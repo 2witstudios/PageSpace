@@ -21,7 +21,7 @@ import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -340,7 +340,7 @@ export async function POST(request: Request) {
 
     // Persist the question immediately so it survives even if generation fails below.
     const userMessageId = createId();
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: userMessageId,
       pageId: agentId,
       conversationId: activeConversationId,
@@ -617,7 +617,7 @@ export async function POST(request: Request) {
 
     // Persist the answer so the conversation can be continued via conversationId.
     const assistantMessageId = createId();
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: assistantMessageId,
       pageId: agentId,
       conversationId: activeConversationId,

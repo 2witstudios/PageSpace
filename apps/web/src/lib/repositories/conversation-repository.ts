@@ -5,13 +5,17 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, sql, inArray, isNull } from '@pagespace/db/operators'
+import { eq, and, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations } from '@pagespace/db/schema/conversations';
 import { isClickHouseEnabled } from '@pagespace/lib/observability/clickhouse-client';
 import { insertUserActivity } from '@pagespace/lib/observability/analytics-inserts';
+import { kickUserFromRooms } from '@pagespace/lib/realtime/kick-client';
+import { conversationRoom } from '@pagespace/lib/realtime/rooms';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
+import { type ConversationEventTriggeredBy } from '@/lib/websocket/conversation-events';
+import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 
 // Types for repository operations
 export interface AiAgent {
@@ -165,7 +169,7 @@ export const conversationRepository = {
     conversationId: string,
     userId: string,
     pageId: string,
-    opts?: { isShared?: boolean; title?: string }
+    opts?: { isShared?: boolean; title?: string; triggeredBy?: ConversationEventTriggeredBy }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const [existing] = await db
       .select({ id: conversations.id })
@@ -180,7 +184,7 @@ export const conversationRepository = {
     // Always session-agnostic: this never writes `sessionId` (there is no
     // param for it). A conversation that needs a session gets one afterward,
     // via `claimConversationInSession` — see `claim-conversation-in-session.ts`.
-    const inserted = await db
+    const [inserted] = await db
       .insert(conversations)
       .values({
         id: conversationId,
@@ -193,10 +197,15 @@ export const conversationRepository = {
         updatedAt: new Date(),
       })
       .onConflictDoNothing()
-      .returning({ id: conversations.id });
+      .returning();
     // A concurrent first-write winning the race is 'exists' too — the caller's
     // insert did not happen.
-    return inserted.length > 0 ? 'created' : 'exists';
+    if (!inserted) return 'exists';
+    // Directory event so sidebars (including the owner's other devices, and
+    // server-spawned workers' owners) see the new conversation without a
+    // poll. Emitted from the repository — routes never decide (SSoT §3).
+    emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
+    return 'created';
   },
 
   /**
@@ -216,17 +225,28 @@ export const conversationRepository = {
    * slot and shows in no listing.
    */
   async claimConversation(conversationId: string, userId: string, sessionId: string): Promise<'claimed' | 'noop'> {
-    const updated = await db
+    const [updated] = await db
       .update(conversations)
-      .set({ sessionId, closedInSessionAt: null, updatedAt: new Date() })
+      .set({
+        sessionId,
+        closedInSessionAt: null,
+        updatedAt: new Date(),
+        // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
+        rev: sql`${conversations.rev} + 1`,
+      })
       .where(and(
         eq(conversations.id, conversationId),
         eq(conversations.userId, userId),
         isNull(conversations.sessionId),
         eq(conversations.isActive, true),
       ))
-      .returning({ id: conversations.id });
-    return updated.length > 0 ? 'claimed' : 'noop';
+      .returning();
+    if (!updated) return 'noop';
+    emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, {
+      workspaceId: sessionId,
+      closedInSessionAt: null,
+    });
+    return 'claimed';
   },
 
   /**
@@ -426,11 +446,12 @@ export const conversationRepository = {
     // #2299). Acquiring the conversations lock FIRST here means a
     // concurrent send's own FOR UPDATE blocks for this transaction's WHOLE
     // duration, including the message sweep — there is no window left.
-    await db.transaction(async (tx) => {
-      await tx
+    const deletedRow = await db.transaction(async (tx) => {
+      const [row] = await tx
         .update(conversations)
-        .set({ isActive: false })
-        .where(eq(conversations.id, conversationId));
+        .set({ isActive: false, rev: sql`${conversations.rev} + 1` })
+        .where(eq(conversations.id, conversationId))
+        .returning();
       // Mirrors `globalConversationRepository.softDeleteConversation`'s
       // pattern, and matches `conversations.isActive`'s own doc comment
       // ("history soft-delete"). Every reader that gates on
@@ -447,10 +468,68 @@ export const conversationRepository = {
           eq(chatMessages.pageId, agentId),
           eq(chatMessages.conversationId, conversationId)
         ));
+      return row ?? null;
     });
+    if (deletedRow) {
+      emitConversationLifecycle('deleted', { ...deletedRow, rev: Number(deletedRow.rev) });
+    }
     // Whole conversation cleared — any summary is stale; the tombstone also
     // guards against a first compaction that may still be in flight.
     await invalidateCompaction(conversationId, { source: 'page', pageId: agentId });
+  },
+
+  /**
+   * Soft-delete a conversation by id alone (no page scoping) — the v1/MCP
+   * conversations API's delete shape: tombstone the conversations row, then
+   * every active message under the conversationId. Same lock-order rationale
+   * as softDeleteConversation above (conversations row FIRST). Bumps rev and
+   * emits `conversation:deleted`.
+   */
+  async softDeleteConversationById(conversationId: string): Promise<void> {
+    const deletedRow = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(conversations)
+        .set({ isActive: false, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+        .where(eq(conversations.id, conversationId))
+        .returning();
+      await tx
+        .update(chatMessages)
+        .set({ isActive: false })
+        .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.isActive, true)));
+      return row ?? null;
+    });
+    if (deletedRow) {
+      emitConversationLifecycle('deleted', { ...deletedRow, rev: Number(deletedRow.rev) });
+    }
+  },
+
+  /**
+   * Close a conversation OUT of its session's listing (`closedInSessionAt`
+   * stamp; never touches history soft-delete). The write, its rev bump, and
+   * the `conversation:closed` emission live here so the session runtime's
+   * wiring cannot skip any of the three (SSoT §3 clause 1).
+   */
+  async closeConversationListing(conversationId: string): Promise<'closed' | 'noop'> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ closedInSessionAt: new Date(), updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInSessionAt)))
+      .returning();
+    if (!updated) return 'noop';
+    emitConversationLifecycle('closed', { ...updated, rev: Number(updated.rev) });
+    return 'closed';
+  },
+
+  /** Reopen a closed listing (clear the stamp). Twin of closeConversationListing. */
+  async reopenConversationListing(conversationId: string): Promise<'reopened' | 'noop'> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ closedInSessionAt: null, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInSessionAt)))
+      .returning();
+    if (!updated) return 'noop';
+    emitConversationLifecycle('reopened', { ...updated, rev: Number(updated.rev) });
+    return 'reopened';
   },
 
   /**
@@ -467,13 +546,33 @@ export const conversationRepository = {
   },
 
   /**
-   * Toggle sharing for a conversation.
+   * Toggle sharing for a conversation. On UN-share, kicks every non-owner
+   * socket out of the `conv:<id>` room (best-effort, alongside the existing
+   * revocation-kick sets) — room membership is a delivery optimization; the
+   * authoritative fact is this row, re-checked at join time.
    */
-  async setConversationShared(conversationId: string, isShared: boolean): Promise<void> {
-    await db
+  async setConversationShared(
+    conversationId: string,
+    isShared: boolean,
+    triggeredBy?: ConversationEventTriggeredBy,
+  ): Promise<void> {
+    const [updated] = await db
       .update(conversations)
-      .set({ isShared, updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
+      .set({ isShared, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(eq(conversations.id, conversationId))
+      .returning();
+    if (!updated) return;
+    emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, triggeredBy, { isShared });
+    if (!isShared) {
+      // Evict everyone but the owner from the content room. Best-effort by
+      // design (kick-client never throws); join-time authz remains the gate.
+      void kickUserFromRooms({
+        userId: '*',
+        exceptUserId: updated.userId,
+        roomPattern: conversationRoom(conversationId),
+        reason: 'conversation_unshared',
+      }).catch(() => {});
+    }
   },
 
   /**
@@ -501,11 +600,17 @@ export const conversationRepository = {
         set: {
           title,
           updatedAt: new Date(),
+          // Rename is a lifecycle mutation → rev bump (fresh inserts start at
+          // the column default 0; only the conflict/update leg bumps).
+          rev: sql`${conversations.rev} + 1`,
         },
       })
-      .returning({ id: conversations.id, title: conversations.title });
+      .returning();
 
-    return result;
+    if (result) {
+      emitConversationLifecycle('updated', { ...result, rev: Number(result.rev) }, undefined, { title });
+    }
+    return result ? { id: result.id, title: result.title } : result;
   },
 
   /**
@@ -518,10 +623,14 @@ export const conversationRepository = {
    * UPDATE, and only the one that lands first actually sets a row.
    */
   async autoTitleConversation(conversationId: string, title: string): Promise<void> {
-    await db
+    const [updated] = await db
       .update(conversations)
-      .set({ title, updatedAt: new Date() })
-      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)));
+      .set({ title, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)))
+      .returning();
+    if (updated) {
+      emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, { title });
+    }
   },
 
   /**

@@ -132,7 +132,7 @@ const existingConversation = {
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
   lastMessageAt: null,
 };
 

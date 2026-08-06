@@ -84,12 +84,16 @@ import {
   userCalendarRoom,
   userDrivesRoom,
   userGlobalRoom,
+  userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
   dmRoom,
+  conversationRoom,
   driveActivityRoom,
   pageActivityRoom,
 } from '@pagespace/lib/realtime/rooms';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { authorizeBroadcastAudience } from './broadcast-audience';
@@ -1102,6 +1106,10 @@ io.on('connection', (socket: AuthSocket) => {
       userCalendarRoom(user.id),
       userDrivesRoom(user.id),
       userGlobalRoom(user.id),
+      // Directory plane (Agent-Session SSoT epic, Phase 2): id-level
+      // conversation:created/updated/closed/reopened/deleted events for the
+      // user's own conversations and sessions.
+      userSessionsRoom(user.id),
     ];
     for (const room of personalRooms) {
       socket.join(room);
@@ -1186,6 +1194,71 @@ io.on('connection', (socket: AuthSocket) => {
     } catch (error) {
       loggers.realtime.error('Error joining drive', error as Error, { driveId });
     }
+  });
+
+  // Join an AI conversation's content room (`conv:<id>`) — the content plane
+  // of the Agent-Session SSoT epic (Phase 2). Authorization is the shared
+  // `canAccessConversation` predicate: owner OR (isShared AND page access) —
+  // the SAME implementation web's /stream-join and /active-streams enforce,
+  // so the three cannot drift. Fails closed: no row, private, or a shared
+  // GLOBAL conversation (no page to share through) all deny for non-owners.
+  socket.on('join_conversation', async (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
+
+    try {
+      const [conversation] = await db
+        .select({
+          userId: conversations.userId,
+          isShared: conversations.isShared,
+          type: conversations.type,
+          contextId: conversations.contextId,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+
+      const allowed =
+        conversation !== undefined && (await canAccessConversation(userId, conversation));
+      if (!allowed) {
+        // Deny quietly (no disconnect): unlike join_channel, a stale join
+        // attempt after an un-share is an expected client state, not a
+        // protocol violation.
+        loggers.realtime.warn('Conversation join denied', { userId, conversationId });
+        return;
+      }
+
+      const room = conversationRoom(conversationId);
+      socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
+      loggers.realtime.debug('User joined conversation room', { userId, room });
+    } catch (error) {
+      loggers.realtime.error('Error joining conversation', error as Error, { conversationId });
+    }
+  });
+
+  socket.on('leave_conversation', (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_conversation', validation.error);
+      return;
+    }
+    const room = conversationRoom(validation.value);
+    socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
+    loggers.realtime.debug('User left conversation room', { userId, room });
   });
 
   // Join a direct message conversation room after membership verification

@@ -1,6 +1,7 @@
 import { db as defaultDb } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 
 export class ConversationOwnershipError extends Error {
   constructor() {
@@ -113,7 +114,17 @@ export async function resolveOrCreateConversation(
     .onConflictDoNothing()
     .returning();
 
-  if (created) return { conversation: created, isNew: true };
+  if (created) {
+    // Authoritative directory event (Agent-Session SSoT epic, Phase 2): this
+    // is THE global-conversation creator — lazy first-message creation AND
+    // server-side worker spawn (create-conversation-in-session.ts) both land
+    // here, so emitting here is what makes a server-spawned worker appear in
+    // the owner's sidebar without a poll. Only the actual-insert branch
+    // emits; the race-loser fallback below resolved someone else's insert.
+    // No caller passes a transaction `db`, so this runs post-commit.
+    emitConversationLifecycle('created', { ...created, rev: Number(created.rev) });
+    return { conversation: created, isNew: true };
+  }
 
   // A concurrent insert won the race — select the winner. Locked for the same
   // reason as the initial SELECT above.

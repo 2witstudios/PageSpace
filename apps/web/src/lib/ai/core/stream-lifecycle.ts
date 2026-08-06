@@ -5,6 +5,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 import { ensureStreamAbortWatcher } from '@/lib/ai/core/stream-abort-watcher';
 import { broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
+import { conversationEvents } from '@/lib/websocket/conversation-events';
 import {
   streamMulticastRegistry,
   type UIMessagePart,
@@ -248,14 +249,23 @@ export const createStreamLifecycle = async (
     return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
   }
 
-  broadcastAiStreamStart({
+  const streamStartPayload = {
     messageId,
     pageId: channelId,
     conversationId,
     startedAt: startedAt.toISOString(),
     isShared: isShared === true,
     triggeredBy: { userId, displayName, browserSessionId },
-  }).catch(() => {});
+  };
+  broadcastAiStreamStart(streamStartPayload).catch(() => {});
+  // Transitional conv-room mirror (Agent-Session SSoT epic, Phase 2): the
+  // same event also reaches `conv:<conversationId>` subscribers, whose room
+  // membership already encodes the isShared/owner authz the page-room leg
+  // has to carry as a payload flag. The page-room leg stays until the legacy
+  // client subscription is deleted.
+  conversationEvents
+    .streamLifecycleMirror(conversationId, 'chat:stream_start', streamStartPayload)
+    .catch(() => {});
 
   let finished = false;
   // True when the in-memory buffer holds content not yet reflected in the last checkpoint
@@ -438,12 +448,17 @@ export const createStreamLifecycle = async (
       }
     })();
 
-    broadcastAiStreamComplete({
+    const streamCompletePayload = {
       messageId,
       pageId: channelId,
       conversationId,
       aborted,
-    }).catch(() => {});
+    };
+    broadcastAiStreamComplete(streamCompletePayload).catch(() => {});
+    // Transitional conv-room mirror — see the stream_start emission above.
+    conversationEvents
+      .streamLifecycleMirror(conversationId, 'chat:stream_complete', streamCompletePayload)
+      .catch(() => {});
   };
 
   const pushPart = (part: UIMessagePart): void => {

@@ -92,9 +92,13 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
 vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
 }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
+}));
 vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
     const msg = m as { id: string; role: string; content: string };
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
@@ -199,7 +203,8 @@ import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -838,7 +843,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'client',
       lastMessageAt: null,
     });
@@ -876,7 +881,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
         type: 'page',
         lastMessageAt: null,
       });
@@ -924,7 +929,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -964,7 +969,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -992,7 +997,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1024,7 +1029,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1060,7 +1065,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest(validBody));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with a step containing tool calls and results',
@@ -1128,7 +1133,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest(validBody));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with steps but no tool calls',
@@ -1160,7 +1165,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a tool-only turn with no text output but steps containing tool calls',
@@ -1179,7 +1184,7 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });
     // Persisting the user message is the last awaited setup step before streamText. A failure
     // here must NOT strand the gate's hold + in-flight slot until TTL.
-    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
 
     const response = await POST(makeRequest(validBody));
 
@@ -1326,7 +1331,7 @@ describe('POST /api/v1/chat/completions', () => {
     // resolving releaseHold only after a deferred tick and asserting it has settled by the
     // time POST resolves.
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-awaited' });
-    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
     let released = false;
     vi.mocked(releaseHold).mockImplementationOnce(
       () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
@@ -1353,14 +1358,14 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-private' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'an assistant message in a private conversation (isShared=false)',
@@ -1381,14 +1386,14 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: true,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-shared' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'an assistant message in a shared conversation (isShared=true)',

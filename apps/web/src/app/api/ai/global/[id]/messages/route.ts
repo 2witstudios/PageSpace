@@ -34,7 +34,8 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
@@ -102,6 +103,7 @@ import {
   ConversationHistoryDeletedError,
 } from './resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -287,6 +289,9 @@ export async function POST(
   // catch's best-effort cleanup can reach them without a wider hoist of variables used in
   // dozens of places below.
   let cleanupContext: { conversationId: string; serverAssistantMessageId: string; userId: string } | undefined;
+  // Hoisted (assigned right after header validation below) so the terminal
+  // save helper can stamp the repository's events with the originating pane.
+  let browserSessionId = '';
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // Becomes true once the stream owns the hold (its onFinish will release it via
@@ -313,19 +318,22 @@ export async function POST(
   // conversation's transcript. One shared choke point (all 3 terminal-write
   // sites below route through it) rather than three separate re-checks.
   const saveTerminalGlobalAssistantMessage = async (
-    args: Parameters<typeof saveGlobalAssistantMessageToDatabase>[0],
+    args: Omit<Parameters<typeof messageRepository.saveGlobalMessage>[0], 'beforeSave' | 'triggeredBy'>,
   ): Promise<boolean> => {
-    return db.transaction(async (tx) => {
-      const [row] = await tx
-        .select({ isActive: conversations.isActive })
-        .from(conversations)
-        .where(eq(conversations.id, args.conversationId))
-        .for('update')
-        .limit(1);
-      if (!row?.isActive) return false;
-      await saveGlobalAssistantMessageToDatabase({ ...args, dbClient: tx });
-      return true;
+    const { saved } = await messageRepository.saveGlobalMessage({
+      ...args,
+      triggeredBy: { userId: args.userId, browserSessionId },
+      beforeSave: async (tx) => {
+        const [row] = await tx
+          .select({ isActive: conversations.isActive })
+          .from(conversations)
+          .where(eq(conversations.id, args.conversationId))
+          .for('update')
+          .limit(1);
+        return row?.isActive === true;
+      },
     });
+    return saved;
   };
   try {
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
@@ -334,7 +342,7 @@ export async function POST(
     if (!browserSessionIdResult.ok) {
       return NextResponse.json({ error: browserSessionIdResult.message }, { status: browserSessionIdResult.status });
     }
-    const browserSessionId = browserSessionIdResult.browserSessionId;
+    browserSessionId = browserSessionIdResult.browserSessionId;
 
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
@@ -597,54 +605,43 @@ export async function POST(
         // wrapping any of the intervening work, which must never run inside an open
         // transaction) closes that window rather than trusting the stale earlier read
         // (review finding — chatgpt-codex-connector and coderabbitai on PR #2299).
-        await db.transaction(async (tx) => {
-          const [row] = await tx
-            .select({ isActive: conversations.isActive })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .for('update')
-            .limit(1);
-          if (!row?.isActive) throw new ConversationHistoryDeletedError();
-
-          await saveGlobalAssistantMessageToDatabase({
-            messageId,
-            conversationId,
-            userId,
-            role: 'user',
-            content: messageContent,
-            toolCalls: undefined,
-            toolResults: undefined,
-            uiMessage: userMessage, // Pass UIMessage to preserve part ordering
-            dbClient: tx,
-          });
+        await messageRepository.saveGlobalMessage({
+          messageId,
+          conversationId,
+          userId,
+          role: 'user',
+          content: messageContent,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+          triggeredBy: { userId, browserSessionId },
+          // Same atomic isActive re-check as before the repository
+          // extraction, now inside the repository's own transaction.
+          beforeSave: async (tx) => {
+            const [row] = await tx
+              .select({ isActive: conversations.isActive })
+              .from(conversations)
+              .where(eq(conversations.id, conversationId))
+              .for('update')
+              .limit(1);
+            if (!row?.isActive) throw new ConversationHistoryDeletedError();
+          },
         });
 
         auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat_message', resourceId: conversationId, details: {
           action: 'chat_message',
         } });
 
-        // Update conversation lastMessageAt and auto-generate title if needed
-        const updateData: {
-          lastMessageAt: Date;
-          updatedAt: Date;
-          title?: string;
-        } = {
-          lastMessageAt: new Date(),
-          updatedAt: new Date(),
-        };
-
+        // lastMessageAt now bumps inside the repository's save transaction
+        // (with the rev counter); only the auto-title remains route-side.
         if (!conversation.title) {
-          // Auto-generate title from first user message
+          // Auto-generate title from first user message. Guarded in-SQL
+          // (title IS NULL) + rev-bumped + emitted by the repository.
           const title = deriveConversationTitle(messageContent);
-          updateData.title = title;
           resolvedConversationTitle = title;
+          await globalConversationRepository.autoTitleConversation(conversationId, title);
         }
 
-        await db
-          .update(conversations)
-          .set(updateData)
-          .where(eq(conversations.id, conversationId));
-        
         loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
         if (error instanceof ConversationHistoryDeletedError) {
@@ -1351,35 +1348,19 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            // Same atomic re-check as saveTerminalGlobalAssistantMessage: a History delete
-            // permitted between the user-message write and here would otherwise let this
-            // best-effort insert plant an isActive:true 'streaming' row under a conversation
-            // already gone from every listing — and since the row is BRAND NEW here, the later
-            // terminal-write check finding the conversation inactive would just skip its
-            // update, leaving this row stuck at 'streaming' forever, visible again the moment
-            // the conversation is reopened (review finding — chatgpt-codex-connector on PR #2299).
-            const conversationActive = await db.transaction(async (tx) => {
-              const [row] = await tx
-                .select({ isActive: conversations.isActive })
-                .from(conversations)
-                .where(eq(conversations.id, conversationId))
-                .for('update')
-                .limit(1);
-              if (!row?.isActive) return false;
-              await tx.insert(messages).values({
-                id: serverAssistantMessageId,
-                conversationId,
-                userId,
-                role: 'assistant',
-                content: '',
-                toolCalls: null,
-                toolResults: null,
-                isActive: true,
-                status: 'streaming',
-              });
-              return true;
+            // Same atomic re-check as saveTerminalGlobalAssistantMessage,
+            // now baked into the repository method: a History delete
+            // permitted between the user-message write and here must not
+            // plant an isActive:true 'streaming' row under a conversation
+            // already gone from every listing (review finding —
+            // chatgpt-codex-connector on PR #2299).
+            const { inserted } = await messageRepository.insertGlobalStreamingPlaceholder({
+              messageId: serverAssistantMessageId,
+              conversationId,
+              userId,
+              triggeredBy: { userId, browserSessionId },
             });
-            if (!conversationActive) {
+            if (!inserted) {
               loggers.api.warn('Global AI messages API: skipped placeholder assistant row, conversation no longer active', {
                 messageId: serverAssistantMessageId,
                 conversationId,
@@ -1555,18 +1536,8 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               status: aborted ? 'interrupted' : 'complete',
             });
             assistantMessagePersisted = true;
-
-            // A conversation with newly-written assistant content — even empty-content,
-            // interrupted content — must still surface as recently active in a list
-            // sorted/filtered by lastMessageAt. onFinish's own responseMessage branch below
-            // does the same bump when it gets to refine this write with richer content.
-            await db
-              .update(conversations)
-              .set({
-                lastMessageAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(conversations.id, conversationId));
+            // lastMessageAt bump: now inside the repository's save
+            // transaction, alongside the rev counter — no separate write.
           } catch (e) {
             loggers.api.error('Global Assistant Chat API: execute-end persist failed', e as Error);
           }
@@ -1624,15 +1595,8 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
             });
             assistantMessagePersisted = true;
 
-            // Update conversation lastMessageAt
-            await db
-              .update(conversations)
-              .set({
-                lastMessageAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(conversations.id, conversationId));
-
+            // lastMessageAt bump: now inside the repository's save
+            // transaction, alongside the rev counter — no separate write.
             loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);

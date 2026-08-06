@@ -64,7 +64,8 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { extractMessageContent, extractToolCalls, extractToolResults, saveMessageToDatabase, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
@@ -151,6 +152,9 @@ export async function POST(request: Request) {
   let userId: string | undefined;
   let chatId: string | undefined;
   let conversationId: string | undefined;
+  // Hoisted (assigned right after header validation below) so the terminal
+  // save helper can stamp the repository's events with the originating pane.
+  let browserSessionId = '';
   let isConversationShared = false;
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
@@ -215,7 +219,7 @@ export async function POST(request: Request) {
   // direction. The durable fix (idempotent createMentionNotification per user+message) is a
   // filed epic D task.
   const saveTerminalAssistantMessage = async (
-    args: Omit<Parameters<typeof saveMessageToDatabase>[0], 'mentionNotify'>,
+    args: Omit<Parameters<typeof messageRepository.savePageMessage>[0], 'mentionNotify' | 'beforeSave' | 'triggeredBy'>,
   ): Promise<void> => {
     const mentionNotify = mentionNotifyFor(args.content);
     // The SAME atomic re-check the user's own message write uses, applied
@@ -233,27 +237,31 @@ export async function POST(request: Request) {
     // happened and is billed/tracked independently of this write via the
     // usual trackUsage path, which this does not touch — only what gets
     // WRITTEN to the (now-gone) conversation's transcript.
-    const persisted = await db.transaction(async (tx) => {
-      const [row] = await tx
-        .select({ isActive: conversations.isActive })
-        .from(conversations)
-        .where(eq(conversations.id, args.conversationId))
-        .for('update')
-        .limit(1);
-      // `row` is undefined for a brand-new conversation whose eager
-      // `createConversation()` call (above, before generation started)
-      // failed — deliberately tolerated there (best-effort/non-fatal, see
-      // that call site) so the user's own message still saves and
-      // generation still proceeds. Treating "no row" the same as
-      // "explicitly inactive" here would then silently drop the assistant's
-      // reply too: the user sees it stream in, then loses it on refresh
-      // while their own prompt remains (review finding — chatgpt-codex-
-      // connector on PR #2299). Only skip when a row exists AND is
-      // explicitly inactive (a real History-delete) — an absent row is not
-      // that, it's the same tolerated gap the user message already crossed.
-      if (row && !row.isActive) return false;
-      await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }), dbClient: tx });
-      return true;
+    const { saved: persisted } = await messageRepository.savePageMessage({
+      ...args,
+      ...(mentionNotify && { mentionNotify }),
+      triggeredBy: userId ? { userId, browserSessionId } : undefined,
+      // Runs inside the repository's transaction, before the message write.
+      beforeSave: async (tx) => {
+        const [row] = await tx
+          .select({ isActive: conversations.isActive })
+          .from(conversations)
+          .where(eq(conversations.id, args.conversationId))
+          .for('update')
+          .limit(1);
+        // `row` is undefined for a brand-new conversation whose eager
+        // `createConversation()` call (above, before generation started)
+        // failed — deliberately tolerated there (best-effort/non-fatal, see
+        // that call site) so the user's own message still saves and
+        // generation still proceeds. Treating "no row" the same as
+        // "explicitly inactive" here would then silently drop the assistant's
+        // reply too: the user sees it stream in, then loses it on refresh
+        // while their own prompt remains (review finding — chatgpt-codex-
+        // connector on PR #2299). Only skip when a row exists AND is
+        // explicitly inactive (a real History-delete) — an absent row is not
+        // that, it's the same tolerated gap the user message already crossed.
+        return !(row && !row.isActive);
+      },
     });
     if (persisted && mentionNotify) mentionNotified = true;
   };
@@ -278,7 +286,7 @@ export async function POST(request: Request) {
     if (!browserSessionIdResult.ok) {
       return NextResponse.json({ error: browserSessionIdResult.message }, { status: browserSessionIdResult.status });
     }
-    const browserSessionId = browserSessionIdResult.browserSessionId;
+    browserSessionId = browserSessionIdResult.browserSessionId;
 
     // Authenticate the request
     const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -801,17 +809,32 @@ export async function POST(request: Request) {
         // lock for the second case let a concurrent History-delete land between
         // that create and this write with nothing to catch it — review finding,
         // round 11).
-        await db.transaction(async (tx) => {
-          const [row] = await tx
-            .select({ isActive: conversations.isActive })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId!))
-            .for('update')
-            .limit(1);
+        await messageRepository.savePageMessage({
+          messageId,
+          pageId: chatId!,
+          conversationId: conversationId!,
+          userId: userId!,
+          role: 'user',
+          content: messageContent,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage,
+          triggeredBy: { userId: userId!, browserSessionId },
+          // Runs inside the repository's transaction, immediately before the
+          // message write — same statements, same lock order as before the
+          // repository extraction.
+          beforeSave: async (tx) => {
+            const [row] = await tx
+              .select({ isActive: conversations.isActive })
+              .from(conversations)
+              .where(eq(conversations.id, conversationId!))
+              .for('update')
+              .limit(1);
 
-          if (row) {
-            if (!row.isActive) throw new ConversationHistoryDeletedError();
-          } else {
+            if (row) {
+              if (!row.isActive) throw new ConversationHistoryDeletedError();
+              return { proceed: true };
+            }
             // `FOR UPDATE` on zero rows locks nothing — if the eager
             // createConversation() call above hasn't landed a row yet (raced
             // with a concurrent request, or failed), there is nothing here
@@ -843,31 +866,20 @@ export async function POST(request: Request) {
 
             if (created) {
               if (!created.isActive) throw new ConversationHistoryDeletedError();
-            } else {
-              // A concurrent insert won the race — re-select, locked, same
-              // reasoning as the initial SELECT above.
-              const [winner] = await tx
-                .select({ isActive: conversations.isActive })
-                .from(conversations)
-                .where(eq(conversations.id, conversationId!))
-                .for('update')
-                .limit(1);
-              if (!winner?.isActive) throw new ConversationHistoryDeletedError();
+              // The repository emits `conversation:created` after commit.
+              return { proceed: true, conversationCreated: true };
             }
-          }
-
-          await saveMessageToDatabase({
-            messageId,
-            pageId: chatId!,
-            conversationId: conversationId!,
-            userId: userId!,
-            role: 'user',
-            content: messageContent,
-            toolCalls: undefined,
-            toolResults: undefined,
-            uiMessage: userMessage,
-            dbClient: tx,
-          });
+            // A concurrent insert won the race — re-select, locked, same
+            // reasoning as the initial SELECT above.
+            const [winner] = await tx
+              .select({ isActive: conversations.isActive })
+              .from(conversations)
+              .where(eq(conversations.id, conversationId!))
+              .for('update')
+              .limit(1);
+            if (!winner?.isActive) throw new ConversationHistoryDeletedError();
+            return { proceed: true };
+          },
         });
 
         // Fire-and-forget: title derivation must never fail or delay the chat
@@ -1592,8 +1604,17 @@ export async function POST(request: Request) {
     isConversationShared = existingConversation?.isShared === true;
 
     if (userMessage && userMessage.role === 'user') {
-      // Only broadcast to the page channel if the conversation is explicitly shared.
-      // Fail closed: no broadcast if the row is missing or private.
+      // LEGACY page-room broadcast, transitional (Agent-Session SSoT epic
+      // Phase 2): the AUTHORITATIVE `conversation:message_created` already
+      // went out unconditionally to the `conv:<id>` room from
+      // messageRepository.savePageMessage — room membership is the authz
+      // there, so the route no longer decides whether the durable event
+      // broadcasts. This page-room `chat:user_message` mirror stays for old
+      // clients and MUST keep its isShared gate while it lives: the page
+      // room contains members with no access to private conversations, so
+      // ungating it would widen the audience (the exact invariant the
+      // Phase 2 security test pins). It is deleted with the other legacy
+      // chat:* events in the client-cutover PR.
       const shouldBroadcast = isConversationShared;
       if (shouldBroadcast) {
         broadcastChatUserMessage({
@@ -1654,45 +1675,21 @@ export async function POST(request: Request) {
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            // Same atomic re-check as saveTerminalAssistantMessage above: a History delete
-            // permitted between the user-message write and here would otherwise let this
-            // best-effort insert plant an isActive:true 'streaming' row under a conversation
-            // already gone from every listing — and since the row is BRAND NEW here (not yet
-            // existing for saveTerminalAssistantMessage's own isActive check to catch via its
-            // upsert), that later check finding the conversation inactive would just skip its
-            // update, leaving this row stuck at 'streaming' forever. Visible again, permanently
-            // "in progress", the moment this PR's reopen feature brings the conversation back
-            // (review finding — chatgpt-codex-connector on PR #2299).
-            const conversationActive = await db.transaction(async (tx) => {
-              const [row] = await tx
-                .select({ isActive: conversations.isActive })
-                .from(conversations)
-                .where(eq(conversations.id, conversationId!))
-                .for('update')
-                .limit(1);
-              // See saveTerminalAssistantMessage's own comment above: `row`
-              // undefined means the eager createConversation() call earlier
-              // in this request failed (tolerated, best-effort) — not that
-              // History deleted it. Only an explicitly inactive row is a
-              // real delete (review finding — chatgpt-codex-connector on
-              // PR #2299, round 10).
-              if (row && !row.isActive) return false;
-              await tx.insert(chatMessages).values({
-                id: serverAssistantMessageId!,
-                pageId: chatId!,
-                conversationId: conversationId!,
-                role: 'assistant',
-                content: '',
-                toolCalls: null,
-                toolResults: null,
-                isActive: true,
-                userId: null,
-                sourceAgentId: null,
-                status: 'streaming',
-              });
-              return true;
+            // Same atomic re-check as saveTerminalAssistantMessage above, now
+            // baked into the repository method: a History delete permitted
+            // between the user-message write and here must not plant an
+            // isActive:true 'streaming' row under a conversation already gone
+            // from every listing (review finding — chatgpt-codex-connector on
+            // PR #2299). An absent row is tolerated (the eager
+            // createConversation call is best-effort); only an explicitly
+            // inactive row skips.
+            const { inserted } = await messageRepository.insertPageStreamingPlaceholder({
+              messageId: serverAssistantMessageId!,
+              pageId: chatId!,
+              conversationId: conversationId!,
+              triggeredBy: { userId: userId!, browserSessionId },
             });
-            if (!conversationActive) {
+            if (!inserted) {
               loggers.ai.warn('AI Chat API: skipped placeholder assistant row, conversation no longer active', {
                 messageId: serverAssistantMessageId,
                 conversationId,

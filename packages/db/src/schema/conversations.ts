@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, boolean, bigint, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { agentSessions } from './agent-sessions';
@@ -36,6 +36,18 @@ export const conversations = pgTable('conversations', {
    * just clearing the stamp.
    */
   closedInSessionAt: timestamp('closedInSessionAt', { mode: 'date' }),
+  /**
+   * Monotonic per-conversation revision counter (Agent-Session Single Source
+   * of Truth epic, Phase 2). Every committed message/conversation mutation
+   * bumps it IN-TRANSACTION (`SET rev = rev + 1 ... RETURNING rev`) and the
+   * resulting `conversation:*` event carries the post-write rev, so any
+   * subscriber holding a rev watermark can prove it is current: an event with
+   * `rev == watermark + 1` applies, a gap triggers a snapshot refetch.
+   * Transport stays best-effort; correctness comes from rev + refetch.
+   * `mode: 'number'` is safe: a conversation would need 2^53 writes to
+   * overflow, and the counter is per-row.
+   */
+  rev: bigint('rev', { mode: 'number' }).default(0).notNull(),
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

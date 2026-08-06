@@ -1,8 +1,6 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
-import { chatMessages } from '@pagespace/db/schema/core';
-import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -12,6 +10,8 @@ import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import { conversationEvents } from '@/lib/websocket/conversation-events';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 /**
@@ -141,40 +141,22 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     const globalOwnerId = parseGlobalChannelId(row.channelId);
 
     if (globalOwnerId !== null) {
-      await db
-        .insert(messages)
-        .values({
-          id: row.messageId,
-          conversationId: row.conversationId,
-          userId: row.userId,
-          role: 'assistant',
-          content: structuredContent,
-          toolCalls: toolCallsJson,
-          toolResults: toolResultsJson,
-          // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
-          // actual start, not reap time, so a recovered reply still sorts correctly against a
-          // user's later follow-up message.
-          createdAt: row.startedAt,
-          isActive: true,
-          status: 'interrupted',
-        })
-        .onConflictDoUpdate({
-          target: messages.id,
-          set: {
-            content: structuredContent,
-            toolCalls: toolCallsJson,
-            toolResults: toolResultsJson,
-            // Re-synced on conflict, mirroring saveMessageToDatabase's own update-set — a
-            // message reprocessed/reparented into a different conversation before this sweep
-            // ran should not have its conversationId left stale.
-            conversationId: row.conversationId,
-            status: 'interrupted',
-          },
-          // The #2022 invariant, enforced atomically as a compare-and-swap: only a row still
-          // `'streaming'` may be relabelled. Never re-touch a row already `'interrupted'` or
-          // `'complete'` — see the docblock above for why `!= 'complete'` alone isn't enough.
-          setWhere: eq(messages.status, 'streaming'),
-        });
+      // Repository-owned CAS terminal write (#2022 invariant preserved:
+      // `setWhere status = 'streaming'` inside the method) — bumps rev and
+      // emits `conversation:message_updated` when the write lands.
+      await messageRepository.materializeGlobalInterruptedMessage({
+        messageId: row.messageId,
+        conversationId: row.conversationId,
+        userId: row.userId,
+        structuredContent,
+        toolCallsJson,
+        toolResultsJson,
+        // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
+        // actual start, not reap time, so a recovered reply still sorts correctly against a
+        // user's later follow-up message.
+        createdAt: row.startedAt,
+        eventMessage: payload.uiMessage,
+      });
 
       // The route's own terminal writes bump this after every persist
       // (execute-end, onFinish) — the materializer is a terminal write by a
@@ -186,49 +168,31 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
       // settled anyway.
       await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
     } else {
-      const written = await db
-        .insert(chatMessages)
-        .values({
-          id: row.messageId,
-          pageId: row.channelId,
-          conversationId: row.conversationId,
-          role: 'assistant',
-          content: structuredContent,
-          toolCalls: toolCallsJson,
-          toolResults: toolResultsJson,
-          // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
-          // actual start, not reap time, so a recovered reply still sorts correctly against a
-          // user's later follow-up message.
-          createdAt: row.startedAt,
-          isActive: true,
-          userId: null,
-          sourceAgentId: null,
-          status: 'interrupted',
-        })
-        .onConflictDoUpdate({
-          target: chatMessages.id,
-          set: {
-            content: structuredContent,
-            toolCalls: toolCallsJson,
-            toolResults: toolResultsJson,
-            conversationId: row.conversationId,
-            status: 'interrupted',
-          },
-          setWhere: eq(chatMessages.status, 'streaming'),
-        })
-        // `.returning` reports whether the CAS actually landed. When it returns nothing, the
-        // row already left 'streaming' via one of the route's own terminal writes (execute-end,
-        // onFinish, or its outer-catch cleanup) — and the route guarantees whichever of those
-        // lands first carries this exact notification behind the same gate (`mentionNotifyFor`
-        // + its once-flag, route.ts; Codex P2 on PR #2097) — so notifying again here would
-        // double-page the mentioned user for one reply.
-        .returning({ id: chatMessages.id });
+      // Repository-owned CAS terminal write; returns whether the CAS landed.
+      // When false, the row already left 'streaming' via one of the route's
+      // own terminal writes — and the route guarantees whichever of those
+      // lands first carries this exact notification behind the same gate
+      // (`mentionNotifyFor` + its once-flag, route.ts; Codex P2 on PR #2097)
+      // — so notifying again here would double-page the mentioned user.
+      const written = await messageRepository.materializePageInterruptedMessage({
+        messageId: row.messageId,
+        pageId: row.channelId,
+        conversationId: row.conversationId,
+        structuredContent,
+        toolCallsJson,
+        toolResultsJson,
+        // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
+        // actual start, not reap time, so a recovered reply still sorts correctly against a
+        // user's later follow-up message.
+        createdAt: row.startedAt,
+        eventMessage: payload.uiMessage,
+      });
 
-      // Same gate order as saveMessageToDatabase: assistant role is implicit here, and the
-      // content.trim() check keeps an empty recovered reply (no parts survived) from paying for
-      // two gate lookups that can never produce a mention. Fire-and-forget, like the finalize
-      // path's own `void notifyMentionedUsers` — the helper never rejects (it catches and warns).
-      if (written.length > 0 && payload.content.trim()) {
+      // Same gate order as the repository's own save path: assistant role is implicit here,
+      // and the content.trim() check keeps an empty recovered reply (no parts survived) from
+      // paying for two gate lookups that can never produce a mention. Fire-and-forget, like
+      // the finalize path's own `void notifyMentionedUsers` — the helper never rejects.
+      if (written && payload.content.trim()) {
         void notifyMentionsBestEffort(row, payload.content);
       }
     }
@@ -268,17 +232,22 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     });
   }
 
-  broadcastAiStreamComplete({
+  const streamCompletePayload = {
     messageId: row.messageId,
     pageId: row.channelId,
     conversationId: row.conversationId,
     aborted: true,
-  }).catch((error) => {
+  };
+  broadcastAiStreamComplete(streamCompletePayload).catch((error) => {
     loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
       messageId: row.messageId,
       error: error instanceof Error ? error.message : 'unknown',
     });
   });
+  // Transitional conv-room mirror — same as stream-lifecycle.ts's finish().
+  conversationEvents
+    .streamLifecycleMirror(row.conversationId, 'chat:stream_complete', streamCompletePayload)
+    .catch(() => {});
 
   return settled;
 };

@@ -373,3 +373,95 @@ describe('handleKickRequest', () => {
     expect((result.body as { error: string }).error).toBeTruthy();
   });
 });
+
+describe('executeKick — room-wide kick (userId: "*", conversation un-share)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function createRoomWideIo(members: Array<{ socketId: string; userId: string }>) {
+    const sockets = new Map(
+      members.map((m) => [
+        m.socketId,
+        {
+          leave: vi.fn(),
+          emit: vi.fn(),
+          data: { user: { id: m.userId } },
+        },
+      ]),
+    );
+    const io = {
+      sockets: {
+        sockets,
+        adapter: {
+          rooms: new Map([[
+            'conv:convabc123',
+            new Set(members.map((m) => m.socketId)),
+          ]]),
+        },
+      },
+    } as unknown as Server;
+    return { io, sockets };
+  }
+
+  it('evicts every socket in the room EXCEPT the excepted owner', () => {
+    const { io, sockets } = createRoomWideIo([
+      { socketId: 'sock-owner', userId: 'owner-1' },
+      { socketId: 'sock-collab-a', userId: 'collab-a' },
+      { socketId: 'sock-collab-b', userId: 'collab-b' },
+    ]);
+
+    const result = executeKick(io, {
+      userId: '*',
+      exceptUserId: 'owner-1',
+      roomPattern: 'conv:convabc123',
+      reason: 'conversation_unshared',
+    } as KickPayload);
+
+    expect(result.success).toBe(true);
+    expect(result.kickedCount).toBe(2);
+    expect(result.rooms).toEqual(['conv:convabc123']);
+
+    expect(sockets.get('sock-owner')!.leave).not.toHaveBeenCalled();
+    expect(sockets.get('sock-collab-a')!.leave).toHaveBeenCalledWith('conv:convabc123');
+    expect(sockets.get('sock-collab-b')!.leave).toHaveBeenCalledWith('conv:convabc123');
+    expect(sockets.get('sock-collab-a')!.emit).toHaveBeenCalledWith(
+      'access_revoked',
+      expect.objectContaining({ room: 'conv:convabc123', reason: 'conversation_unshared' }),
+    );
+    expect(socketRegistry.trackRoomLeave).toHaveBeenCalledWith('sock-collab-a', 'conv:convabc123');
+    expect(socketRegistry.trackRoomLeave).toHaveBeenCalledWith('sock-collab-b', 'conv:convabc123');
+  });
+
+  it('is a clean no-op when the room has no members', () => {
+    const io = {
+      sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
+    } as unknown as Server;
+
+    const result = executeKick(io, {
+      userId: '*',
+      exceptUserId: 'owner-1',
+      roomPattern: 'conv:convabc123',
+      reason: 'conversation_unshared',
+    } as KickPayload);
+
+    expect(result).toEqual({ success: true, kickedCount: 0, rooms: [] });
+  });
+
+  it('with no exceptUserId, evicts every socket in the room', () => {
+    const { io, sockets } = createRoomWideIo([
+      { socketId: 'sock-a', userId: 'user-a' },
+      { socketId: 'sock-b', userId: 'user-b' },
+    ]);
+
+    const result = executeKick(io, {
+      userId: '*',
+      roomPattern: 'conv:convabc123',
+      reason: 'conversation_unshared',
+    } as KickPayload);
+
+    expect(result.kickedCount).toBe(2);
+    expect(sockets.get('sock-a')!.leave).toHaveBeenCalled();
+    expect(sockets.get('sock-b')!.leave).toHaveBeenCalled();
+  });
+});

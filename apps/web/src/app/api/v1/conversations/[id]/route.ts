@@ -1,8 +1,4 @@
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
-import { conversations } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -80,15 +76,10 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
     }
   }
 
-  await db
-    .update(conversations)
-    .set({ isActive: false, updatedAt: new Date() })
-    .where(eq(conversations.id, id));
-
-  await db
-    .update(chatMessages)
-    .set({ isActive: false })
-    .where(and(eq(chatMessages.conversationId, id), eq(chatMessages.isActive, true)));
+  // Repository-owned conversation soft-delete (same conversationId-scoped
+  // message sweep this route always did): bumps rev and emits
+  // `conversation:deleted` (Agent-Session SSoT epic, Phase 2).
+  await conversationRepository.softDeleteConversationById(id);
 
   auditRequest(request, { eventType: 'data.delete', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
 
