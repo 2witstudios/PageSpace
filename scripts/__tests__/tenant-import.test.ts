@@ -106,6 +106,129 @@ describe('runImport', () => {
     expect(pagesResult.rows).toHaveLength(3);
   });
 
+  /**
+   * Round-trip proof for the columns the hand-maintained export lists used to
+   * drop silently. Every value asserted here is seeded AWAY from its column
+   * default (see `seedFixtures`), so a passing assertion means the value
+   * travelled — not that the tenant's default happened to agree.
+   *
+   * The drift guard (`tenant-export-columns.test.ts`) keeps the LIST honest
+   * against the schema; this keeps the bundle honest against a real database.
+   */
+  describe('carries every column through a full round trip', () => {
+    async function reimport(label: string): Promise<void> {
+      await truncateAll(db);
+      const targetFilePath = path.join(tmpDir, `target-files-${label}`);
+      await mkdir(targetFilePath, { recursive: true });
+      await runImport({
+        bundleDir,
+        databaseUrl: getTestDatabaseUrl(),
+        fileStoragePath: targetFilePath,
+        dryRun: false,
+      });
+    }
+
+    it('restores the conversation⇄session binding, rev, closed-listing stamp and shared flag', async () => {
+      await reimport('conversation');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "sessionId", rev, "closedInSessionAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sessionId).toBe(FIXTURES.agentSessions.workspace.id);
+      expect(Number(rows[0].rev)).toBe(FIXTURES.conversations.pageChat.rev);
+      expect(rows[0].closedInSessionAt).not.toBeNull();
+      expect(rows[0].isShared).toBe(true);
+    });
+
+    it('carries the agent session the conversation is bound to, without its source-fleet Sprite identity', async () => {
+      await reimport('session');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "sessionKey", "storageMeasuredBytes" FROM agent_sessions WHERE id = '${FIXTURES.agentSessions.workspace.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].driveId).toBe(FIXTURES.drives.shared.id);
+      expect(rows[0].ownerId).toBe(FIXTURES.users.owner.id);
+      expect(rows[0].name).toBe(FIXTURES.agentSessions.workspace.name);
+      // The exclusion allowlist in scripts/lib/tenant-export-columns.ts: these
+      // name a VM in the SOURCE fleet and must NOT reach the tenant, which
+      // provisions its own on first use.
+      expect(rows[0].sandboxId).toBeNull();
+      expect(rows[0].spriteInstanceId).toBeNull();
+      expect(rows[0].sessionKey).toBeNull();
+      expect(rows[0].storageMeasuredBytes).toBeNull();
+    });
+
+    it("restores the user's email blind index — the lookup key a migrated account logs in through", async () => {
+      await reimport('user');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "emailBidx" FROM users WHERE id = '${FIXTURES.users.owner.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows[0].emailBidx).toBe(FIXTURES.users.owner.emailBidx);
+    });
+
+    it("restores the drive's landing page, which FKs forward and rides a trailing UPDATE", async () => {
+      await reimport('drive');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "homePageId" FROM drives WHERE id = '${FIXTURES.drives.shared.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows[0].homePageId).toBe(FIXTURES.pages.root.id);
+    });
+
+    it("restores the pages' agent settings, privacy flag, description and author", async () => {
+      await reimport('pages');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT id, description, "isPrivate", "createdBy", "toolExposureMode", "sandboxEnabled", "userScopedAccess" FROM pages WHERE "driveId" = '${FIXTURES.drives.shared.id}'`,
+      ))).rows as Record<string, unknown>[];
+      const byId = new Map(rows.map((r) => [r.id as string, r]));
+
+      const root = byId.get(FIXTURES.pages.root.id)!;
+      expect(root.description).toBe(FIXTURES.pages.root.description);
+      expect(root.isPrivate).toBe(true);
+      expect(root.createdBy).toBe(FIXTURES.users.owner.id);
+
+      const agent = byId.get(FIXTURES.pages.grandchild.id)!;
+      expect(agent.toolExposureMode).toBe('search');
+      expect(agent.sandboxEnabled).toBe(true);
+      expect(agent.userScopedAccess).toBe(true);
+    });
+
+    it('carries the unified messages\' page and agent attribution', async () => {
+      // A conversation-scoped agent reply: NULL userId + a sourceAgentId, the
+      // exact shape 0248's attribution rule describes.
+      await db.execute(sql`
+        INSERT INTO messages (id, "conversationId", "userId", role, content, "pageId", "sourceAgentId", "createdAt")
+        VALUES ('test_message_attrib_001', ${FIXTURES.conversations.pageChat.id}, NULL, 'assistant', 'Agent reply', ${FIXTURES.pages.grandchild.id}, ${FIXTURES.pages.grandchild.id}, ${new Date()})
+      `);
+      await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: bundleDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      await reimport('messages');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "userId", "pageId", "sourceAgentId" FROM messages WHERE id = 'test_message_attrib_001'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].userId).toBeNull();
+      expect(rows[0].pageId).toBe(FIXTURES.pages.grandchild.id);
+      expect(rows[0].sourceAgentId).toBe(FIXTURES.pages.grandchild.id);
+    });
+  });
+
   it('preserves page tree structure (parent references)', async () => {
     await truncateAll(db);
 

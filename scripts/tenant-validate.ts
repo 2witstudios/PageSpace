@@ -160,6 +160,9 @@ export async function validateData(
     chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIn})`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
+    // Mirrors the export's rule: the sessions the migrated conversations are
+    // bound to, owned by a migrated user.
+    agent_sessions: sql.raw(`SELECT id FROM agent_sessions WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "sessionId" FROM conversations WHERE "userId" IN (${userIn}) AND "sessionId" IS NOT NULL)`),
     conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
     messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
