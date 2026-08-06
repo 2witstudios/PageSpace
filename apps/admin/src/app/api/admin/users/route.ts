@@ -1,8 +1,8 @@
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, count, sql } from '@pagespace/db/operators'
+import { and, eq, ne, inArray, desc, count, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core'
-import { messages } from '@pagespace/db/schema/conversations'
+import { drives, pages } from '@pagespace/db/schema/core'
+import { conversations, messages } from '@pagespace/db/schema/conversations'
 import { subscriptions } from '@pagespace/db/schema/subscriptions'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { stripe } from '@/lib/stripe';
@@ -56,7 +56,15 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     // Last active across ALL sessions regardless of revoked state — a user who
     // was active yesterday and then logged out still has a recent lastActiveAt.
     // COALESCE handles sessions where lastUsedAt was never set.
-    const [lastActiveDates, [driveTotal], [pageTotal], [chatMessageTotal], [globalMessageTotal]] = await Promise.all([
+    //
+    // Message counts read the unified `messages` table since the message-table
+    // merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6).
+    // `chat_messages` used to hold every non-global conversation's rows and
+    // `messages` only the global-assistant ones, so the two admin buckets are
+    // now split by CONVERSATION TYPE — `type = 'global'` vs everything else —
+    // which reproduces the old split exactly, including `type = 'client'`
+    // (v1 API) rows landing in the page/chat bucket where they always did.
+    const [lastActiveDates, [driveTotal], [pageTotal], [messageTotal]] = await Promise.all([
       db.select({
         userId: sessions.userId,
         lastActiveAt: sql<Date>`MAX(COALESCE(${sessions.lastUsedAt}, ${sessions.createdAt}))`,
@@ -65,7 +73,6 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         .groupBy(sessions.userId),
       db.select({ count: count() }).from(drives),
       db.select({ count: count() }).from(pages),
-      db.select({ count: count() }).from(chatMessages),
       db.select({ count: count() }).from(messages),
     ]);
 
@@ -86,7 +93,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       suspendedUsers: allUsers.filter(u => u.suspendedAt != null).length,
       totalDrives: Number(driveTotal?.count ?? 0),
       totalPages: Number(pageTotal?.count ?? 0),
-      totalMessages: Number(chatMessageTotal?.count ?? 0) + Number(globalMessageTotal?.count ?? 0),
+      totalMessages: Number(messageTotal?.count ?? 0),
     };
 
     // Filter → sort → page.
@@ -130,18 +137,26 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
             .where(inArray(drives.ownerId, userIds))
             .groupBy(drives.ownerId),
           db.select({
-            userId: chatMessages.userId,
+            userId: messages.userId,
             count: count(),
           })
-            .from(chatMessages)
-            .where(inArray(chatMessages.userId, userIds))
-            .groupBy(chatMessages.userId),
+            .from(messages)
+            .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+            .where(and(
+              inArray(messages.userId, userIds),
+              ne(conversations.type, 'global')
+            ))
+            .groupBy(messages.userId),
           db.select({
             userId: messages.userId,
             count: count(),
           })
             .from(messages)
-            .where(inArray(messages.userId, userIds))
+            .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+            .where(and(
+              inArray(messages.userId, userIds),
+              eq(conversations.type, 'global')
+            ))
             .groupBy(messages.userId),
         ]);
 

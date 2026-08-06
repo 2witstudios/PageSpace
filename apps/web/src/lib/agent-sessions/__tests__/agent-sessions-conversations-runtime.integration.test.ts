@@ -2,15 +2,22 @@
  * `hasActiveMessage` regression coverage against a REAL Postgres (real DB, not
  * mocked) — the drizzle-mock unit test in this same directory can prove the
  * pagination math, but "does this predicate actually see rows written by the
- * real page-agent send path" needs real SQL against the real `chat_messages`
- * table, joined the way `conversationRepository.conversationExists` does.
+ * real page-agent send path" needs real SQL against the real tables.
  *
  * The bug this guards: `hasActiveMessage` originally checked only the
- * `messages` table, which only `type: 'global'` conversations ever write to —
- * every `type: 'page'` conversation (including session-bound agent chats)
- * writes its content to `chat_messages` instead, keyed by `pageId` +
- * `conversationId` (review finding: this silently excluded every real
- * page-agent conversation from the listing).
+ * `messages` table, while every `type: 'page'` conversation (including
+ * session-bound agent chats) wrote its content to `chat_messages` — which
+ * silently excluded every real page-agent conversation from the listing
+ * (review finding).
+ *
+ * SINCE THE MESSAGE-TABLE MERGE (epic "Agent-Session Single Source of Truth",
+ * Phase 4 / D6) the reader queries the unified `messages` table only, and
+ * page-chat writes land on BOTH legs (PR 10's dual-write). So the seeding here
+ * writes both legs too — `insertPageMessage` below — which keeps the original
+ * regression honest: the fixture is still "content written by the page-agent
+ * send path", it is just no longer single-legged. A reader that reverted to
+ * checking only the legacy leg would still be caught, because the assertions
+ * are about what the LISTING returns, not about which table it read.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
@@ -21,13 +28,41 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { pages, chatMessages } from '@pagespace/db/schema/core';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { listAllConversationsPaginated, decodeCursor } from '../agent-sessions-conversations-runtime';
 
 let dbAvailable = false;
 
-describe('listAllConversationsPaginated — hasActiveMessage against real chat_messages', () => {
+/**
+ * Seed one page-chat message on BOTH legs — exactly what PR 10's dual-write
+ * does for every live page-chat write. Returns the shared row id so a test can
+ * reach back for a raw-SQL timestamp fixup.
+ */
+async function insertPageMessage(row: {
+  pageId: string;
+  conversationId: string;
+  role: string;
+  content: string;
+  isActive?: boolean;
+  createdAt?: Date;
+}): Promise<string> {
+  const id = createId();
+  const values = {
+    id,
+    pageId: row.pageId,
+    conversationId: row.conversationId,
+    role: row.role,
+    content: row.content,
+    isActive: row.isActive ?? true,
+    ...(row.createdAt ? { createdAt: row.createdAt } : {}),
+  };
+  await db.insert(chatMessages).values(values);
+  await db.insert(messages).values(values);
+  return id;
+}
+
+describe('listAllConversationsPaginated — hasActiveMessage against a real Postgres', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -37,7 +72,7 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
     }
   });
 
-  it('surfaces a type: "page" conversation whose content lives in chat_messages, not messages', async () => {
+  it('surfaces a type: "page" conversation written by the page-agent send path', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -53,13 +88,11 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
       title: null,
       isActive: true,
     });
-    await db.insert(chatMessages).values({
-      id: createId(),
+    await insertPageMessage({
       pageId: agentPage.id,
       conversationId,
       role: 'user',
       content: 'hello',
-      isActive: true,
     });
 
     const result = await listAllConversationsPaginated({ ownerId: owner.id });
@@ -117,13 +150,11 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
       createdAt: new Date('2020-01-01'),
     });
     // Its only message is TODAY — real recent activity.
-    await db.insert(chatMessages).values({
-      id: createId(),
+    await insertPageMessage({
       pageId: oldAgent.id,
       conversationId: oldConversationId,
       role: 'user',
       content: 'still using this one',
-      isActive: true,
       createdAt: new Date(),
     });
 
@@ -138,13 +169,11 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
       createdAt: new Date('2026-01-01'),
     });
     // Created much later, but its only message is old — no recent activity.
-    await db.insert(chatMessages).values({
-      id: createId(),
+    await insertPageMessage({
       pageId: newAgent.id,
       conversationId: newConversationId,
       role: 'user',
       content: 'sent right after creating, never touched again',
-      isActive: true,
       createdAt: new Date('2026-01-01'),
     });
 
@@ -187,13 +216,11 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
       title: 'My API thread',
       isActive: true,
     });
-    await db.insert(chatMessages).values({
-      id: createId(),
+    await insertPageMessage({
       pageId: agentPage.id,
       conversationId,
       role: 'user',
       content: 'hi from the API',
-      isActive: true,
     });
 
     const result = await listAllConversationsPaginated({ ownerId: owner.id });
@@ -234,9 +261,7 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
       await db.insert(conversations).values({
         id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
       });
-      await db.insert(chatMessages).values({
-        id: createId(), pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true, createdAt: activityAt,
-      });
+      await insertPageMessage({ pageId: agentId, conversationId, role: 'user', content: 'hi', createdAt: activityAt });
       return conversationId;
     };
 
@@ -259,9 +284,7 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
     // live-re-lookup design, decoding the cursor's id and re-querying its
     // CURRENT sort key would see this new, much-more-recent timestamp
     // instead of the frozen one.
-    await db.insert(chatMessages).values({
-      id: createId(), pageId: agent2.id, conversationId: middle, role: 'user', content: 'still here', isActive: true, createdAt: new Date(),
-    });
+    await insertPageMessage({ pageId: agent2.id, conversationId: middle, role: 'user', content: 'still here', createdAt: new Date() });
 
     // Page 2, using the cursor obtained BEFORE that mutation.
     const page2 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2, cursor });
@@ -286,9 +309,7 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
       await db.insert(conversations).values({
         id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
       });
-      await db.insert(chatMessages).values({
-        id: createId(), pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true, createdAt: activityAt,
-      });
+      await insertPageMessage({ pageId: agentId, conversationId, role: 'user', content: 'hi', createdAt: activityAt });
       return conversationId;
     };
 
@@ -338,10 +359,7 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
       await db.insert(conversations).values({
         id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
       });
-      const messageId = createId();
-      await db.insert(chatMessages).values({
-        id: messageId, pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true,
-      });
+      const messageId = await insertPageMessage({ pageId: agentId, conversationId, role: 'user', content: 'hi' });
       return { conversationId, messageId };
     };
 
@@ -350,8 +368,11 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
     // actually seed the sub-millisecond difference this test needs.
     const newer = await makeConversation(agentNewer.id);
     const older = await makeConversation(agentOlder.id);
+    // Both legs, so the fixture stays coherent whichever one a reader looks at.
     await db.execute(sql`UPDATE chat_messages SET "createdAt" = '2020-03-01 00:00:00.123456' WHERE id = ${newer.messageId}`);
     await db.execute(sql`UPDATE chat_messages SET "createdAt" = '2020-03-01 00:00:00.123400' WHERE id = ${older.messageId}`);
+    await db.execute(sql`UPDATE messages SET "createdAt" = '2020-03-01 00:00:00.123456' WHERE id = ${newer.messageId}`);
+    await db.execute(sql`UPDATE messages SET "createdAt" = '2020-03-01 00:00:00.123400' WHERE id = ${older.messageId}`);
 
     const page1 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 1 });
     expect(page1.conversations.map((c) => c.conversationId)).toEqual([newer.conversationId]);

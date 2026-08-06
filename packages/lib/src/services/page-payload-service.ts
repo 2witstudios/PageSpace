@@ -15,7 +15,8 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, ne, desc, sql } from '@pagespace/db/operators';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import type {
   PagePayload,
   BreadcrumbEntry,
@@ -185,30 +186,38 @@ async function fetchChatMessages(
   // Excludes 'streaming' placeholders — this is a model-facing AI-payload context bag, not a
   // client history view, so an empty mid-flight row would be pure noise. See Server Stream
   // Durability epic PR 2.
+  //
+  // Unified `messages` table since the message-table merge (epic
+  // "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope is the
+  // JOIN — `conversations.type = 'page'` AND `conversations.contextId = pageId`
+  // — not `messages.pageId`, which is transitional and dropped at the contract
+  // PR. The emitted `pageId` is therefore the argument itself, which is what
+  // the join proves it equals.
   const rows = await runner
     .select({
-      id: chatMessages.id,
-      pageId: chatMessages.pageId,
-      conversationId: chatMessages.conversationId,
-      role: chatMessages.role,
-      content: chatMessages.content,
-      createdAt: chatMessages.createdAt,
-      isActive: chatMessages.isActive,
-      userId: chatMessages.userId,
+      id: messages.id,
+      conversationId: messages.conversationId,
+      role: messages.role,
+      content: messages.content,
+      createdAt: messages.createdAt,
+      isActive: messages.isActive,
+      userId: messages.userId,
     })
-    .from(chatMessages)
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
     .where(and(
-      eq(chatMessages.pageId, pageId),
-      eq(chatMessages.isActive, true),
-      ne(chatMessages.status, 'streaming')
+      eq(conversations.type, 'page'),
+      eq(conversations.contextId, pageId),
+      eq(messages.isActive, true),
+      ne(messages.status, 'streaming')
     ))
-    .orderBy(desc(chatMessages.createdAt))
+    .orderBy(desc(messages.createdAt))
     .limit(RECENT_MESSAGE_LIMIT);
 
   return rows
     .map((row) => ({
       id: row.id,
-      pageId: row.pageId,
+      pageId,
       conversationId: row.conversationId,
       role: row.role,
       content: row.content,

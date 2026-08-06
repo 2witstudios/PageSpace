@@ -6,7 +6,7 @@ import {
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import {
   validateConversationAccess,
   serializeMessageRowToMessages,
@@ -41,7 +41,11 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   // epic PR 2.
   const { searchParams } = new URL(request.url);
   const includeStreaming = searchParams.get('includeStreaming') === '1';
-  const messages = await chatMessageRepository.getMessagesByConversationId(id, includeStreaming);
+  // Unified `messages` table since the message-table merge (epic
+  // "Agent-Session Single Source of Truth", Phase 4 / D6). Same
+  // conversationId-scoped, streaming-aware query the legacy repository ran —
+  // one table instead of two.
+  const messages = await messageRepository.getMessagesByConversationId(id, includeStreaming);
 
   auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
 
