@@ -31,7 +31,7 @@ on:
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
   pull_request:
-    branches: [master, pu/flash-sandbox]
+    branches: [master, pu/flash-sandbox, pu/broken-sessions]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'
