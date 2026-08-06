@@ -64,8 +64,9 @@ export const conversationMessagesActions = {
     useConversationMessagesStore.getState().removeOptimisticSendOnFailure(conversationId, messageId),
   applyEdit: (conversationId: string, payload: MessageEditPayload): void =>
     useConversationMessagesStore.getState().applyEdit(conversationId, payload),
-  applyDelete: (conversationId: string, messageId: string): void =>
-    useConversationMessagesStore.getState().applyDelete(conversationId, messageId),
+  /** `rev`: the deleting event's post-write rev, when it carried one — see PendingMutation. */
+  applyDelete: (conversationId: string, messageId: string, rev?: number): void =>
+    useConversationMessagesStore.getState().applyDelete(conversationId, messageId, rev),
   /** Optimistic ask_user answer patch — the resume POST's own commit reconciles it once persisted. */
   applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload): void =>
     useConversationMessagesStore.getState().applyAskUserAnswer(conversationId, payload),
@@ -87,8 +88,8 @@ export const conversationMessagesActions = {
    * cross-instance recovery), where an existing row under this id may be a
    * stale/half-streamed snapshot that must be overwritten, not skipped.
    */
-  applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
-    useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
+  applyConfirmedMessage: (conversationId: string, message: UIMessage, rev?: number): void =>
+    useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message, rev),
   /**
    * Promote optimistic sends into confirmed messages. Call on THIS TAB'S OWN
    * stream commit only — an own reply proves the user rows that triggered it

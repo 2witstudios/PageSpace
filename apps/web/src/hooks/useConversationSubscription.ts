@@ -199,7 +199,10 @@ export function useConversationSubscription(
         heal(payload.rev);
         return;
       }
-      conversationMessagesActions.applyConfirmedMessage(conversationId, message);
+      // The rev rides along onto the recorded pending mutation, so a snapshot
+      // fetched by a concurrent gap-heal can tell whether it already contains
+      // this write rather than replaying it over newer truth.
+      conversationMessagesActions.applyConfirmedMessage(conversationId, message, payload.rev);
       conversationMessagesActions.advanceRev(conversationId, payload.rev);
     };
 
@@ -211,7 +214,7 @@ export function useConversationSubscription(
         heal(payload.rev);
         return;
       }
-      conversationMessagesActions.applyDelete(conversationId, payload.messageId);
+      conversationMessagesActions.applyDelete(conversationId, payload.messageId, payload.rev);
       conversationMessagesActions.advanceRev(conversationId, payload.rev);
     };
 

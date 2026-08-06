@@ -49,7 +49,14 @@ export const applyLoad = (
   const existing = byConversationId[event.conversationId];
   if (!existing || event.generation !== existing.loadGeneration) return byConversationId;
 
-  const messages = replayPendingMutations(event.messages, existing.pendingMutationsSinceLoad);
+  // Rev-gated: a mutation the snapshot already contains must not be replayed
+  // over it (see `replayPendingMutations`). Only mutations NEWER than this
+  // snapshot's rev — plus every unversioned one — survive onto the result.
+  const messages = replayPendingMutations(
+    event.messages,
+    existing.pendingMutationsSinceLoad,
+    event.rev,
+  );
   const loadedIds = new Set(messages.map((m) => m.id));
   const optimisticSends = existing.optimisticSends.filter((m) => !loadedIds.has(m.id));
 
