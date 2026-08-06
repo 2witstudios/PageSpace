@@ -134,6 +134,7 @@
         "src/schema/hotkeys.ts",
         "src/schema/incidents.ts",
         "src/schema/integrations.ts",
+        "src/schema/agent-workspace-layout.ts",
         "src/schema/machine-sprite-reclaims.ts",
         "src/schema/members.ts",
         "src/schema/monitoring.ts",
