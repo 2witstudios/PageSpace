@@ -79,6 +79,21 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserDriveAccess: vi.fn(),
 }));
 
+// conversation-access predicate mock (join_conversation authz — SSoT Phase 2)
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
+  canAccessConversation: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: {
+    id: 'id',
+    userId: 'userId',
+    isShared: 'isShared',
+    type: 'type',
+    contextId: 'contextId',
+  },
+}));
+
 // auth/session mock
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
@@ -305,6 +320,7 @@ vi.mock('socket.io', () => ({
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { emitValidationError } from '../validation';
@@ -1119,6 +1135,8 @@ describe('Socket.IO connection handler', () => {
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:tasks');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:calendar');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:drives');
+    // Directory plane (SSoT Phase 2): the user's own sessions room is auto-joined.
+    expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:sessions');
     expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-conn-1', 'notifications:user-conn-1');
   });
 
@@ -1273,6 +1291,134 @@ describe('Socket.IO connection handler', () => {
       await socket._trigger('join_dm_conversation', 'athmieqpwr4ax1t2e0i4lmor');
 
       expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.objectContaining({ message: 'DB error' }), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
+    });
+  });
+
+  describe('join_conversation event (SSoT Phase 2 — canAccessConversation authz)', () => {
+    const CONV = 'athmieqpwr4ax1t2e0i4lmor';
+    const row = { userId: 'owner-1', isShared: false, type: 'page', contextId: 'pageabc123' };
+
+    it('given the predicate allows (owner, or shared + page access), joins the conv room', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'owner-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith('owner-1', row);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+      expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-1', `conv:${CONV}`);
+    });
+
+    it('given a non-owner on a PRIVATE conversation (predicate denies), does not join and does not disconnect', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(false);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'intruder', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('given a collaborator on a SHARED conversation (predicate allows), joins the conv room', async () => {
+      const sharedRow = { ...row, isShared: true };
+      mockDbLimit.mockResolvedValueOnce([sharedRow]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'collab-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith('collab-1', sharedRow);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+    });
+
+    it('given no conversations row, fails closed without consulting the predicate', async () => {
+      mockDbLimit.mockResolvedValueOnce([]);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(canAccessConversation).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', { not: 'a string' });
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_conversation', 'Conversation ID must be a valid ID');
+    });
+
+    it('given no user on the socket, returns silently — no join, no validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(emitValidationError).not.toHaveBeenCalled();
+    });
+
+    it('given the conversation lookup throws, logs the error without joining or disconnecting', async () => {
+      mockDbLimit.mockRejectedValueOnce(new Error('DB error'));
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith(
+        'Error joining conversation',
+        expect.objectContaining({ message: 'DB error' }),
+        { conversationId: CONV },
+      );
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('leave_conversation event', () => {
+    it('leaves the conv room', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).toHaveBeenCalledWith('conv:athmieqpwr4ax1t2e0i4lmor');
+      expect(mockSocketRegistry.trackRoomLeave).toHaveBeenCalledWith('socket-1', 'conv:athmieqpwr4ax1t2e0i4lmor');
+    });
+
+    it('given no user on the socket, returns silently — no leave', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error and leaves nothing', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 12345);
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_conversation', 'Conversation ID must be a valid ID');
+      expect(socket.leave).not.toHaveBeenCalled();
     });
   });
 

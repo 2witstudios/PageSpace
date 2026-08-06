@@ -78,6 +78,43 @@ export function roomMatchesPattern(room: string, pattern: string): boolean {
 }
 
 /**
+ * Room-wide kick (`userId: '*'`): evict every socket currently in the room,
+ * except `exceptUserId`'s sockets. Exists for conversation un-share, where
+ * the caller cannot enumerate which collaborators had joined the room but
+ * the room's own membership can. Same best-effort contract as the targeted
+ * kick — join-time authz is the real gate.
+ */
+function executeRoomWideKick(io: Server, payload: KickPayload): KickResult {
+  const { roomPattern, reason, metadata, exceptUserId } = payload;
+  const memberSocketIds = io.sockets.adapter.rooms.get(roomPattern);
+  if (!memberSocketIds || memberSocketIds.size === 0) {
+    return { success: true, kickedCount: 0, rooms: [] };
+  }
+
+  let kickedCount = 0;
+  for (const socketId of [...memberSocketIds]) {
+    const socket = io.sockets.sockets.get(socketId) as
+      | (Socket & { data: { user?: { id: string } } })
+      | undefined;
+    if (!socket) continue;
+    if (exceptUserId && socket.data.user?.id === exceptUserId) continue;
+
+    socket.leave(roomPattern);
+    socketRegistry.trackRoomLeave(socketId, roomPattern);
+    kickedCount++;
+    socket.emit('access_revoked', { room: roomPattern, reason, metadata });
+  }
+
+  loggers.realtime.info('Room-wide kick executed', {
+    roomPattern,
+    reason,
+    kickedCount,
+  });
+
+  return { success: true, kickedCount, rooms: kickedCount > 0 ? [roomPattern] : [] };
+}
+
+/**
  * Execute the kick operation - remove user's sockets from matching rooms
  */
 export function executeKick(
@@ -85,6 +122,10 @@ export function executeKick(
   payload: KickPayload
 ): KickResult {
   const { userId, roomPattern, reason, metadata } = payload;
+
+  if (userId === '*') {
+    return executeRoomWideKick(io, payload);
+  }
 
   // Get all sockets for this user
   const userSocketIds = socketRegistry.getSocketsForUser(userId);

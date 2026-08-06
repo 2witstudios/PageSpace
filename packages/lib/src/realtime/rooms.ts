@@ -95,6 +95,25 @@ export const dmRoom = (conversationId: string): string => `dm:${conversationId}`
  */
 export const sessionRoom = (workspaceId: string): string => `session:${workspaceId}`;
 
+/**
+ * AI conversation content room (`conv:<conversationId>`) — the content plane
+ * of the Agent-Session Single Source of Truth epic (Phase 2). Joined on pane
+ * open via the `join_conversation` handler, which authorizes with
+ * `canAccessConversation` (owner OR isShared + page access). Carries the
+ * authoritative `conversation:message_*` / `conversation:undo_applied` events
+ * plus the transitional `chat:stream_start/complete` mirror.
+ */
+export const conversationRoom = (conversationId: string): string => `conv:${conversationId}`;
+
+/**
+ * Per-user session/conversation directory room (`user:<id>:sessions`) —
+ * the directory plane. Auto-joined on connect alongside the other personal
+ * rooms; carries id-level `conversation:created/updated/closed/reopened/
+ * deleted` events so sidebars and session lists can update without joining
+ * every conversation's own room.
+ */
+export const userSessionsRoom = (userId: string): string => `user:${userId}:sessions`;
+
 /** Drive activity feed room. */
 export const driveActivityRoom = (driveId: string): string => `activity:drive:${driveId}`;
 
@@ -112,10 +131,12 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
   userCalendarRoom,
   userDrivesRoom,
   userGlobalRoom,
+  userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
   dmRoom,
   sessionRoom,
+  conversationRoom,
   driveActivityRoom,
   pageActivityRoom,
 ];
@@ -125,7 +146,7 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
 // ---------------------------------------------------------------------------
 
 /** Suffix-keyed `user:<cuid>:<suffix>` rooms. */
-const USER_SUFFIXES = new Set(['tasks', 'calendar', 'drives', 'global']);
+const USER_SUFFIXES = new Set(['tasks', 'calendar', 'drives', 'global', 'sessions']);
 
 /** `activity:<scope>:<cuid>` scopes. */
 const ACTIVITY_SCOPES = new Set(['drive', 'page']);
@@ -142,10 +163,14 @@ export function isKnownRoomId(roomId: string): boolean {
     return isCUID2(roomId);
   }
 
-  // notifications:<cuid> | dm:<cuid> | drive:<cuid> | session:<cuid>
+  // notifications:<cuid> | dm:<cuid> | drive:<cuid> | session:<cuid> | conv:<cuid>
   if (
     segments.length === 2 &&
-    (segments[0] === 'notifications' || segments[0] === 'dm' || segments[0] === 'drive' || segments[0] === 'session')
+    (segments[0] === 'notifications' ||
+      segments[0] === 'dm' ||
+      segments[0] === 'drive' ||
+      segments[0] === 'session' ||
+      segments[0] === 'conv')
   ) {
     return isCUID2(segments[1]);
   }

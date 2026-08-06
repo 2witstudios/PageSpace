@@ -11,6 +11,19 @@ import { PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    editGlobalMessage: vi.fn().mockResolvedValue(undefined),
+    softDeleteGlobalMessage: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi
+    .fn()
+    .mockResolvedValue({ userId: 'user_123', displayName: 'Tester', browserSessionId: '' }),
+}));
+
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: {
     getConversationById: vi.fn(),
@@ -60,6 +73,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -150,7 +164,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
     );
 
     // Default: update succeeds
-    vi.mocked(globalConversationRepository.updateMessageContent).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.editGlobalMessage).mockResolvedValue(undefined);
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -235,7 +249,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toMatch(/still generating/i);
-      expect(globalConversationRepository.updateMessageContent).not.toHaveBeenCalled();
+      expect(messageRepository.editGlobalMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -266,9 +280,8 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
         mockConversationId,
         mockMessageId
       );
-      expect(globalConversationRepository.updateMessageContent).toHaveBeenCalledWith(
-        mockMessageId,
-        'Updated'
+      expect(messageRepository.editGlobalMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId, updatedContent: 'Updated' })
       );
     });
 
@@ -291,7 +304,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(globalConversationRepository.updateMessageContent).mockRejectedValue(
+      vi.mocked(messageRepository.editGlobalMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -399,7 +412,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
     );
 
     // Default: delete succeeds
-    vi.mocked(globalConversationRepository.softDeleteMessage).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.softDeleteGlobalMessage).mockResolvedValue(undefined);
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -460,7 +473,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toMatch(/still generating/i);
-      expect(globalConversationRepository.softDeleteMessage).not.toHaveBeenCalled();
+      expect(messageRepository.softDeleteGlobalMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -483,7 +496,9 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       await DELETE(request, context);
 
-      expect(globalConversationRepository.softDeleteMessage).toHaveBeenCalledWith(mockMessageId);
+      expect(messageRepository.softDeleteGlobalMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId })
+      );
     });
 
     it('should log successful deletion', async () => {
@@ -505,7 +520,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(globalConversationRepository.softDeleteMessage).mockRejectedValue(
+      vi.mocked(messageRepository.softDeleteGlobalMessage).mockRejectedValue(
         new Error('Database error')
       );
 

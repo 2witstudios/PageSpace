@@ -48,6 +48,21 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_col, val) => ({ __eq: val })),
   and: vi.fn((...args) => ({ __and: args })),
+  sql: vi.fn(),
+  ne: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -90,7 +105,6 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 
 vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
     const msg = m as { id: string; role: string; content: string };
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
@@ -250,7 +264,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null,
+      closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -320,7 +334,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null,
+      closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -366,7 +380,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null,
+      closedInSessionAt: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });

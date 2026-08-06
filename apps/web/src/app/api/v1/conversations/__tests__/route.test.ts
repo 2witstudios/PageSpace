@@ -74,6 +74,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: vi.fn().mockResolvedValue(null),
+    softDeleteConversationById: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -132,7 +133,7 @@ const existingConversation = {
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
   sessionId: null,
-  closedInSessionAt: null,
+  closedInSessionAt: null, rev: 0,
   lastMessageAt: null,
 };
 
@@ -485,14 +486,14 @@ describe('DELETE /api/v1/conversations/[id]', () => {
     });
   });
 
-  test('soft delete calls db.update for the conversations table', async () => {
+  test('soft delete goes through the repository choke point (rev bump + conversation:deleted emission)', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
     await DELETE(makeDeleteRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
     assert({
       given: 'a successful delete',
-      should: 'call db.update at least once (to soft-delete the conversations row)',
-      actual: vi.mocked(db.update).mock.calls.length >= 1,
-      expected: true,
+      should: 'delegate the tombstone + message sweep to conversationRepository.softDeleteConversationById',
+      actual: vi.mocked(conversationRepository.softDeleteConversationById).mock.calls,
+      expected: [['conv-1']],
     });
   });
 

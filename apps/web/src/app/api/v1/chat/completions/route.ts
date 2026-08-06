@@ -20,7 +20,8 @@ import {
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForDispatchCredentials, filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
@@ -434,7 +435,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const userMessageId = userMessage.id;
     if (userMessage && userMessage.role === 'user') {
-      await saveMessageToDatabase({
+      await messageRepository.savePageMessage({
         messageId: userMessageId,
         pageId,
         conversationId,
@@ -516,7 +517,7 @@ export async function POST(request: Request): Promise<Response> {
       const extracted = extractToolCallsFromSteps(steps ?? []);
       const hasContent = text !== undefined || extracted.toolCalls.length > 0;
       if (hasContent) {
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: assistantId,
           pageId,
           conversationId,

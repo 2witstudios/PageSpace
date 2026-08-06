@@ -1562,6 +1562,11 @@
       "import": "./dist/permissions/rollback-permissions.js",
       "require": "./dist/permissions/rollback-permissions.js"
     },
+    "./permissions/conversation-access": {
+      "types": "./dist/permissions/conversation-access.d.ts",
+      "import": "./dist/permissions/conversation-access.js",
+      "require": "./dist/permissions/conversation-access.js"
+    },
     "./permissions/enforced-context": {
       "types": "./dist/permissions/enforced-context.d.ts",
       "import": "./dist/permissions/enforced-context.js",

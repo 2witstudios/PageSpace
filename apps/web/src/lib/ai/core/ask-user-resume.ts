@@ -7,9 +7,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   convertDbMessageToUIMessage,
   convertGlobalAssistantMessageToUIMessage,
-  saveMessageToDatabase,
-  saveGlobalAssistantMessageToDatabase,
 } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import {
   buildAssistantPersistencePayload,
   type AssistantPersistencePayload,
@@ -104,15 +103,16 @@ function pendingAskUserToolCallIds(parts: UIMessage['parts']): string[] {
  * double-submit, or answering in one tab while a dismiss-triggering message
  * arrives from another) can interleave and the later write wins, silently
  * dropping the earlier one. Not fixed here: doing so correctly requires
- * threading a transaction/row-lock through `saveMessageToDatabase` /
- * `saveGlobalAssistantMessageToDatabase` in message-utils.ts, which are
+ * threading a transaction/row-lock through the message repository's save
+ * methods (apps/web/src/lib/repositories/message-repository.ts), which are
  * shared by many unrelated AI features — broader blast radius than this
  * narrow, low-probability, self-healing race (the user can just answer
  * again) justifies in isolation.
  */
 interface FetchedAssistantMessage {
   message: UIMessage;
-  persist(payload: AssistantPersistencePayload): Promise<void>;
+  /** Result (the repository's MessageWriteResult) is intentionally ignored by callers. */
+  persist(payload: AssistantPersistencePayload): Promise<unknown>;
 }
 
 /**
@@ -202,7 +202,7 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     });
 
   const persistFor = (messageId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
-    saveMessageToDatabase({
+    messageRepository.savePageMessage({
       messageId,
       pageId: args.pageId,
       conversationId: args.conversationId,
@@ -234,7 +234,7 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       if (!row || row.role !== 'assistant') return null;
       // The fetchers' ne(status, 'streaming') filter guarantees row.status is 'complete' or
       // 'interrupted' here — persist must preserve it, not silently default back to 'complete'
-      // (saveMessageToDatabase's own default), or a genuinely cut-short reply with a pending
+      // (the repository save's own default), or a genuinely cut-short reply with a pending
       // ask_user call would read as fully complete the moment it's answered/dismissed.
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
@@ -308,7 +308,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
     });
 
   const persistFor = (messageId: string, userId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
-    saveGlobalAssistantMessageToDatabase({
+    messageRepository.saveGlobalMessage({
       messageId,
       conversationId: args.conversationId,
       userId,

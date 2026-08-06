@@ -4,12 +4,13 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, sql, lt, exists } from '@pagespace/db/operators'
+import { eq, and, desc, sql, lt, exists, isNull } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 
 // Types
 export interface ConversationSummary {
@@ -346,6 +347,9 @@ export const globalConversationRepository = {
       })
       .returning();
 
+    if (newConversation) {
+      emitConversationLifecycle('created', { ...newConversation, rev: Number(newConversation.rev) });
+    }
     return newConversation;
   },
 
@@ -401,6 +405,7 @@ export const globalConversationRepository = {
       .set({
         title,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -408,7 +413,31 @@ export const globalConversationRepository = {
       ))
       .returning();
 
+    if (updatedConversation) {
+      emitConversationLifecycle(
+        'updated',
+        { ...updatedConversation, rev: Number(updatedConversation.rev) },
+        undefined,
+        { title },
+      );
+    }
     return updatedConversation || null;
+  },
+
+  /**
+   * Auto-title from the first user message, never overwriting an existing
+   * title (IS NULL guard lives in the SQL, so it's race-safe to call on
+   * every message). Rev-bumped + emitted like every lifecycle mutation.
+   */
+  async autoTitleConversation(conversationId: string, title: string): Promise<void> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ title, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)))
+      .returning();
+    if (updated) {
+      emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, { title });
+    }
   },
 
   /**
@@ -420,12 +449,17 @@ export const globalConversationRepository = {
       .set({
         isActive: false,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
         eq(conversations.userId, userId)
       ))
       .returning();
+
+    if (deletedConversation) {
+      emitConversationLifecycle('deleted', { ...deletedConversation, rev: Number(deletedConversation.rev) });
+    }
 
     // Invalidate only when the user-scoped delete actually matched a row —
     // a caller holding someone else's conversation ID must not be able to

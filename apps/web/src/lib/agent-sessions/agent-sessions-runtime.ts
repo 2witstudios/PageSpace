@@ -19,7 +19,7 @@
 
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
-import { and, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -475,14 +475,10 @@ export async function closeConversationInSession(input: {
     closeConversationInSessionWith(
       {
         ...sessionListingReadDeps(),
-        closeConversation: async (conversationId) => {
-          const updated = await db
-            .update(conversations)
-            .set({ closedInSessionAt: new Date() })
-            .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInSessionAt)))
-            .returning({ id: conversations.id });
-          return updated.length > 0 ? 'closed' : 'noop';
-        },
+        // Repository-owned write: bumps rev and emits `conversation:closed`
+        // (Agent-Session SSoT epic, Phase 2 — one writer, one emitter).
+        closeConversation: (conversationId) =>
+          conversationRepository.closeConversationListing(conversationId),
       },
       input,
     ),
@@ -504,14 +500,9 @@ export async function reopenConversationInSession(input: {
     reopenConversationInSessionWith(
       {
         ...sessionListingReadDeps(),
-        reopenConversation: async (conversationId) => {
-          const updated = await db
-            .update(conversations)
-            .set({ closedInSessionAt: null })
-            .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInSessionAt)))
-            .returning({ id: conversations.id });
-          return updated.length > 0 ? 'reopened' : 'noop';
-        },
+        // Repository-owned write: bumps rev and emits `conversation:reopened`.
+        reopenConversation: (conversationId) =>
+          conversationRepository.reopenConversationListing(conversationId),
       },
       input,
     ),

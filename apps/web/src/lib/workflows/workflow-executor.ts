@@ -10,7 +10,7 @@ import { spawnSession, createConversationInSession, endSession } from '@/lib/age
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
-import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
@@ -747,7 +747,7 @@ async function runExecution(
     const userMessageId = createId();
     const assistantMessageId = createId();
 
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: userMessageId,
       pageId: agent.id,
       conversationId,
@@ -756,7 +756,7 @@ async function runExecution(
       content: userMessage,
     });
 
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: assistantMessageId,
       pageId: agent.id,
       conversationId,

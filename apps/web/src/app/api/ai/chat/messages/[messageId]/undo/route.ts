@@ -7,8 +7,8 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { broadcastAiUndoApplied } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
@@ -221,12 +221,14 @@ export async function POST(
       );
     }
 
-    // Broadcast chat:undo_applied so remote viewers refresh their conversation.
-    // Page-event broadcasts below cover the page-domain side; this one covers the
-    // chat-domain side (conversation history). Failure must never break the request.
+    // Record the undo through the repository choke point: bumps the
+    // conversation's rev, emits the legacy chat:undo_applied (moved in from
+    // this route) plus the authoritative conversation:undo_applied to the
+    // conv room. Page-event broadcasts below cover the page-domain side.
+    // Failure must never break the request.
     void (async () => {
       try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
+        const legacyTriggeredBy = await resolveTriggeredBy(userId, request);
         const broadcastPageId = preview.source === 'page_chat' && preview.pageId
           ? preview.pageId
           : globalChannelId(userId);
@@ -234,12 +236,15 @@ export async function POST(
           .filter((a) => a.resourceType === 'message')
           .map((a) => a.resourceId);
         const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
-        await broadcastAiUndoApplied({
+        await messageRepository.recordUndoApplied({
           conversationId: preview.conversationId,
-          pageId: broadcastPageId,
+          legacyChannelId: broadcastPageId,
+          scope: preview.source === 'page_chat' && preview.pageId
+            ? { kind: 'page', pageId: preview.pageId }
+            : { kind: 'global', ownerId: userId },
           mode,
           affectedMessageIds,
-          triggeredBy,
+          legacyTriggeredBy,
         });
       } catch (broadcastError) {
         loggers.api.error('Failed to broadcast chat undo-applied', broadcastError as Error, {

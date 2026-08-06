@@ -161,6 +161,25 @@ vi.mock('@pagespace/db/operators', () => ({
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2): forwards to the same spy the
+// route used to call directly, preserving this file's assertions.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    saveGlobalMessage: vi.fn(async (args: Record<string, unknown>) => {
+      const { beforeSave: _b, triggeredBy: _t, ...rest } = args as { beforeSave?: unknown; triggeredBy?: unknown };
+      await mockSaveGlobalAssistantMessageToDatabase(rest);
+      return { saved: true, rev: 1 };
+    }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+  },
+}));
+
 vi.mock('../resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
@@ -211,7 +230,6 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
-  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
 }));
 vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),

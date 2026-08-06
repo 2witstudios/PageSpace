@@ -153,8 +153,8 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME:
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('@/lib/ai/core/message-utils', () => ({
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: { savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }) },
 }));
 
 const convertToModelMessages = vi.fn().mockImplementation((msgs: unknown) => msgs);

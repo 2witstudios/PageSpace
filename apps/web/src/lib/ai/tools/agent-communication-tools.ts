@@ -13,7 +13,8 @@ import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
-import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -566,7 +567,7 @@ export async function executeAskAgent(
         const sourceAgentId = callingPage?.type === 'AI_CHAT' ? callingPage.id : null;
 
         // Save user message to database
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: userMessageId,
           pageId: agentId,
           conversationId: activeConversationId,
@@ -812,7 +813,7 @@ export async function executeAskAgent(
 
         // 13. Save assistant's response to database
         const assistantMessageId = createId();
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: assistantMessageId,
           pageId: agentId,
           conversationId: activeConversationId,

@@ -152,20 +152,30 @@ Four clauses:
 1. **Every fact has one server-side owner.** One writer per table, behind a repository
    choke point (message writes converge on a message repository; conversation
    lifecycle on the conversation repository). Routes never decide whether to
-   broadcast. *Today:* ~10 call sites save messages directly and membership facts are
-   stored three ways (FK, `workspaceState` jsonb, localStorage). *Target:* epic
-   Phases 2–3.
+   broadcast. *Message writes: SHIPPED* (epic Phase 2 PR 2) — every durable message
+   write goes through `apps/web/src/lib/repositories/message-repository.ts` (the raw
+   savers are private to it), and conversation lifecycle emits from the conversation
+   repositories. *Still open:* membership facts are stored three ways (FK,
+   `workspaceState` jsonb, localStorage) — epic Phase 3.
 2. **Every owner emits on write.** Each committed write broadcasts a rev-carrying event
    (`conversations.rev` bumped in-transaction; the event carries the post-write rev).
-   *Today:* nothing broadcasts on message persistence — only the stream lifecycle
-   emits, and the `chat:user_message` broadcast is gated on `isShared`, so a user's own
-   server-side dispatch is invisible to their own open panes. *Target:* epic Phase 2.
+   *SHIPPED server-side* (epic Phase 2 PR 2): `conversation:message_created/updated/
+   deleted`, `conversation:undo_applied` to the `conv:<conversationId>` room —
+   unconditionally; room membership (the `join_conversation` handler +
+   `canAccessConversation`) is the authorization — and directory events
+   `conversation:created/updated/closed/reopened/deleted` to `user:<ownerId>:sessions`
+   (plus the page room when shared). The legacy `chat:*` page-room events still emit
+   in parallel (old clients depend on them; the page-room `chat:user_message` keeps
+   its `isShared` gate while it lives, because the page room contains members with no
+   access to private conversations); they are deleted with the client cutover
+   (Phase 2 PRs 3–4).
 3. **Every surface is a subscriber that can prove it is current.** Pane, sidebar, and
    agent alike hold a rev watermark; an event with `rev == watermark + 1` applies, a
    gap triggers a snapshot refetch, reconnect runs a batched rev check. Transport stays
    best-effort; correctness comes from rev + refetch, not delivery guarantees.
-   *Today:* caches apply events only for conversations already loaded and lists heal by
-   15–20s polls. *Target:* epic Phases 2–4; polls demoted to backstops.
+   *Server half shipped* (Phase 2 PR 2): every event carries the post-write rev.
+   *Today, client-side:* caches apply events only for conversations already loaded and
+   lists heal by 15–20s polls. *Target:* epic Phases 2–4; polls demoted to backstops.
 4. **A tool action and a UI action are indistinguishable to every observer — including
    the acting agent.** A server-side `send_session` dispatch and a pane's own POST take
    the same write path, emit the same events, and appear live in the same surfaces.
