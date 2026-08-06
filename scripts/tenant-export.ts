@@ -269,6 +269,32 @@ export async function exportData(
     `SELECT * FROM channel_messages WHERE "pageId" IN (${pageIn})`,
   ));
 
+  /**
+   * Conversations: the ones the requested users own, PLUS every conversation
+   * an exported `chat_messages` row names.
+   *
+   * The second half became mandatory with migration 0248, which gave
+   * `chat_messages.conversationId` a real FK (`NOT NULL` column, so it cannot
+   * be nulled out the way an orphaned `userId`/`sourceAgentId` is). The two
+   * sets are gathered along different axes — conversations by OWNER, chat
+   * messages by PAGE — so a page chat started by a drive member outside
+   * `userIds` used to be exported as messages with no parent row, and the
+   * import of that bundle now aborts on the FK. Selecting the referenced
+   * conversations closes the gap; their owners are then pulled into the user
+   * set below, since `conversations.userId` is NOT NULL and FK'd too.
+   */
+  const referencedConversationIds = new Set(
+    chatMessagesData
+      .map((r) => r.conversationId as string | null)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const conversationsData = await queryRows(db, sql.raw(
+    referencedConversationIds.size > 0
+      ? `SELECT * FROM conversations WHERE "userId" IN (${userIn}) OR id IN (${toSqlInList(referencedConversationIds)})`
+      : `SELECT * FROM conversations WHERE "userId" IN (${userIn})`,
+  ));
+  const conversationIds = conversationsData.map((r) => r.id as string);
+
   // For channel messages from non-exported users, we need to include those user records
   const referencedUserIds = new Set(userIds);
   for (const msg of channelMessagesData) {
@@ -277,6 +303,10 @@ export async function exportData(
   // Also check chatMessages userId
   for (const msg of chatMessagesData) {
     if (msg.userId) referencedUserIds.add(msg.userId as string);
+  }
+  // …and the owners of the conversations pulled in above (NOT NULL + FK'd)
+  for (const conversation of conversationsData) {
+    if (conversation.userId) referencedUserIds.add(conversation.userId as string);
   }
 
   // Fetch any additional referenced users not in original set
@@ -314,15 +344,14 @@ export async function exportData(
     `SELECT * FROM channel_read_status WHERE "userId" IN (${userIn}) AND "channelId" IN (${pageIn})`,
   ));
 
-  const conversationsData = await queryRows(db, sql.raw(
-    `SELECT * FROM conversations WHERE "userId" IN (${userIn})`,
-  ));
-  const conversationIds = conversationsData.map((r) => r.id as string);
-
-  // Filter messages to only include those from exported users (userId is NOT NULL)
+  // Messages from exported users, plus the agent/system-authored rows.
+  // `messages.userId` was relaxed to NULLABLE in 0248 (the attribution rule:
+  // NULL userId = agent- or system-authored), so an `IN (…)` filter alone now
+  // silently drops every agent reply from the bundle. NULL rows have no user
+  // reference to dangle, so they are always safe to carry.
   const messagesData = conversationIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM messages WHERE "conversationId" IN (${toSqlInList(conversationIds)}) AND "userId" IN (${allUserIn})`,
+        `SELECT * FROM messages WHERE "conversationId" IN (${toSqlInList(conversationIds)}) AND ("userId" IS NULL OR "userId" IN (${allUserIn}))`,
       ))
     : [];
 
@@ -387,12 +416,17 @@ export async function exportData(
     buildInsert('pages', PAGE_COLUMNS, pagesData),
     buildInsert('tags', TAG_COLUMNS, tagsData),
     buildInsert('page_tags', PAGE_TAG_COLUMNS, pageTagsData),
+    // `conversations` MUST precede `chat_messages`: since migration 0248 the
+    // latter has a real (non-deferrable) FK onto the former, and the whole
+    // bundle replays inside one BEGIN/COMMIT, so an out-of-order INSERT aborts
+    // the entire import. It also precedes `messages`, which has always had
+    // that FK. Insert order in this list is FK order, not table-name order.
+    buildInsert('conversations', CONVERSATION_COLUMNS, conversationsData),
     buildInsert('chat_messages', CHAT_MESSAGE_COLUMNS, chatMessagesData),
+    buildInsert('messages', MESSAGE_COLUMNS, messagesData),
     buildInsert('channel_messages', CHANNEL_MESSAGE_COLUMNS, channelMessagesData),
     buildInsert('channel_message_reactions', CHANNEL_REACTION_COLUMNS, channelReactionsData),
     buildInsert('channel_read_status', CHANNEL_READ_STATUS_COLUMNS, channelReadStatusData),
-    buildInsert('conversations', CONVERSATION_COLUMNS, conversationsData),
-    buildInsert('messages', MESSAGE_COLUMNS, messagesData),
     buildInsert('files', FILE_COLUMNS, filesData),
     buildInsert('file_pages', FILE_PAGE_COLUMNS, filePagesData),
     buildInsert('page_permissions', PAGE_PERMISSION_COLUMNS, pagePermissionsData),
