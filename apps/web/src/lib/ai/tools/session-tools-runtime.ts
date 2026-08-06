@@ -21,7 +21,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -44,6 +44,7 @@ import {
   spawnSession,
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { countOpenConversations } from '@/lib/agent-sessions/conversation-cap';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
@@ -387,8 +388,9 @@ async function listWorkspaceWorkers({
 }
 
 /**
- * ALL the caller's active workspaces (their newest `SESSION_LIST_LIMIT`
- * slice, same as the sidebar) with each one's workers — the discovery half of
+ * ALL the caller's active workspaces (their newest
+ * `MAX_ACTIVE_WORKSPACES_PER_OWNER` slice, same as the sidebar — which is all
+ * of them, see below) with each one's workers — the discovery half of
  * resource-addressed orchestration: every worker id here is addressable by
  * the verbs from anywhere, and every workspaceId is a valid `spawn_session`
  * `workspace` target. Composed from the SAME primitives the sidebar uses
@@ -402,18 +404,19 @@ async function listOwnWorkspaces({
   userId: string;
   excludeWorkspaceId?: string;
 }): Promise<OwnWorkspaceSummary[]> {
-  // The exclusion runs AFTER `listSessions`' own SESSION_LIST_LIMIT cap, not
-  // as a query-level filter before it — deliberately, not an oversight: a
+  // The exclusion runs AFTER `listSessions`' own listing cap, not as a
+  // query-level filter before it — deliberately, not an oversight: a
   // pre-cap exclusion would need a new filter shape on the shared store
-  // (`AgentSessionListFilter`) for a scenario that cannot occur today.
-  // `SESSION_LIST_LIMIT` and `MAX_ACTIVE_SESSIONS_PER_OWNER` are both 100,
-  // and the latter is a STRUCTURAL cap (`createIfUnderLimit`'s atomic
-  // count-and-insert) — no owner can ever HAVE more than 100 active
-  // sessions, so `listSessions` never actually truncates here and this
-  // filter can never drop a workspace that a pre-cap exclusion would have
-  // backfilled (review finding — CodeRabbit). That soundness is CONTINGENT
-  // on the two constants staying equal and the cap staying structural; if
-  // either ever changes independently, revisit this filter's ordering.
+  // (`AgentSessionListFilter`) for a scenario that cannot occur. The store's
+  // `.limit()` and the spawn ceiling are the SAME
+  // `MAX_ACTIVE_WORKSPACES_PER_OWNER` constant (contract.ts), and the
+  // ceiling is STRUCTURAL (`createIfUnderLimit`'s atomic count-and-insert) —
+  // no owner can ever HAVE more active workspaces than one listing shows, so
+  // `listSessions` never actually truncates here and this filter can never
+  // drop a workspace that a pre-cap exclusion would have backfilled (review
+  // finding — CodeRabbit; the two-constants coupling this used to lean on is
+  // now one constant, pinned by session-list-limit-invariant.test.ts). If
+  // the cap ever stops being structural, revisit this filter's ordering.
   const sessions = (await listSessions({ ownerId: userId })).filter(
     (session) => session.sessionId !== excludeWorkspaceId,
   );
@@ -547,7 +550,6 @@ export async function resolveCallerSessionForWorker(
     if (!agent) return { ok: false, reason: 'no_session' };
     if (!(await canUserViewPage(ownerId, agent.id))) return { ok: false, reason: 'not_permitted' };
     const access = await checkAccessForSubject(ownerId, {
-      sessionId: 'about-to-be-minted',
       ownerId,
       driveId: agent.driveId,
     });
@@ -621,7 +623,7 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
     }
-    const access = await checkAccessForSubject(ownerId, { sessionId: 'about-to-be-minted', ownerId, driveId });
+    const access = await checkAccessForSubject(ownerId, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
     }
@@ -746,23 +748,10 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       };
     },
 
-    countOpenConversations: async (workspaceId) => {
-      const [row] = await db
-        .select({ n: count() })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.sessionId, workspaceId),
-            eq(conversations.isActive, true),
-            // Mirrors the HTTP creation path's cap count (create-conversation-
-            // in-session.ts): a closed listing frees its cap slot here too, or
-            // the tool-side spawn planner keeps refusing a replacement worker
-            // for a slot the human already closed.
-            isNull(conversations.closedInSessionAt),
-          ),
-        );
-      return row?.n ?? 0;
-    },
+    // The ONE shared open-conversation count (`conversation-cap.ts`) — the
+    // same predicate the HTTP creation path's cap enforces, so a closed
+    // listing frees its cap slot here too by construction, not by mirroring.
+    countOpenConversations: (workspaceId) => countOpenConversations(workspaceId),
 
     canUseAgent: async (userId, agentPageId) => {
       const page = await db.query.pages.findFirst({

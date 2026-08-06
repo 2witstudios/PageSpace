@@ -38,6 +38,20 @@
 import { z } from 'zod';
 
 /**
+ * The most NOT-ENDED workspaces (`agent_sessions` rows) one owner may hold —
+ * and, therefore, the most one listing ever returns. ONE constant on purpose
+ * (epic Phase 1, D7): the spawn ceiling (`spawnAgentSession`'s required
+ * `maxActiveSessions` dep — a per-owner advisory-locked count-and-insert, so
+ * the cap is STRUCTURAL, not a pre-check) and the store's `list()` LIMIT used
+ * to be two constants in two packages that had to stay equal by hand.
+ * Because they are one number, a listing can never truncate an owner's real
+ * set: no owner can HAVE more active workspaces than one page shows.
+ * `listOwnWorkspaces`' post-cap exclusion (session-tools-runtime.ts) leans on
+ * exactly that.
+ */
+export const MAX_ACTIVE_WORKSPACES_PER_OWNER = 100;
+
+/**
  * The sandbox states the UI and tools discriminate between, and the ONLY four
  * that exist. `'none'` = the session has never acquired a Sprite (the common
  * case — most conversations never touch one); `'starting'` = provisioning is in

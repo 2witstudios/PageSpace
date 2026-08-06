@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { checkAgentSessionAccess, checkAgentSessionEndAccess, type AgentSessionAccessDeps } from '../agent-session-access';
 import { DRIVE_ID, OWNER_ID, SESSION_ID } from './fakes';
 
-const subject = { sessionId: SESSION_ID, ownerId: OWNER_ID, driveId: DRIVE_ID };
+const subject = { ownerId: OWNER_ID, driveId: DRIVE_ID };
 
 function makeDeps(over: Partial<AgentSessionAccessDeps> = {}): AgentSessionAccessDeps {
   return {

@@ -134,7 +134,6 @@ describe('resolveCallerSessionForWorker', () => {
 
     expect(resolved).toEqual({ ok: true, session: sessionRow });
     expect(mockCheckAccessForSubject).toHaveBeenCalledWith('user-1', {
-      sessionId: 'about-to-be-minted',
       ownerId: 'user-1',
       driveId: 'drive-1',
     });

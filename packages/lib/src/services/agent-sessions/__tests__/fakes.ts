@@ -20,7 +20,8 @@ import type {
 } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type { AgentSessionRecord, AgentSessionStore } from '../agent-sessions-store';
-import { SESSION_LIST_LIMIT, stampColumns } from '../agent-sessions-store';
+import { stampColumns } from '../agent-sessions-store';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-sessions/contract';
 import type { SessionShellRecord, SessionShellStore } from '../session-shells-store';
 
 export const NOW = new Date('2026-07-28T12:00:00.000Z');
@@ -125,7 +126,7 @@ export function makeAgentSessionStore(
 
     async list(filter) {
       // Mirrors the real store: active rows only, newest activity first,
-      // capped at SESSION_LIST_LIMIT (the sidebar polls this every few
+      // capped at MAX_ACTIVE_WORKSPACES_PER_OWNER (the sidebar polls this every few
       // seconds — an unbounded fake would let a test pass against a query
       // shape the real store never allows). Also mirrors the real store's
       // driveId+ownerId union: an OWNED drive-scoped filter additionally
@@ -152,7 +153,7 @@ export function makeAgentSessionStore(
           if (aAt !== bAt) return bAt - aAt;
           return b.createdAt.getTime() - a.createdAt.getTime();
         })
-        .slice(0, SESSION_LIST_LIMIT);
+        .slice(0, MAX_ACTIVE_WORKSPACES_PER_OWNER);
     },
 
     async countActive(ownerId) {

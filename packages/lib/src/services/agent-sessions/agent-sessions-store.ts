@@ -24,6 +24,7 @@
  */
 
 import type { AgentSessionRowStamps } from '../../agent-sessions/plan-session-lifecycle';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-sessions/contract';
 
 /** One `agent_sessions` row. `id` is the session's OWN identity (see `contract.ts`). */
 export interface AgentSessionRecord {
@@ -81,9 +82,6 @@ export type AgentSessionListFilter =
   | { driveId: string }
   | { ownerId: string };
 
-/** The most sessions one listing returns — the sidebar shows the newest slice, not an archive. */
-export const SESSION_LIST_LIMIT = 100;
-
 export interface AgentSessionStore {
   findById(sessionId: string): Promise<AgentSessionRecord | null>;
   /**
@@ -120,10 +118,12 @@ export interface AgentSessionStore {
   /**
    * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
    * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
-   * {@link SESSION_LIST_LIMIT}. Ended rows are retained for lifecycle/billing
-   * but are not listings: the sidebar polls this every few seconds, and an
-   * unbounded, unordered enumeration that never forgets grew without limit
-   * and reshuffled between polls (review M3/M4).
+   * {@link MAX_ACTIVE_WORKSPACES_PER_OWNER} — the SAME constant the spawn
+   * ceiling enforces, so the cap never actually truncates an owner's real
+   * set. Ended rows are retained for lifecycle/billing but are not listings:
+   * the sidebar polls this every few seconds, and an unbounded, unordered
+   * enumeration that never forgets grew without limit and reshuffled between
+   * polls (review M3/M4).
    */
   list(filter: AgentSessionListFilter): Promise<AgentSessionRecord[]>;
   /**
@@ -453,7 +453,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         .from(agentSessions)
         .where(and(...conditions))
         .orderBy(sql`${agentSessions.lastActiveAt} DESC NULLS LAST`, desc(agentSessions.createdAt))
-        .limit(SESSION_LIST_LIMIT);
+        .limit(MAX_ACTIVE_WORKSPACES_PER_OWNER);
       return rows as AgentSessionRecord[];
     },
 

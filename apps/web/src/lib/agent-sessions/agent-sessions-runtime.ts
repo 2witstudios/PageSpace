@@ -19,7 +19,7 @@
 
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
-import { and, count, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -68,12 +68,13 @@ import {
   resolveDriveMembership,
   canRunCodeForSession,
 } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
-import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import { planSessionReopen } from '@pagespace/lib/agent-sessions/plan-session-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { countOpenConversations } from '@/lib/agent-sessions/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
 import {
   closeConversationInSessionWith,
@@ -95,11 +96,16 @@ export { isCodeExecutionEnabled };
  * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
  * instant and free (no sandbox), which meant the live-sandbox concurrency
  * quota never applied to it — an authorized caller could mint unbounded rows
- * (review M6/F4). The single source of truth: `spawnSession` below passes it
- * as `spawnAgentSession`'s REQUIRED `maxActiveSessions` dep (review
- * #2261/2), and the route imports it for its own advisory pre-check.
+ * (review M6/F4). `spawnSession` below passes it as `spawnAgentSession`'s
+ * REQUIRED `maxActiveSessions` dep (review #2261/2), and the route imports it
+ * for its own advisory pre-check.
+ *
+ * A RE-EXPORT of the one contract constant, not a second number: the store's
+ * listing LIMIT is the same `MAX_ACTIVE_WORKSPACES_PER_OWNER`, which is what
+ * makes "a listing never truncates an owner's real set" structural rather
+ * than a two-constants-kept-equal-by-hand invariant (epic Phase 1, D7).
  */
-export const MAX_ACTIVE_SESSIONS_PER_OWNER = 100;
+export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-sessions/contract';
 
 // ---------------------------------------------------------------------------
 // Lazy singletons — the store reconnects to one DB pool; the host is stateless.
@@ -166,7 +172,7 @@ function buildAccessDeps(): AgentSessionAccessDeps {
     findSession: async (sessionId) => {
       const row = await findSessionRecord(sessionId);
       if (!row) return null;
-      return { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
+      return { ownerId: row.ownerId, driveId: row.driveId };
     },
     resolveDriveMembership,
     canRunCode: canRunCodeForSession,
@@ -183,13 +189,13 @@ export async function checkSessionAccess(
 /**
  * The same ONE pure decision, applied BEFORE a row exists — the spawn path's
  * subject is the session about to be minted (`ownerId` = the requester,
- * `driveId` = where it will live). This gathers the identical facts
- * `buildAccessDeps` gathers and hands them to `decideAgentSessionAccess`; no
- * extra rule exists here.
+ * `driveId` = where it will live; there is no id yet, and the decision never
+ * needs one). This gathers the identical facts `buildAccessDeps` gathers and
+ * hands them to `decideAgentSessionAccess`; no extra rule exists here.
  */
 export async function checkAccessForSubject(
   requesterId: string,
-  subject: { sessionId: string; ownerId: string; driveId: string | null },
+  subject: { ownerId: string; driveId: string | null },
 ): Promise<AgentSessionAccessCheck> {
   const deps = buildAccessDeps();
   const driveMembership =
@@ -428,10 +434,12 @@ export async function createConversationInSession(input: {
  * "is this row open" fact), and the cap's symmetry between close and reopen
  * depends on them staying that way: one copy drifting from the other would
  * silently unbalance which listings count toward `MAX_SESSION_CONVERSATIONS`.
- * One definition, shared, rather than two that must be kept in lockstep by
- * hand (review finding — coderabbitai on PR #2296). Always the plain `db` —
- * `withSessionListingLock`'s lock is on a separate dedicated connection, not
- * a transaction these reads need to share.
+ * The count is the ONE shared `countOpenConversations`
+ * (`conversation-cap.ts`) every cap consumer uses — never a local re-write of
+ * its predicate (review finding — coderabbitai on PR #2296, generalized in
+ * epic Phase 1). Always the plain `db` — `withSessionListingLock`'s lock is
+ * on a separate dedicated connection, not a transaction these reads need to
+ * share.
  */
 function sessionListingReadDeps() {
   return {
@@ -447,19 +455,7 @@ function sessionListingReadDeps() {
         .limit(1);
       return row ?? null;
     },
-    countOpenConversations: async (sessionId: string) => {
-      const [row] = await db
-        .select({ n: count() })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.sessionId, sessionId),
-            eq(conversations.isActive, true),
-            isNull(conversations.closedInSessionAt),
-          ),
-        );
-      return row?.n ?? 0;
-    },
+    countOpenConversations: (sessionId: string) => countOpenConversations(sessionId),
   };
 }
 
@@ -535,11 +531,7 @@ export async function reopenConversationInSession(input: {
  * around either transaction can prevent a human confirming minutes later).
  */
 export async function countOpenConversationsForSession(sessionId: string): Promise<number> {
-  const [row] = await db
-    .select({ n: count() })
-    .from(conversations)
-    .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true), isNull(conversations.closedInSessionAt)));
-  return row?.n ?? 0;
+  return countOpenConversations(sessionId);
 }
 
 export async function spawnSession(input: {
@@ -552,7 +544,7 @@ export async function spawnSession(input: {
     ownerId: input.userId,
     driveId: input.driveId,
     name: input.name,
-    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_SESSIONS_PER_OWNER },
+    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_WORKSPACES_PER_OWNER },
   });
 }
 
