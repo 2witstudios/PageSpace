@@ -395,6 +395,29 @@ function notYourSession(sessionId: string): { success: false; error: string } {
   };
 }
 
+/**
+ * The typed refusals for the caller's OWN rows (spec §2, Phase 1's "Tool
+ * contract pin and typed refusals"): a resource the caller does not own
+ * always reads as nonexistent (`notYourSession` — anti-enumeration), but a
+ * row that IS theirs earns a distinct, actionable answer. One cause, one
+ * message, mapped at the tool boundary — never a raw internal error.
+ */
+function notAWorkerYet(sessionId: string): { success: false; error: string; reason: 'not_a_worker' } {
+  return {
+    success: false,
+    error: `"${sessionId}" is your conversation, but it is not a worker yet — it has no workspace. Running spawn_session from inside it claims it into one; until then there is nothing here to send to, read, or kill.`,
+    reason: 'not_a_worker',
+  };
+}
+
+function workerListingClosed(sessionId: string): { success: false; error: string; reason: 'worker_closed' } {
+  return {
+    success: false,
+    error: `Worker "${sessionId}" was closed in its workspace, so worker verbs no longer reach it (its history is untouched). Reopen it from the sidebar, or spawn_session a fresh worker.`,
+    reason: 'worker_closed',
+  };
+}
+
 function notYourShell(shellId: string): { success: false; error: string } {
   return {
     success: false,
@@ -472,7 +495,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
    *  - it must actually BE a worker (bound into some workspace) — a plain
    *    session-less thread is not addressable as one;
    *  - not closed — a listing the human closed stays closed to worker verbs.
-   * All three refuse identically: nothing to learn from the difference.
+   *
+   * How they refuse (spec §2): a row that does not exist and a row the caller
+   * does NOT own read IDENTICALLY as nonexistent — anti-enumeration, an
+   * id-guessing caller learns nothing. The caller's OWN rows get distinct,
+   * typed, actionable refusals (`notAWorkerYet` / `workerListingClosed`):
+   * there is nothing to hide from the resource's own owner, and the collapsed
+   * message used to send the model chasing list_sessions for a worker whose
+   * real remedy was "reopen it" or "spawn from inside it".
    */
   const openOwnSession = async (
     context: ToolExecutionContext | undefined,
@@ -484,13 +514,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
     const actor = readActor(context);
     if (!actor) return { ok: false, error: NEEDS_AUTH };
     const row = await deps.findWorker(conversationId);
-    if (
-      !row ||
-      row.ownerId !== actor.userId ||
-      row.workspaceId === null ||
-      row.isClosed
-    ) {
+    // Not-found and not-yours are ONE answer, checked before anything about
+    // the row's state leaks into the response shape.
+    if (!row || row.ownerId !== actor.userId) {
       return { ok: false, error: notYourSession(conversationId) };
+    }
+    if (row.workspaceId === null) {
+      return { ok: false, error: notAWorkerYet(conversationId) };
+    }
+    if (row.isClosed) {
+      return { ok: false, error: workerListingClosed(conversationId) };
     }
     return { ok: true, actor, row };
   };

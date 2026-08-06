@@ -420,32 +420,34 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
     expect(deps.killWorker).not.toHaveBeenCalled();
   });
 
-  it('a worker the human already CLOSED reads as nonexistent — never dispatch/read/kill into a closed listing', async () => {
+  it('the caller\'s OWN worker with a CLOSED listing refuses with the typed worker_closed remedy — never dispatch/read/kill into it (spec §2 Phase 1)', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceId: WORKSPACE_ID, isClosed: true })),
     });
     const tools = createSessionTools(deps);
 
     const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());
-    expect(sent.success).toBe(false);
+    expect(sent).toEqual(expect.objectContaining({ success: false, reason: 'worker_closed' }));
+    expect((sent as { error: string }).error).toContain('closed');
     expect(deps.dispatch).not.toHaveBeenCalled();
 
     const readResult = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
-    expect(readResult.success).toBe(false);
+    expect(readResult).toEqual(expect.objectContaining({ success: false, reason: 'worker_closed' }));
     expect(deps.readTranscript).not.toHaveBeenCalled();
 
     const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
-    expect(killed.success).toBe(false);
+    expect(killed).toEqual(expect.objectContaining({ success: false, reason: 'worker_closed' }));
     expect(deps.killWorker).not.toHaveBeenCalled();
   });
 
-  it('a SESSION-LESS conversation reads as nonexistent — it is not a worker anywhere', async () => {
+  it('the caller\'s OWN workspace-less conversation refuses with the typed not_a_worker guidance — it is not a worker anywhere (spec §2 Phase 1)', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceId: null })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
-    expect(result.success).toBe(false);
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'not_a_worker' }));
+    expect((result as { error: string }).error).toContain('spawn_session');
     expect(deps.readTranscript).not.toHaveBeenCalled();
   });
 

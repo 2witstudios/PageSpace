@@ -69,8 +69,11 @@ vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShells: vi.fn(),
   spawnShell: vi.fn(),
 }));
+const { mockAbortConversationStreams } = vi.hoisted(() => ({
+  mockAbortConversationStreams: vi.fn(),
+}));
 vi.mock('@/lib/ai/core/abort-conversation-streams', () => ({
-  abortConversationStreams: vi.fn(),
+  abortConversationStreams: mockAbortConversationStreams,
 }));
 vi.mock('../shell-io', () => ({
   createShellIo: vi.fn(),
@@ -351,5 +354,38 @@ describe('createWorkerSession — placement', () => {
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'workspace_not_found' }));
       expect(mockCreateConversationInSession).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ============================================================================
+// Tests for session-tools-runtime.ts — killWorker (kill_session's wired dep)
+//
+// CONTRACT PIN for kill_session's description claim "Workers share YOUR
+// session's sandbox, so stopping one never tears the sandbox down" (spec §5;
+// the pure-layer half lives in session-tools-contract.test.ts): the wired
+// dep only aborts the worker's in-flight runs — it must never call the
+// workspace-lifecycle endSession, and it reports spriteTornDown: false.
+// ============================================================================
+
+describe('killWorker — kill_session never tears the sandbox down', () => {
+  test('aborts the worker conversation\'s own streams and nothing else — the workspace lifecycle is untouched', async () => {
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    const result = await deps.killWorker({ conversationId: 'conv-worker', userId: 'user-1' });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(mockAbortConversationStreams).toHaveBeenCalledWith({ conversationId: 'conv-worker', userId: 'user-1' });
+    expect(mockEndSession).not.toHaveBeenCalled();
+  });
+
+  test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {
+    mockAbortConversationStreams.mockRejectedValue(new Error('realtime unreachable'));
+
+    const deps = buildSessionToolsDeps();
+    const result = await deps.killWorker({ conversationId: 'conv-worker', userId: 'user-1' });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(mockEndSession).not.toHaveBeenCalled();
   });
 });
