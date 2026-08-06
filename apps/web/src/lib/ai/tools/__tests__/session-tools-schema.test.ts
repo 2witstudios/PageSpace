@@ -55,8 +55,13 @@ describe('session + shell tools — frozen wire contract', () => {
   it('every tool description and JSON input schema is byte-identical to the pinned contract', () => {
     expect(wireSurface()).toEqual({
       list_sessions: {
+        // DELIBERATE description change (discovery-symmetry PR): the listing
+        // gained the member-visible `sharedWorkspaces` section with redacted
+        // foreign private-thread titles, and the addressability claim narrowed
+        // to the workers the caller actually owns. Re-pinned in the same
+        // commit as the tool change — this is a contract edit, not drift.
         description:
-          'List ALL your workspaces and their workers. Your current conversation\'s workspace comes with full detail (workers, shells, shared sandbox status); every other workspace lists its workspaceId (a spawn_session `workspace` target) and workers. Every worker\'s sessionId is the exact address send_session/read_session/kill_session take, from anywhere. Names are labels — always address by id.',
+          'List the workspaces you can reach, and their workers. Your current conversation\'s workspace comes with full detail (workers, shells, shared sandbox status); every other workspace you OWN lists its workspaceId (a spawn_session `workspace` target) and workers; sharedWorkspaces lists OTHER members\' workspaces in drives you belong to — equally valid spawn_session `workspace` targets, shown for awareness with other members\' private thread titles redacted to "(private thread)". Your own workers\' sessionIds are the exact addresses send_session/read_session/kill_session take, from anywhere; another member\'s worker is not yours to address. Names are labels — always address by id.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',

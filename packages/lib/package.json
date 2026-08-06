@@ -87,6 +87,11 @@
       "import": "./dist/agent-sessions/plan-spawn-session.js",
       "require": "./dist/agent-sessions/plan-spawn-session.js"
     },
+    "./agent-sessions/redact-conversation-listing": {
+      "types": "./dist/agent-sessions/redact-conversation-listing.d.ts",
+      "import": "./dist/agent-sessions/redact-conversation-listing.js",
+      "require": "./dist/agent-sessions/redact-conversation-listing.js"
+    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",

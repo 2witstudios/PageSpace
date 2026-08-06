@@ -46,6 +46,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
+    listSharedWorkspaces: vi.fn(async () => []),
     findWorker: vi.fn(async (conversationId: string) => ({ ...OWN_WORKER, conversationId })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
@@ -88,8 +89,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('list_sessions description: "List ALL your workspaces and their workers ... from anywhere"', () => {
-  it('returns the current workspace in full detail (workers, shells, sandbox) PLUS every other workspace with its workspaceId and workers', async () => {
+describe('list_sessions description: "List the workspaces you can reach, and their workers ... from anywhere"', () => {
+  it('returns the current workspace in full detail (workers, shells, sandbox) PLUS every other owned workspace and every shared one, in distinctly labeled sections', async () => {
     const here = {
       sandbox: 'running' as const,
       workers: [{ sessionId: 'conv-worker', name: 'w', agent: null, isCaller: false }],
@@ -102,16 +103,55 @@ describe('list_sessions description: "List ALL your workspaces and their workers
       sandbox: 'none' as const,
       workers: [{ sessionId: 'conv-far-worker', name: 'far', agent: null }],
     };
+    const shared = {
+      workspaceId: 'ws-shared',
+      name: 'team workspace',
+      driveId: 'drive-1',
+      sandbox: 'running' as const,
+      workers: [{ sessionId: 'conv-their-worker', name: '(private thread)', agent: null, lastActiveAt: null }],
+    };
     const deps = makeDeps({
       listWorkspaceWorkers: vi.fn(async () => here),
       listOwnWorkspaces: vi.fn(async () => [elsewhere]),
+      listSharedWorkspaces: vi.fn(async () => [shared]),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
-    expect(result).toEqual({ success: true, workspaceId: WORKSPACE_ID, ...here, otherWorkspaces: [elsewhere] });
+    expect(result).toEqual({
+      success: true,
+      workspaceId: WORKSPACE_ID,
+      ...here,
+      otherWorkspaces: [elsewhere],
+      sharedWorkspaces: [shared],
+    });
   });
 
-  it('"Every worker\'s sessionId is the exact address send_session/read_session/kill_session take, from anywhere": a listed worker in ANOTHER workspace is reachable by all three verbs', async () => {
+  it('"sharedWorkspaces lists OTHER members\' workspaces ... equally valid spawn_session `workspace` targets": a workspaceId discovered in sharedWorkspaces is spawnable-into (discovery symmetry with the spawn gate)', async () => {
+    const shared = {
+      workspaceId: 'ws-shared',
+      name: 'team workspace',
+      driveId: 'drive-1',
+      sandbox: 'running' as const,
+      workers: [],
+    };
+    const deps = makeDeps({
+      listSharedWorkspaces: vi.fn(async () => [shared]),
+      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-shared' })),
+    });
+    const tools = createSessionTools(deps);
+
+    const listed = (await run(tools.list_sessions, {}, contextOptions())) as {
+      sharedWorkspaces: Array<{ workspaceId: string }>;
+    };
+    const target = listed.sharedWorkspaces[0]?.workspaceId;
+    expect(target).toBe('ws-shared');
+
+    const spawned = await run(tools.spawn_session, { name: 'w', prompt: 'p', workspace: target }, contextOptions());
+    expect(spawned).toEqual(expect.objectContaining({ success: true, workspaceId: 'ws-shared' }));
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ workspace: 'ws-shared' }));
+  });
+
+  it('"Your own workers\' sessionIds are the exact addresses send_session/read_session/kill_session take, from anywhere": a listed worker in ANOTHER workspace is reachable by all three verbs', async () => {
     // The cross-workspace claim: the listing's ids are conversation ids, and
     // the verbs are resource-addressed — a worker outside the caller's own
     // workspace is exactly as addressable as a sibling.
