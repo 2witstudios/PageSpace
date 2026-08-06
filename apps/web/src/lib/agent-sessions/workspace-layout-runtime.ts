@@ -112,7 +112,7 @@ export async function applyWorkspaceLayoutVerb(input: {
   });
 
   if (result.status === 'ok' && result.applied) {
-    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: verb.type, grid: result.grid });
+    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: verb.type, opId, grid: result.grid });
   }
   return result;
 }
@@ -137,7 +137,13 @@ export async function saveWorkspaceBlobReconciled(input: {
     return store.replaceWorkspaceGrid({ workspaceId, grid: gridFromWorkspaceState(workspace) });
   });
   if (result.applied) {
-    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: 'legacy_replace', grid: workspace.columns });
+    broadcastWorkspaceUpdated({
+      workspaceId,
+      rev: result.rev,
+      verb: 'legacy_replace',
+      opId: null,
+      grid: workspace.columns,
+    });
   }
 }
 

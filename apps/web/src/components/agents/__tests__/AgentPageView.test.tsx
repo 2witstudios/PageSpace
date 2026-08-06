@@ -212,7 +212,10 @@ vi.mock('@/components/shared/PageWebhooksDialog', () => ({
 }));
 
 import AgentPageView from '../AgentPageView';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 function pageFixture(): TreePage {
   return {
@@ -251,7 +254,7 @@ beforeEach(() => {
   conversationsState.lastOnConversationDelete = null;
   agentPanesState.lastOnConversationClosed = null;
   agentPanesState.firstOnConversationClosed = null;
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  __resetWorkspaceQueuesForTests();
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
     if (url.endsWith('/agent-config'))

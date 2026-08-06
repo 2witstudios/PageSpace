@@ -74,6 +74,23 @@ export const validateConversationId = (input: unknown): ValidationResult<string>
 };
 
 /**
+ * Validates an agent-workspace (session) ID payload — the `session:<id>`
+ * layout room's join/leave key. Same CUID2 shape as every other room id;
+ * separate from {@link validateConversationId} only so the error message
+ * names what the caller actually sent.
+ * Returns Result type - never throws
+ */
+export const validateSessionId = (input: unknown): ValidationResult<string> => {
+  if (typeof input !== 'string') {
+    return { ok: false, error: 'Session ID must be a string' };
+  }
+  if (!isCUID2(input)) {
+    return { ok: false, error: 'Session ID must be a valid ID' };
+  }
+  return { ok: true, value: input };
+};
+
+/**
  * Validates a presence payload containing { pageId: string }.
  * Extracts and validates the pageId from the object payload.
  * Returns Result type - never throws
