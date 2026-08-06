@@ -62,6 +62,7 @@ import { useStopStream } from '@/hooks/useStopStream';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
+import { useConversationSubscription } from '@/hooks/useConversationSubscription';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { UseAgentSessionChatReturn } from './useAgentSessionChat';
 
@@ -136,6 +137,14 @@ export function useAssistantSessionChat({
   // (or none) is looking. Its rejoin is the recovery hook the send handoff
   // needs.
   const { rejoinGlobalStream } = useGlobalChatConversation();
+
+  // The CONVERSATION plane, though, is this pane's own (Agent-Session SSoT
+  // epic, Phase 2): join `conv:<id>`, hold the rev watermark, apply the
+  // authoritative `conversation:*` events. `channelId: null` deliberately skips
+  // a second channel stream socket — the provider's is the one, and duplicating
+  // its bootstrap would buy nothing. This is what makes a server-side dispatch
+  // into an open global-assistant pane render live.
+  useConversationSubscription(conversationId, { channelId: null, agentPageId: null });
 
   const renderedMessages = useRenderedMessages(channelId ?? '', conversationId);
   const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);

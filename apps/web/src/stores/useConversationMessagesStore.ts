@@ -14,6 +14,7 @@ import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfir
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { mergeSnapshotTail } from '@/stores/conversationMessages/mergeSnapshotTail';
+import { advanceRev } from '@/stores/conversationMessages/advanceRev';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
@@ -38,8 +39,18 @@ interface ConversationMessagesState {
     generation: number,
     messages: UIMessage[],
     pagination?: { hasMore: boolean; nextCursor: string | null },
+    /** The server's `conversations.rev` at read time — folded monotonically into the watermark. */
+    rev?: number | null,
   ) => void;
   failLoad: (conversationId: string, generation: number) => void;
+  /**
+   * The conversation's current rev watermark, or `null` when no load has
+   * established one. The input to `decideConversationApply` for every incoming
+   * `conversation:*` event.
+   */
+  getRev: (conversationId: string) => number | null;
+  /** Advances the watermark after an event's payload was applied — monotonic, no-op for an uncached conversation. */
+  advanceRev: (conversationId: string, rev: number) => void;
   /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
   startLoadingOlder: (conversationId: string) => void;
   /** Prepends a dedup'd older page and advances olderCursor/hasMoreOlder; generation-gated. */
@@ -88,6 +99,8 @@ interface ConversationMessagesState {
     messages: UIMessage[],
     /** The snapshot fetch's own envelope — applied only when the snapshot REPLACES the cache (no overlap), so pagination resets consistently with the replaced list. */
     pagination?: { hasMore: boolean; nextCursor: string | null },
+    /** The `conversations.rev` the snapshot was read at — the watermark a gap-triggered refetch heals to. */
+    rev?: number | null,
   ) => void;
   /**
    * Marks a freshly-minted conversation as loaded-empty — createNewConversation
@@ -113,12 +126,18 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   isLoadCurrent: (conversationId, generation) =>
     get().byConversationId[conversationId]?.loadGeneration === generation,
 
-  applyLoad: (conversationId, generation, messages, pagination) => {
-    set((state) => ({ byConversationId: applyLoad(state.byConversationId, { conversationId, generation, messages, pagination }) }));
+  applyLoad: (conversationId, generation, messages, pagination, rev) => {
+    set((state) => ({ byConversationId: applyLoad(state.byConversationId, { conversationId, generation, messages, pagination, rev }) }));
   },
 
   failLoad: (conversationId, generation) => {
     set((state) => ({ byConversationId: applyFailLoad(state.byConversationId, { conversationId, generation }) }));
+  },
+
+  getRev: (conversationId) => get().byConversationId[conversationId]?.rev ?? null,
+
+  advanceRev: (conversationId, rev) => {
+    set((state) => ({ byConversationId: advanceRev(state.byConversationId, { conversationId, rev }) }));
   },
 
   startLoadingOlder: (conversationId) => {
@@ -191,7 +210,7 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   beginServerSnapshot: (conversationId) =>
     get().byConversationId[conversationId]?.loadGeneration ?? 0,
 
-  applyServerSnapshot: (conversationId, generationToken, messages, pagination) => {
+  applyServerSnapshot: (conversationId, generationToken, messages, pagination, rev) => {
     set((state) => {
       // Stale-token drop (CR4): the generation moved since this snapshot's fetch
       // began — a loud load started, or a fresher snapshot already committed — so
@@ -221,6 +240,7 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
           generation,
           messages: replayPendingMutations(merged.messages, pendingSinceFetch),
           pagination: merged.overlapped ? undefined : pagination,
+          rev,
         }),
       };
     });

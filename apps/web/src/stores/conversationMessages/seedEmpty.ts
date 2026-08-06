@@ -62,6 +62,18 @@ export interface ConversationCacheEntry {
   hasMoreOlder: boolean;
   /** True while a "load older" fetch is in flight — inline scroll indicator only, no error-banner takeover. */
   isLoadingOlder: boolean;
+  /**
+   * The conversation's rev WATERMARK (Agent-Session SSoT epic, Phase 2) — the
+   * `conversations.rev` this entry's `messages` are known to reflect.
+   *
+   * Established by a message-list GET (both envelopes now carry `rev`) and
+   * advanced by every applied `conversation:*` event. `null` means "no proven
+   * baseline yet": an entry exists (subscribe-on-open guarantees one the moment
+   * a surface opens the conversation) but nothing has told us where it stands,
+   * so `decideConversationApply` answers `refetch` for any versioned event
+   * rather than guessing. See `@/lib/realtime/conversation-apply`.
+   */
+  rev: number | null;
 }
 
 export type ConversationMessagesById = Record<string, ConversationCacheEntry>;
@@ -76,4 +88,5 @@ export const seedEmpty = (): ConversationCacheEntry => ({
   olderCursor: null,
   hasMoreOlder: false,
   isLoadingOlder: false,
+  rev: null,
 });

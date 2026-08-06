@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import type { ConversationMessagesById } from './seedEmpty';
 import { replayPendingMutations } from './replayPendingMutations';
+import { nextWatermark } from '@/lib/realtime/conversation-apply';
 
 export interface ApplyLoadEvent {
   conversationId: string;
@@ -8,6 +9,16 @@ export interface ApplyLoadEvent {
   messages: UIMessage[];
   /** The load's pagination envelope (epic leaf 6.6) — seeds hasMoreOlder/olderCursor for "load older". */
   pagination?: { hasMore: boolean; nextCursor: string | null };
+  /**
+   * The server's `conversations.rev` at read time (Agent-Session SSoT epic,
+   * Phase 2). Folded through `nextWatermark`, never assigned outright: live
+   * events replayed from `pendingMutationsSinceLoad` may already have carried
+   * the entry PAST this snapshot's rev, and a load must not walk the watermark
+   * backwards into re-applying writes it already holds. Omit (or `null`) when
+   * the caller has no rev — a legacy envelope, or an "older page" fetch, which
+   * says nothing about the conversation's head.
+   */
+  rev?: number | null;
 }
 
 /**
@@ -55,6 +66,10 @@ export const applyLoad = (
       // whatever the last envelope-carrying load established (PR 6 review, Codex).
       hasMoreOlder: event.pagination ? event.pagination.hasMore : existing.hasMoreOlder,
       olderCursor: event.pagination ? event.pagination.nextCursor : existing.olderCursor,
+      rev:
+        event.rev === undefined || event.rev === null
+          ? existing.rev
+          : nextWatermark(existing.rev, event.rev),
     },
   };
 };

@@ -26,6 +26,8 @@ export interface PaginationInfo {
 interface AgentMessagesResponse {
   messages?: UIMessage[];
   pagination?: PaginationInfo;
+  /** `conversations.rev` at read time; absent on a pre-cutover build mid-rollout. */
+  rev?: number | null;
 }
 
 interface AgentConversationCreateResponse {
@@ -51,6 +53,13 @@ export interface FetchAgentMessagesOptions {
 export interface FetchAgentMessagesResult {
   messages: UIMessage[];
   pagination: PaginationInfo | null;
+  /**
+   * The `conversations.rev` this snapshot was read at (Agent-Session SSoT epic,
+   * Phase 2) — the cache entry's watermark. `null` when the route answered a
+   * legacy shape (bare array) or the conversation has no row: no baseline, so
+   * the subscriber refetches on any versioned event rather than guessing.
+   */
+  rev: number | null;
 }
 
 /**
@@ -81,13 +90,15 @@ export async function fetchAgentConversationMessages(
   if (Array.isArray(data)) {
     return {
       messages: data,
-      pagination: null
+      pagination: null,
+      rev: null,
     };
   }
 
   return {
     messages: data.messages || [],
-    pagination: data.pagination || null
+    pagination: data.pagination || null,
+    rev: typeof data.rev === 'number' ? data.rev : null,
   };
 }
 

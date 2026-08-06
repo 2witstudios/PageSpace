@@ -25,6 +25,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
 import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
+import { useConversationSubscription } from '@/hooks/useConversationSubscription';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
 
 /**
@@ -237,17 +238,27 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const userId = user?.id ?? null;
   const channelId = userId ? globalChannelId(userId) : null;
 
+  // THE STREAM PLANE ONLY (Agent-Session SSoT epic, Phase 2 / plan PR 3). This
+  // provider keeps the app-wide global-channel subscription because a stream must
+  // stay in the store even for a conversation no surface is currently showing —
+  // but it no longer handles the MESSAGE plane. `onUserMessage`/`onMessageEdited`/
+  // `onMessageDeleted` (the legacy `chat:*` fan-out) are superseded by the
+  // authoritative `conversation:message_*` events, which arrive on the
+  // conversation's own room and are applied — rev-gated — by
+  // `useConversationSubscription`. Only `onStreamComplete` is kept from the shared
+  // cache protocol: it is stream lifecycle, not message content, and it is what
+  // keeps a finished reply from flashing out when the mirror releases.
+  //
+  // NO useChat dual-write here: this provider cannot reach the surfaces'
+  // transport instances, and post-cutover their arrays are bookkeeping only — the
+  // surfaces re-seed the transport at the actions that need it (retry, ask_user).
+  const { onStreamComplete } = buildConversationCacheHandlers({
+    reloadConversation: loadGlobalConversationMessages,
+    refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
+  });
+
   const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
-    // P2-P4 + P6: the shared socket-events → cache protocol (one implementation with
-    // the agent channels — see buildConversationCacheHandlers for the commit/promote/
-    // heal semantics). NO useChat dual-write here, unlike AiChatView: this provider
-    // cannot reach the surfaces' transport instances, and post-cutover their arrays
-    // are bookkeeping only — the surfaces re-seed the transport at the actions that
-    // need it (retry, ask_user answers).
-    ...buildConversationCacheHandlers({
-      reloadConversation: loadGlobalConversationMessages,
-      refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
-    }),
+    onStreamComplete,
     // P5: a remote tab's undo restructures the conversation wholesale — reload the
     // cache entry. Guard kept as the pure fn (cross-conversation + own-tab).
     onUndoApplied: (payload) => {
@@ -258,6 +269,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setLatestGlobalConversationAdded(payload);
     },
   });
+
+  // The MESSAGE plane for whichever global conversation the app is currently on
+  // — the surfaces that render it in "global mode" (the dashboard assistant, the
+  // sidebar chat tab) read their conversation id from this provider and mount no
+  // subscription of their own, so this is theirs. Panes are different: each one
+  // subscribes to its own conversation through `useAssistantSessionChat` /
+  // `useAgentSessionChat`. Duplicate delivery across the two is harmless — every
+  // cache action is idempotent by construction.
+  useConversationSubscription(currentConversationId, { channelId: null, agentPageId: null });
 
   const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
   const transport = useChatTransport(currentConversationId, apiEndpoint, channelId);

@@ -25,10 +25,17 @@ export const conversationMessagesActions = {
     generation: number,
     messages: UIMessage[],
     pagination?: { hasMore: boolean; nextCursor: string | null },
+    rev?: number | null,
   ): void =>
-    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages, pagination),
+    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages, pagination, rev),
   failLoad: (conversationId: string, generation: number): void =>
     useConversationMessagesStore.getState().failLoad(conversationId, generation),
+  /** The conversation's rev watermark (Agent-Session SSoT epic, Phase 2), or null when no load has established one. */
+  getRev: (conversationId: string): number | null =>
+    useConversationMessagesStore.getState().getRev(conversationId),
+  /** Advance the watermark after an event's payload was applied — monotonic; no-op for an uncached conversation. */
+  advanceRev: (conversationId: string, rev: number): void =>
+    useConversationMessagesStore.getState().advanceRev(conversationId, rev),
   /** Imperative snapshot read of a conversation's cache entry (defaults when never seen). */
   getEntry: (conversationId: string): ConversationCacheEntry =>
     useConversationMessagesStore.getState().getEntry(conversationId),
@@ -98,8 +105,9 @@ export const conversationMessagesActions = {
     generationToken: number,
     messages: UIMessage[],
     pagination?: { hasMore: boolean; nextCursor: string | null },
+    rev?: number | null,
   ): void =>
-    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages, pagination),
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages, pagination, rev),
   /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
   seedConversation: (conversationId: string): void =>
     useConversationMessagesStore.getState().seedConversation(conversationId),
