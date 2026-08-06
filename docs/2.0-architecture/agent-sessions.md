@@ -64,10 +64,17 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
   `packages/lib/src/services/agent-sessions/session-status.ts`): the four lifecycle
   stamps are each single-writer facts; a status column would be a second copy. This
   stays true under the epic — it is the pattern, not an exception to it.
-- **Pane grid**: today `agent_sessions.workspaceState` is one jsonb blob written only by
-  the client's debounced sync (`PUT /api/agent-sessions/{id}/workspace`) / target:
-  relational pane tables + rev counter + idempotent verbs, server-authoritative, with
-  the blob dying at contract (epic Phase 3, the #2202 machine-panes pattern).
+- **Pane grid**: today `agent_sessions.workspaceState` is one jsonb blob with exactly
+  one write path — the client's debounced sync (`useWorkspaceServerSync` →
+  `PUT /api/agent-sessions/{id}/workspace` → `saveSessionWorkspace`). Server tool
+  paths cannot write placement at all: `open_page_pane` only acks and relies on a
+  client-side reaction (`useOpenPagePane`), and worker spawn placement mints
+  conversations without touching the grid — so server-side actions are invisible to
+  any grid no client happens to be rendering, and the client's localStorage copy is a
+  third version of the same fact. / Target: relational pane tables + rev counter +
+  idempotent verbs behind one shared writer that the client, the server, and the AI
+  tool paths all post through, with the blob and the localStorage copy dying at
+  contract (epic Phase 3, the #2202 machine-panes pattern).
 
 ## 2. Authorization axioms (PR #2336 — product-locked)
 
@@ -77,9 +84,13 @@ finding 1's workspace confinement.
 1. **Verbs are resource-addressed and permission-gated, like `read_page`.**
    `send_session` / `read_session` / `kill_session` authorize against the resource:
    the caller owns the worker conversation, it is actually a worker (bound into some
-   workspace), and its listing is not human-closed. All three refuse identically —
-   nothing to learn from the difference. The calling conversation plays no
-   authorization role and is not required. (Page-worker dispatch additionally
+   workspace), and its listing is not human-closed. A resource the caller does **not**
+   own always reads as nonexistent — anti-enumeration, today's behavior and kept.
+   For the caller's *own* rows, today every failure cause collapses into the same
+   not-yours message / Phase 1 target: distinct, typed, actionable refusals
+   (closed-listing vs not-yet-a-worker), per the "Tool contract pin and typed
+   refusals" task — the collapse is an implementation state, not an axiom. The
+   calling conversation plays no authorization role and is not required. (Page-worker dispatch additionally
    re-enforces the agent's RBAC inside the standard chat pipeline it runs through.)
 2. **Binding state, lifecycle state, and calling surface NEVER refuse a permitted
    operation.** Ended sessions reopen on use. Unbound threads mint a workspace
