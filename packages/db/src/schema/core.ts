@@ -102,7 +102,28 @@ export const pages = pgTable('pages', {
 export const chatMessages = pgTable('chat_messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  conversationId: text('conversationId').notNull().$defaultFn(() => createId()), // Group messages into conversation sessions
+  /**
+   * Group messages into conversation sessions.
+   *
+   * Self-minting (`$defaultFn`) and, for its whole history, referentially
+   * unanchored: a row could name a `conversations` id that never existed.
+   * Migration 0248 (epic "Agent-Session Single Source of Truth", Phase 4 —
+   * the expand step) synthesises the missing `conversations` rows and adds a
+   * real FK to `conversations(id)` ON DELETE CASCADE, `NOT VALID` — new
+   * writes are checked, the existing corpus is left unscanned until a later
+   * PR runs `VALIDATE CONSTRAINT`.
+   *
+   * That FK is declared IN THE MIGRATION, not here, for two reasons, and the
+   * omission is deliberate rather than an oversight:
+   *   1. `NOT VALID` has no drizzle expression — a `.references()` here would
+   *      generate a VALIDATED FK, whose creation scans every row of this
+   *      table under a lock. On a large corpus that is an outage.
+   *   2. `core.ts` importing `conversations.ts` would close an import cycle
+   *      (conversations → agent-sessions → core).
+   * Keep the two in sync by hand: the constraint is
+   * `chat_messages_conversationId_conversations_id_fk`.
+   */
+  conversationId: text('conversationId').notNull().$defaultFn(() => createId()),
   role: text('role').notNull(),
   content: text('content').notNull(),
   toolCalls: jsonb('toolCalls'),

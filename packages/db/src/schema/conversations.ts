@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, jsonb, boolean, bigint, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { pages } from './core';
 import { agentSessions } from './agent-sessions';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -62,12 +63,44 @@ export const conversations = pgTable('conversations', {
 }));
 
 /**
- * Unified messages table for all conversation types
+ * Unified messages table for all conversation types.
+ *
+ * THE MERGE TARGET for `chat_messages` (packages/db/src/schema/core.ts) —
+ * epic "Agent-Session Single Source of Truth", Phase 4 (D6). The two tables
+ * are column-identical except three deltas, all of which land here in the
+ * EXPAND step (migration 0248) so that the later dual-write/backfill/reader
+ * cutover PRs have somewhere to write:
+ *
+ *   1. `userId` relaxed to NULLABLE — agent/system-authored rows (consult
+ *      replies, `/help` responses, worker dispatches) have no human author,
+ *      and `chat_messages.userId` has always been nullable.
+ *   2. `sourceAgentId` adopted — the agent page that authored the row.
+ *   3. `pageId` carried TRANSITIONALLY (see the column).
+ *
+ * ATTRIBUTION RULE (the contract every writer and reader must honour):
+ *   - `userId` NOT NULL  ⇒ a human wrote it, and that is who.
+ *   - `userId` NULL      ⇒ agent- or system-authored. `sourceAgentId` names
+ *                          the authoring agent page WHEN KNOWN; both NULL is
+ *                          legal and means "authored by the platform, source
+ *                          not recorded".
+ *
+ * There is DELIBERATELY NO CHECK constraint binding those two columns. The
+ * legacy `chat_messages` corpus contains NULL/NULL rows (agent replies
+ * written before `sourceAgentId` existed) and the backfill copies them
+ * verbatim; a CHECK would either reject the backfill or force us to invent
+ * attribution we do not have. The rule is documented and tested, not
+ * enforced by the database.
  */
 export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   conversationId: text('conversationId').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /**
+   * The HUMAN author, or NULL for an agent/system-authored row. See the
+   * attribution rule in this table's doc comment. Relaxed from NOT NULL in
+   * 0248: purely widening, so every pre-existing row and every old-code
+   * INSERT during the rolling-deploy window stays valid.
+   */
+  userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull(), // 'user' | 'assistant'
   messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
   content: text('content').notNull(),
@@ -79,10 +112,41 @@ export const messages = pgTable('messages', {
   // Lifecycle state of an assistant row from the moment generation starts. See chat_messages.status
   // (packages/db/src/schema/core.ts) for the full contract.
   status: text('status', { enum: ['streaming', 'complete', 'interrupted'] }).default('complete').notNull(),
+  /**
+   * TRANSITIONAL — carried only so the cutover can copy `chat_messages` rows
+   * without losing a column, and DROPPED at the contract PR (Phase 4 PR 15).
+   * It is not the source of truth even while it exists: a page conversation's
+   * page is `conversations.contextId` (`type='page'`), which is exactly what
+   * every reader derives after the cutover. Nothing new may be built on this
+   * column.
+   *
+   * No FK to `pages`, deliberately: an FK on a column scheduled for deletion
+   * buys nothing (the authoritative link, `conversations.contextId`, has none
+   * either), and its `ON DELETE CASCADE` would add a second, redundant delete
+   * path for page teardown during the very window in which both tables hold
+   * the same rows.
+   */
+  pageId: text('pageId'),
+  /**
+   * The agent page that authored this row, when known. Adopted verbatim from
+   * `chat_messages.sourceAgentId`, including its `ON DELETE SET NULL`:
+   * deleting an agent must never delete the transcript it produced — the
+   * message survives, attributed to nobody (see the attribution rule above).
+   */
+  sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),
   userIdx: index('messages_user_id_idx').on(table.userId),
+  // Parity with `chat_messages`'s page-scoped access paths, so the reader
+  // cutover does not regress page-chat history loads onto sequential scans.
+  // CREATED CONDITIONALLY by 0248: below the size gate the migration builds
+  // them inline; above it they are built by
+  // scripts/deferred-migrations/0248-messages-unification-indexes.sql with
+  // CREATE INDEX CONCURRENTLY. Both paths produce these exact names, so this
+  // declaration stays the single description of the intended end state.
+  pageIdx: index('messages_page_id_idx').on(table.pageId),
+  pageIsActiveCreatedAtIdx: index('messages_page_id_is_active_created_at_idx').on(table.pageId, table.isActive, table.createdAt),
 }));
 
 // Relations
@@ -106,5 +170,12 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   user: one(users, {
     fields: [messages.userId],
     references: [users.id],
+  }),
+  // Mirrors `chatMessagesRelations.sourceAgent` so the reader cutover can
+  // move relation-shaped queries across without changing their shape.
+  sourceAgent: one(pages, {
+    fields: [messages.sourceAgentId],
+    references: [pages.id],
+    relationName: 'messageSourceAgent',
   }),
 }));
