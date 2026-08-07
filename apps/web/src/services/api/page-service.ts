@@ -4,7 +4,7 @@ import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
-import { unifiedPageScope } from '@/lib/repositories/unified-message-scope';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
@@ -334,11 +334,9 @@ async function recursivelyTrash(
 /**
  * A page's chat messages for the page payload, author included.
  *
- * Reads the UNIFIED `messages` table since the message-table merge (epic
- * "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope is
- * `unifiedPageScope` - the join through `conversations`, which is what
- * `chat_messages.pageId` became; `chat_messages` is still dual-written, so
- * reverting the cutover is safe.
+ * Reads the one `messages` table (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6). Page scope is `unifiedPageScope` - the join through
+ * `conversations`, which is what `chat_messages.pageId` became.
  *
  * Deliberately keeps the legacy shape verbatim, including the ABSENCE of a
  * `status` filter (this payload has always included mid-flight 'streaming'
@@ -349,7 +347,7 @@ async function fetchPageChatMessages(pageId: string) {
   const rows = await db
     .select({
       id: unifiedMessages.id,
-      pageId: unifiedMessages.pageId,
+      pageId: derivedPageId(),
       conversationId: unifiedMessages.conversationId,
       userId: unifiedMessages.userId,
       role: unifiedMessages.role,

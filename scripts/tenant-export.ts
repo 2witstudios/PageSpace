@@ -169,49 +169,37 @@ export async function exportData(
   // rule as any other page ref.
   nullifyOrphanedPageRefs(drivesData, pageIdSet, 'homePageId', 'not_found_page_id');
 
-  const chatMessagesData = await queryRows(db, sql.raw(
-    `SELECT * FROM chat_messages WHERE "pageId" IN (${pageIn})`,
-  ));
-  nullifyOrphanedUserRefs(chatMessagesData, userIdSet, 'userId');
-  nullifyOrphanedPageRefs(chatMessagesData, pageIdSet, 'sourceAgentId');
-
   const channelMessagesData = await queryRows(db, sql.raw(
     `SELECT * FROM channel_messages WHERE "pageId" IN (${pageIn})`,
   ));
 
   /**
    * Conversations: the ones the requested users own, PLUS every conversation
-   * an exported `chat_messages` row names.
+   * ATTACHED TO AN EXPORTED PAGE.
    *
-   * The second half became mandatory with migration 0248, which gave
-   * `chat_messages.conversationId` a real FK (`NOT NULL` column, so it cannot
-   * be nulled out the way an orphaned `userId`/`sourceAgentId` is). The two
-   * sets are gathered along different axes — conversations by OWNER, chat
-   * messages by PAGE — so a page chat started by a drive member outside
-   * `userIds` used to be exported as messages with no parent row, and the
-   * import of that bundle now aborts on the FK. Selecting the referenced
-   * conversations closes the gap; their owners are then pulled into the user
+   * The second half is not optional. The two sets are gathered along different
+   * axes — conversations by OWNER, pages by DRIVE — so a page chat started by
+   * a drive member outside `userIds` would otherwise be exported as messages
+   * with no parent row, and `messages.conversationId` is NOT NULL and FK'd, so
+   * the import of that bundle aborts. Their owners are pulled into the user
    * set below, since `conversations.userId` is NOT NULL and FK'd too.
+   *
+   * The page predicate is `unifiedPageScope`'s pair, in SQL: a `type='page'`
+   * thread names its page in `contextId`, a `type='client'` API thread in
+   * `agentPageId`. It used to be derived from `chat_messages.pageId` — asking
+   * the conversation directly is both narrower and correct now that a
+   * message's page IS its conversation's page.
    */
-  const referencedConversationIds = new Set(
-    chatMessagesData
-      .map((r) => r.conversationId as string | null)
-      .filter((id): id is string => Boolean(id)),
-  );
   const conversationsData = await queryRows(db, sql.raw(
-    referencedConversationIds.size > 0
-      ? `SELECT * FROM conversations WHERE "userId" IN (${userIn}) OR id IN (${toSqlInList(referencedConversationIds)})`
-      : `SELECT * FROM conversations WHERE "userId" IN (${userIn})`,
+    `SELECT * FROM conversations WHERE "userId" IN (${userIn})`
+    + ` OR (type = 'page' AND "contextId" IN (${pageIn}))`
+    + ` OR (type = 'client' AND "agentPageId" IN (${pageIn}))`,
   ));
   const conversationIds = conversationsData.map((r) => r.id as string);
 
   // For channel messages from non-exported users, we need to include those user records
   const referencedUserIds = new Set(userIds);
   for (const msg of channelMessagesData) {
-    if (msg.userId) referencedUserIds.add(msg.userId as string);
-  }
-  // Also check chatMessages userId
-  for (const msg of chatMessagesData) {
     if (msg.userId) referencedUserIds.add(msg.userId as string);
   }
   // …and the owners of the conversations pulled in above (NOT NULL + FK'd)
@@ -309,6 +297,12 @@ export async function exportData(
   const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
   nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'sessionId');
 
+  // `conversations.agentPageId` FKs `pages` (ON DELETE SET NULL) and is a
+  // `type='client'` thread's only page link. A thread whose agent page is
+  // outside the bundle becomes page-less rather than a dangling reference —
+  // which reads, correctly, as an API thread that has not been used yet.
+  nullifyOrphanedPageRefs(conversationsData, pageIdSet, 'agentPageId');
+
   // Messages from exported users, plus the agent/system-authored rows.
   // `messages.userId` was relaxed to NULLABLE in 0248 (the attribution rule:
   // NULL userId = agent- or system-authored), so an `IN (…)` filter alone now
@@ -319,12 +313,11 @@ export async function exportData(
         `SELECT * FROM messages WHERE "conversationId" IN (${toSqlInList(conversationIds)}) AND ("userId" IS NULL OR "userId" IN (${allUserIn}))`,
       ))
     : [];
-  // `messages.sourceAgentId` FKs `pages` (ON DELETE SET NULL). `messages.pageId`
-  // deliberately has NO FK — it is transitional, dropped at the unification's
-  // contract PR — but a value naming a page the bundle does not carry would be
-  // a phantom reference in the tenant, and the authoritative page link is
-  // `conversations.contextId` anyway, so it gets the same treatment.
-  nullifyOrphanedPageRefs(messagesData, pageIdSet, 'sourceAgentId', 'pageId');
+  // `messages.sourceAgentId` FKs `pages` (ON DELETE SET NULL); a value naming
+  // a page the bundle does not carry would be a phantom reference in the
+  // tenant. A message's own page is its conversation's, and that is nulled
+  // with the conversation rows below.
+  nullifyOrphanedPageRefs(messagesData, pageIdSet, 'sourceAgentId');
 
   const filesData = await queryRows(db, sql.raw(
     `SELECT * FROM files WHERE "driveId" IN (${driveIn})`,
@@ -394,13 +387,11 @@ export async function exportData(
     // `agent_sessions` precedes `conversations`: `conversations.sessionId`
     // FKs it, and a session row also needs its drive and owner, both above.
     buildInsert('agent_sessions', cols('agent_sessions'), agentSessionsData),
-    // `conversations` MUST precede `chat_messages`: since migration 0248 the
-    // latter has a real (non-deferrable) FK onto the former, and the whole
-    // bundle replays inside one BEGIN/COMMIT, so an out-of-order INSERT aborts
-    // the entire import. It also precedes `messages`, which has always had
-    // that FK. Insert order in this list is FK order, not table-name order.
+    // `conversations` MUST precede `messages`: the latter has a real
+    // (non-deferrable) FK onto the former, and the whole bundle replays inside
+    // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
+    // Insert order in this list is FK order, not table-name order.
     buildInsert('conversations', cols('conversations'), conversationsData),
-    buildInsert('chat_messages', cols('chat_messages'), chatMessagesData),
     buildInsert('messages', cols('messages'), messagesData),
     buildInsert('channel_messages', cols('channel_messages'), channelMessagesData),
     buildInsert('channel_message_reactions', cols('channel_message_reactions'), channelReactionsData),
@@ -426,7 +417,6 @@ export async function exportData(
     driveRoles: driveRolesData.length,
     driveMembers: driveMembersData.length,
     pages: pagesData.length,
-    chatMessages: chatMessagesData.length,
     channelMessages: channelMessagesData.length,
     channelMessageReactions: channelReactionsData.length,
     channelReadStatus: channelReadStatusData.length,

@@ -11,7 +11,6 @@ export interface ManifestTableCounts {
   driveRoles: number;
   driveMembers: number;
   pages: number;
-  chatMessages: number;
   channelMessages: number;
   channelMessageReactions: number;
   channelReadStatus: number;
@@ -108,7 +107,6 @@ export const TABLE_IMPORT_ORDER = [
   'pages',
   'tags',
   'page_tags',
-  'chat_messages',
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',

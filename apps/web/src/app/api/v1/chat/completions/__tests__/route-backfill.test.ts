@@ -25,7 +25,6 @@ vi.mock('@pagespace/db/db', () => ({
     }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
     query: {
-      chatMessages: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
 }));
@@ -73,7 +72,6 @@ vi.mock('@/lib/repositories/message-repository', () => ({
 
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', type: 'pages.type' },
-  chatMessages: {},
   drives: {},
 }));
 
@@ -262,7 +260,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null, rev: 0,
+      closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -331,7 +329,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null, rev: 0,
+      closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -377,7 +375,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-      closedInSessionAt: null, rev: 0,
+      closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });

@@ -53,7 +53,6 @@ export async function truncateAll(db: TestDb): Promise<void> {
       channel_read_status,
       channel_message_reactions,
       channel_messages,
-      chat_messages,
       page_tags,
       tags,
       pages,
@@ -130,13 +129,12 @@ export const FIXTURES = {
     },
   },
   /**
-   * The page conversation the fixture's `chat_messages` hang off.
+   * The page conversation the fixture's messages hang off.
    *
-   * Since migration 0248 (`chat_messages_conversationId_conversations_id_fk`,
-   * NOT VALID) a page-chat message MUST name a real `conversations` row —
-   * that migration's orphan-synthesis step exists precisely to retire the old
-   * self-minting, parentless `conversationId`. A fixture without a parent row
-   * is therefore no longer a state the application can produce, so it is
+   * A page-chat message MUST name a real `conversations` row —
+   * `messages.conversationId` carries a validated, cascading FK, and a
+   * message's PAGE is derived from that conversation. A fixture without a
+   * parent row is therefore not a state the application can produce, so it is
    * seeded the way production writes one: `type='page'` with
    * `contextId = pageId` (the shape `conversations_page_context_present_chk`
    * requires and the reader cutover derives the page from).
@@ -172,7 +170,7 @@ export const FIXTURES = {
       spriteInstanceId: 'sprite-instance-source-001',
     },
   },
-  chatMessages: {
+  messages: {
     msg1: {
       id: 'test_chatmsg_001',
       role: 'user',
@@ -217,7 +215,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, conversations, agentSessions, chatMessages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, agentSessions, messages, files, pagePermissions, tags } = FIXTURES;
   const now = new Date();
 
   // Users. `emailBidx` is seeded because it is the LOOKUP KEY for an encrypted
@@ -287,12 +285,14 @@ export async function seedFixtures(db: TestDb): Promise<void> {
     VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.sessionId}, ${now}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})
   `);
 
-  // Chat messages (on the grandchild AI_CHAT page)
+  // Chat messages, in the ONE message table. Their page is their
+  // conversation's (`type='page'`, `contextId` = the grandchild AI_CHAT page)
+  // — there is no per-row page column since Phase 4 PR 15 dropped it.
   await db.execute(sql`
-    INSERT INTO chat_messages (id, "pageId", "conversationId", role, content, "userId", "createdAt")
+    INSERT INTO messages (id, "conversationId", role, content, "userId", "createdAt")
     VALUES
-      (${chatMessages.msg1.id}, ${pages.grandchild.id}, ${chatMessages.msg1.conversationId}, ${chatMessages.msg1.role}, ${chatMessages.msg1.content}, ${users.owner.id}, ${now}),
-      (${chatMessages.msg2.id}, ${pages.grandchild.id}, ${chatMessages.msg2.conversationId}, ${chatMessages.msg2.role}, ${chatMessages.msg2.content}, NULL, ${now})
+      (${messages.msg1.id}, ${messages.msg1.conversationId}, ${messages.msg1.role}, ${messages.msg1.content}, ${users.owner.id}, ${now}),
+      (${messages.msg2.id}, ${messages.msg2.conversationId}, ${messages.msg2.role}, ${messages.msg2.content}, NULL, ${now})
   `);
 
   // Files

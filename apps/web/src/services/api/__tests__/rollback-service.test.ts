@@ -76,7 +76,6 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
   drives: { id: 'id' },
-  chatMessages: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { id: 'id' },

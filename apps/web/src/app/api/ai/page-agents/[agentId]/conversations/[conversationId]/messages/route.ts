@@ -8,7 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { unifiedPageScope } from '@/lib/repositories/unified-message-scope';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -170,7 +170,7 @@ export async function GET(
     const dbMessages = await db
       .select({
         id: messages.id,
-        pageId: messages.pageId,
+        pageId: derivedPageId(),
         userId: messages.userId,
         role: messages.role,
         content: messages.content,

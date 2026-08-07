@@ -50,7 +50,6 @@ vi.mock('@pagespace/db/schema/agent-sessions', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', title: 'pages.title', driveId: 'pages.driveId' },
-  chatMessages: { pageId: 'chatMessages.pageId', conversationId: 'chatMessages.conversationId', isActive: 'chatMessages.isActive' },
 }));
 
 import * as dbModule from '@pagespace/db/db';

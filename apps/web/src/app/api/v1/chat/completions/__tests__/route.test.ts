@@ -31,7 +31,6 @@ vi.mock('@pagespace/db/db', () => ({
     }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
     query: {
-      chatMessages: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
 }));
@@ -58,7 +57,6 @@ vi.mock('@pagespace/db/operators', () => ({
 
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', type: 'pages.type' },
-  chatMessages: {},
   drives: {},
 }));
 
@@ -841,7 +839,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'client',
       lastMessageAt: null,
     });
@@ -879,7 +877,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
         type: 'page',
         lastMessageAt: null,
       });
@@ -927,7 +925,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -967,7 +965,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -995,7 +993,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1027,7 +1025,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1356,7 +1354,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1384,7 +1382,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: true,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
       type: 'page',
       lastMessageAt: null,
     });
