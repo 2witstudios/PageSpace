@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { z } from 'zod';
+import { type PaneScope, type PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import {
-  persistedColumnStateSchema,
-  type PaneScope,
-  type PersistedColumnState,
-} from '@pagespace/lib/agent-workspaces/contract';
+  workspaceLayoutSnapshotSchema,
+  workspaceLayoutStaleResponseSchema,
+  workspaceLayoutVerbResponseSchema,
+  type WorkspaceLayoutSnapshot,
+} from '@pagespace/lib/agent-workspaces/workspace-layout-wire';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import {
@@ -248,12 +250,6 @@ interface AgentWorkspaceState {
   refreshWorkspaceSnapshot(sessionId: string): Promise<boolean>;
 }
 
-/** The layout GET's body, and what a verb response carries back. */
-export interface WorkspaceLayoutSnapshot {
-  rev: number;
-  grid: PersistedColumnState[] | null;
-}
-
 /** The `workspace:updated` payload, as it arrives on the `session:<id>` room. */
 export interface WorkspaceUpdatedEvent {
   workspaceId: string;
@@ -263,17 +259,11 @@ export interface WorkspaceUpdatedEvent {
   grid: PersistedColumnState[];
 }
 
-const gridSchema = z.array(persistedColumnStateSchema);
-
-const snapshotSchema = z.object({
-  rev: z.number().int().min(0),
-  grid: gridSchema.nullable(),
-});
-
-const verbResponseSchema = z.object({
-  rev: z.number().int().min(0),
-  grid: gridSchema,
-});
+// The 409 body carries no `applied` — nothing was applied — so the two are
+// parsed with different schemas rather than one loose shape.
+const snapshotSchema = workspaceLayoutSnapshotSchema;
+const verbResponseSchema = workspaceLayoutVerbResponseSchema;
+const staleResponseSchema = workspaceLayoutStaleResponseSchema;
 
 /**
  * Transport give-up threshold. A verb that cannot be settled after this many
@@ -518,7 +508,10 @@ async function settle(
   }
 
   if (response.status === 409) {
-    const parsed = verbResponseSchema.safeParse(body);
+    // The STALE schema, not the 200 one: a 409 carries no `applied`, because
+    // nothing was applied. Parsing it with the verb-response shape would fail
+    // on the missing field and turn every rebase into a backoff-and-retry.
+    const parsed = staleResponseSchema.safeParse(body);
     if (!parsed.success) {
       scheduleRetry(sessionId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
       return;

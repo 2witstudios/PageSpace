@@ -1607,6 +1607,11 @@
       "import": "./dist/realtime/rooms.js",
       "require": "./dist/realtime/rooms.js"
     },
+    "./agent-workspaces/workspace-layout-wire": {
+      "types": "./dist/agent-workspaces/workspace-layout-wire.d.ts",
+      "import": "./dist/agent-workspaces/workspace-layout-wire.js",
+      "require": "./dist/agent-workspaces/workspace-layout-wire.js"
+    },
     "./realtime/conversation-event-names": {
       "types": "./dist/realtime/conversation-event-names.d.ts",
       "import": "./dist/realtime/conversation-event-names.js",

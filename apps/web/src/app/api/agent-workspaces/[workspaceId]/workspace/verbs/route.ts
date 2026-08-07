@@ -27,6 +27,10 @@
  */
 
 import { NextResponse } from 'next/server';
+import type {
+  WorkspaceLayoutStaleResponse,
+  WorkspaceLayoutVerbResponse,
+} from '@pagespace/lib/agent-workspaces/workspace-layout-wire';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -102,7 +106,10 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   if (result.status === 'stale') {
-    return NextResponse.json({ rev: result.rev, grid: result.grid }, { status: 409 });
+    // Typed against the shared wire shape, so the store parses exactly what
+    // this returns — including the ABSENCE of `applied` on a 409.
+    const stale: WorkspaceLayoutStaleResponse = { rev: result.rev, grid: result.grid };
+    return NextResponse.json(stale, { status: 409 });
   }
 
   if (result.applied) {
@@ -115,5 +122,6 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
-  return NextResponse.json({ rev: result.rev, grid: result.grid, applied: result.applied });
+  const ok: WorkspaceLayoutVerbResponse = { rev: result.rev, grid: result.grid, applied: result.applied };
+  return NextResponse.json(ok);
 }

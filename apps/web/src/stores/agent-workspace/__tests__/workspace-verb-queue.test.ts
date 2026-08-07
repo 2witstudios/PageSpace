@@ -560,7 +560,7 @@ describe('rearrange verbs: 409 rebase', () => {
     // a rev ahead — the exact shape a 409 exists to report.
     mockFetchWithAuth
       .mockResolvedValueOnce(reply(409, { rev: 9, grid: twoColumnWireGrid([0.8, 0.2]) }))
-      .mockResolvedValue(reply(200, { rev: 10, grid: twoColumnWireGrid([0.35, 0.65]) }));
+      .mockResolvedValue(reply(200, { rev: 10, grid: twoColumnWireGrid([0.35, 0.65]), applied: true }));
 
     store().hydrateFromServer('ses-1', { rev: 4, grid: twoColumnWireGrid() });
     store().resizeColumn('ses-1', 'col-b', 0.65);
@@ -591,5 +591,42 @@ describe('rearrange verbs: 409 rebase', () => {
     expect(grid().columns.map((column) => column.widthFraction)).toEqual([0.25, 0.75]);
     expect(grid().activePaneId).toBe('pane-a2');
     expect(sync().rev).toBe(5);
+  });
+});
+
+/**
+ * The 200 and the 409 are DIFFERENT shapes, and the store now parses them
+ * against different schemas from the shared wire module. The 409 carries no
+ * `applied` — nothing was applied — so parsing it with the 200's schema would
+ * fail on the missing field and turn every rebase into a backoff-and-retry.
+ */
+describe('verb response shapes', () => {
+  it('accepts a 200 carrying applied and adopts its rev', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      reply(200, { rev: 6, grid: wireGrid('pane-server', scope()), applied: true }),
+    );
+
+    store().hydrateFromServer('ses-1', { rev: 5, grid: wireGrid('pane-a', scope()) });
+    store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+    await settled();
+
+    expect(sync().rev).toBe(6);
+    expect(sync().pending).toHaveLength(0);
+  });
+
+  it('rebases on a 409 body that has no applied field', async () => {
+    mockFetchWithAuth
+      .mockResolvedValueOnce(reply(409, { rev: 11, grid: wireGrid('pane-truth', scope()) }))
+      .mockResolvedValue(reply(200, { rev: 12, grid: wireGrid('pane-truth', scope()), applied: true }));
+
+    store().hydrateFromServer('ses-1', { rev: 5, grid: wireGrid('pane-a', scope()) });
+    store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+    await settled();
+    await settled();
+
+    // Re-posted against the rev the 409 taught us, then settled on the 200.
+    expect(postedVerbs()[1]?.baseRev).toBe(11);
+    expect(sync().rev).toBe(12);
+    expect(sync().pending).toHaveLength(0);
   });
 });

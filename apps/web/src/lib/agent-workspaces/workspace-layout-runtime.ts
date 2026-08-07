@@ -156,11 +156,15 @@ export async function applyWorkspaceLayoutVerb(input: {
   return { status: 'ok', rev: outcome.rev, grid, applied: outcome.applied };
 }
 
-export interface WorkspaceLayoutSnapshot {
-  rev: number;
-  /** `null` when the session has no grid at all (no pane rows). */
-  grid: WorkspaceLayoutGridDTO | null;
-}
+/**
+ * Re-exported, not redeclared. This name existed here AND in the client store,
+ * structurally identical and related by nothing — so the GET's producer and its
+ * only consumer could drift without a type error. The wire shape now has one
+ * home (`packages/lib`), which is also the only place the client can reach: it
+ * cannot import this module, which pulls in `@pagespace/db`.
+ */
+import type { WorkspaceLayoutSnapshot } from '@pagespace/lib/agent-workspaces/workspace-layout-wire';
+export type { WorkspaceLayoutSnapshot };
 
 /**
  * Who a labelled grid is being derived FOR.
