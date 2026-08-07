@@ -245,6 +245,52 @@ describe('chat mutation matrix — one message table', () => {
       // The routes read soft-deleted rows too and decide for themselves.
       expect((await messageRepository.getMessageById(target))?.isActive).toBe(false);
     });
+
+    it('moves lastMessageAt back to the newest SURVIVING message', async () => {
+      if (!dbAvailable) return;
+      // The page twin of the global case below. `recomputeLastMessageAt`'s
+      // contract names soft-delete as a caller, but only the global path
+      // honoured it — so deleting the newest message in a page conversation
+      // left the sidebar sorting it on a tombstoned row.
+      const thread = await seedPageThread({
+        contents: [
+          { role: 'user', content: 'first' },
+          { role: 'assistant', content: 'newest, about to go' },
+        ],
+      });
+      const survivor = await messageRepository.getMessageById(thread.ids[0]);
+
+      await messageRepository.softDeletePageMessage({
+        messageId: thread.ids[1],
+        pageId: thread.pageId,
+        conversationId: thread.conversationId,
+        legacyTriggeredBy: triggeredBy,
+      });
+
+      const [conv] = await db
+        .select({ lastMessageAt: conversations.lastMessageAt })
+        .from(conversations)
+        .where(eq(conversations.id, thread.conversationId));
+      expect(conv.lastMessageAt?.getTime()).toBe(survivor!.createdAt.getTime());
+    });
+
+    it('nulls lastMessageAt when the deleted message was the only one', async () => {
+      if (!dbAvailable) return;
+      const thread = await seedPageThread({ contents: [{ role: 'user', content: 'only' }] });
+
+      await messageRepository.softDeletePageMessage({
+        messageId: thread.ids[0],
+        pageId: thread.pageId,
+        conversationId: thread.conversationId,
+        legacyTriggeredBy: triggeredBy,
+      });
+
+      const [conv] = await db
+        .select({ lastMessageAt: conversations.lastMessageAt })
+        .from(conversations)
+        .where(eq(conversations.id, thread.conversationId));
+      expect(conv.lastMessageAt).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -296,6 +342,31 @@ describe('chat mutation matrix — one message table', () => {
 
       expect(first.success).toBe(true);
       expect(second).toMatchObject({ success: true, messagesDeleted: 0, activitiesRolledBack: 0 });
+    });
+
+    it('recomputes lastMessageAt from what the undo left behind', async () => {
+      if (!dbAvailable) return;
+      // `softDeleteUndoRange` tombstones a whole range, so it is the mutation
+      // most likely to strand the sort key on a deleted row — and it never
+      // recomputed at all.
+      const thread = await seedPageThread({
+        contents: [
+          { role: 'user', content: 'turn one question' },
+          { role: 'assistant', content: 'turn one answer' },
+          { role: 'user', content: 'turn two question' },
+          { role: 'assistant', content: 'turn two answer' },
+        ],
+      });
+      const survivor = await messageRepository.getMessageById(thread.ids[1]);
+
+      const result = await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only');
+      expect(result.success).toBe(true);
+
+      const [conv] = await db
+        .select({ lastMessageAt: conversations.lastMessageAt })
+        .from(conversations)
+        .where(eq(conversations.id, thread.conversationId));
+      expect(conv.lastMessageAt?.getTime()).toBe(survivor!.createdAt.getTime());
     });
   });
 

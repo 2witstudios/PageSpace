@@ -126,15 +126,26 @@ const BUMPED_ROW = {
   closedInWorkspaceAt: null,
   isActive: true,
 };
+/** The surviving message the post-undo `lastMessageAt` recompute settles on. */
+const NEWEST_SURVIVING_AT = new Date('2024-01-01T00:00:00.000Z');
+
 /**
- * The transaction handle `executeAiUndo` gets. Both statements it now issues
- * run on it: the `messages` soft-delete AND the `conversations` rev bump —
+ * The transaction handle `executeAiUndo` gets. The writes it issues run on it:
+ * the `messages` soft-delete AND the `conversations` rev bump —
  * `messageRepository.softDeleteUndoRange` performs them as one pair on the
  * CALLER's tx, which is the invariant this suite's table assertions pin.
  *
  * `.where()` returns a plain object carrying `.returning()`: awaiting it in
  * the soft-delete path yields the object (harmless), while the bump chains
  * off it for its RETURNING.
+ *
+ * `select` covers the two read shapes the undo path now issues, both of which
+ * exist so the delete recomputes `lastMessageAt` inside this transaction:
+ *   - `.from(conversations).where(...).for('update')` — the row lock, taken
+ *     before any rollback so this transaction runs conversations -> messages
+ *     like every other writer.
+ *   - `.from(messages).where(...).orderBy(...).limit(1)` — the newest
+ *     surviving message, which becomes the conversation's new sort key.
  *
  * @param updatedTables optional sink recording each table passed to `update`.
  */
@@ -149,6 +160,15 @@ function makeUndoTx(updatedTables?: unknown[]) {
           }),
         }),
       };
+    }),
+    select: vi.fn(() => {
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn().mockReturnValue(chain);
+      chain.where = vi.fn().mockReturnValue(chain);
+      chain.orderBy = vi.fn().mockReturnValue(chain);
+      chain.limit = vi.fn().mockResolvedValue([{ createdAt: NEWEST_SURVIVING_AT }]);
+      chain.for = vi.fn().mockResolvedValue([{ id: mockConversationId }]);
+      return chain;
     }),
   };
 }
@@ -629,7 +649,10 @@ describe('ai-undo-service', () => {
       );
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {};
+        // Not a bare `{}` any more: the transaction takes the conversation row
+        // lock before the rollback loop, so `tx.select` is reached even on the
+        // path where the first rollback refuses.
+        const tx = makeUndoTx();
         try {
           await callback(tx);
         } catch (e) {
@@ -713,7 +736,7 @@ describe('ai-undo-service', () => {
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         try {
-          await callback({});
+          await callback(makeUndoTx());
         } catch (e) {
           throw e;
         }
@@ -951,7 +974,9 @@ describe('ai-undo-service', () => {
       const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
       const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        await callback({ update: updateMock });
+        // Spread in the standard handle for `select` (the row lock and the
+        // surviving-message read), keeping this test's own `update` spy.
+        await callback({ ...makeUndoTx(), update: updateMock });
       });
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');

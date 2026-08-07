@@ -10,7 +10,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, gte, lt, ne, desc } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
-import { messages } from '@pagespace/db/schema/conversations';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   logConversationUndo,
@@ -479,6 +479,25 @@ export async function executeAiUndo(
     let bumpedConversation: BumpedConversationRow | null = null;
 
     await db.transaction(async (tx) => {
+      // Take the conversation row lock FIRST, before any rollback touches a
+      // table. `softDeleteUndoRange` below needs it (it recomputes
+      // `lastMessageAt` from the surviving messages and must not race a
+      // concurrent send), and every other writer in this codebase — the
+      // chat-turn's user-message save, softDeleteConversation, the other two
+      // delete paths — locks `conversations` before `messages`.
+      //
+      // It has to be acquired here rather than inside the repository call: an
+      // activity rollback can itself write `messages` (a message activity
+      // routes through `pickConversationTable`), so acquiring it further down
+      // would put this transaction in messages -> conversations order while
+      // everyone else runs conversations -> messages, which is a deadlock
+      // waiting for two users to undo and send at the same time.
+      await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .for('update');
+
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
         // Collect all activity IDs for undo group context - allows conflict detection

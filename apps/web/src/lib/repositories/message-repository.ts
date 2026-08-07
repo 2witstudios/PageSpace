@@ -441,6 +441,60 @@ function contextForMutation(
   };
 }
 
+/**
+ * THE DELETE PATHS' WRITE: tombstone message rows, recompute the conversation's
+ * `lastMessageAt` from what survives, and bump the rev — all in ONE transaction,
+ * one statement for the last two.
+ *
+ * `recomputeLastMessageAt` below states the contract every delete path is
+ * supposed to honour ("soft-delete, hard-delete, purge, and the interrupted-
+ * stream materializer"). Only the global delete actually did, and it did it in a
+ * SECOND transaction after the first had committed, with the failure swallowed
+ * to a warn — so a crash in the gap left the conversation sorted on a tombstoned
+ * row forever, with no repair path. The page delete and the undo range never
+ * recomputed at all: deleting the newest message in a page conversation left
+ * `lastMessageAt` pointing at a row that is no longer active.
+ *
+ * ORDER MATTERS. The conversation row is locked FIRST — before the message write
+ * and before the read that decides the new sort key. Without the lock a
+ * concurrent writer (a normal message save, or another delete's recompute) can
+ * commit between this function's SELECT and its UPDATE, and this UPDATE then
+ * overwrites that writer's fresher timestamp with a stale snapshot. Locking
+ * conversations before messages is also the order `softDeleteConversation` and
+ * the chat-turn's user-message save already take, so this introduces no new
+ * deadlock ordering.
+ *
+ * Returns the bumped row (the rev + the recomputed timestamp the post-commit
+ * emission carries), or null for a conversation with no `conversations` row.
+ */
+async function tombstoneAndRebump(
+  tx: DbExecutor,
+  conversationId: string,
+  tombstone: (tx: DbExecutor) => Promise<unknown>,
+): Promise<BumpedConversationRow | null> {
+  await tx
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .for('update');
+
+  await tombstone(tx);
+
+  const [newest] = await tx
+    .select({ createdAt: messages.createdAt })
+    .from(messages)
+    .where(and(
+      eq(messages.conversationId, conversationId),
+      eq(messages.isActive, true),
+    ))
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+
+  return bumpConversationRev(tx, conversationId, {
+    extraSet: { lastMessageAt: newest ? newest.createdAt : null },
+  });
+}
+
 /** Shared 'streaming'-placeholder emission (message_created with an empty streaming shell). */
 function emitPlaceholderCreated(
   row: BumpedConversationRow | null,
@@ -846,10 +900,11 @@ export const messageRepository = {
     conversationId: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) => {
-      await mutateUnifiedMessageById(tx, args.messageId, { isActive: false });
-      return bumpConversationRev(tx, args.conversationId);
-    });
+    const row = await db.transaction(async (tx) =>
+      tombstoneAndRebump(tx, args.conversationId, (t) =>
+        mutateUnifiedMessageById(t, args.messageId, { isActive: false }),
+      ),
+    );
 
     void (async () => {
       await broadcastAiMessageDeleted({
@@ -921,31 +976,24 @@ export const messageRepository = {
     });
   },
 
-  /** Soft-delete a global-assistant message (with the repo's lastMessageAt recompute preserved). */
+  /**
+   * Soft-delete a global-assistant message. The `lastMessageAt` recompute
+   * (#2153 — the newest SURVIVING message decides the sort key, not "now") used
+   * to run here in a second transaction after this one committed, with its
+   * failure swallowed to a warn; it now rides inside the write. See
+   * `tombstoneAndRebump`.
+   */
   async softDeleteGlobalMessage(args: {
     messageId: string;
     conversationId: string;
     ownerUserId: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) => {
-      await tx
-        .update(messages)
-        .set({ isActive: false })
-        .where(eq(messages.id, args.messageId));
-      return bumpConversationRev(tx, args.conversationId);
-    });
-
-    // Preserve the pre-existing recompute-on-delete behavior (#2153) — the
-    // newest surviving message decides lastMessageAt, not "now".
-    try {
-      await messageRepository.recomputeLastMessageAt(args.conversationId);
-    } catch (error) {
-      loggers.ai.warn('messageRepository: lastMessageAt recompute failed after delete', {
-        conversationId: args.conversationId,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
-    }
+    const row = await db.transaction(async (tx) =>
+      tombstoneAndRebump(tx, args.conversationId, (t) =>
+        mutateUnifiedMessageById(t, args.messageId, { isActive: false }),
+      ),
+    );
 
     void (async () => {
       await broadcastAiMessageDeleted({
@@ -996,17 +1044,17 @@ export const messageRepository = {
     tx: DbExecutor,
     args: { conversationId: string; fromCreatedAt: Date },
   ): Promise<BumpedConversationRow | null> {
-    await tx
-      .update(messages)
-      .set({ isActive: false })
-      .where(and(
-        eq(messages.conversationId, args.conversationId),
-        gte(messages.createdAt, args.fromCreatedAt),
-        eq(messages.isActive, true),
-        ne(messages.status, 'streaming'),
-      ));
-
-    return bumpConversationRev(tx, args.conversationId);
+    return tombstoneAndRebump(tx, args.conversationId, (t) =>
+      t
+        .update(messages)
+        .set({ isActive: false })
+        .where(and(
+          eq(messages.conversationId, args.conversationId),
+          gte(messages.createdAt, args.fromCreatedAt),
+          eq(messages.isActive, true),
+          ne(messages.status, 'streaming'),
+        )),
+    );
   },
 
   /**
@@ -1260,11 +1308,16 @@ export const messageRepository = {
   },
 
   /**
-   * The single "message mutated" recompute for `conversations.lastMessageAt`
-   * (#2153). Every mutation that can change which active message is newest —
-   * soft-delete, hard-delete, purge, and the interrupted-stream materializer
-   * — calls this instead of writing the field ad hoc, so a recovered or
-   * deleted message can't leave a conversation sorted on a stale timestamp.
+   * The STANDALONE recompute for `conversations.lastMessageAt` (#2153), for the
+   * mutations that cannot fold it into their own write: the retention purge
+   * (which sweeps many conversations, so a bump-and-emit per row would be a
+   * broadcast storm from a cron) and the interrupted-stream materializer.
+   *
+   * The soft-delete paths do NOT call this — they recompute inside their write
+   * transaction via `tombstoneAndRebump`, so the new sort key rides the same
+   * statement as the rev bump and the post-commit event carries it. This used
+   * to be their route too, called after commit with the failure swallowed, and
+   * two of the three never called it at all.
    *
    * Runs in its own transaction and locks the conversation row FIRST, before
    * reading the surviving messages. Without this, a concurrent writer (a
