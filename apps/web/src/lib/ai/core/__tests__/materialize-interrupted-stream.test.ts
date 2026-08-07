@@ -8,6 +8,7 @@ const {
   mockReturning,
   mockUpdateSet,
   mockUpdateWhere,
+  mockTxSelectLimit,
   mockFindPageById,
   mockGetConversation,
   mockBroadcastAiStreamComplete,
@@ -21,6 +22,7 @@ const {
   mockReturning: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockTxSelectLimit: vi.fn(),
   mockFindPageById: vi.fn(),
   mockGetConversation: vi.fn(),
   mockBroadcastAiStreamComplete: vi.fn(),
@@ -38,9 +40,22 @@ vi.mock('@pagespace/db/db', () => ({
     // insert spies (so every table-routing/setWhere assertion below still
     // binds to the real repository SQL); the rev bump's update chain returns
     // no row (legacy-conversation shape), which the repository tolerates.
+    //
+    // `select` is the unified leg's FK precheck (Phase 4 PR 10,
+    // unified-message-leg.ts): a page-chat terminal write now lands on BOTH
+    // `chat_messages` and `messages` in this same transaction, and it looks
+    // the `conversations` row up first because `messages`'s FK is validated.
+    // Defaults to "the conversation exists" — the only shape a materializable
+    // stream can have, since its placeholder was written through the same
+    // repository.
     transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
       cb({
         insert: mockInsert,
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: mockTxSelectLimit })),
+          })),
+        })),
         update: vi.fn(() => ({
           set: vi.fn(() => ({
             where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })),
@@ -175,6 +190,8 @@ beforeEach(() => {
   // gate needs it); the global chain awaits the upsert directly and ignores this shape.
   mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
   mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
+  // The unified leg's `conversations` precheck — present by default.
+  mockTxSelectLimit.mockResolvedValue([{ id: 'conv-1' }]);
   // Default the mention-gate lookups to "page gone" so tests not about notifications never
   // trip the notify path.
   mockFindPageById.mockResolvedValue(null);
@@ -239,6 +256,78 @@ describe('materializeInterruptedStream — table routing', () => {
       should: 'include conversationId in the conflict update set clause',
       actual: setClause.conversationId,
       expected: 'conv-fresh',
+    });
+  });
+
+  // NEW INTENDED BEHAVIOUR since the dual-write (Phase 4 PR 10): a page-chat
+  // terminal write is no longer one INSERT. `chat_messages` stays the legacy
+  // leg every reader still uses, and `messages` is written alongside it in the
+  // SAME transaction, or the unified table silently misses every reply that
+  // was recovered rather than finished — a class of row no backfill re-derives,
+  // because materialization IS the terminal write.
+  it('dual-writes the materialized page reply to both the legacy and the unified leg', async () => {
+    await materializeInterruptedStream(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
+
+    assert({
+      given: 'a materialized page-chat reply',
+      should: 'insert into chat_messages (legacy leg) and messages (unified leg), in that order',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [
+        { id: 'chat_messages.id', status: 'chat_messages.status' },
+        { id: 'messages.id', status: 'messages.status' },
+      ],
+    });
+
+    const legacy = mockInsertValues.mock.calls[0][0];
+    const unified = mockInsertValues.mock.calls[1][0];
+    assert({
+      given: 'the unified leg of a materialized page reply',
+      should: 'carry the same id/content/status as the legacy leg, plus the page attribution',
+      actual: {
+        id: unified.id,
+        content: unified.content,
+        status: unified.status,
+        conversationId: unified.conversationId,
+        pageId: unified.pageId,
+        sameContentAsLegacy: unified.content === legacy.content,
+      },
+      expected: {
+        id: 'msg-1',
+        content: legacy.content,
+        status: 'interrupted',
+        conversationId: 'conv-1',
+        pageId: 'page-abc123',
+        sameContentAsLegacy: true,
+      },
+    });
+  });
+
+  // The legacy CAS is the gate for BOTH legs: it is what proves the row was
+  // still 'streaming'. Mirroring a declined write onto the unified leg would
+  // clobber a terminal row the route's own onFinish already wrote correctly.
+  it('given the legacy CAS wrote nothing, does not write the unified leg either', async () => {
+    mockReturning.mockResolvedValue([]);
+
+    await materializeInterruptedStream(pageRow());
+
+    assert({
+      given: 'a materialization whose compare-and-swap matched no streaming row',
+      should: 'leave the unified leg untouched — one insert attempted, not two',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [{ id: 'chat_messages.id', status: 'chat_messages.status' }],
+    });
+  });
+
+  // The global assistant's ONE leg has always been `messages`; there is no
+  // second table to mirror into, and a duplicate insert would be a real bug.
+  it('given a global-assistant row, writes messages exactly once (no dual-write — global has one leg)', async () => {
+    await materializeInterruptedStream(globalRow());
+
+    assert({
+      given: 'a materialized global-assistant reply',
+      should: 'write the messages table once',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
     });
   });
 });
