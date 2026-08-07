@@ -5,11 +5,14 @@
  * The individual transitions (split/assign/close/reset/…) are pinned by the
  * web client's own pane-reducer suite (which now runs against these very
  * functions via re-export); what THIS suite owns is the verb layer on top —
- * targeting, no-op semantics, the focus-or-assign policy — and the epic's
- * drift guard: after ANY sequence of verbs, the blob the engine dual-writes
- * and the rows it persists must project to the identical structural grid
- * (a seeded random-sequence property, the "blob ≡ rows" invariant of the
- * dual-write window).
+ * targeting, no-op semantics, the focus-or-assign policy — and, since the
+ * `workspaceState` blob was dropped, the SINGLE-SOURCE property that
+ * replaced the old "blob ≡ rows" drift guard: after ANY sequence of verbs
+ * the persisted ROWS are a complete record of the grid's structure — reading
+ * them back and re-reducing the next verb against that rehydration lands on
+ * exactly the grid the in-memory state carries (a seeded random-sequence
+ * property). There is nothing left to drift against; what has to hold now is
+ * that the one remaining representation loses nothing.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -22,7 +25,7 @@ import {
   type WorkspaceLayoutVerb,
   type WorkspaceState,
 } from '../workspace-layout-verbs';
-import { persistedWorkspaceStateSchema, type PaneScope } from '../contract';
+import { type PaneScope } from '../contract';
 import { createFakeWorkspaceLayoutStore } from '../../services/agent-sessions/__tests__/fake-workspace-layout-store';
 
 const WORKSPACE_ID = 'ses-1';
@@ -227,16 +230,12 @@ describe('projections', () => {
     ]);
   });
 
-  it('workspaceStateFromGrid takes structure from rows and display/view state from the blob', () => {
-    const state = opening();
-    const grid = gridFromWorkspaceState(state);
-    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob: state });
-    expect(rehydrated).toEqual(state);
-  });
-
-  it('workspaceStateFromGrid survives a missing/foreign blob with empty display fields', () => {
+  it('workspaceStateFromGrid takes structure from rows and NOTHING else', () => {
+    // Labels and focus have no row to come from — they are derived at read
+    // time (`resolvePaneLabels`) and client-local respectively, so the
+    // rehydrated state carries neutral defaults, not stale copies.
     const grid = gridFromWorkspaceState(opening());
-    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob: null });
+    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid });
     expect(rehydrated).toEqual({
       id: WORKSPACE_ID,
       columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { kind: 'chat', name: '', targetId: 'conv-1', agentPageId: null } }] }],
@@ -245,26 +244,33 @@ describe('projections', () => {
     });
   });
 
-  it('a blob disagreeing on structure loses to the rows', () => {
-    const rowsState = opening();
-    const grid = gridFromWorkspaceState(rowsState);
-    const blob: WorkspaceState = {
-      ...opening(),
-      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-OTHER', 'Stale') }] }],
-    };
-    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob });
-    expect(rehydrated?.columns[0].panes[0].scope).toEqual({ kind: 'chat', name: '', targetId: 'conv-1', agentPageId: null });
+  it('anchors focus on the first pane — the server has no focus to restore', () => {
+    let state = opening();
+    state = applyVerbLocal(state, WORKSPACE_ID, {
+      type: 'split_right', fromPaneId: 'pane-1', newColumnId: 'col-2', newPaneId: 'pane-2',
+    }).state!;
+    // The split moved focus to the new pane; the rows do not carry that, so a
+    // server-side rehydrate anchors on the first pane instead (#2048 —
+    // deliberately no cross-device focus restore).
+    expect(state.activePaneId).toBe('pane-2');
+    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: gridFromWorkspaceState(state) });
+    expect(rehydrated?.activePaneId).toBe('pane-1');
+    expect(rehydrated?.pendingPickerPaneId).toBeNull();
   });
 
-  it('empty rows fall back to the blob wholesale; no rows and no blob is null', () => {
-    const blob = opening();
-    expect(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: [], blob })).toEqual(blob);
-    expect(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: [], blob: null })).toBeNull();
+  it('no rows is no grid', () => {
+    expect(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: [] })).toBeNull();
+    // A grid of empty columns is representable in rows (they carry no min(1)
+    // the way the wire schema does) but has no pane to anchor focus on, so it
+    // reads as no grid rather than a state with a dangling activePaneId.
+    expect(
+      workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: [{ id: 'col-1', widthFraction: null, panes: [] }] }),
+    ).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Drift guard — the dual-write window's acceptance property.
+// Single-source property — the contract step's acceptance property.
 // ---------------------------------------------------------------------------
 
 /** Deterministic LCG so a failure reproduces from its logged seed. */
@@ -308,7 +314,7 @@ function randomVerb(rand: () => number, state: WorkspaceState | null, mint: () =
   }
 }
 
-describe('drift guard: blob ≡ rows after ANY verb sequence', () => {
+describe('single source: the rows are the whole grid after ANY verb sequence', () => {
   it('holds across seeded random verb sequences run through the engine + store exactly as the runtime does', async () => {
     for (let seed = 1; seed <= 25; seed += 1) {
       const rand = prng(seed * 7919);
@@ -317,12 +323,10 @@ describe('drift guard: blob ≡ rows after ANY verb sequence', () => {
       const store = createFakeWorkspaceLayoutStore();
 
       for (let step = 0; step < 40; step += 1) {
-        // The runtime's locked read-reduce-write cycle, verbatim.
-        const [grid, blob] = await Promise.all([
-          store.getWorkspaceGrid(WORKSPACE_ID),
-          store.getWorkspaceBlob(WORKSPACE_ID),
-        ]);
-        const state = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob });
+        // The runtime's locked read-reduce-write cycle, verbatim: the ONLY
+        // read is the rows, because the blob no longer exists.
+        const grid = await store.getWorkspaceGrid(WORKSPACE_ID);
+        const state = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid });
         const verb = randomVerb(rand, state, mint);
         const outcome = applyVerbLocal(state, WORKSPACE_ID, verb);
         if (!outcome.applied || outcome.state === null) continue;
@@ -332,17 +336,20 @@ describe('drift guard: blob ≡ rows after ANY verb sequence', () => {
         await store.replaceWorkspaceGrid({
           workspaceId: WORKSPACE_ID,
           grid: gridFromWorkspaceState(outcome.state),
-          workspaceState: outcome.state,
         });
 
-        // THE invariant: the rows and the dual-written blob project to the
-        // identical structural grid (and the blob re-parses under the wire
-        // schema — the shim never writes what the PUT would reject).
+        // THE invariant: what the rows hold, read back, projects to exactly
+        // the grid the reduced state does — every column, pane, binding and
+        // fraction survives the only round trip that still exists.
         const rowsAfter = await store.getWorkspaceGrid(WORKSPACE_ID);
-        const blobAfter = await store.getWorkspaceBlob(WORKSPACE_ID);
-        expect(blobAfter, `seed ${seed} step ${step}: blob missing after applied verb`).not.toBeNull();
-        const reparsed = persistedWorkspaceStateSchema.parse(blobAfter);
-        expect(gridFromWorkspaceState(reparsed), `seed ${seed} step ${step} (${verb.type})`).toEqual(rowsAfter);
+        expect(rowsAfter, `seed ${seed} step ${step} (${verb.type})`).toEqual(
+          gridFromWorkspaceState(outcome.state),
+        );
+        const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid: rowsAfter });
+        expect(
+          rehydrated === null ? [] : gridFromWorkspaceState(rehydrated),
+          `seed ${seed} step ${step} (${verb.type}): rehydration is not an identity`,
+        ).toEqual(rowsAfter);
       }
     }
   });

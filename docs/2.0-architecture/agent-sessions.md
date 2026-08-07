@@ -64,23 +64,26 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
   `packages/lib/src/services/agent-sessions/session-status.ts`): the four lifecycle
   stamps are each single-writer facts; a status column would be a second copy. This
   stays true under the epic — it is the pattern, not an exception to it.
-- **Pane grid**: the server side of the relational promotion is SHIPPED (epic
-  Phase 3, the #2202 machine-panes pattern): `agent_workspace_pane_columns` /
-  `agent_workspace_panes` rows behind a per-workspace rev
-  (`agent_workspace_layout_revs`), mutated by idempotent verbs
+- **Pane grid: COMPLETE** (epic Phase 3, the #2202 machine-panes pattern).
+  `agent_workspace_pane_columns` / `agent_workspace_panes` rows behind a
+  per-workspace rev (`agent_workspace_layout_revs`) are the ONE source of
+  truth, mutated only by idempotent verbs
   (`POST /api/agent-sessions/{id}/workspace/verbs {opId, baseRev, verb}`,
   stale rev → 409 + truth) through ONE reducer (`applyVerbLocal`,
   `packages/lib/src/agent-sessions/workspace-layout-verbs.ts`) that the client
   store re-exports, each applied verb broadcasting rev-carrying
-  `workspace:updated` to the `session:<id>` room. During the dual-write window
-  the `workspaceState` blob is kept true by the verb engine and the legacy
-  blob PUT conversely reconciles blob→rows via the same projection, under one
-  per-workspace lock (drift-guard property test pins blob ≡ rows). / Still
-  today: the production CLIENT still writes through the debounced blob PUT
-  with a localStorage copy, and the AI tool paths (`open_page_pane`, worker
-  spawn placement) still cannot write placement. / Target: the client store
-  rewritten onto the verbs + live `workspace:updated` application, tool paths
-  posting verbs, then the blob + localStorage copy dying at contract.
+  `workspace:updated` to the `session:<id>` room. The three-way membership
+  duplication is gone: the `agent_sessions.workspaceState` jsonb blob was
+  dropped at the contract step (migration 0250, guarded by a pre-drop
+  RAISE-EXCEPTION check that no blob described a pane binding the rows
+  lacked), the localStorage grid copy and its hydration latches died with the
+  client rewrite, and the debounced blob `PUT` is retired — it answers 410 and
+  the route is `GET`-only. What rows deliberately do NOT own is derived on
+  read: pane LABELS join the conversation/shell/page title at read time (so a
+  rename can never leave a stale label), and FOCUS is client-local — the
+  server anchors placement on the first pane and never restores focus
+  cross-device (#2048). The `GET`'s legacy whole-state `workspace` field
+  survives as a projection of the same rows, for pre-verbs clients only.
 - **Pane REARRANGE (issue #2208): SHIPPED.** The verb set is complete —
   `resize_column` / `resize_pane` / `move_pane` / `reorder_columns` join the
   structural verbs in the same pure engine, and the `widthFraction` /
@@ -184,8 +187,10 @@ Four clauses:
    broadcast. *Message writes: SHIPPED* (epic Phase 2 PR 2) — every durable message
    write goes through `apps/web/src/lib/repositories/message-repository.ts` (the raw
    savers are private to it), and conversation lifecycle emits from the conversation
-   repositories. *Still open:* membership facts are stored three ways (FK,
-   `workspaceState` jsonb, localStorage) — epic Phase 3.
+   repositories. *Pane membership: SHIPPED* (epic Phase 3) — the three-way
+   store (FK, `workspaceState` jsonb, localStorage) collapsed to the FK plus
+   the relational pane rows; the jsonb column and the localStorage copy are
+   both gone.
 2. **Every owner emits on write.** Each committed write broadcasts a rev-carrying event
    (`conversations.rev` bumped in-transaction; the event carries the post-write rev).
    *SHIPPED server-side* (epic Phase 2 PR 2): `conversation:message_created/updated/

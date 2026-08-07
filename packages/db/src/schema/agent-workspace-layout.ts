@@ -12,10 +12,10 @@ import { agentSessions } from './agent-sessions';
  * `columns`/`panes` into rows, mutated by ordered, idempotent VERB writes —
  * see `@pagespace/lib/agent-sessions/workspace-layout-verbs.ts` (the pure
  * engine) and `@pagespace/lib/services/agent-sessions/workspace-layout-store.ts`
- * (the one write primitive). `workspaceState` is KEPT for now as a
- * rolling-deploy shim (old web instances still read/write only the blob
- * during a deploy window; the dual-write keeps both representations true) —
- * it dies in a later contract PR.
+ * (the one write primitive). `workspaceState` was kept one release as the
+ * rolling-deploy shim and DROPPED at the contract step (migration 0250, with
+ * a final sweep and a refuses-to-drop guard); these rows are now the only
+ * representation of a pane grid that exists.
  *
  * Column and pane `id`s are CLIENT-MINTED (the browser keeps authoring ids so
  * optimistic local application needs no server round-trip for identity), so

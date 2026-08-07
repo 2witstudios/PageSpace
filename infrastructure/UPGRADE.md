@@ -13,6 +13,52 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-08 — Minimum upgrade path: agent pane grid (epic #2161, Phase 3 contract)
+
+**Applies to tenant / self-host deployments that skip releases.** Cloud rolls
+every release in order and needs nothing here.
+
+The agent-session pane grid moved from a `agent_sessions.workspaceState` jsonb
+blob to relational rows (`agent_workspace_pane_columns` /
+`agent_workspace_panes` behind `agent_workspace_layout_revs`) in two steps:
+
+| step | migration | what it does |
+|------|-----------|--------------|
+| expand | `0246_vengeful_veda` | creates the row tables, promotes every blob into them, KEEPS the blob and dual-writes it |
+| contract | `0251_mighty_shaman` | final promotion sweep, refuses-to-drop guard, then `DROP COLUMN "workspaceState"` |
+
+**The rule: never apply `0251` in the same `migrate` run as `0246` while the
+old application image is still what restarts afterwards.** The two migrations
+are safe to run back-to-back (0251 re-sweeps anything 0246 promoted, and the
+guard proves nothing is lost) — what is NOT safe is leaving an application
+image older than this release pointed at the contracted schema. A pre-0251
+image still `SELECT`s and `UPDATE`s `workspaceState`, so the sessions list and
+the pane-layout `GET`/`PUT` fail with `column "workspaceState" does not exist`
+until the new image is up.
+
+So, for a version-skipping upgrade:
+
+1. Pull the new images FIRST (`docker compose pull`), so the post-migrate
+   restart brings up code that never mentions the column.
+2. Run `migrate` once — it applies every pending migration including 0246 and
+   0251 in order.
+3. Start the stack.
+
+Degradation if you do it out of order is bounded to the window between the
+migrate one-shot and the restart, and it is loud (500s on the agents sidebar
+and the workspace route), not silent. Rolling back to a pre-0251 image after
+the fact requires restoring the column, so take the usual pre-upgrade database
+snapshot.
+
+**If `migrate` HALTS** with `Refusing to drop agent_sessions."workspaceState"`,
+that is the pre-drop guard doing its job: it found pane bindings that exist in
+the blob and nowhere else, and it prints the affected session ids (up to 50).
+Nothing has been dropped and the migration is safe to re-run. For each listed
+session either open it once in the new client (its verbs rewrite the rows) or,
+if you would rather take the blob wholesale, `DELETE FROM
+agent_workspace_pane_columns WHERE "workspaceId" = '<id>'` — the migration's
+sweep then promotes that session's blob from scratch on the next run.
+
 ## 2026-07 — Audit trust-plane mode contract (issue #890)
 
 How a deployment's `adminDb` mode is resolved from env — this governs where

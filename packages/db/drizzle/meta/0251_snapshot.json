@@ -1,5 +1,5 @@
 {
-  "id": "8876f931-ea2b-4735-8987-02c521c4a95d",
+  "id": "553421ba-a15f-4387-ab0f-2ee7fb0f43e9",
   "prevId": "0338e72c-5807-4633-8a0a-9a8ef38b7ae2",
   "version": "7",
   "dialect": "postgresql",
@@ -1361,6 +1361,241 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.chat_messages": {
+      "name": "chat_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "pageId": {
+          "name": "pageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversationId": {
+          "name": "conversationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "toolCalls": {
+          "name": "toolCalls",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "toolResults": {
+          "name": "toolResults",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "isActive": {
+          "name": "isActive",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "editedAt": {
+          "name": "editedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sourceAgentId": {
+          "name": "sourceAgentId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "messageType": {
+          "name": "messageType",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'standard'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'complete'"
+        }
+      },
+      "indexes": {
+        "chat_messages_page_id_idx": {
+          "name": "chat_messages_page_id_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chat_messages_user_id_idx": {
+          "name": "chat_messages_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chat_messages_conversation_id_idx": {
+          "name": "chat_messages_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chat_messages_page_id_conversation_id_idx": {
+          "name": "chat_messages_page_id_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chat_messages_page_id_is_active_created_at_idx": {
+          "name": "chat_messages_page_id_is_active_created_at_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "isActive",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chat_messages_pageId_pages_id_fk": {
+          "name": "chat_messages_pageId_pages_id_fk",
+          "tableFrom": "chat_messages",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "pageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "chat_messages_userId_users_id_fk": {
+          "name": "chat_messages_userId_users_id_fk",
+          "tableFrom": "chat_messages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "chat_messages_sourceAgentId_pages_id_fk": {
+          "name": "chat_messages_sourceAgentId_pages_id_fk",
+          "tableFrom": "chat_messages",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "sourceAgentId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -4352,12 +4587,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "agentPageId": {
-          "name": "agentPageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "closedInSessionAt": {
           "name": "closedInSessionAt",
           "type": "timestamp",
@@ -4492,21 +4721,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "conversations_agent_page_id_idx": {
-          "name": "conversations_agent_page_id_idx",
-          "columns": [
-            {
-              "expression": "agentPageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -4529,19 +4743,6 @@
           "tableTo": "agent_sessions",
           "columnsFrom": [
             "sessionId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "conversations_agentPageId_pages_id_fk": {
-          "name": "conversations_agentPageId_pages_id_fk",
-          "tableFrom": "conversations",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "agentPageId"
           ],
           "columnsTo": [
             "id"
@@ -4649,6 +4850,12 @@
           "notNull": true,
           "default": "'complete'"
         },
+        "pageId": {
+          "name": "pageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "sourceAgentId": {
           "name": "sourceAgentId",
           "type": "text",
@@ -4698,6 +4905,48 @@
           "columns": [
             {
               "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "messages_page_id_idx": {
+          "name": "messages_page_id_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "messages_page_id_is_active_created_at_idx": {
+          "name": "messages_page_id_is_active_created_at_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "isActive",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20089,12 +20338,6 @@
         "name": {
           "name": "name",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "workspaceState": {
-          "name": "workspaceState",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

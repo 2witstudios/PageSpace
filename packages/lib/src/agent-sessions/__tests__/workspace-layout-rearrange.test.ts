@@ -329,7 +329,7 @@ describe('the structural verbs re-establish the invariant after a membership cha
 // Fractions survive the round trip the runtime actually performs
 // ---------------------------------------------------------------------------
 
-describe('fractions round-trip through the row projection and the blob', () => {
+describe('fractions round-trip through the row projection', () => {
   it('project to rows and rehydrate identically', () => {
     let state = apply(threeColumns(), { type: 'resize_column', columnId: 'col-1', widthFraction: 0.5 });
     state = apply(state, { type: 'resize_pane', paneId: 'pane-1', heightFraction: 0.7 });
@@ -339,10 +339,14 @@ describe('fractions round-trip through the row projection and the blob', () => {
     expect(grid[0].panes[0].heightFraction).toBeCloseTo(0.7, 5);
     expect(grid[1].panes[0].heightFraction, 'an unsized column projects canonical nulls').toBe(null);
 
-    expect(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob: state })).toEqual(state);
+    // Structure and fractions survive the row round trip exactly; the fields
+    // rows deliberately do NOT own (labels, focus) come back at their
+    // defaults, which is why this compares the projection, not the state.
+    const rehydrated = workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid })!;
+    expect(gridFromWorkspaceState(rehydrated)).toEqual(grid);
   });
 
-  it('survive the legacy blob schema — the dual-write shim never drops a fraction', () => {
+  it('survive the wire schema — a grid serialized to the client and back keeps every fraction', () => {
     let state = apply(threeColumns(), { type: 'resize_column', columnId: 'col-2', widthFraction: 0.5 });
     state = apply(state, { type: 'resize_pane', paneId: 'pane-1b', heightFraction: 0.3 });
     const reparsed = persistedWorkspaceStateSchema.parse(JSON.parse(JSON.stringify(state)));
@@ -355,7 +359,6 @@ describe('fractions round-trip through the row projection and the blob', () => {
     // unsized and materializes from the even split on the next resize.
     const mixed = workspaceStateFromGrid({
       workspaceId: WORKSPACE_ID,
-      blob: null,
       grid: [
         { id: 'col-1', widthFraction: 0.5, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
         { id: 'col-2', widthFraction: null, panes: [{ id: 'pane-2', kind: null, targetId: null, heightFraction: null }] },
@@ -470,7 +473,7 @@ describe('property: any sequence of the rearrange verbs preserves the structural
         ).toBe(true);
         // And the rows round-trip back to the same grid, fractions included.
         expect(
-          gridFromWorkspaceState(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid, blob: state })!),
+          gridFromWorkspaceState(workspaceStateFromGrid({ workspaceId: WORKSPACE_ID, grid })!),
           `${label}: row round-trip is not an identity`,
         ).toEqual(grid);
       }

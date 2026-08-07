@@ -109,9 +109,13 @@ const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder
 /** Everything BEFORE this PR's migration. */
 const baseMigrations = allMigrations.slice(0, 250);
 /**
- * Through 0250 and NO FURTHER. Bounded on purpose: 0252 DROPs
- * `chat_messages`, and every scenario below inspects that table after
- * migrating.
+ * Base + 0250, and nothing after — the same bound, for the same reason, as
+ * the sibling expand suite's `throughThisPr`. Later migrations are entitled
+ * to reject corpora these scenarios deliberately construct (0251's pre-drop
+ * guard aborts on a pane grid that exists only in the legacy blob, which is
+ * exactly its job), and 0252 DROPs `chat_messages` outright while every
+ * scenario below inspects that table after migrating. This suite is about
+ * what 0250 does to a database, not about the head of the journal.
  */
 const throughThisPr = allMigrations.slice(0, 251);
 
@@ -254,7 +258,8 @@ describeLive('0250 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: 0250 is the only migration under test here', () => {
+  it('pins the base: the scenarios below apply exactly 0250', () => {
+    expect(allMigrations.length).toBe(journal.entries.length);
     expect(throughThisPr.length - baseMigrations.length).toBe(1);
     expect(journal.entries[250]?.idx).toBe(250);
   });

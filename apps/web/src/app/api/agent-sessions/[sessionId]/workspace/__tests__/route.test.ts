@@ -2,8 +2,8 @@
 /**
  * GET/PUT `/api/agent-sessions/[sessionId]/workspace` — what matters here is
  * the not-found/denied family policy (SAME null-workspace answer on GET, a
- * uniform 404 on PUT) and that PUT never reaches the DB with an unvalidated
- * payload.
+ * uniform 404 on PUT) and that the retired PUT answers 410 for every
+ * reachable session without touching storage.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -11,16 +11,12 @@ const {
   mockAuthenticateRequest,
   mockAuditRequest,
   mockCheckSessionAccess,
-  mockGetSessionWorkspace,
   mockReadWorkspaceLayoutSnapshot,
-  mockSaveWorkspaceBlobReconciled,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
-  mockGetSessionWorkspace: vi.fn(),
   mockReadWorkspaceLayoutSnapshot: vi.fn(),
-  mockSaveWorkspaceBlobReconciled: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -36,12 +32,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
 }));
-vi.mock('@/lib/agent-sessions/session-workspace-runtime', () => ({
-  getSessionWorkspace: (...args: unknown[]) => mockGetSessionWorkspace(...args),
-}));
-vi.mock('@/lib/agent-sessions/workspace-layout-runtime', () => ({
+// `workspaceListEntryFromGrid` is the REAL pure projection: this suite's whole
+// point on GET is that the older whole-state `workspace` field is now derived
+// from the same rows the snapshot serves, so mocking it would test nothing.
+vi.mock('@/lib/agent-sessions/workspace-layout-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent-sessions/workspace-layout-runtime')>()),
   readWorkspaceLayoutSnapshot: (...args: unknown[]) => mockReadWorkspaceLayoutSnapshot(...args),
-  saveWorkspaceBlobReconciled: (...args: unknown[]) => mockSaveWorkspaceBlobReconciled(...args),
 }));
 
 import { GET, PUT } from '../route';
@@ -83,21 +79,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
-  mockGetSessionWorkspace.mockResolvedValue(null);
   mockReadWorkspaceLayoutSnapshot.mockResolvedValue({ rev: 0, grid: null });
-  mockSaveWorkspaceBlobReconciled.mockResolvedValue(undefined);
 });
 
 describe('GET /api/agent-sessions/[sessionId]/workspace', () => {
-  it('returns the saved workspace when one exists, alongside the relational rev + grid', async () => {
-    mockGetSessionWorkspace.mockResolvedValue(workspace);
+  it('derives the whole-state `workspace` field from the SAME rows as rev + grid', async () => {
     mockReadWorkspaceLayoutSnapshot.mockResolvedValue({ rev: 3, grid: workspace.columns });
     const response = await get();
     expect(response.status).toBe(200);
+    // Byte-identical to what the blob used to serve, except that focus is a
+    // default now (first pane) rather than a restored fact — the column that
+    // stored it is gone.
     expect(await response.json()).toEqual({ workspace, rev: 3, grid: workspace.columns });
   });
 
-  it('returns null workspace/grid for a session that has never saved a grid', async () => {
+  it('returns null workspace/grid for a session with no grid', async () => {
     const response = await get();
     expect(await response.json()).toEqual({ workspace: null, rev: 0, grid: null });
   });
@@ -107,7 +103,6 @@ describe('GET /api/agent-sessions/[sessionId]/workspace', () => {
     const response = await get();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ workspace: null, rev: 0, grid: null });
-    expect(mockGetSessionWorkspace).not.toHaveBeenCalled();
     expect(mockReadWorkspaceLayoutSnapshot).not.toHaveBeenCalled();
   });
 
@@ -120,41 +115,29 @@ describe('GET /api/agent-sessions/[sessionId]/workspace', () => {
   });
 });
 
-describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
-  it('saves a well-formed workspace through the blob+rows reconcile', async () => {
+describe('PUT /api/agent-sessions/[sessionId]/workspace (retired)', () => {
+  it('410s a well-formed write — the endpoint is gone, and says so rather than pretending to save', async () => {
     const response = await put({ workspace });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
-    expect(mockSaveWorkspaceBlobReconciled).toHaveBeenCalledWith({ workspaceId: SESSION_ID, workspace });
-    expect(mockAuditRequest).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ op: 'save_workspace' }) }),
-    );
+    // NOT 200: a stale deployed client (pre-#2345, still debouncing this PUT)
+    // must never be told its layout persisted when nothing was stored.
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({
+      error: expect.stringContaining('/workspace/verbs'),
+    });
+    // No write happened, so there is no data.write to audit.
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
-  it('400s a malformed workspace rather than trusting it', async () => {
-    const response = await put({ workspace: { id: 'ses-1', columns: [] } }); // columns: [] fails min(1)
-    expect(response.status).toBe(400);
-    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
+  it('410s a malformed body too — there is no payload worth validating any more', async () => {
+    expect((await put({ workspace: { id: 'ses-1', columns: [] } })).status).toBe(410);
+    expect((await put(undefined)).status).toBe(410);
+    expect((await put({ workspace: { ...workspace, id: 'ses-OTHER' } })).status).toBe(410);
   });
 
-  it('400s a missing body', async () => {
-    const response = await put(undefined);
-    expect(response.status).toBe(400);
-    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
-  });
-
-  it("400s a workspace whose id does not match the route's sessionId", async () => {
-    const response = await put({ workspace: { ...workspace, id: 'ses-OTHER' } });
-    expect(response.status).toBe(400);
-    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
-  });
-
-  it('404s an unknown session', async () => {
+  it('404s an unknown session — the retirement notice is not a session-existence oracle', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'session_not_found' });
     const response = await put({ workspace });
     expect(response.status).toBe(404);
-    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
   });
 
   it('404s a session the requester cannot reach (SAME as not-found), but still audits it', async () => {
@@ -165,12 +148,6 @@ describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'authz.access.denied' }),
     );
-  });
-
-  it('502s a save failure', async () => {
-    mockSaveWorkspaceBlobReconciled.mockRejectedValue(new Error('db exploded'));
-    const response = await put({ workspace });
-    expect(response.status).toBe(502);
   });
 
   it('given an auth failure, returns the auth error untouched', async () => {
