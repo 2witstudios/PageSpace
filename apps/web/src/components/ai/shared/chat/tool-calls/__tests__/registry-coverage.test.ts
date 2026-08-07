@@ -78,6 +78,14 @@ const PENDING_RICH_RENDERERS = new Set<string>([
   'send_shell',
   'read_shell',
   'kill_shell',
+  // pane-grid family (createSessionTools) — same surface, same gap: their
+  // results are a grid geometry, and a rich card for one is a layout-diagram
+  // design task rather than a payload reshuffle. Deferred with the rest of the
+  // family so all of it lands as one coherent renderer set.
+  'list_panes',
+  'resize_pane',
+  'move_pane',
+  'arrange_panes',
   // sandbox file family (createSandboxTools); its `bash` shares the CLI renderer
   'writeFile',
   'readFile',

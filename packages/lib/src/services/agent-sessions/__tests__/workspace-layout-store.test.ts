@@ -12,19 +12,35 @@ import type { PersistedWorkspaceState } from '../../../agent-sessions/contract';
 
 const WORKSPACE_ID = 'ses-1';
 
+// Fractions are CANONICAL null on an unsized grid — never absent. The store's
+// content diff is a `JSON.stringify` comparison, where an undefined key simply
+// vanishes from the string, so the projection type requires them (issue #2208).
 const GRID_A: LayoutGridColumn[] = [
   {
     id: 'col-1',
+    widthFraction: null,
     panes: [
-      { id: 'pane-1', kind: 'chat', targetId: 'conv-1' },
-      { id: 'pane-2', kind: null, targetId: null },
+      { id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null },
+      { id: 'pane-2', kind: null, targetId: null, heightFraction: null },
     ],
   },
 ];
 
 const GRID_B: LayoutGridColumn[] = [
-  { id: 'col-1', panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1' }] },
-  { id: 'col-2', panes: [{ id: 'pane-3', kind: 'terminal', targetId: 'shell-1' }] },
+  { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
+  { id: 'col-2', widthFraction: null, panes: [{ id: 'pane-3', kind: 'terminal', targetId: 'shell-1', heightFraction: null }] },
+];
+
+/** GRID_A, sized — same structure, different shares. */
+const GRID_A_SIZED: LayoutGridColumn[] = [
+  {
+    id: 'col-1',
+    widthFraction: null,
+    panes: [
+      { id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: 0.75 },
+      { id: 'pane-2', kind: null, targetId: null, heightFraction: 0.25 },
+    ],
+  },
 ];
 
 const blobFor = (grid: LayoutGridColumn[]): PersistedWorkspaceState => ({
@@ -91,6 +107,21 @@ describe('workspace-layout-store: replaceWorkspaceGrid', () => {
     const retry = await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A, workspaceState: blobStale });
     expect(retry.applied).toBe(false);
     expect(await store.getWorkspaceBlob(WORKSPACE_ID)).toEqual(blobA);
+  });
+
+  it('treats a SIZE-only change as a real change — a resize bumps rev like any other verb', async () => {
+    const store = createFakeWorkspaceLayoutStore();
+    await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A });
+    // Identical structure, different shares. Fractions are rows, so this is a
+    // content change, not a view-state one.
+    const resized = await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A_SIZED });
+    expect(resized).toEqual({ rev: 2, applied: true });
+    expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual(GRID_A_SIZED);
+
+    // And re-sending the same sizes is still an idempotent no-op — the whole
+    // reason both sides quantize to one precision grid.
+    const replay = await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A_SIZED });
+    expect(replay).toEqual({ rev: 2, applied: false });
   });
 
   it('saveWorkspaceBlob writes the blob unconditionally (the legacy PUT leg)', async () => {
