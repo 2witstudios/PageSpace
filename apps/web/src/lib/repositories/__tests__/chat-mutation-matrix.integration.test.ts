@@ -73,6 +73,16 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { conversationEvents } from '@/lib/websocket/conversation-events';
+
+/** The conversation's current rev — the watermark every open pane compares. */
+async function revOf(conversationId: string): Promise<number> {
+  const [row] = await db
+    .select({ rev: conversations.rev })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId));
+  return Number(row.rev);
+}
 
 let dbAvailable = false;
 
@@ -272,6 +282,38 @@ describe('chat mutation matrix — one message table', () => {
         .from(conversations)
         .where(eq(conversations.id, thread.conversationId));
       expect(conv.lastMessageAt?.getTime()).toBe(survivor!.createdAt.getTime());
+    });
+
+    it('a messageId that names nothing neither bumps the rev nor broadcasts', async () => {
+      if (!dbAvailable) return;
+      // `mutateUnifiedMessageById` has always reported `no_match`; the delete
+      // and edit paths discarded it. A bump is an instruction to every open
+      // pane to refetch (`syncWatchedConversationRevs` compares revs and
+      // nothing else), so bumping for a write that changed no row is pure
+      // churn — and the event that rode with it described a message that does
+      // not exist.
+      const thread = await seedPageThread({ contents: [{ role: 'user', content: 'untouched' }] });
+      const revBefore = await revOf(thread.conversationId);
+      vi.mocked(conversationEvents.messageDeleted).mockClear();
+      vi.mocked(conversationEvents.messageUpdated).mockClear();
+
+      await messageRepository.softDeletePageMessage({
+        messageId: createId(),
+        pageId: thread.pageId,
+        conversationId: thread.conversationId,
+        legacyTriggeredBy: triggeredBy,
+      });
+      await messageRepository.editPageMessage({
+        messageId: createId(),
+        pageId: thread.pageId,
+        conversationId: thread.conversationId,
+        updatedContent: 'never written',
+        legacyTriggeredBy: triggeredBy,
+      });
+
+      expect(await revOf(thread.conversationId)).toBe(revBefore);
+      expect(conversationEvents.messageDeleted).not.toHaveBeenCalled();
+      expect(conversationEvents.messageUpdated).not.toHaveBeenCalled();
     });
 
     it('nulls lastMessageAt when the deleted message was the only one', async () => {

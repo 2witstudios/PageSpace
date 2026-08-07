@@ -88,6 +88,7 @@ import {
   materializeUnifiedPageMessage,
   mutateUnifiedMessageById,
   serializeJsonColumn,
+  type UnifiedLegOutcome,
 } from '@/lib/repositories/unified-message-leg';
 
 // ---------------------------------------------------------------------------
@@ -442,6 +443,33 @@ function contextForMutation(
 }
 
 /**
+ * What an id-scoped edit/delete did, and the conversation row to emit from.
+ *
+ * `no_match` is the gate `mutateUnifiedMessageById` already reported and every
+ * caller here used to discard. Post-merge there is one message table, so an
+ * UPDATE matching nothing means the id names no row — the caller must NOT bump
+ * the rev or broadcast. `syncWatchedConversationRevs` compares revs and nothing
+ * else, so a bump is an instruction to every open pane to refetch; doing that
+ * for a write that changed nothing is pure churn, and the accompanying
+ * `message_updated` / `message_deleted` describes a message that does not
+ * exist.
+ *
+ * The routes read the message before calling, so this should be unreachable —
+ * which is exactly why it is logged at `warn` rather than swallowed. If it
+ * fires, something upstream is wrong.
+ */
+type WriteResult = { outcome: UnifiedLegOutcome; row: BumpedConversationRow | null };
+
+/** Report an id-scoped write that matched nothing. Loud, not swallowed — see `WriteResult`. */
+function warnNoMatch(method: string, args: { messageId: string; conversationId: string }): void {
+  loggers.api.warn('messageRepository: write matched no row — no rev bump, no broadcast', {
+    method,
+    messageId: args.messageId,
+    conversationId: args.conversationId,
+  });
+}
+
+/**
  * THE DELETE PATHS' WRITE: tombstone message rows, recompute the conversation's
  * `lastMessageAt` from what survives, and bump the rev — all in ONE transaction,
  * one statement for the last two.
@@ -464,21 +492,26 @@ function contextForMutation(
  * the chat-turn's user-message save already take, so this introduces no new
  * deadlock ordering.
  *
+ * A `no_match` tombstone means the message id named nothing (an id-scoped
+ * delete) — see `WriteResult`. The recompute and the bump are then SKIPPED:
+ * bumping the rev for a write that changed no row tells every subscriber to
+ * refetch a conversation that did not move.
+ *
  * Returns the bumped row (the rev + the recomputed timestamp the post-commit
  * emission carries), or null for a conversation with no `conversations` row.
  */
 async function tombstoneAndRebump(
   tx: DbExecutor,
   conversationId: string,
-  tombstone: (tx: DbExecutor) => Promise<unknown>,
-): Promise<BumpedConversationRow | null> {
+  tombstone: (tx: DbExecutor) => Promise<UnifiedLegOutcome>,
+): Promise<WriteResult> {
   await tx
     .select({ id: conversations.id })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .for('update');
 
-  await tombstone(tx);
+  if ((await tombstone(tx)) === 'no_match') return { outcome: 'no_match', row: null };
 
   const [newest] = await tx
     .select({ createdAt: messages.createdAt })
@@ -490,9 +523,10 @@ async function tombstoneAndRebump(
     .orderBy(desc(messages.createdAt))
     .limit(1);
 
-  return bumpConversationRev(tx, conversationId, {
+  const row = await bumpConversationRev(tx, conversationId, {
     extraSet: { lastMessageAt: newest ? newest.createdAt : null },
   });
+  return { outcome: 'written', row };
 }
 
 /** Shared 'streaming'-placeholder emission (message_created with an empty streaming shell). */
@@ -861,11 +895,16 @@ export const messageRepository = {
     updatedContent: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) => {
+    const { outcome, row } = await db.transaction(async (tx): Promise<WriteResult> => {
       const editedAt = new Date();
-      await mutateUnifiedMessageById(tx, args.messageId, { content: args.updatedContent, editedAt });
-      return bumpConversationRev(tx, args.conversationId);
+      const written = await mutateUnifiedMessageById(tx, args.messageId, {
+        content: args.updatedContent,
+        editedAt,
+      });
+      if (written === 'no_match') return { outcome: 'no_match', row: null };
+      return { outcome: 'written', row: await bumpConversationRev(tx, args.conversationId) };
     });
+    if (outcome === 'no_match') return warnNoMatch('editPageMessage', args);
 
     void (async () => {
       const updated = await messageRepository.getMessageById(args.messageId);
@@ -900,11 +939,12 @@ export const messageRepository = {
     conversationId: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) =>
+    const { outcome, row } = await db.transaction(async (tx) =>
       tombstoneAndRebump(tx, args.conversationId, (t) =>
         mutateUnifiedMessageById(t, args.messageId, { isActive: false }),
       ),
     );
+    if (outcome === 'no_match') return warnNoMatch('softDeletePageMessage', args);
 
     void (async () => {
       await broadcastAiMessageDeleted({
@@ -933,13 +973,17 @@ export const messageRepository = {
     updatedContent: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) => {
-      await tx
-        .update(messages)
-        .set({ content: args.updatedContent, editedAt: new Date() })
-        .where(eq(messages.id, args.messageId));
-      return bumpConversationRev(tx, args.conversationId);
+    // Through the shared statement rather than a bare `tx.update`, so the
+    // global edit reports `no_match` the same way its page twin does.
+    const { outcome, row } = await db.transaction(async (tx): Promise<WriteResult> => {
+      const written = await mutateUnifiedMessageById(tx, args.messageId, {
+        content: args.updatedContent,
+        editedAt: new Date(),
+      });
+      if (written === 'no_match') return { outcome: 'no_match', row: null };
+      return { outcome: 'written', row: await bumpConversationRev(tx, args.conversationId) };
     });
+    if (outcome === 'no_match') return warnNoMatch('editGlobalMessage', args);
 
     void (async () => {
       await broadcastAiMessageEdited({
@@ -989,11 +1033,12 @@ export const messageRepository = {
     ownerUserId: string;
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
-    const row = await db.transaction(async (tx) =>
+    const { outcome, row } = await db.transaction(async (tx) =>
       tombstoneAndRebump(tx, args.conversationId, (t) =>
         mutateUnifiedMessageById(t, args.messageId, { isActive: false }),
       ),
     );
+    if (outcome === 'no_match') return warnNoMatch('softDeleteGlobalMessage', args);
 
     void (async () => {
       await broadcastAiMessageDeleted({
@@ -1044,8 +1089,8 @@ export const messageRepository = {
     tx: DbExecutor,
     args: { conversationId: string; fromCreatedAt: Date },
   ): Promise<BumpedConversationRow | null> {
-    return tombstoneAndRebump(tx, args.conversationId, (t) =>
-      t
+    const { row } = await tombstoneAndRebump(tx, args.conversationId, async (t) => {
+      await t
         .update(messages)
         .set({ isActive: false })
         .where(and(
@@ -1053,8 +1098,13 @@ export const messageRepository = {
           gte(messages.createdAt, args.fromCreatedAt),
           eq(messages.isActive, true),
           ne(messages.status, 'streaming'),
-        )),
-    );
+        ));
+      // Always 'written': this is a RANGE, not an id, so matching zero rows is
+      // a legitimate outcome (an idempotent re-undo), not a bad reference. The
+      // caller short-circuits on an empty preview before reaching here anyway.
+      return 'written';
+    });
+    return row;
   },
 
   /**
