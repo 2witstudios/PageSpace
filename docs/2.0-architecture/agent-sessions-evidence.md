@@ -78,21 +78,28 @@ Worth knowing before trusting a green run:
 
 ## RED GATE: what turning the gate on immediately revealed
 
-The first time these specs ran against a correctly-built topology, **4 of 11 failed — and they
-are exactly the four live-delivery assertions the epic exists to make true**:
+Run these specs against a correctly-built topology and they fail — and the failures are exactly
+the live-delivery assertions the epic exists to make true. Two full runs on the same tree:
 
-| Spec | Result |
-|---|---|
-| `16` — a server dispatch into an open pane renders live without reload | **FAIL** |
-| `16` — two windows on one conversation both see both sides live | **FAIL** |
-| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** |
-| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** |
+| Spec | Run 1 | Run 2 |
+|---|---|---|
+| `16` — a server dispatch into an open pane renders live without reload | **FAIL** | **FAIL** |
+| `16` — two windows on one conversation both see both sides live | **FAIL** | **FAIL** |
+| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** | **FAIL** |
+| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** | **FAIL** |
+| `17` — convergence is DURABLE: a window opened afterwards sees the same grid | pass | **FAIL** |
+| **Totals** | 7 passed, 4 failed | 6 passed, 5 failed |
 
-Everything not requiring live socket delivery passed: both `16` persistence smokes, all three
-`15` chat smokes, and `17`'s durable-convergence spec. The server side was verified healthy in
-the same run — realtime logged **197** `User joined conversation room` entries for the correct
-`conv:<id>`, and **148** broadcasts were sent, including `conversation:message_created` /
-`conversation:message_updated` to that exact room, one second after the client joined it.
+The four live-delivery specs fail deterministically. The durable-convergence spec is **flaky**,
+which is itself diagnostic: it reads the persisted rows rather than a broadcast, so a spec that
+should not depend on delivery timing failing intermittently points at the same instability.
+Everything with no live-socket dependency passed in both runs: both `16` persistence smokes and
+all three `15` chat smokes.
+
+The server side was verified healthy in the same run — realtime logged **197**
+`User joined conversation room` entries for the correct `conv:<id>`, and **148** broadcasts were
+sent, including `conversation:message_created` / `conversation:message_updated` to that exact
+room, one second after the client joined it.
 
 The failure is on the client. A single test produced **33** `Creating new Socket.IO connection`
 log lines, 33 socket-token fetches and 11+ distinct socket ids, with **no** authentication
