@@ -39,9 +39,15 @@ import {
   STARTER_SKILL_TRIGGERS,
 } from './starter-skills';
 
-type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
-type DatabaseType = typeof db;
-export type DbClient = TransactionType | DatabaseType;
+/**
+ * An OPEN transaction. Deliberately not `TransactionType | typeof db`: the
+ * `SELECT … FOR UPDATE` in `installStarterSkills` only serializes anything while
+ * a transaction is held, and the page/command/stamp writes are only atomic
+ * inside one. Admitting the bare connection would let a caller compile fine and
+ * silently get neither — so the requirement the docblock states is enforced by
+ * the type rather than left to a comment.
+ */
+export type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface InstallStarterSkillsResult {
   /** Triggers newly installed by this call. */
