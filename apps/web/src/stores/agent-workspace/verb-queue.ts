@@ -33,6 +33,7 @@
  */
 
 import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
+import { readFraction } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from './pane-reducer';
 
 /**
@@ -177,15 +178,25 @@ export function adoptServerGrid(
   // rows, not view state, so unlike focus they come straight off the wire. An
   // unsized container carries no key at all, which is what keeps a hydrated
   // grid byte-identical to one the reducer built.
-  const columns = grid.map((column) => ({
-    id: column.id,
-    ...(typeof column.widthFraction === 'number' ? { widthFraction: column.widthFraction } : {}),
-    panes: column.panes.map((pane) => ({
-      id: pane.id,
-      scope: pane.scope,
-      ...(typeof pane.heightFraction === 'number' ? { heightFraction: pane.heightFraction } : {}),
-    })),
-  }));
+  const columns = grid.map((column) => {
+    // Through the SHARED funnel, not a bare `typeof x === 'number'`: the wire
+    // schema's `widthFraction` is unbounded, so a 0 or a negative reaches here
+    // and used to render a 0%-wide column while the server read the same row
+    // as unsized and split it evenly.
+    const width = readFraction(column.widthFraction);
+    return {
+      id: column.id,
+      ...(width !== null ? { widthFraction: width } : {}),
+      panes: column.panes.map((pane) => {
+        const height = readFraction(pane.heightFraction);
+        return {
+          id: pane.id,
+          scope: pane.scope,
+          ...(height !== null ? { heightFraction: height } : {}),
+        };
+      }),
+    };
+  });
   const first = columns.find((column) => column.panes.length > 0);
   if (!first) return null;
   return {

@@ -52,6 +52,7 @@ import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspace
 import {
   applyVerbLocal,
   gridFromWorkspaceState,
+  readFraction,
   workspaceStateFromGrid,
   type LayoutGridColumn,
   type WorkspaceLayoutGridDTO,
@@ -203,11 +204,14 @@ function applyPaneLabels(grid: LayoutGridColumn[], labels: Map<string, PaneLabel
   // Fractions come straight off the rows (issue #2208) — unlike labels there
   // is nothing to re-derive, and unlike focus they are not client-local. An
   // unsized container carries no key, matching what the reducer produces.
-  return grid.map((column) => ({
+  return grid.map((column) => {
+    const width = readFraction(column.widthFraction);
+    return {
     id: column.id,
-    ...(column.widthFraction !== null ? { widthFraction: column.widthFraction } : {}),
+    ...(width !== null ? { widthFraction: width } : {}),
     panes: column.panes.map((pane) => {
-      const height = pane.heightFraction !== null ? { heightFraction: pane.heightFraction } : {};
+      const settledHeight = readFraction(pane.heightFraction);
+      const height = settledHeight !== null ? { heightFraction: settledHeight } : {};
       if (pane.kind === null) return { id: pane.id, scope: null, ...height };
       const label = pane.targetId !== null ? labels.get(`${pane.kind}:${pane.targetId}`) : undefined;
       const scope: PaneScope = {
@@ -218,7 +222,8 @@ function applyPaneLabels(grid: LayoutGridColumn[], labels: Map<string, PaneLabel
       };
       return { id: pane.id, scope, ...height };
     }),
-  }));
+    };
+  });
 }
 
 /**

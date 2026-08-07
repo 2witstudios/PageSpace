@@ -127,6 +127,24 @@ export const FRACTION_EPSILON = 1e-6;
 export const MIN_FRACTION = 0.05;
 
 /**
+ * Grid bounds. Every accepted verb rewrites the WHOLE grid — a DELETE plus one
+ * INSERT per column and per pane — so an unbounded grid is an unbounded write
+ * on the hot path, and `MIN_FRACTION` means a column past ~20 is unusably thin
+ * anyway.
+ *
+ * `MAX_GRID_COLUMNS` was already the bound on `reorder_columns` (as a bare
+ * `.max(64)` literal), while `split_right` and `split_down` were unbounded —
+ * so a grid could be grown past the point where its own reorder verb could
+ * address it. One constant, one meaning, used by both.
+ *
+ * A refused split returns the state unchanged, which is this module's existing
+ * "declined" convention (`applyVerbLocal` compares `next !== state`): the verb
+ * never reaches the queue, never bumps a rev, and never broadcasts.
+ */
+export const MAX_GRID_COLUMNS = 64;
+export const MAX_PANES_PER_COLUMN = 16;
+
+/**
  * The grid every stored fraction snaps to (1e-5 — a hundredth of a percent of
  * a container, orders of magnitude finer than a pixel).
  *
@@ -144,18 +162,45 @@ export const MIN_FRACTION = 0.05;
  */
 const FRACTION_PRECISION = 1e-5;
 
-/** Snap a fraction to {@link FRACTION_PRECISION}. See its doc for why this exists. */
+/**
+ * Snap a fraction to {@link FRACTION_PRECISION}. See its doc for why this exists.
+ *
+ * Round to an INTEGER number of steps, then divide by the integer scale —
+ * never divide-then-multiply by the precision. `Math.round(0.75 / 1e-5) * 1e-5`
+ * is `0.7500000000000001`: the trailing multiply reintroduces exactly the error
+ * the round just removed. Dividing an integer by an exact integer scale
+ * (`1e5`, not `1 / 1e-5`, which is itself `100000.00000000001`) lands on the
+ * nearest representable double instead.
+ *
+ * Both forms are idempotent, so `gridsEqual`'s byte comparison held either way
+ * — but the values it compared were noise, and any client that did NOT
+ * quantize (as the browser's `adoptServerGrid` did not, until it started
+ * sharing this funnel) disagreed with the server on values that were supposed
+ * to be identical.
+ *
+ * Verified idempotent and stable across the `real`/float4 storage round trip
+ * at this precision.
+ */
+const FRACTION_SCALE = 1e5;
+
 export function quantizeFraction(value: number): number {
-  return Math.round(value / FRACTION_PRECISION) * FRACTION_PRECISION;
+  return Math.round(value * FRACTION_SCALE) / FRACTION_SCALE;
 }
 
 /**
  * A stored fraction in canonical form, or `null` when it is absent,
  * non-finite, or not positive. THE funnel through which an external number
- * (a row, a wire payload, a hand-written blob) becomes a fraction this module
- * will compare or persist.
+ * (a row, a wire payload, a hand-written blob) becomes a fraction anything
+ * will compare, render or persist.
+ *
+ * Exported because the CLIENT needs the same funnel. `persistedColumnState
+ * Schema.widthFraction` is an unbounded `z.number().nullable().optional()`, so
+ * a `0` or a negative passes the wire schema; the client used to admit those
+ * with a bare `typeof x === 'number'` and render a 0%-wide column, while the
+ * server read the same row as unsized and split it evenly. The two disagreed
+ * until the next transition happened to heal it.
  */
-function readFraction(value: number | null | undefined): number | null {
+export function readFraction(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? quantizeFraction(value) : null;
 }
 
@@ -432,6 +477,7 @@ export function splitRight(
 ): WorkspaceState {
   const location = findPaneLocation(state, fromPaneId);
   if (!location) return state;
+  if (state.columns.length >= MAX_GRID_COLUMNS) return state;
 
   const columns = [...state.columns];
   columns.splice(location.columnIndex + 1, 0, { id: newColumnId, panes: [{ id: newPaneId, scope: null }] });
@@ -446,6 +492,7 @@ export function splitRight(
 export function splitDown(state: WorkspaceState, fromPaneId: string, newPaneId: string): WorkspaceState {
   const location = findPaneLocation(state, fromPaneId);
   if (!location) return state;
+  if (state.columns[location.columnIndex].panes.length >= MAX_PANES_PER_COLUMN) return state;
 
   const columns = state.columns.map((column, columnIndex) =>
     columnIndex === location.columnIndex
@@ -649,6 +696,13 @@ export function movePane(
   const sameColumn = targetColumnIndex === location.columnIndex;
   const pane = sourceColumn.panes[location.paneIndex];
 
+  // A cross-column move grows the destination, so it is bounded like a split.
+  // A same-column move only reorders, and can never exceed a cap the column is
+  // already within.
+  if (!sameColumn && state.columns[targetColumnIndex].panes.length >= MAX_PANES_PER_COLUMN) {
+    return state;
+  }
+
   // The destination's length once the pane has left it (only a same-column
   // move shortens it), which is what `toIndex` is clamped against.
   const destinationLength = state.columns[targetColumnIndex].panes.length - (sameColumn ? 1 : 0);
@@ -780,7 +834,7 @@ export const workspaceLayoutVerbSchema = z.discriminatedUnion('type', [
   /** Relocate a pane to another column and/or index. `toIndex` omitted = append. */
   z.object({ type: z.literal('move_pane'), paneId: id, toColumnId: id, toIndex: z.number().int().optional() }),
   /** Reorder columns; the list is a PREFIX, not a required permutation (see `reorderColumns`). */
-  z.object({ type: z.literal('reorder_columns'), columnIds: z.array(id).min(1).max(64) }),
+  z.object({ type: z.literal('reorder_columns'), columnIds: z.array(id).min(1).max(MAX_GRID_COLUMNS) }),
 ]);
 
 export type WorkspaceLayoutVerb = z.infer<typeof workspaceLayoutVerbSchema>;

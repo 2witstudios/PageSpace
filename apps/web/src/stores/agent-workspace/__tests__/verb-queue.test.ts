@@ -199,3 +199,30 @@ describe('the minting tables cover the whole verb union', () => {
     expect(verbAlreadyLanded(landed, { type: 'close_pane', paneId: 'pane-2' })).toBe(false);
   });
 });
+
+/**
+ * `persistedColumnStateSchema`'s fractions are unbounded
+ * (`z.number().nullable().optional()`), so a 0, a negative or a NaN passes the
+ * wire schema and reaches the client. It used to admit them with a bare
+ * `typeof x === 'number'` and render a 0%-wide column, while the server read
+ * the same row through `readFraction` as UNSIZED and split it evenly — the two
+ * disagreeing until some later transition happened to heal it.
+ */
+describe('adoptServerGrid funnels fractions the way the server does', () => {
+  const paneScope = scope();
+
+  const widthOf = (widthFraction: number | null) =>
+    adoptServerGrid('ses-1', [
+      { id: 'col-1', widthFraction, panes: [{ id: 'pane-1', scope: paneScope }] },
+    ] as never)?.columns[0].widthFraction;
+
+  it('drops a zero, a negative and a non-finite share rather than rendering them', () => {
+    expect(widthOf(0)).toBeUndefined();
+    expect(widthOf(-0.5)).toBeUndefined();
+    expect(widthOf(Number.NaN)).toBeUndefined();
+  });
+
+  it('keeps a real share, quantized exactly as the server stores it', () => {
+    expect(widthOf(0.75)).toBe(0.75);
+  });
+});

@@ -64,6 +64,7 @@ import {
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
 import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import { MAX_GRID_COLUMNS } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { ToolExecutionContext } from '../core/types';
 
@@ -185,14 +186,14 @@ export const movePaneInputSchema = z
     /** The columnId to move it into — its own column reorders it in place. */
     toColumnId: z.string().min(1),
     /** 0-based position in the destination. Omit to append. Out-of-range values clamp. */
-    toIndex: z.number().int().min(0).max(64).optional(),
+    toIndex: z.number().int().min(0).max(MAX_GRID_COLUMNS).optional(),
   })
   .strict();
 
 export const arrangePanesInputSchema = z
   .object({
     /** columnIds in the left-to-right order you want. Unlisted columns keep their order behind these. */
-    columnIds: z.array(z.string().min(1)).min(1).max(64),
+    columnIds: z.array(z.string().min(1)).min(1).max(MAX_GRID_COLUMNS),
   })
   .strict();
 

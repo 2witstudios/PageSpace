@@ -27,6 +27,8 @@ import {
   panesOf,
   workspaceLayoutVerbSchema,
   FRACTION_EPSILON,
+  MAX_GRID_COLUMNS,
+  MAX_PANES_PER_COLUMN,
   MIN_FRACTION,
   type ColumnState,
   type WorkspaceLayoutVerb,
@@ -478,5 +480,99 @@ describe('property: any sequence of the rearrange verbs preserves the structural
         ).toEqual(grid);
       }
     }
+  });
+});
+
+/**
+ * THE GRID IS BOUNDED.
+ *
+ * `reorder_columns` was capped at 64 while `split_right` and `split_down` were
+ * unbounded — so a grid could be grown past the point where its own reorder
+ * verb could address it. And every accepted verb rewrites the WHOLE grid (a
+ * DELETE plus one INSERT per column and per pane), so an unbounded grid is an
+ * unbounded write on the hot path.
+ *
+ * A refusal returns the state unchanged, which is this module's existing
+ * "declined" convention: `applied: false`, so the verb never reaches the
+ * queue, never bumps a rev, and never broadcasts. No new error path.
+ */
+describe('grid caps', () => {
+  /** A grid at exactly `MAX_GRID_COLUMNS`, built by splitting rightward. */
+  function fullWidthGrid(): WorkspaceState {
+    let state = opening();
+    for (let i = 2; i <= MAX_GRID_COLUMNS; i += 1) {
+      state = apply(state, {
+        type: 'split_right',
+        fromPaneId: `pane-${i - 1}`,
+        newColumnId: `col-${i}`,
+        newPaneId: `pane-${i}`,
+      });
+    }
+    return state;
+  }
+
+  it('declines a split_right that would exceed MAX_GRID_COLUMNS', () => {
+    const full = fullWidthGrid();
+    expect(full.columns).toHaveLength(MAX_GRID_COLUMNS);
+
+    const outcome = applyVerbLocal(full, WORKSPACE_ID, {
+      type: 'split_right',
+      fromPaneId: 'pane-1',
+      newColumnId: 'col-over',
+      newPaneId: 'pane-over',
+    });
+
+    expect(outcome.applied).toBe(false);
+    expect(outcome.state).toBe(full);
+  });
+
+  it('keeps every column addressable by reorder_columns at the cap', () => {
+    // The point of sharing the constant: a grid that can be BUILT must be one
+    // its own reorder verb can name.
+    const ids = fullWidthGrid().columns.map((column) => column.id);
+    expect(workspaceLayoutVerbSchema.safeParse({ type: 'reorder_columns', columnIds: ids }).success).toBe(true);
+  });
+
+  it('declines a split_down that would exceed MAX_PANES_PER_COLUMN', () => {
+    let state = opening();
+    for (let i = 2; i <= MAX_PANES_PER_COLUMN; i += 1) {
+      state = apply(state, { type: 'split_down', fromPaneId: 'pane-1', newPaneId: `pane-${i}` });
+    }
+    expect(state.columns[0].panes).toHaveLength(MAX_PANES_PER_COLUMN);
+
+    const outcome = applyVerbLocal(state, WORKSPACE_ID, {
+      type: 'split_down',
+      fromPaneId: 'pane-1',
+      newPaneId: 'pane-over',
+    });
+
+    expect(outcome.applied).toBe(false);
+    expect(outcome.state).toBe(state);
+  });
+
+  it('declines a cross-column move into a full column, but still reorders within one', () => {
+    let state = opening();
+    state = apply(state, { type: 'split_right', fromPaneId: 'pane-1', newColumnId: 'col-2', newPaneId: 'pane-2' });
+    for (let i = 3; i <= MAX_PANES_PER_COLUMN + 1; i += 1) {
+      state = apply(state, { type: 'split_down', fromPaneId: 'pane-1', newPaneId: `pane-${i}` });
+    }
+    expect(state.columns[0].panes).toHaveLength(MAX_PANES_PER_COLUMN);
+
+    const blocked = applyVerbLocal(state, WORKSPACE_ID, {
+      type: 'move_pane',
+      paneId: 'pane-2',
+      toColumnId: 'col-1',
+    });
+    expect(blocked.applied).toBe(false);
+
+    // A same-column move only reorders, so a full column is not a reason to
+    // refuse it.
+    const within = applyVerbLocal(state, WORKSPACE_ID, {
+      type: 'move_pane',
+      paneId: 'pane-3',
+      toColumnId: 'col-1',
+      toIndex: 0,
+    });
+    expect(within.applied).toBe(true);
   });
 });
