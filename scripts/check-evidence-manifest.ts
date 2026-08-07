@@ -313,6 +313,83 @@ function suiteForFile(manifest: EvidenceManifest, file: string): string | null {
   return null;
 }
 
+/**
+ * The floor on how many guarantees the manifest must carry.
+ *
+ * `checkManifest` iterates `manifest.guarantees`, so an EMPTY array yielded
+ * zero violations: the cheapest way to make this gate green was to delete the
+ * row it exists to protect. A floor makes deletion a visible edit to THIS
+ * file — a reviewer sees the number go down — while adding guarantees stays
+ * free. Raise it when guarantees are legitimately added; lowering it should
+ * need the same justification as deleting the evidence itself.
+ */
+export const MIN_GUARANTEES = 15;
+
+/**
+ * The completeness check, kept OUT of `checkManifest` so that per-guarantee
+ * logic stays testable against small fixtures while the floor still applies to
+ * the real manifest. The CLI runs both.
+ */
+export function checkManifestCompleteness(manifest: EvidenceManifest): Violation[] {
+  if (manifest.guarantees.length >= MIN_GUARANTEES) return [];
+  return [{
+    code: 'MALFORMED',
+    guaranteeId: '(manifest)',
+    detail: `manifest carries ${manifest.guarantees.length} guarantees but MIN_GUARANTEES is ${MIN_GUARANTEES} — deleting a guarantee must not be the cheapest way to green this gate`,
+  }];
+}
+
+/**
+ * Workflows that are `on: workflow_call` only cannot be triggered by a push or
+ * a PR directly — something has to call them. `ci.yml` is exactly this shape,
+ * and the manifest's `ciEvidence` points every non-e2e suite at it. Grepping
+ * `ci.yml` for a marker therefore proves the STEP exists, not that it ever
+ * RUNS: the caller (`test.yml`) carries a `branches:` allow-list, and on a
+ * branch outside it every suite the manifest calls "run in CI" runs nowhere
+ * while this checker still prints OK.
+ *
+ * So resolve the chain: a workflow whose only trigger is `workflow_call` must
+ * have a caller (`uses: ./.github/workflows/<name>`) that is itself reachable.
+ */
+function resolveTriggerChain(
+  workflowRel: string,
+  readWorkflow: (rel: string) => string,
+  workflowDir: string,
+  seen = new Set<string>(),
+): { reachable: true } | { reachable: false; detail: string } {
+  if (seen.has(workflowRel)) return { reachable: false, detail: `trigger chain for ${workflowRel} is circular` };
+  seen.add(workflowRel);
+
+  const body = readWorkflow(workflowRel);
+  if (!body) return { reachable: false, detail: `${workflowRel} does not exist` };
+
+  // Directly triggerable: anything other than a lone `workflow_call`.
+  const hasDirectTrigger = /^\s{2}(push|pull_request|schedule):/m.test(body);
+  if (hasDirectTrigger) return { reachable: true };
+  if (!/^\s{2}workflow_call:/m.test(body)) {
+    return { reachable: false, detail: `${workflowRel} declares no push/pull_request/schedule/workflow_call trigger — nothing runs it` };
+  }
+
+  // Reusable: find a caller and recurse.
+  const base = path.basename(workflowRel);
+  const callers = fs
+    .readdirSync(workflowDir)
+    .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+    .filter((f) => {
+      const caller = readWorkflow(`.github/workflows/${f}`);
+      return new RegExp(`uses:\\s*\\./\\.github/workflows/${base.replace('.', '\\.')}`).test(caller);
+    });
+
+  if (callers.length === 0) {
+    return { reachable: false, detail: `${workflowRel} is \`workflow_call\`-only and no workflow calls it — its steps never run` };
+  }
+  for (const caller of callers) {
+    const resolved = resolveTriggerChain(`.github/workflows/${caller}`, readWorkflow, workflowDir, seen);
+    if (resolved.reachable) return { reachable: true };
+  }
+  return { reachable: false, detail: `${workflowRel} is only called by workflows that are themselves unreachable` };
+}
+
 export function checkManifest(manifest: EvidenceManifest, repoRoot: string): Violation[] {
   const violations: Violation[] = [];
   const workflowCache = new Map<string, string>();
@@ -322,6 +399,19 @@ export function checkManifest(manifest: EvidenceManifest, repoRoot: string): Vio
       workflowCache.set(rel, fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '');
     }
     return workflowCache.get(rel)!;
+  };
+  const workflowDir = path.join(repoRoot, '.github/workflows');
+  const triggerCache = new Map<string, ReturnType<typeof resolveTriggerChain>>();
+  const triggerFor = (rel: string) => {
+    if (!triggerCache.has(rel)) {
+      triggerCache.set(
+        rel,
+        fs.existsSync(workflowDir)
+          ? resolveTriggerChain(rel, readWorkflow, workflowDir)
+          : { reachable: false, detail: '.github/workflows does not exist' },
+      );
+    }
+    return triggerCache.get(rel)!;
   };
 
   for (const guarantee of manifest.guarantees) {
@@ -370,6 +460,21 @@ export function checkManifest(manifest: EvidenceManifest, repoRoot: string): Vio
       }
 
       // UNRUN_SUITE: does a CI job actually execute this suite?
+      //
+      // Two questions, both required. The marker proves the STEP exists; the
+      // trigger chain proves the workflow holding it can actually be reached.
+      // Only checking the first is how a `workflow_call`-only workflow, or one
+      // whose caller's `branches:` allow-list excludes the branch under test,
+      // could report "runs in CI" while running nowhere.
+      const trigger = triggerFor(suite.ciEvidence.workflow);
+      if (!trigger.reachable) {
+        violations.push({
+          code: 'UNRUN_SUITE',
+          guaranteeId: id,
+          detail: `suite "${citation.suite}" cites ${suite.ciEvidence.workflow}, but ${trigger.detail}`,
+        });
+        continue;
+      }
       const workflow = readWorkflow(suite.ciEvidence.workflow);
       if (!workflow.includes(suite.ciEvidence.contains)) {
         violations.push({
@@ -437,7 +542,10 @@ function main(): void {
       : path.resolve(args[manifestIndex + 1]);
 
   const manifest = loadManifest(manifestPath);
-  const violations = checkManifest(manifest, repoRoot);
+  // Completeness first: a manifest that lost guarantees passes every
+  // per-guarantee check vacuously, so the count has to be asserted separately
+  // from the loop over what remains.
+  const violations = [...checkManifestCompleteness(manifest), ...checkManifest(manifest, repoRoot)];
 
   const proven = manifest.guarantees.filter((g) => g.status === 'proven').length;
   const gaps = manifest.guarantees.filter((g) => g.status === 'gap');

@@ -79,8 +79,41 @@ const EXEMPT_WRITERS: Array<{ file: string; reason: string }> = [
 
 const ALLOWED = new Set([...CHOKE_POINT, ...EXEMPT_WRITERS.map((e) => e.file)]);
 
-/** `.insert(messages)`, `.update(messages)`, `.delete(messages)` on any executor. */
-const WRITE_STATEMENT = /\.\s*(insert|update|delete)\s*\(\s*messages\s*\)/;
+/**
+ * `.insert(X)`, `.update(X)`, `.delete(X)` where X is whatever local name this
+ * file bound the `messages` table to — plus raw SQL against the table.
+ *
+ * The literal-`messages` form is not enough. Four shipped files already import
+ * the table under an alias (`messages as unifiedMessages` in
+ * `agent-communication-tools.ts`, `messages as globalMessages` in
+ * `session-tools-runtime.ts`, and two more), so `.insert(unifiedMessages)` was
+ * invisible to this scan. All four happen to be read-only today, which means
+ * the guard passed for the right answer by luck — and the guard's own stated
+ * purpose is catching a NEW write site somewhere in the tree, which is exactly
+ * the case luck does not cover.
+ */
+function writeStatementPattern(src: string): RegExp {
+  // Every local binding of the `messages` table in this file: the plain import
+  // and any `messages as alias` rename.
+  const names = new Set(['messages']);
+  const importRe = /import\s*\{([^}]*)\}\s*from\s*['"][^'"]*schema\/conversations['"]/g;
+  for (const match of src.matchAll(importRe)) {
+    for (const clause of match[1].split(',')) {
+      const aliased = clause.trim().match(/^messages\s+as\s+(\w+)$/);
+      if (aliased) names.add(aliased[1]);
+    }
+  }
+  const alternation = [...names].join('|');
+  return new RegExp(
+    // Query-builder writes through any local binding…
+    `\\.\\s*(insert|update|delete)\\s*\\(\\s*(${alternation})\\s*\\)`
+    // …or raw SQL that bypasses the builder entirely.
+    + `|(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\s+"messages"`,
+    'i',
+  );
+}
+
+const hasWriteStatement = (src: string): boolean => writeStatementPattern(src).test(src);
 
 /**
  * Comments are not code. This module's whole subject is where `messages`
@@ -124,7 +157,7 @@ const WRITER_FILES: string[] = SCANNED_ROOTS.flatMap((root) => sourceFiles(join(
     const rel = repoRel(file);
     // The db package's own test factories are seeding helpers, not runtime.
     if (rel.startsWith('packages/db/src/test/')) return false;
-    return WRITE_STATEMENT.test(stripComments(readFileSync(file, 'utf8')));
+    return hasWriteStatement(stripComments(readFileSync(file, 'utf8')));
   })
   .map(repoRel)
   .sort();

@@ -130,8 +130,8 @@ export async function GET(
     // Reads the UNIFIED `messages` table since the message-table merge (epic
     // "Agent-Session Single Source of Truth", Phase 4 / D6). The page
     // predicate is `unifiedPageScope` — the join through `conversations`,
-    // which is what `chat_messages.pageId` became. `chat_messages` is still
-    // dual-written, so a revert of that cutover is safe.
+    // which is what `chat_messages.pageId` became. `chat_messages` was DROPPED
+    // by migration 0253 — there is no dual write and no revert path.
     const conditions = [
       unifiedPageScope(agentId),
       eq(messages.conversationId, conversationId),

@@ -40,6 +40,17 @@ on:
       - 'apps/web/src/lib/repositories/**'
       - 'packages/cli/**'
       - 'packages/sdk/**'
+      # The agent-workspace layer. Its compare-and-swap suite
+      # (`agent-sessions-store.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere — and a path filter
+      # that omitted the code under test meant a PR touching only
+      # `agent-sessions-store.ts` never triggered this workflow and never ran
+      # it. The tool-layer authz gates (`session-tools*.ts`) live under
+      # `apps/web/src/lib/ai/tools/**`, already listed above.
+      - 'packages/lib/src/services/agent-workspaces/**'
+      - 'packages/lib/src/agent-workspaces/**'
+      - 'apps/web/src/lib/agent-workspaces/**'
   pull_request:
     branches: [master, pu/flash-sandbox, pu/broken-sessions]
     paths:
@@ -79,6 +90,17 @@ on:
       - 'apps/web/src/lib/repositories/**'
       - 'packages/cli/**'
       - 'packages/sdk/**'
+      # The agent-workspace layer. Its compare-and-swap suite
+      # (`agent-sessions-store.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere — and a path filter
+      # that omitted the code under test meant a PR touching only
+      # `agent-sessions-store.ts` never triggered this workflow and never ran
+      # it. The tool-layer authz gates (`session-tools*.ts`) live under
+      # `apps/web/src/lib/ai/tools/**`, already listed above.
+      - 'packages/lib/src/services/agent-workspaces/**'
+      - 'packages/lib/src/agent-workspaces/**'
+      - 'apps/web/src/lib/agent-workspaces/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -184,6 +206,38 @@ jobs:
       - name: Run permission tests
         run: |
           bun run --filter '@pagespace/lib' test:db -- src/__tests__/permissions.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # THESE RAN NOWHERE. All five are excluded from @pagespace/lib's default
+      # vitest config (they need a live Postgres) and no workflow or script
+      # named them, so `zero-trust-boundaries` and `cross-tenant-escalation` —
+      # the two suites whose entire subject is the authorization boundary — had
+      # no runner at all. `test:db` uses vitest.security.config.ts, which sets
+      # no `include` and therefore only runs the files passed as arguments;
+      # being excluded from the default config is not the same as being run
+      # somewhere else, and nothing was closing that gap.
+      #
+      # The two auth service files are the same story with an extra twist: the
+      # "web app auth library tests" step below runs `src/auth/` through the
+      # DEFAULT config, which excludes exactly these two, so that step steps
+      # right over them.
+      - name: Run zero-trust and cross-tenant boundary tests
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/permissions/__tests__/zero-trust-boundaries.test.ts \
+            src/permissions/__tests__/permission-mutations.test.ts \
+            src/__tests__/cross-tenant-escalation.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      - name: Run auth service tests (magic link, passkey)
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/auth/magic-link-service.test.ts \
+            src/auth/passkey-service.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test

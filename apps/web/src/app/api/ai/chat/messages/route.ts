@@ -50,8 +50,9 @@ export async function GET(request: Request) {
 
     // Get messages from the repository — the UNIFIED `messages` table since
     // the message-table merge (epic "Agent-Session Single Source of Truth",
-    // Phase 4 / D6). Page scope is the join through `conversations.contextId`;
-    // `chat_messages` is still dual-written, so this PR reverts cleanly.
+    // Phase 4 / D6). Page scope is the join through `conversations.contextId`.
+    // `chat_messages` was DROPPED by migration 0253 — there is no dual write
+    // and no revert path.
     const dbMessages = await messageRepository.getMessagesForPage(
       pageId,
       conversationId || undefined,

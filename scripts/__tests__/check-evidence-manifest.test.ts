@@ -15,6 +15,8 @@ import path from 'node:path';
 import {
   parseDeclarations,
   checkManifest,
+  checkManifestCompleteness,
+  MIN_GUARANTEES,
   loadManifest,
   blankOutLiteralsAndComments,
   type EvidenceManifest,
@@ -39,7 +41,22 @@ const RUNNING_SUITE = {
   ciEvidence: { workflow: '.github/workflows/ci.yml', contains: 'turbo run test' },
 };
 
-const WORKFLOW_THAT_RUNS_IT = 'jobs:\n  unit:\n    steps:\n      - run: turbo run test\n';
+/**
+ * A directly-triggerable workflow. The `on:` block is not decoration: the
+ * checker resolves the trigger CHAIN as well as looking for the step marker,
+ * because a `workflow_call`-only workflow proves a step exists without proving
+ * anything ever runs it.
+ */
+const WORKFLOW_THAT_RUNS_IT =
+  'on:\n  push:\n    branches: [master]\njobs:\n  unit:\n    steps:\n      - run: turbo run test\n';
+
+/** The same steps, but reusable-only — nothing triggers it on its own. */
+const REUSABLE_WORKFLOW =
+  'on:\n  workflow_call:\njobs:\n  unit:\n    steps:\n      - run: turbo run test\n';
+
+/** A caller that makes a reusable workflow reachable. */
+const CALLER_WORKFLOW =
+  'on:\n  pull_request:\n    branches: [master]\njobs:\n  ci:\n    uses: ./.github/workflows/ci.yml\n';
 
 describe('parseDeclarations', () => {
   it('given a plain test declaration, should recover the exact name and mark it executing', () => {
@@ -216,7 +233,10 @@ describe('checkManifest failure modes', () => {
 
   it('given a hand-listed runner and a file not named in the workflow, should report UNRUN_SUITE', () => {
     const root = scratchRepo({
-      '.github/workflows/ci.yml': 'run: cd scripts && bunx vitest run __tests__/other.test.ts\n',
+      // Directly triggerable, so this test isolates the hand-list check rather
+      // than tripping the trigger-chain check first.
+      '.github/workflows/ci.yml':
+        'on:\n  push:\n    branches: [master]\njobs:\n  s:\n    steps:\n      - run: cd scripts && bunx vitest run __tests__/other.test.ts\n',
       'scripts/__tests__/mine.test.ts': `it('the cited one', () => {});`,
     });
     const manifest: EvidenceManifest = {
@@ -288,6 +308,78 @@ describe('gap honesty', () => {
       REPO_ROOT
     );
     expect(violations[0]).toMatchObject({ code: 'MALFORMED' });
+  });
+});
+
+/**
+ * THE TWO WAYS THE GATE COULD BE SATISFIED WITHOUT PROVING ANYTHING.
+ *
+ * Both are about the gate rather than any individual citation, which is why
+ * neither was caught by the per-citation checks above.
+ */
+describe('the gate cannot be greened by deleting the thing it guards', () => {
+  const manifest = loadManifest(path.join(REPO_ROOT, 'docs/2.0-architecture/agent-sessions-evidence.json'));
+
+  it('given an EMPTIED guarantee list, should report MALFORMED rather than zero violations', () => {
+    // `checkManifest` iterates `guarantees`, so an empty array satisfied every
+    // check vacuously: deleting the row was the cheapest way to go green.
+    expect(checkManifestCompleteness({ ...manifest, guarantees: [] })).toEqual([
+      expect.objectContaining({ code: 'MALFORMED', guaranteeId: '(manifest)' }),
+    ]);
+  });
+
+  it('given ONE guarantee removed, should still report MALFORMED', () => {
+    expect(checkManifestCompleteness({ ...manifest, guarantees: manifest.guarantees.slice(0, -1) }))
+      .toEqual([expect.objectContaining({ code: 'MALFORMED' })]);
+  });
+
+  it('given the real manifest, should be at or above the floor', () => {
+    expect(checkManifestCompleteness(manifest)).toEqual([]);
+    expect(manifest.guarantees.length).toBeGreaterThanOrEqual(MIN_GUARANTEES);
+  });
+});
+
+describe('a suite is only "run in CI" if something can actually trigger its workflow', () => {
+  const provenManifest = (workflow: string): EvidenceManifest => ({
+    suites: { unit: { ...RUNNING_SUITE, ciEvidence: { workflow, contains: 'turbo run test' } } },
+    guarantees: [{
+      id: 'g1',
+      guarantee: 'x',
+      status: 'proven',
+      evidence: [{ suite: 'unit', file: 'specs/a.test.ts', name: 'the cited one' }],
+    }],
+  });
+
+  const SPEC = { 'specs/a.test.ts': `describe('area', () => { it('the cited one', () => {}); });` };
+
+  it('given a workflow_call-only workflow that NOTHING calls, should report UNRUN_SUITE', () => {
+    // The step marker is present, so the old substring check passed. But a
+    // reusable workflow with no caller runs nowhere — this is the shape
+    // `ci.yml` actually has, and why grepping it alone proved nothing.
+    const root = scratchRepo({ '.github/workflows/ci.yml': REUSABLE_WORKFLOW, ...SPEC });
+    const violations = checkManifest(provenManifest('.github/workflows/ci.yml'), root);
+    expect(violations).toEqual([
+      expect.objectContaining({ code: 'UNRUN_SUITE', detail: expect.stringContaining('no workflow calls it') }),
+    ]);
+  });
+
+  it('given a workflow_call-only workflow WITH a caller, should accept it', () => {
+    const root = scratchRepo({
+      '.github/workflows/ci.yml': REUSABLE_WORKFLOW,
+      '.github/workflows/test.yml': CALLER_WORKFLOW,
+      ...SPEC,
+    });
+    expect(checkManifest(provenManifest('.github/workflows/ci.yml'), root)).toEqual([]);
+  });
+
+  it('given a workflow with no trigger block at all, should report UNRUN_SUITE', () => {
+    const root = scratchRepo({
+      '.github/workflows/ci.yml': 'jobs:\n  unit:\n    steps:\n      - run: turbo run test\n',
+      ...SPEC,
+    });
+    expect(checkManifest(provenManifest('.github/workflows/ci.yml'), root)).toEqual([
+      expect.objectContaining({ code: 'UNRUN_SUITE' }),
+    ]);
   });
 });
 

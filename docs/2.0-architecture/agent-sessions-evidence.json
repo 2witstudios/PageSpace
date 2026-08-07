@@ -3,7 +3,9 @@
   "suites": {
     "e2e-playwright": {
       "runner": "playwright (apps/e2e), production web build + realtime behind a same-origin proxy",
-      "pathPrefixes": ["apps/e2e/tests/"],
+      "pathPrefixes": [
+        "apps/e2e/tests/"
+      ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "playwright test"
@@ -12,7 +14,9 @@
     },
     "web-unit": {
       "runner": "vitest project 'web' via turbo run test:coverage",
-      "pathPrefixes": ["apps/web/src/"],
+      "pathPrefixes": [
+        "apps/web/src/"
+      ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
@@ -20,7 +24,9 @@
     },
     "lib-unit": {
       "runner": "vitest project '@pagespace/lib' via turbo run test:coverage",
-      "pathPrefixes": ["packages/lib/src/"],
+      "pathPrefixes": [
+        "packages/lib/src/"
+      ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
@@ -28,7 +34,9 @@
     },
     "realtime-unit": {
       "runner": "vitest project 'realtime' via turbo run test:coverage",
-      "pathPrefixes": ["apps/realtime/src/"],
+      "pathPrefixes": [
+        "apps/realtime/src/"
+      ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
@@ -36,7 +44,9 @@
     },
     "scripts-vitest": {
       "runner": "vitest in scripts/ — the workflow runs the whole context; scripts/vitest.config.ts's `include` patterns are the one declaration of the file set",
-      "pathPrefixes": ["scripts/__tests__/"],
+      "pathPrefixes": [
+        "scripts/__tests__/"
+      ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "cd scripts && bunx vitest run"
@@ -222,7 +232,7 @@
         },
         {
           "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
-          "name": "getRecentPageMessages selects a deterministic WINDOW, not just a deterministic order",
+          "name": "getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order",
           "suite": "web-unit"
         },
         {
@@ -315,7 +325,7 @@
           "suite": "web-unit"
         }
       ],
-      "notes": "CAVEAT the checker cannot see: this file gates every test body on a `dbAvailable` probe set in beforeAll, so without a reachable Postgres it passes green with zero assertions rather than reporting a skip. CI does supply DATABASE_URL, but nothing asserts the suite actually ran. That silent-green shape is the same class of failure that once hid a real CI break; see the .md."
+      "notes": "The cited suite reaches a real Postgres or FAILS: its connection probe routes through `requireDb` (packages/db/src/test/require-db.ts), so an absent database is an environment error rather than a green, zero-assertion pass. This note previously recorded the opposite as an open caveat; that silent-green shape was closed and the note had gone stale."
     },
     {
       "id": "gdpr-export-covers-agent-session-tables",
@@ -386,7 +396,7 @@
           "suite": "web-unit"
         }
       ],
-      "notes": "The plan-level citations are pure and always execute; the behavioural ones share the dbAvailable silent-green caveat noted on gdpr-export-agent-authored-messages."
+      "notes": "The plan-level citations are pure and always execute; the behavioural ones run against a real Postgres, guarded by `requireDb` so a missing database fails loudly instead of passing green with zero assertions."
     },
     {
       "id": "tool-contract-byte-identical",

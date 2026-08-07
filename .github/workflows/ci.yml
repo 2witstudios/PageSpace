@@ -72,9 +72,16 @@ jobs:
       - name: Create scratch Admin database
         run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pagespace_admin_test'
 
+      # ADMIN_DATABASE_URL belongs here too, not only on the backfill/db-integration
+      # steps below. The GDPR eraser's integration suite
+      # (packages/lib/src/compliance/erasure/__tests__) gates its whole describe
+      # on this variable, so without it the pseudonymization path that GDPR
+      # erasure depends on reported SKIPPED on every single CI run while the job
+      # went green.
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
@@ -85,9 +92,14 @@ jobs:
         with:
           node-version: '22'
 
+      # Same reason: the audit hash-chainer, SIEM delivery and audit-backfill-flip
+      # worker suites all gate on ADMIN_DATABASE_URL. Without it the audit
+      # chain — the thing that makes the audit log tamper-evident — was
+      # unverified on every run.
       - name: Run processor tests with coverage (Node 22)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bunx turbo run test:coverage --filter='@pagespace/processor'
 
       # Backfill scripts have their own vitest context (scripts/vitest.config.ts)

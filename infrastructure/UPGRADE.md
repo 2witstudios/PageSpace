@@ -524,3 +524,29 @@ roll, so once it has succeeded the table is gone.
   `messages` no longer carries a `pageId` column. `conversations` gains
   `agentPageId`. Bundles produced by an OLDER exporter will not import into a
   0253 database.
+
+---
+
+## Starter skills for existing users (migration `0246_sticky_venus`)
+
+`0246_sticky_venus` adds `users.starterSkillsInstalledAt`. New signups get the
+starter skills during `provisionHomeDriveIfNeeded`, but that path only runs when
+a Home drive is **created** — a user who already has one never passes through it
+again. Without the step below, every pre-existing user's Home drive stays
+without starter skills permanently, and nothing surfaces that.
+
+Run once, after migrating:
+
+```bash
+bun scripts/backfill-starter-skills.ts --dry-run   # reports what it would do
+bun scripts/backfill-starter-skills.ts
+```
+
+Safe to re-run: `installStarterSkills` no-ops on any user already stamped with
+`users.starterSkillsInstalledAt`, so a partial run can simply be run again, and
+a starter a user deleted in the meantime is never resurrected.
+
+The script walks users in batches and reports `scanned` / `installed` /
+`skippedCollision` / `alreadyStamped` / `unstampedRemaining` / `failed`. A
+non-zero `failed` is safe to retry; `unstampedRemaining` counts users with no
+Home drive yet, who will get theirs at provisioning.

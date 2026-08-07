@@ -93,11 +93,19 @@ interface PgPool {
 }
 // @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
+import { requireDbUrl } from '@pagespace/db/test/require-db';
+import { createAdminTestPool } from './admin-test-pool';
 const { Pool } = pg as unknown as {
   Pool: new (config: Record<string, unknown>) => PgPool;
 };
 
 const url = process.env.ADMIN_DATABASE_URL;
+// A missing ADMIN_DATABASE_URL is an ENVIRONMENT failure, not a reason to
+// quietly report green. This suite skipped silently on every CI run until the
+// variable was added to the workflow steps that run it; `requireDbUrl` makes
+// that state loud, with `ALLOW_SKIP_DB_TESTS=1` as the one explicit local
+// opt-out (which CI never sets).
+requireDbUrl(url, 'ADMIN_DATABASE_URL', 'siem-delivery-worker.integration.test.ts');
 const MAIN_DB_NAME = 'pagespace_main_siem_it';
 
 const PASSWORDS = {
@@ -415,8 +423,8 @@ describe.skipIf(!url)('SIEM delivery worker across the admin store flip (wire-co
     // Sessions opened before a schema reset hold the DROPPED public schema's
     // OID in their search_path cache and stop seeing the recreated tables —
     // fresh pools per reset.
-    appPool = new Pool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
-    procPool = new Pool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
+    appPool = createAdminTestPool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
+    procPool = createAdminTestPool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
 
     // Main (legacy) store: minimal DDL matching the worker's raw SQL.
     await mainOwner.query('DROP TABLE IF EXISTS activity_logs, security_audit_log, siem_delivery_cursors, siem_delivery_receipts');
@@ -424,13 +432,13 @@ describe.skipIf(!url)('SIEM delivery worker across the admin store flip (wire-co
   }
 
   beforeAll(async () => {
-    adminOwner = new Pool({ connectionString: url, max: 3 });
+    adminOwner = createAdminTestPool({ connectionString: url, max: 3 });
     await adminOwner
       .query(`CREATE DATABASE ${MAIN_DB_NAME}`)
       .catch((err: unknown) => {
         if ((err as { code?: string }).code !== '42P04') throw err; // 42P04 = already exists
       });
-    mainOwner = new Pool({ connectionString: mainDbUrl(), max: 3 });
+    mainOwner = createAdminTestPool({ connectionString: mainDbUrl(), max: 3 });
     // appPool/procPool are created (and recreated) by resetBothStores.
   });
 

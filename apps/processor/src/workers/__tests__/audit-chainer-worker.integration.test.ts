@@ -46,11 +46,19 @@ interface PgPool {
 }
 // @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
+import { requireDbUrl } from '@pagespace/db/test/require-db';
+import { createAdminTestPool } from './admin-test-pool';
 const { Pool } = pg as unknown as {
   Pool: new (config: Record<string, unknown>) => PgPool;
 };
 
 const url = process.env.ADMIN_DATABASE_URL;
+// A missing ADMIN_DATABASE_URL is an ENVIRONMENT failure, not a reason to
+// quietly report green. This suite skipped silently on every CI run until the
+// variable was added to the workflow steps that run it; `requireDbUrl` makes
+// that state loud, with `ALLOW_SKIP_DB_TESTS=1` as the one explicit local
+// opt-out (which CI never sets).
+requireDbUrl(url, 'ADMIN_DATABASE_URL', 'audit-chainer-worker.integration.test.ts');
 
 const PASSWORDS = {
   ADMIN_APP_PASSWORD: 'appsecretchainer1',
@@ -126,7 +134,7 @@ describe.skipIf(!url)('audit chainer drain cycle as admin_processor_user (wire-c
     // legacy rows to backfill, so the genesis link is legitimate (#890
     // Phase 2 FIX era-fork guard).
     process.env.AUDIT_CHAINER_ALLOW_GENESIS = 'true';
-    owner = new Pool({ connectionString: url, max: 3 });
+    owner = createAdminTestPool({ connectionString: url, max: 3 });
     // Fresh-DB guarantee on the SCRATCH db — same reset as the db package's
     // admin integration suites, including LOGIN users so provisioning runs.
     await owner.query('DROP SCHEMA IF EXISTS public CASCADE');
@@ -156,8 +164,8 @@ describe.skipIf(!url)('audit chainer drain cycle as admin_processor_user (wire-c
     const result = await provisionAdminLoginUsers({ ADMIN_DATABASE_URL: url, ...PASSWORDS });
     expect(result.provisioned).toEqual(['admin_app_user', 'admin_processor_user']);
 
-    appPool = new Pool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
-    procPool = new Pool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
+    appPool = createAdminTestPool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
+    procPool = createAdminTestPool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
   });
 
   afterAll(async () => {
