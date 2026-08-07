@@ -305,6 +305,46 @@ legs' legacy half (`purge-stream-state` and every unified path stay), the debug
 `GET /api/debug/chat-messages`, the backfill script, and the tenant-export registry
 entry. A coexistence window's scaffolding is only honest while the window is open.
 
+### 3b. One chat pipeline behind two URLs
+
+Two message tables forced two chat routes: `POST /api/ai/chat` for page agents and
+`POST /api/ai/global/[id]/messages` for the global assistant. The table merged (3a), so
+the second implementation went too.
+
+**Both URLs still exist and their wire contracts are untouched** — auth, body, statuses,
+headers, stream. Deployed browsers, desktop, mobile, MCP clients, the CLI and any running
+agent address them by name, and retiring a URL is a separate decision with its own compat
+window. What changed is that both now call ONE entry,
+`apps/web/src/lib/ai/chat-pipeline/handle-chat-turn.ts`, which does the header check, the
+auth (with the surface's own options), the size guard and the parse once — and then picks
+the page-agent or global-assistant strategy **from the conversation, not from the URL**.
+
+The consequence worth naming: `dispatchThroughChatPipeline` no longer branches on
+`agentPageId === null` to choose a URL. Server-side dispatch names one internal path for
+every worker; a page worker carries `chatId`, a global worker carries none and the entry
+resolves its conversation. That branch was the last visible trace of the two-table era in
+the send path.
+
+`/api/ai/chat` therefore accepts one shape it used to refuse: a request with no `chatId`
+whose `conversationId` resolves to an existing global-assistant conversation. That is the
+whole widening, it is fail-closed (the global strategy independently re-checks owner +
+`type='global'` + `isActive`), and an MCP token still cannot reach the global assistant
+through it — MCP has never been able to drive the global assistant and the entry refuses
+with the same answer the session-only route always gave.
+
+**Two strategies, not one merged function, and deliberately so.** Beyond the shared
+prologue the two turns genuinely differ — the authorization subject (agent page vs
+conversation), MCP drive scoping, conversation minting rules, the tool set (per-agent
+allowlist and sandbox gating vs always-search-mode), system-prompt construction, the
+credit path (page chat aborts mid-stream on exhaustion), provider admission order, the
+history seam, @mention notification, the realtime gates, and usage telemetry. Collapsing
+those into one function would mean twenty conditionals in the app's highest-risk path,
+several of them security decisions. The table of divergences is maintained in the entry's
+own docblock; the one stretch that WAS duplicated rather than merely similar — takeover,
+stream lifecycle and the `'streaming'` placeholder under a per-conversation advisory lock
+— is shared outright in `start-chat-generation.ts`, because a lock protocol maintained
+twice is a lock protocol that drifts into double generation and double billing.
+
 ## 4. Vocabulary
 
 "sessionId" has carried five meanings. The canonical names:
