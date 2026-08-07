@@ -6,6 +6,12 @@ import { conversationMessagesActions } from '@/hooks/conversationMessagesActions
 interface GlobalMessagesEnvelope {
   messages: UIMessage[];
   pagination?: { hasMore: boolean; nextCursor: string | null };
+  /**
+   * `conversations.rev` at read time (Agent-Session SSoT epic, Phase 2) — the
+   * cache entry's watermark. `null` for the legacy bare-array shape and for a
+   * conversation with no row.
+   */
+  rev: number | null;
 }
 
 /**
@@ -15,10 +21,14 @@ interface GlobalMessagesEnvelope {
  */
 const parseGlobalMessagesEnvelope = (data: unknown): GlobalMessagesEnvelope =>
   Array.isArray(data)
-    ? { messages: data as UIMessage[] }
+    ? { messages: data as UIMessage[], rev: null }
     : {
         messages: (data as { messages?: UIMessage[] }).messages ?? [],
         pagination: (data as GlobalMessagesEnvelope).pagination ?? undefined,
+        rev:
+          typeof (data as { rev?: unknown }).rev === 'number'
+            ? ((data as { rev: number }).rev)
+            : null,
       };
 
 /**
@@ -55,8 +65,8 @@ export const loadGlobalConversationMessages = async (conversationId: string): Pr
     if (!conversationMessagesActions.isLoadCurrent(conversationId, generation)) return;
     // epic leaf 6.6: capture the pagination envelope (dropped entirely before this PR) so
     // "load older" has a cursor and knows whether there's anything left to fetch.
-    const { messages, pagination } = parseGlobalMessagesEnvelope(data);
-    conversationMessagesActions.applyLoad(conversationId, generation, messages, pagination);
+    const { messages, pagination, rev } = parseGlobalMessagesEnvelope(data);
+    conversationMessagesActions.applyLoad(conversationId, generation, messages, pagination, rev);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] global load failed', conversationId, error);
     // failLoad is generation-gated, so a stale failure cannot clobber a newer load's status.
@@ -153,6 +163,7 @@ const doRefreshConversationSnapshot = async (
         token,
         result.messages,
         result.pagination ?? undefined,
+        result.rev,
       );
       return;
     }
@@ -163,8 +174,8 @@ const doRefreshConversationSnapshot = async (
       console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, res.status);
       return;
     }
-    const { messages, pagination } = parseGlobalMessagesEnvelope(await res.json());
-    conversationMessagesActions.applyServerSnapshot(conversationId, token, messages, pagination);
+    const { messages, pagination, rev } = parseGlobalMessagesEnvelope(await res.json());
+    conversationMessagesActions.applyServerSnapshot(conversationId, token, messages, pagination, rev);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, error);
   }
@@ -186,6 +197,7 @@ export const loadAgentConversationMessages = async (
       generation,
       result.messages,
       result.pagination ?? undefined,
+      result.rev,
     );
   } catch (error) {
     console.warn('[conversationMessagesLoaders] agent load failed', agentId, conversationId, error);

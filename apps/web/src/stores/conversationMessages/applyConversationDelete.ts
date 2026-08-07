@@ -4,6 +4,12 @@ import type { ConversationMessagesById } from './seedEmpty';
 export interface ApplyConversationDeleteEvent {
   conversationId: string;
   messageId: string;
+  /**
+   * The post-write `conversations.rev` the originating `conversation:message_deleted`
+   * event carried, when there was one — see `applyConfirmedMessage`'s `rev` and
+   * `replayPendingMutations`.
+   */
+  rev?: number;
 }
 
 /**
@@ -40,7 +46,7 @@ export const applyConversationDelete = (
       optimisticSends: applyMessageDelete(existing.optimisticSends, event.messageId),
       pendingMutationsSinceLoad: [
         ...existing.pendingMutationsSinceLoad,
-        { type: 'delete', messageId: event.messageId },
+        { type: 'delete', messageId: event.messageId, rev: event.rev },
       ],
     },
   };
