@@ -1135,9 +1135,13 @@ export const messageRepository = {
    * model.
    *
    * Keeps the page predicate rather than scoping by conversationId alone. The
-   * chat route already proved `conversations.contextId === pageId` before
-   * reaching here, so this is defence in depth — and defence in depth is not
-   * something a cutover gets to quietly drop.
+   * chat route's write gate now applies this exact `unifiedPageScope` rule
+   * before reaching here (page-chat-turn.ts — it used to test `contextId`
+   * type-blind, which is how a global conversation came to "belong" to every
+   * page), so this is defence in depth — and defence in depth is not something
+   * a cutover gets to quietly drop. It was also the thing that CONTAINED that
+   * defect: a global conversation matched no rows here, so the injected turn
+   * never read anyone's history back.
    */
   async getPageConversationMessages(
     pageId: string,

@@ -664,11 +664,46 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         }
         const ownsIt = existingConversation.userId === userId;
         const isSharedConversation = existingConversation.isShared === true;
-        // contextId is nullable in the schema (null for global conversations), so only
-        // enforce the page match when it is actually set — an owner must never be
-        // locked out of their own row by a historically-unset column.
+        // WHICH PAGE A CONVERSATION BELONGS TO IS A FUNCTION OF ITS `type`,
+        // never of `contextId` alone — that column means a different thing per
+        // type, and reading it type-blind is what made this check unsound.
+        //
+        // It used to be `!contextId || contextId === chatId`. A `type='global'`
+        // conversation ALWAYS has `contextId IS NULL` — the database enforces
+        // it (`conversations_global_context_null_chk`, migration 0249) — so
+        // that first disjunct said every global conversation belongs to every
+        // page, and this route would happily append a page-agent turn to the
+        // global-assistant transcript (CodeQL `js/user-controlled-bypass`;
+        // adversarial security review finding 10). `type='client'` had the
+        // same hole from the other side: its `contextId` is a DRIVE, so the
+        // match was meaningless, and an unstamped client thread with both
+        // columns null matched every page too.
+        //
+        // The answer is the predicate every page-scoped READER already uses,
+        // `unifiedPageScope()` (lib/repositories/unified-message-scope.ts):
+        // `type='page'` names its page in `contextId`, `type='client'` in
+        // `agentPageId`, and NOTHING else names a page at all. Gating writes on
+        // the same rule that scopes reads is the point — a thread you may write
+        // into here is now exactly a thread whose messages this page reads back
+        // (the history load below is `getPageConversationMessages`, i.e. the
+        // very same scope).
+        //
+        // The single deliberate widening is the legacy tolerance the old
+        // disjunct was actually there for: `conversations_page_context_present_chk`
+        // shipped NOT VALID, so `type='page'` rows with a null `contextId` were
+        // grandfathered and their owners must not be locked out of their own
+        // history. Kept — but scoped to `type='page'` AND to the OWNER, which is
+        // exactly what the original comment claimed it was for. Owner-scoping
+        // also closes the review's named residual: a legacy null-context row
+        // with `isShared=true` was otherwise writable by any co-member from any
+        // page they could edit.
         const belongsToThisPage =
-          !existingConversation.contextId || existingConversation.contextId === chatId;
+          existingConversation.type === 'page'
+            ? existingConversation.contextId === chatId ||
+              (existingConversation.contextId === null && ownsIt)
+            : existingConversation.type === 'client'
+              ? existingConversation.agentPageId === chatId
+              : false;
         if ((!ownsIt && !isSharedConversation) || !belongsToThisPage) {
           loggers.ai.warn('AI Chat API: rejected conversationId the caller may not write to', {
             userId,
@@ -676,6 +711,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             ownsIt,
             isSharedConversation,
             belongsToThisPage,
+            // The `type` is what decides `belongsToThisPage`, so a refusal is
+            // undiagnosable without it: 'global' here means someone addressed a
+            // global thread at a page, which is a categorically different event
+            // from a 'page' thread pointed at the wrong page.
+            conversationType: existingConversation.type,
           });
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }

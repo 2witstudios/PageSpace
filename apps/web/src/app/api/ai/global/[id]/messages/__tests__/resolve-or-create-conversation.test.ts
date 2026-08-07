@@ -151,4 +151,29 @@ describe('resolveOrCreateConversation', () => {
       resolveOrCreateConversation('user1', 'conv1', db as never)
     ).rejects.toThrow(ConversationHistoryDeletedError);
   });
+
+  // The `type` check existed on the `existing` branch and NOT on this one, so
+  // the two branches enforced different rules. Reaching it needs an isActive
+  // flip between the two statements, but a gate whose branches disagree is a
+  // gate that will eventually be wrong on the reachable side too — this is the
+  // mirror of the page-side defect (a global conversation "belonging" to every
+  // page) that the same PR fixes in page-chat-turn.ts.
+  it('given the conflict winner is a non-global (page) row, throws ConversationOwnershipError', async () => {
+    const pageWinner = { ...CONV, type: 'page' };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(selectChain([]))
+        .mockReturnValueOnce(selectChain([pageWinner])),
+      insert: vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    };
+    await expect(
+      resolveOrCreateConversation('user1', 'conv1', db as never)
+    ).rejects.toThrow(ConversationOwnershipError);
+  });
 });
