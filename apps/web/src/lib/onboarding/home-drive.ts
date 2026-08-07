@@ -6,6 +6,7 @@ import { createId } from '@paralleldrive/cuid2'
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards'
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
 import { populateUserDrive } from '@/lib/onboarding/drive-setup'
+import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -64,6 +65,12 @@ export async function provisionHomeDriveIfNeeded(
     // Auto-allocate a globally-unique publish subdomain for the Home drive so it is
     // addressable at <sub>.pagespace.site from creation (participates in this tx).
     await allocatePublishSubdomain(newDrive.id, slug, tx);
+
+    // Starter skills install on BOTH branches. They are the user's own editable
+    // copies of workflow skills, not tutorial content, so an existing user
+    // reaching Home lazily should get them too — and this adds content without
+    // flipping `created`, so their post-login returnUrl is still not hijacked.
+    await installStarterSkills(userId, newDrive.id, tx);
 
     if (isExistingUser) {
       return { driveId: newDrive.id, created: false };

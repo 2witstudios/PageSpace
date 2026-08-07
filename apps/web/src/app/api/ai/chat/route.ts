@@ -82,6 +82,8 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
+import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
+import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
@@ -1446,11 +1448,15 @@ export async function POST(request: Request) {
       systemPrompt += buildInlineInstructions(allowedToolNames);
     }
 
+    const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation);
+
     const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
       currentPage: turnLocation.currentPage,
       currentDrive: turnLocation.currentDrive,
       breadcrumbs: turnLocation.breadcrumbs,
-    } : undefined);
+      homeDriveId: locationHomeDriveId,
+    } : { homeDriveId: locationHomeDriveId });
 
     // Cross-drive membership context applies uniformly regardless of whether
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
@@ -1465,6 +1471,21 @@ export async function POST(request: Request) {
     // conversation, so it belongs in this cache-stable prompt, never the
     // volatile block.
     systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
+
+    // Active plan pointer. Same volatility class as the skill catalog above and
+    // as Agent Memory: it changes only when the agent calls set_plan/clear_plan,
+    // never on navigation, so it is cache-stable per conversation. It has to be
+    // here rather than in the volatile block — the compaction summary is lossy,
+    // and this pointer is precisely what the agent needs after a summary.
+    // Scoped MCP/OAuth tokens reach this route too, and a plan can be bound to a
+    // page in ANOTHER drive — so the principal-aware check is required here. A
+    // user-level check would leak an out-of-scope plan's title and id to a token
+    // that may not reach that drive.
+    systemPrompt += buildActivePlanPrompt(
+      await getActivePlan(conversationId, userId, (pageId) =>
+        canPrincipalViewPage(authResult, pageId),
+      ),
+    );
 
 
     // Build timestamp system prompt for temporal awareness

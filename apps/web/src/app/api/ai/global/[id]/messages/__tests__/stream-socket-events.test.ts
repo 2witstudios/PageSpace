@@ -699,7 +699,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  sessionId: null, closedInSessionAt: null,
+  sessionId: null, closedInSessionAt: null, planPageId: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 

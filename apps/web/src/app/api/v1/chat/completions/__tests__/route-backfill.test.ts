@@ -251,6 +251,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       isShared: false,
   sessionId: null,
       closedInSessionAt: null,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -321,6 +322,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       isShared: false,
   sessionId: null,
       closedInSessionAt: null,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -367,6 +369,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       isShared: false,
   sessionId: null,
       closedInSessionAt: null,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
