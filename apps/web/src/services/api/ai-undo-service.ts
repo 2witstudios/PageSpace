@@ -9,7 +9,6 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, gte, lt, ne, desc } from '@pagespace/db/operators'
-import { chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -525,20 +524,20 @@ export async function executeAiUndo(
         }
       }
 
-      // Only reached if all rollbacks succeed
-      // Soft-delete messages in the same transaction
-      // Note: Update BOTH tables to handle edge cases where a conversation
-      // might have messages in both tables (e.g., migration scenarios)
+      // Only reached if all rollbacks succeed: soft-delete the undone range
+      // in the same transaction.
       loggers.api.debug('[AiUndo:Execute] Soft-deleting messages', {
         source: preview.source,
         conversationId,
         fromTimestamp: createdAt.toISOString(),
       });
 
-      // The UNIFIED leg — the one every reader now consults. Excludes
-      // 'streaming' rows: see the SAFE DEFAULT note on previewAiUndo's
-      // affectedMessages query above; the same exclusion must apply to the
-      // actual mutation, not just its preview count.
+      // `messages` — the one table every reader consults and, since Phase 4
+      // PR 14, the only one anything writes. The mirrored `chat_messages`
+      // tombstone that used to follow this statement is gone with the rest of
+      // the legacy leg. Excludes 'streaming' rows: see the SAFE DEFAULT note
+      // on previewAiUndo's affectedMessages query above; the same exclusion
+      // must apply to the actual mutation, not just its preview count.
       await tx
         .update(messages)
         .set({ isActive: false })
@@ -548,26 +547,6 @@ export async function executeAiUndo(
             gte(messages.createdAt, createdAt),
             eq(messages.isActive, true),
             ne(messages.status, 'streaming')
-          )
-        );
-
-      // The LEGACY leg, mirrored in the same transaction. Not "the other
-      // table for the other kind of chat" any more — since the merge both
-      // kinds live in `messages`, and this is the dual-write's tombstone half.
-      // It stays until PR 15 drops `chat_messages`, because a revert of the
-      // reader cutover must find that table already correct: an undo that only
-      // tombstoned the unified leg would resurrect every undone message the
-      // moment a reader went back to the legacy one. Matches nothing for a
-      // global conversation, which is the right no-op.
-      await tx
-        .update(chatMessages)
-        .set({ isActive: false })
-        .where(
-          and(
-            eq(chatMessages.conversationId, conversationId),
-            gte(chatMessages.createdAt, createdAt),
-            eq(chatMessages.isActive, true),
-            ne(chatMessages.status, 'streaming')
           )
         );
 

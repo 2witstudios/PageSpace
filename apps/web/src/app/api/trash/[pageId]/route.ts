@@ -53,6 +53,12 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
         : eq(messages.pageId, pageId),
     );
 
+    // The frozen legacy table. Since Phase 4 PR 14 nothing INSERTs or UPDATEs
+    // `chat_messages`, but the rows written before the freeze are still there
+    // and a permanently deleted page must take them with it. Kept explicit
+    // rather than left to `chat_messages.pageId`'s ON DELETE CASCADE (which
+    // fires on the `pages` delete below) so the teardown reads as one list of
+    // what it removes; PR 15 deletes this line with the table.
     await tx.delete(chatMessages).where(eq(chatMessages.pageId, pageId));
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 

@@ -1,8 +1,9 @@
 /**
- * Contract tests for GET/POST /api/debug/chat-messages
+ * Contract tests for GET /api/debug/chat-messages
  *
- * Verifies production guard, authentication, authorization,
- * and success paths for the debug endpoint.
+ * Verifies production guard, authentication, authorization and the success
+ * path of the read-only debug endpoint — plus, at the bottom, that its POST
+ * (a legacy `chat_messages` seeder) stays deleted.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -79,9 +80,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { NextResponse } from 'next/server';
-import { GET, POST } from '../route';
+import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 
 // Test fixtures
@@ -108,14 +109,6 @@ const createGetRequest = (params?: Record<string, string>) => {
     url += '?' + searchParams.toString();
   }
   return new Request(url, { method: 'GET' });
-};
-
-const createPostRequest = (body: Record<string, unknown>) => {
-  return new Request('https://example.com/api/debug/chat-messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
 };
 
 describe('GET /api/debug/chat-messages', () => {
@@ -226,99 +219,28 @@ describe('GET /api/debug/chat-messages', () => {
   });
 });
 
+/**
+ * The POST is GONE (Phase 4 PR 14). It seeded fixture rows straight into
+ * `chat_messages`, which is now frozen — and it had in fact been broken since
+ * migration 0248 anyway, because its self-minted `conversationId` names no
+ * `conversations` row and 0248's FK rejects that for every new row. This
+ * asserts the route no longer exports one, so a revert cannot quietly restore
+ * a legacy writer.
+ */
 describe('POST /api/debug/chat-messages', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it('is not exported — the legacy seeding route was removed with the legacy leg', async () => {
+    const route = await import('../route');
+    expect('POST' in route).toBe(false);
+    expect(typeof route.GET).toBe('function');
+  });
 
-    // Default: authenticated user
+  it('never inserts: the module has no write path left at all', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
 
-    // Default: permission granted
-    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    await GET(createGetRequest({ pageId: mockPageId }));
 
-    // Default: insert succeeds, select returns empty
-    const selectResult = {
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      orderBy: vi.fn().mockReturnValue([]),
-      limit: vi.fn().mockResolvedValue([]),
-    };
-    vi.mocked(db.select).mockReturnValue(selectResult as unknown as ReturnType<typeof db.select>);
-    vi.mocked(db.insert).mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    } as unknown as ReturnType<typeof db.insert>);
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  describe('production guard', () => {
-    it('should return 404 when NODE_ENV is production', async () => {
-      vi.stubEnv('NODE_ENV', 'production');
-
-      const request = createPostRequest({ pageId: mockPageId });
-      const response = await POST(request);
-
-      expect(response.status).toBe(404);
-      const body = await response.json();
-      expect(body.error).toBe('Not found');
-    });
-  });
-
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createPostRequest({ pageId: mockPageId });
-      const response = await POST(request);
-
-      expect(response.status).toBe(401);
-    });
-  });
-
-  describe('validation', () => {
-    it('should return 400 when pageId is missing', async () => {
-      const request = createPostRequest({});
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('pageId is required');
-    });
-  });
-
-  describe('authorization', () => {
-    it('should return 403 when user cannot edit the page', async () => {
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-      const request = createPostRequest({ pageId: mockPageId });
-      const response = await POST(request);
-
-      expect(response.status).toBe(403);
-      const body = await response.json();
-      expect(body.error).toBe('Forbidden');
-    });
-
-    it('should call canUserEditPage with correct userId and pageId', async () => {
-      const request = createPostRequest({ pageId: mockPageId });
-      await POST(request);
-
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
-    });
-  });
-
-  describe('successful insert', () => {
-    it('should return 200 on successful insert when authorized', async () => {
-      const request = createPostRequest({ pageId: mockPageId });
-      const response = await POST(request);
-
-      expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(body.success).toBe(true);
-      expect(body.message).toBe('Manual save test completed');
-    });
+    expect(db.insert).not.toHaveBeenCalled();
   });
 });

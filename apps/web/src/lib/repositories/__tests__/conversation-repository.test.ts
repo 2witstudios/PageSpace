@@ -441,7 +441,7 @@ describe('conversationRepository.setConversationShared', () => {
 });
 
 describe('conversationRepository.softDeleteConversation', () => {
-  it("deactivates the canonical conversations row, not just its chat_messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
+  it("deactivates the canonical conversations row, not just its messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
     const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, sessionId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInSessionAt: null, isActive: true, rev: 1 }]);
     const whereMock = vi.fn(() =>
       Object.assign(Promise.resolve(undefined), { returning: returningMock }),
@@ -456,39 +456,40 @@ describe('conversationRepository.softDeleteConversation', () => {
     // vice versa (a second review finding on the same fix: chatgpt-codex-
     // connector on PR #2296).
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    // Two separate UPDATEs: conversations FIRST, then chat_messages — the
-    // canonical row is locked before the message sweep, or a concurrent
-    // send's own FOR UPDATE re-check (apps/web/src/app/api/ai/chat/route.ts)
-    // could acquire that lock in the window between them, observe
-    // isActive: true, and commit a new active message a moment before this
-    // transaction tombstones the conversation (review finding — chatgpt-
-    // codex-connector on PR #2299, filed after the original chatMessages-
-    // then-conversations order shipped on PR #2296). Verified via the table
-    // argument each db.update() call received.
+    // Two UPDATEs: conversations FIRST, then the message sweep — the
+    // canonical row is locked before the sweep, or a concurrent send's own
+    // FOR UPDATE re-check (apps/web/src/app/api/ai/chat/route.ts) could
+    // acquire that lock in the window between them, observe isActive: true,
+    // and commit a new active message a moment before this transaction
+    // tombstones the conversation (review finding — chatgpt-codex-connector on
+    // PR #2299, filed after the original messages-then-conversations order
+    // shipped on PR #2296). Verified via the table argument each db.update()
+    // call received.
     //
-    // THREE updates since Phase 4 PR 10: the message sweep is DUAL-LEG, so
-    // `messages` is tombstoned alongside `chat_messages` in the same
-    // transaction. Without it, deleting a conversation from History would
-    // clear only the legacy leg and the post-cutover reader would resurrect
-    // every message in it.
-    expect(mockDb.update).toHaveBeenCalledTimes(3);
+    // The count has tracked the merge: two before PR 10, THREE during the
+    // dual-write, and two again now that Phase 4 PR 14 has frozen
+    // `chat_messages`. A `chatMessages` table argument reappearing in this
+    // list is a resurrected legacy writer.
+    expect(mockDb.update).toHaveBeenCalledTimes(2);
     expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'conversations.id' }));
-    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'chatMessages.id' }));
-    expect(mockDb.update).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: 'messages.id' }));
+    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'messages.id' }));
+    expect(mockDb.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'chatMessages.id' }));
     expect(setMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ isActive: false }));
     expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
-    expect(setMock).toHaveBeenNthCalledWith(3, { isActive: false });
     expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
   });
 
-  it('does not touch conversations.isActive at all if the chat_messages update throws — the transaction rolls back atomically', async () => {
+  it('does not touch conversations.isActive at all if the message sweep throws — the transaction rolls back atomically', async () => {
     const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, sessionId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInSessionAt: null, isActive: true, rev: 1 }]);
     const whereMock = vi
       .fn()
       // First statement: the conversations tombstone (ends `.returning()`).
       .mockImplementationOnce(() => ({ returning: returningMock }))
-      // Second statement: the chat_messages sweep — awaited directly, throws.
-      .mockImplementationOnce(() => Promise.reject(new Error('db exploded')));
+      // Second statement: the message sweep, through the shared page writer —
+      // it ends in `.returning()`, which is what throws here.
+      .mockImplementationOnce(() => ({
+        returning: () => Promise.reject(new Error('db exploded')),
+      }));
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 

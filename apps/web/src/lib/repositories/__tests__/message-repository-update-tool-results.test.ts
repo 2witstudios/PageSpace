@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// The write is now TRANSACTIONAL and DUAL-LEG (Phase 4 PR 10): the same
-// statement is issued against `chat_messages` and the unified `messages`
-// table, in one transaction, so the v1 completions route's client-tool-result
-// backfill cannot land on one leg only. `mockWhere` therefore has to return a
-// `.returning()` (the unified leg reads the affected-row count), and `db`
-// needs a `transaction`.
+// The v1 completions route's client-tool-result backfill. It was dual-leg and
+// transactional through Phase 4 PR 10; PR 14 froze `chat_messages`, so it is
+// now ONE statement against the unified `messages` table — a single UPDATE,
+// atomic on its own, with no transaction left to wrap. `mockWhere` still has
+// to return a `.returning()`, which is how the shared writer reads the
+// affected-row count.
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([{ id: 'msg-abc' }]));
 const mockWhere = vi.hoisted(() =>
   vi.fn().mockReturnValue({
@@ -100,61 +100,41 @@ describe('messageRepository.updateMessageToolResults', () => {
     mockUpdate.mockReturnValue({ set: mockSet });
   });
 
-  it('writes BOTH legs, in one transaction, with the identical serialization', async () => {
+  it('writes the unified table ONLY — the frozen leg gets no statement', async () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
     await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(mockUpdate).toHaveBeenCalledWith(chatMessages);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(mockUpdate).toHaveBeenCalledWith(messages);
-    // One `JSON.stringify`, handed to both legs — the columns must be
-    // byte-identical, not merely equivalent.
-    for (const call of mockSet.mock.calls) {
-      expect(call[0]).toEqual({ toolResults: JSON.stringify(results) });
-    }
+    expect(mockUpdate).not.toHaveBeenCalledWith(chatMessages);
+    expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
   });
 
-  it('scopes the unified leg by conversationId too, exactly like the legacy leg', async () => {
+  it('scopes the write by conversationId as well as id — the caller\'s authority boundary', async () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
     ];
     await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
-    // Two WHEREs, one per leg, both carrying the id AND the conversation.
-    expect(mockWhere).toHaveBeenCalledTimes(2);
-    for (const call of mockWhere.mock.calls) {
-      expect(call[0]).toMatchObject({
-        type: 'and',
-        conditions: expect.arrayContaining([
-          { type: 'eq', field: 'id', value: 'msg-abc' },
-          { type: 'eq', field: 'conversationId', value: 'conv-123' },
-        ]),
-      });
-    }
+    expect(mockWhere).toHaveBeenCalledTimes(1);
+    expect(mockWhere.mock.calls[0][0]).toMatchObject({
+      type: 'and',
+      conditions: expect.arrayContaining([
+        { type: 'eq', field: 'id', value: 'msg-abc' },
+        { type: 'eq', field: 'conversationId', value: 'conv-123' },
+      ]),
+    });
   });
 
-  it('given the kill switch off, writes the legacy leg only', async () => {
-    vi.stubEnv('UNIFIED_MESSAGES_DUAL_WRITE', 'off');
-    const results: ToolResult[] = [
-      { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
-    ];
-
-    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
-
-    expect(mockUpdate).toHaveBeenCalledWith(chatMessages);
-    expect(mockUpdate).not.toHaveBeenCalledWith(messages);
-    vi.unstubAllEnvs();
-  });
-
-  it('should UPDATE chatMessages table scoped to the given message and conversation IDs', async () => {
+  it('should UPDATE the message table scoped to the given message and conversation IDs', async () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
     await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
-    expect(db.update).toHaveBeenCalledWith(chatMessages);
+    expect(db.update).toHaveBeenCalledWith(messages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
     // WHERE must be an AND combining both id and conversationId conditions
     const whereArg = mockWhere.mock.calls[0][0];
@@ -180,7 +160,7 @@ describe('messageRepository.updateMessageToolResults', () => {
     ];
     await messageRepository.updateMessageToolResults('msg-xyz', 'conv-456', results);
 
-    expect(db.update).toHaveBeenCalledWith(chatMessages);
+    expect(db.update).toHaveBeenCalledWith(messages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
     const whereArg = mockWhere.mock.calls[0][0];
     expect(whereArg).toMatchObject({
@@ -198,7 +178,7 @@ describe('messageRepository.updateMessageToolResults', () => {
     ];
     await messageRepository.updateMessageToolResults('msg-err', 'conv-789', results);
 
-    expect(db.update).toHaveBeenCalledWith(chatMessages);
+    expect(db.update).toHaveBeenCalledWith(messages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
     const whereArg = mockWhere.mock.calls[0][0];
     expect(whereArg).toMatchObject({

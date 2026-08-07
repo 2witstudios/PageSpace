@@ -203,15 +203,13 @@ textbook forced copy, so it runs under the rule above rather than around it:
   three files permitted to call it are pinned by test. Global rows are untouched:
   `messages` was always their only table, and they now carry `pageId: null`
   explicitly so a post-cutover reader can tell them apart.
-  - Kill switch `UNIFIED_MESSAGES_DUAL_WRITE=off` disables the unified leg without a
-    deploy (default on; only the exact value `off` disables).
+  - It had an env kill switch (`…DUAL_WRITE=off`) for the window in which the second
+    write was new on the hot chat path. **PR 14 deleted the switch along with the leg
+    it disabled** — a kill switch for a leg that no longer exists reads as "the legacy
+    write can be turned back on", and nothing would happen.
   - Historical rows are carried across by `scripts/backfill-unify-messages.ts` —
-    batched, resumable from the target table, idempotent, `--dry-run`.
-  - **Drift guards, both layers:** a vitest suite asserting every write path touches
-    both legs (and that nothing outside the allowlist writes `chat_messages` at all),
-    plus the `reconcile-message-unification` cron comparing per-conversation counts and
-    `MAX(createdAt)` for recently-active page conversations, logging at error level on
-    divergence.
+    batched, resumable from the target table, idempotent, `--dry-run`. **PR 14 assumes
+    it has run to completion**; that is what the soak gate is gating.
 - **Reader cutover, internal readers — SHIPPED** (Phase 4 PR 11): the session tools'
   transcript readers, the agent-session conversation listing, the search / page-read /
   agent-communication tools, memory discovery, both pulse routes, the page-payload
@@ -291,16 +289,61 @@ textbook forced copy, so it runs under the rule above rather than around it:
     `ai_stream_sessions`/`ai_pending_abort_intents` rows carrying the MEMBER's user_id
     inside the OWNER's conversation survive the member's erasure. The step is
     user-scoped and fatal.
+- **Legacy writes STOPPED, FK VALIDATED — SHIPPED** (Phase 4 PR 14, migration 0250).
+  The soak gate. `messages` is now the SOLE write target: no code path anywhere
+  INSERTs or UPDATEs `chat_messages`.
+  - **What stopped, exhaustively** — the three dual-writers plus the two reasoned
+    exemptions the old drift guard's allowlist named: `message-repository.ts` (the
+    scoped upsert, the streaming placeholder, the interrupted materialiser, edit,
+    soft-delete, the tool-result backfill), `conversation-repository.ts` (both
+    History-delete cascades), `ai-undo-service.ts` (the undo tombstone range), and the
+    `POST /api/debug/chat-messages` seeder, which is deleted outright — it had been
+    broken since 0248 anyway, since its self-minted `conversationId` names no
+    `conversations` row and 0248's FK rejects that. The trash route's legacy statement
+    stays, because it is a DELETE.
+  - **DELETEs are still legal, and still owed.** Retention's legacy sweep, GDPR
+    erasure, permanent page delete and the 0248 cascade keep removing rows from
+    `chat_messages` until PR 15 drops it: rows that physically exist are rows a
+    subject can demand the erasure of. "Frozen" means the table stops GAINING and
+    CHANGING rows, not that it stops shrinking.
+  - **The guards inverted with the writes.** The structural scan
+    (`__tests__/unified-message-freeze-guard.test.ts`) now asserts the INSERT/UPDATE
+    list is EMPTY — with no allowlist to add yourself to — while DELETEs match a
+    reasoned list; and the `reconcile-message-unification` cron stopped comparing
+    counts (which now diverge permanently and correctly, as `messages` grows) and
+    instead asserts every legacy row still has an identical `messages` twin. A legacy
+    row without one can only mean a writer is still live, and it pages at error level.
+  - **`ALTER TABLE chat_messages VALIDATE CONSTRAINT` on the 0248 FK**, after an audit
+    that handles what 0248 left behind rather than letting VALIDATE fail opaquely: the
+    orphans 0248 SKIPPED (it could not mint a `conversations` row without a NOT NULL
+    owner) are counted, named and RAISEd on — repair is a human decision, since one
+    option hands someone a chat history and the other destroys one — and the
+    conversations that disagree with their `chat_messages` about the page are counted
+    and reported at WARNING (they satisfy the FK; they are the reader cutover's known
+    blind spot). Both sets are empty on a consistent database: the ownership ladder's
+    last tier is `drives.ownerId`, which is NOT NULL.
+  - **Why validate a table PR 15 drops?** The passing VALIDATE is the receipt. A legacy
+    row whose conversation does not exist is a row `messages` would have REFUSED (its
+    FK is validated and cascading), so proving there are none is proving the copy PR 15
+    keeps can be complete.
 - **Still open:** erasure and retention keep both tables until the contract PR, and
-  `chat_messages` + `messages.pageId` are dropped last (PR 15).
+  `chat_messages` + `messages.pageId` are dropped last (PR 15) — which is now
+  unblocked on the write side: nothing writes the table, and the FK says nothing in it
+  is unrepresentable in `messages`.
 
-Reads come from `messages` while the dual-write still populates BOTH legs: every save,
-the History-delete cascade, undo, the rollback/redo executors and page teardown all still
-write `chat_messages`, and the retention cron still sweeps it. That is what makes a revert
-of the reader cutover safe on its own — the legacy leg it would fall back to never stopped
-being correct. It is also why the unified INSERT paths skip (loudly, at error level)
-rather than abort when a `conversations` row is genuinely missing: the unified leg must
-never be able to break a write that works today.
+Both the reads and the writes now come from `messages` alone. That ends the window in
+which a revert of the reader cutover was safe on its own, and it is deliberate: PR 14 is
+the point of no easy return, which is why it is the soak gate and why PR 15 waits a
+release behind it. Two consequences worth stating plainly:
+
+- The unified INSERT paths no longer SKIP when a `conversations` row is missing. Skipping
+  bought safety while a legacy leg still carried the message; with one leg it would lose
+  the user's message instead. The FK refuses the write and the transaction aborts — which
+  is what the legacy statement has done since 0248 gave it the same FK, so the skip had
+  been dead code for two PRs before it was removed.
+- A revert of PR 14 restores the dual-write but NOT the rows written while it was live;
+  re-running `scripts/backfill-unify-messages.ts` is not the recovery path here, because
+  the copy now runs the other way. The recovery path is forward.
 
 ## 4. Vocabulary
 

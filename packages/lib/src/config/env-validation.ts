@@ -89,15 +89,6 @@ export const serverEnvSchema = z
     CLICKHOUSE_PASSWORD: z.string().optional(),
     CLICKHOUSE_DATABASE: z.string().optional(),
 
-    // Message-table unification dual-write kill switch (epic "Agent-Session
-    // Single Source of Truth", Phase 4 / D6). Default ON: every page-chat
-    // write lands in both `chat_messages` and `messages`. The EXACT value
-    // 'off' disables the unified leg without a deploy. Accept any string so a
-    // stray value never fails app-wide env validation — the exact-match gate
-    // lives in apps/web/src/lib/config/unified-messages-env.ts, which is the
-    // only reader of this variable.
-    UNIFIED_MESSAGES_DUAL_WRITE: z.string().optional(),
-
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 

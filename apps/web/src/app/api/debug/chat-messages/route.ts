@@ -3,17 +3,26 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
-import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
- * Debug endpoint to test chat message persistence
- * GET: View all messages for a pageId or test database connectivity
- * POST: Manually test saving messages
+ * Debug endpoint for inspecting the FROZEN legacy `chat_messages` table.
+ *
+ * GET only: list the legacy rows a page still has, or test DB connectivity.
+ * Non-production, and read-only by construction — the POST that used to
+ * fabricate fixture rows here was deleted by Phase 4 PR 14 of the epic
+ * "Agent-Session Single Source of Truth". Nothing may INSERT or UPDATE
+ * `chat_messages` any more: `messages` is the sole write target, and a seeded
+ * legacy row with no unified twin is exactly what the reconcile cron now pages
+ * on. (That POST had in fact been broken since migration 0248 anyway — its
+ * self-minted `conversationId` names no `conversations` row, and the FK 0248
+ * added enforces that for every new row.)
+ *
+ * The GET survives on purpose: during the soak this is how an operator looks
+ * at what the legacy table still holds. PR 15 deletes it with the table.
  */
 
 export async function GET(request: Request) {
@@ -112,102 +121,6 @@ export async function GET(request: Request) {
     loggers.api.error('❌ Debug: Error in debug endpoint:', error as Error);
     return NextResponse.json({
       error: 'Debug endpoint failed',
-      details: error instanceof Error ? error.message : String(error)
-    }, { status: 500 });
-  }
-}
-
-interface TestMessage {
-  id: string;
-  role: string;
-  parts: { type: string; text: string }[];
-  createdAt: Date;
-}
-
-export async function POST(request: Request) {
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  }
-
-  try {
-    loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
-
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
-
-    const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();
-
-    if (!pageId) {
-      return NextResponse.json({
-        error: 'pageId is required'
-      }, { status: 400 });
-    }
-
-    if (!await canUserEditPage(auth.userId, pageId)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-
-    // Create test messages if none provided
-    const messagesToSave = testMessages || [
-      {
-        id: createId(),
-        role: 'user',
-        parts: [{ type: 'text', text: 'Test user message from debug endpoint' }],
-        createdAt: new Date()
-      },
-      {
-        id: createId(),
-        role: 'assistant',
-        parts: [{ type: 'text', text: 'Test assistant response from debug endpoint' }],
-        createdAt: new Date()
-      }
-    ];
-
-    loggers.api.debug('💾 Debug: Testing manual save', { messageCount: messagesToSave.length });
-
-    // Direct database insert for test messages
-    const messageRecords = messagesToSave.map((msg: TestMessage) => ({
-      id: msg.id,
-      pageId,
-      userId: auth.userId,
-      role: msg.role,
-      content: msg.parts?.find(p => p.type === 'text')?.text || '',
-      toolCalls: null,
-      toolResults: null,
-      createdAt: new Date(),
-      isActive: true,
-    }));
-
-    await db.insert(chatMessages).values(messageRecords);
-
-    loggers.api.debug('✅ Debug: Manual save test completed', {});
-
-    // Verify the save worked
-    const savedMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.isActive, true)
-      ))
-      .orderBy(chatMessages.createdAt);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Manual save test completed',
-      messagesSaved: messagesToSave.length,
-      messagesLoaded: savedMessages.length,
-      savedMessages: savedMessages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        contentLength: msg.content?.length || 0
-      }))
-    });
-
-  } catch (error) {
-    loggers.api.error('❌ Debug: Error in manual save test:', error as Error);
-    return NextResponse.json({
-      error: 'Manual save test failed',
       details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
   }
