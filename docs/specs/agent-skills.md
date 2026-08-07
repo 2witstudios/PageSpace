@@ -116,6 +116,56 @@ skill covers inline-instructions text verbatim-or-better, the always-on
 bullet slimmed to a pointer (full text remains the fallback for agents
 without `load_skill`).
 
+## Starter skills (seeded, user-owned)
+
+A second tier, distinguished by **ownership, not implementation**. A built-in
+skill teaches PageSpace's own mechanics (how a CANVAS page works, what
+`SUBTASKS_INCOMPLETE` means) — users have no reason to edit those and a deploy
+is the right way to change them. A **starter skill** is methodology, where the
+useful property is that the user can disagree with it and rewrite it.
+
+Starter skills are therefore seeded once as real pages and then belong to the
+user: registry in `packages/lib/src/commands/starter-skills.ts`, bodies in
+`starter-bodies/`, installed by `starter-skill-installer.ts` into
+`Home / Skills / <Title>` and registered as personal `commands` rows. Edits to
+the registry never reach an existing install — it is a seed, not a live source.
+
+| Skill | Encodes |
+|---|---|
+| `plan` | context-gathering before proposing, plan as a DOCUMENT (goal/approach/steps/open questions), `Plans` folder in a working drive vs Home when driveless, `set_plan` binding + re-read discipline, handoff to `task-management`, the read-only-mode limitation |
+
+Idempotence rides `users.starterSkillsInstalledAt`, deliberately not "does a
+command with this trigger exist?" — only a stamp both prevents resurrecting a
+starter the user deleted and lets the backfill script be re-run safely. New
+signups install during `provisionHomeDriveIfNeeded` (both drive-creation
+branches, in the same transaction); existing users are covered by the one-shot
+`scripts/backfill-starter-skills.ts`, so the auth hot path is untouched.
+
+Note the prompt-budget consequence: a starter is scope `user`, so it rides the
+VOLATILE `AVAILABLE COMMANDS` block rather than the cache-stable `SKILLS:`
+block. Keep starter descriptions short (≤ ~140 chars) so the user's own commands
+aren't pushed down the degradation ladder.
+
+## Plan binding (`conversations.planPageId`)
+
+The one piece of per-conversation skill state that is persisted. `set_plan` /
+`clear_plan` (`apps/web/src/lib/ai/tools/plan-tools.ts`) bind a DOCUMENT page to
+the thread; `plan-binding.ts` renders an `ACTIVE PLAN:` section into the
+**cache-stable** system prompt, and `PlanChip` shows it in both chat headers.
+
+Why stable rather than volatile: compaction is lossy. The summary at
+`ModelMessages[0]` only approximately remembers a plan, while a re-read of the
+page is exact — so a pointer carried in the message stream is summarized away
+precisely when it is most needed (the same reason `TasksDropdown`'s
+message-derived task binding empties on truncation). The system prompt is never
+compacted. That placement is only sound because the value changes on explicit
+tool call and never on navigation: one prefix invalidation per plan change, the
+same trade Agent Memory makes.
+
+`set_plan`/`clear_plan` are deliberately **not** in `WRITE_TOOLS` — they mutate
+conversation metadata, not user content, and binding an existing plan doc is a
+legitimate read-only-mode action.
+
 ## Surfaces
 
 Wired: page chat route, Global Assistant (whose bespoke drifted instruction
@@ -146,7 +196,10 @@ completions) — adding their catalogs is additive follow-up.
    injection is an append (volatile block or tool result), never a splice.
 2. USER-AUTHORED command descriptions rendered into any prompt pass
    `clipDescription` — the sanitization is a security property. (Built-in
-   skill descriptions are code-shipped and render raw by design.)
+   skill descriptions are code-shipped and render raw by design.) This
+   extends to the bound plan's PAGE TITLE in the `ACTIVE PLAN:` section:
+   titles are user-authored and land in the system prompt, so an unsanitized
+   one could forge a prompt section.
 3. The chip path and `load_skill` resolve through the same permission
    functions; a load the picker wouldn't offer must be indistinguishable
    from not_found.

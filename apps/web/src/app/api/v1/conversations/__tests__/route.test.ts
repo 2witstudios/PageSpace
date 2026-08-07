@@ -133,6 +133,7 @@ const existingConversation = {
   isShared: false,
   sessionId: null,
   closedInSessionAt: null,
+  planPageId: null,
   lastMessageAt: null,
 };
 

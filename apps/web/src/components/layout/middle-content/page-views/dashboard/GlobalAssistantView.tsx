@@ -46,7 +46,7 @@ import { toast } from 'sonner';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
-import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/shared';
+import { AiUsageMonitor, AISelector, TasksDropdown, PlanChip } from '@/components/ai/shared';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -947,6 +947,7 @@ const GlobalAssistantView: React.FC = () => {
           />
         </div>
         <div className="flex items-center space-x-2">
+          <PlanChip conversationId={currentConversationId} />
           <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
             variant="ghost"
