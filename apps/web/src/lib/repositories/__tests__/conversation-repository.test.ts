@@ -64,6 +64,14 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     title: 'conversations.title',
     updatedAt: 'conversations.updatedAt',
   },
+  // The unified leg of the dual-write (Phase 4 PR 10): the History soft-delete
+  // now tombstones a conversation's rows in BOTH message tables, in the same
+  // transaction, so a post-cutover reader cannot resurrect deleted messages.
+  messages: {
+    id: 'messages.id',
+    conversationId: 'messages.conversationId',
+    isActive: 'messages.isActive',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -452,11 +460,19 @@ describe('conversationRepository.softDeleteConversation', () => {
     // codex-connector on PR #2299, filed after the original chatMessages-
     // then-conversations order shipped on PR #2296). Verified via the table
     // argument each db.update() call received.
-    expect(mockDb.update).toHaveBeenCalledTimes(2);
+    //
+    // THREE updates since Phase 4 PR 10: the message sweep is DUAL-LEG, so
+    // `messages` is tombstoned alongside `chat_messages` in the same
+    // transaction. Without it, deleting a conversation from History would
+    // clear only the legacy leg and the post-cutover reader would resurrect
+    // every message in it.
+    expect(mockDb.update).toHaveBeenCalledTimes(3);
     expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'conversations.id' }));
     expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'chatMessages.id' }));
+    expect(mockDb.update).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: 'messages.id' }));
     expect(setMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ isActive: false }));
     expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
+    expect(setMock).toHaveBeenNthCalledWith(3, { isActive: false });
     expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
   });
 

@@ -116,7 +116,15 @@ interface DatabaseMessage {
 interface GlobalAssistantMessage {
   id: string;
   conversationId: string;
-  userId: string;
+  /**
+   * NULL for an agent/system-authored row. `messages.userId` became nullable
+   * in migration 0248 (Phase 4 expand — see the attribution rule on the
+   * `messages` table in packages/db/src/schema/conversations.ts). Nothing
+   * writes NULL yet; this type widening is what lets the readers keep
+   * compiling ahead of the dual-write PR. The field is structural here — this
+   * converter never reads it.
+   */
+  userId: string | null;
   role: string;
   content: string;
   toolCalls: unknown;

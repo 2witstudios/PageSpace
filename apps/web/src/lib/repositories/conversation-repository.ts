@@ -16,6 +16,7 @@ import { conversationRoom } from '@pagespace/lib/realtime/rooms';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 import { type ConversationEventTriggeredBy } from '@/lib/websocket/conversation-events';
 import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
+import { deactivateUnifiedMessagesForConversation } from '@/lib/repositories/unified-message-leg';
 
 // Types for repository operations
 export interface AiAgent {
@@ -468,6 +469,12 @@ export const conversationRepository = {
           eq(chatMessages.pageId, agentId),
           eq(chatMessages.conversationId, conversationId)
         ));
+      // UNIFIED LEG (Phase 4 PR 10) — the ONE message write outside
+      // message-repository.ts that a real user can trigger, so it dual-writes
+      // through the same shared unified-leg writer. Without it, deleting a
+      // conversation from History would tombstone only `chat_messages` and
+      // the post-cutover reader would resurrect every message in it.
+      await deactivateUnifiedMessagesForConversation(tx, conversationId);
       return row ?? null;
     });
     if (deletedRow) {
@@ -496,6 +503,16 @@ export const conversationRepository = {
         .update(chatMessages)
         .set({ isActive: false })
         .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.isActive, true)));
+      // UNIFIED LEG — see softDeleteConversation above, but gated on
+      // `type='page'` here because this shape accepts ANY conversation id,
+      // including a global one. For a global conversation `messages` is not a
+      // second leg, it is the ONLY leg, and the legacy sweep above matches
+      // nothing — so an ungated unified sweep would not be mirroring a write,
+      // it would be inventing one (tombstoning global messages this route has
+      // never touched). The dual-write mirrors; it does not fix.
+      if (row?.type === 'page') {
+        await deactivateUnifiedMessagesForConversation(tx, conversationId);
+      }
       return row ?? null;
     });
     if (deletedRow) {
