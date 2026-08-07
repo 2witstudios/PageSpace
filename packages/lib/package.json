@@ -447,6 +447,11 @@
       "import": "./dist/repositories/account-repository.js",
       "require": "./dist/repositories/account-repository.js"
     },
+    "./repositories/conversation-cleanup": {
+      "types": "./dist/repositories/conversation-cleanup.d.ts",
+      "import": "./dist/repositories/conversation-cleanup.js",
+      "require": "./dist/repositories/conversation-cleanup.js"
+    },
     "./repositories/activity-log-repository": {
       "types": "./dist/repositories/activity-log-repository.d.ts",
       "import": "./dist/repositories/activity-log-repository.js",

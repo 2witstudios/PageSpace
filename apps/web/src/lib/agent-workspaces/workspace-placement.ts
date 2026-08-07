@@ -26,6 +26,7 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { createId } from '@paralleldrive/cuid2';
@@ -68,12 +69,15 @@ export async function applyLayoutVerbForWorkspace(input: {
 }): Promise<{ ok: true; applied: boolean } | { ok: false; reason: 'contended' | 'failed' }> {
   try {
     for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt += 1) {
-      const snapshot = await readWorkspaceLayoutSnapshot(input.workspaceId);
+      const snapshot = await readWorkspaceLayoutSnapshot(input.workspaceId, null);
       const result = await applyWorkspaceLayoutVerb({
         workspaceId: input.workspaceId,
         opId: input.opId,
         baseRev: snapshot.rev,
         verb: input.verb,
+        // This path reports only `applied` — it never returns a grid to
+        // anyone, so there is no viewer to label for and nothing to leak.
+        viewerId: null,
       });
       if (result.status === 'ok') return { ok: true, applied: result.applied };
     }
@@ -99,11 +103,14 @@ async function placePane(input: {
   excludeTargetId?: string;
 }): Promise<void> {
   for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt += 1) {
-    const snapshot = await readWorkspaceLayoutSnapshot(input.workspaceId);
+    const snapshot = await readWorkspaceLayoutSnapshot(input.workspaceId, null);
     const result = await applyWorkspaceLayoutVerb({
       workspaceId: input.workspaceId,
       opId: input.opId,
       baseRev: snapshot.rev,
+      // A placement returns nothing to anybody; the live update rides the
+      // (label-free) broadcast.
+      viewerId: null,
       verb: {
         type: 'open_conversation',
         scope: input.scope,
@@ -145,11 +152,26 @@ export async function placePagePaneForConversation(input: {
   conversationId: string;
   pageId: string;
   title?: string;
+  /** The ACTING USER — the page ACL is checked against them, never the model's word. */
+  viewerId: string;
   opId: string;
 }): Promise<void> {
   try {
     const workspaceId = await findWorkspaceOfConversation(input.conversationId);
     if (!workspaceId) return;
+
+    // THE GATE (security review, MEDIUM on the HIGH 1 surface). `pageId` comes
+    // from the MODEL, and a prompt-injected agent naming ids it should not
+    // know must not be able to turn this into a page-title exfiltration
+    // channel — the title would land in the pane row and the broadcast. The
+    // acting user's own page access is the only thing that decides.
+    if ((await getUserAccessLevel(input.viewerId, input.pageId)) === null) {
+      loggers.api.warn('Refused a page-pane placement for a page the acting user cannot view', {
+        conversationId: input.conversationId,
+        pageId: input.pageId,
+      });
+      return;
+    }
 
     // Prefer the page's REAL title over the model's label: the pane header is
     // display-only, but a wrong label is still a lie, and the row is one

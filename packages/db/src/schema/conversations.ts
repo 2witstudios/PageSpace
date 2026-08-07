@@ -59,10 +59,18 @@ export const conversations = pgTable('conversations', {
    * re-point it, for the same reason `workspaceId` is write-once.
    *
    * `ON DELETE SET NULL`, matching `workspaceId` and NOT the
-   * `chat_messages.pageId` cascade it replaces: a permanently deleted page
-   * takes its chat MESSAGES with it (the trash route does that explicitly) but
-   * has never deleted `conversations` rows, and this column must not become
-   * the first thing that does.
+   * `chat_messages.pageId` cascade it replaces: this column must not become an
+   * implicit deleter of `conversations` rows, because SET NULL is also what
+   * makes a *soft*-deleted or moved page harmless.
+   *
+   * Permanent deletion is handled EXPLICITLY instead, in one place —
+   * `packages/lib/src/repositories/conversation-cleanup.ts` — which every page
+   * and drive delete path calls BEFORE deleting the rows (this FK nulls
+   * itself the moment the page goes, so the scope must be collected first).
+   * That helper deletes the `conversations` row as well as its messages: the
+   * shell used to survive, and with it `ai_stream_sessions.parts` — message
+   * content that cascades from `conversations` and from nothing else, leaving
+   * it alive and unreachable by any sweep after the page was erased.
    *
    * NULL for every other conversation type, and for a client thread that has
    * not yet run a completion. Read it through `derivedPageId()` /

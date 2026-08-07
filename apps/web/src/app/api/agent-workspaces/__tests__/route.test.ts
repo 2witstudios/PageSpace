@@ -139,7 +139,9 @@ describe('GET /api/agent-workspaces', () => {
     expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
     expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
-    expect(mockReadWorkspaceGridsBulk).toHaveBeenCalledWith(['ses-1']);
+    // Pane labels are a permissioned join (security review HIGH 1) — the bulk
+    // read names the viewer it is resolving for.
+    expect(mockReadWorkspaceGridsBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
   });
 
   it('given a session with pane rows, should attach the grid as `workspace` in the whole-state shape', async () => {

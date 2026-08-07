@@ -15,6 +15,15 @@
  * Gated by the same session-access check the blob PUT uses, with the same
  * family policy: an unknown session and a denied session answer the SAME 404
  * (`sessionNotFoundOrDenied`) so a probe learns nothing from the difference.
+ *
+ * SESSION ACCESS IS NOT TARGET ACCESS (security review HIGH 1, attack B).
+ * Reaching a workspace says nothing about the `scope.targetId` a verb wants to
+ * bind into it — that id is free-form in the body — so a second gate
+ * (`authorizeVerbScopes`) settles the target before the engine ever sees it:
+ *
+ *   403 { error }              — the caller may use this workspace but not
+ *       show that target in it. Uniform across "forbidden" and "no such
+ *       target", so a caller probing ids learns nothing.
  */
 
 import { NextResponse } from 'next/server';
@@ -25,6 +34,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { workspaceLayoutVerbSchema } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { checkSessionAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
 import { applyWorkspaceLayoutVerb } from '@/lib/agent-workspaces/workspace-layout-runtime';
+import { authorizeVerbScopes } from '@/lib/agent-workspaces/authorize-pane-scope';
 import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -63,6 +73,18 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'Invalid verb payload', issues: parsed.error.issues }, { status: 400 });
   }
 
+  // The target gate runs on the PARSED verb — after the shape is known and
+  // after session access is settled, so a probe cannot use it to distinguish
+  // "workspace you cannot reach" from "target you cannot bind".
+  const scopesAllowed = await authorizeVerbScopes({
+    viewerId: auth.userId,
+    workspaceId,
+    verb: parsed.data.verb,
+  });
+  if (!scopesAllowed) {
+    return NextResponse.json({ error: 'You cannot show that in this workspace.' }, { status: 403 });
+  }
+
   let result;
   try {
     result = await applyWorkspaceLayoutVerb({
@@ -70,6 +92,9 @@ export async function POST(request: Request, context: RouteContext) {
       opId: parsed.data.opId,
       baseRev: parsed.data.baseRev,
       verb: parsed.data.verb,
+      // Labels on the way out are resolved for THIS caller alone; the
+      // broadcast that follows carries none at all.
+      viewerId: auth.userId,
     });
   } catch (error) {
     loggers.api.error('Workspace layout verb failed', error instanceof Error ? error : undefined, { workspaceId });

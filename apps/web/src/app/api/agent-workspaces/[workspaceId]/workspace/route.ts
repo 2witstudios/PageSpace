@@ -53,7 +53,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ workspace: null, rev: 0, grid: null });
   }
 
-  const snapshot = await readWorkspaceLayoutSnapshot(workspaceId);
+  const snapshot = await readWorkspaceLayoutSnapshot(workspaceId, auth.userId);
   return NextResponse.json({
     workspace: workspaceListEntryFromGrid(workspaceId, snapshot.grid),
     rev: snapshot.rev,

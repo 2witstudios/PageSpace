@@ -89,7 +89,7 @@ const allowedRooms = (isShared: boolean): Set<string> => {
   return rooms;
 };
 
-let capturedTargets: Array<{ channelId: string; event: string }>;
+let capturedTargets: Array<{ channelId: string; event: string; payload: unknown }>;
 
 beforeEach(() => {
   capturedTargets = [];
@@ -97,8 +97,11 @@ beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: string, init?: { body?: string }) => {
-      const body = JSON.parse(init?.body ?? '{}') as { channelId: string; event: string };
-      capturedTargets.push({ channelId: body.channelId, event: body.event });
+      const body = JSON.parse(init?.body ?? '{}') as { channelId: string; event: string; payload: unknown };
+      // The PAYLOAD is kept, not discarded (security review, MEDIUM): a suite
+      // that records only {channelId, event} cannot notice a future emitter
+      // putting message content into a directory event.
+      capturedTargets.push({ channelId: body.channelId, event: body.event, payload: body.payload });
       return { ok: true } as Response;
     }),
   );
@@ -214,28 +217,175 @@ describe('payload shaping', () => {
   });
 });
 
-describe('emit-site containment (source scan)', () => {
-  it('no file outside conversation-events.ts emits a conversation:* socket event', () => {
-    const SRC_ROOT = path.resolve(__dirname, '../../..');
-    const offenders: string[] = [];
+/**
+ * PAYLOAD SHAPE, not just audience (security review, MEDIUM).
+ *
+ * The audience assertions above answer "which rooms?" — but the harness used
+ * to record `{channelId, event}` and throw the payload away, so an emitter
+ * that started putting message CONTENT into a directory event would have
+ * stayed green. Rooms and payloads are one invariant, so assert both.
+ */
+describe('content never rides a directory event', () => {
+  /** Keys that mean "this payload carries conversation content". */
+  const CONTENT_KEYS = ['message', 'messageRef', 'parts', 'content'];
+
+  const carriesContent = (payload: unknown): boolean =>
+    typeof payload === 'object' &&
+    payload !== null &&
+    CONTENT_KEYS.some((key) => key in (payload as Record<string, unknown>));
+
+  for (const [name, emit] of Object.entries(EMITTERS)) {
+    for (const isShared of [false, true]) {
+      it(`${name} (${isShared ? 'shared' : 'private'}): a content-bearing payload targets ONLY the conv room`, async () => {
+        await emit(ctxFor(isShared));
+        for (const t of capturedTargets) {
+          if (!carriesContent(t.payload)) continue;
+          expect(
+            t.channelId,
+            `${t.event} carried content to ${t.channelId}, which is not the content room`,
+          ).toBe(`conv:${CONVERSATION}`);
+        }
+      });
+    }
+  }
+
+  it('the directory bump reports only metadata — never the message that caused it', async () => {
+    await conversationEvents.messageCreated(ctxFor(true), message, new Date());
+    const directory = capturedTargets.filter((t) => t.channelId !== `conv:${CONVERSATION}`);
+    expect(directory.length).toBeGreaterThan(0);
+    for (const t of directory) {
+      expect(carriesContent(t.payload), `${t.event} leaked content to ${t.channelId}`).toBe(false);
+    }
+  });
+});
+
+/**
+ * THE BROADCAST EMIT-SITE REGISTRY — widened from a `conversation:`-only scan
+ * of `apps/web/src` to EVERY broadcast emitter in the repo (security review,
+ * MEDIUM).
+ *
+ * The old scan matched `event: 'conversation:...'` and walked `apps/web/src`
+ * only. `workspace:updated` (agent-workspace-events.ts) and the `chat:*`
+ * literals in socket-utils.ts were therefore outside its universe entirely —
+ * which is precisely why HIGH 1's labelled-grid broadcast was never
+ * audience-reviewed. A scan whose universe excludes the emitters that matter
+ * is not a guard.
+ *
+ * So the guard is now an inventory: every file that builds a broadcast body
+ * (it mentions `channelId` and names an event literal) must be registered
+ * here with the events it emits. Adding an emitter — or a new event to an
+ * existing one — fails this test until someone writes it down, and writing it
+ * down is the moment to ask who the room's audience is and whether the
+ * payload may reach them.
+ */
+describe('broadcast emit-site registry (repo-wide source scan)', () => {
+  const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
+  const ROOTS = ['apps', 'packages'];
+  const SKIP_DIR = new Set(['node_modules', 'dist', '.next', '.turbo', 'coverage', '__tests__', 'build', 'out']);
+  const EVENT_LITERAL = /event:\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+
+  /** file → the event names it broadcasts. Sorted; template literals kept verbatim. */
+  const REGISTERED: Record<string, string[]> = {
+    // --- the conversation content/directory plane (this module) -------------
+    // Its `conversation:*` names are passed as arguments, so only the literal
+    // mirror event appears in source.
+    'apps/web/src/lib/websocket/conversation-events.ts': ['chat:stream_start'],
+    // --- the agent-session layout plane -------------------------------------
+    // Audience: the `session:<id>` room — every member of a shared workspace
+    // at once. Its grid is LABEL-FREE for exactly that reason (security review
+    // HIGH 1); see workspace-layout-runtime.ts.
+    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:updated'],
+    // --- the pre-epic surfaces ----------------------------------------------
+    'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
+    'apps/web/src/lib/websocket/socket-utils.ts': [
+      'activity',
+      'activity:logged',
+      'agent:grant_changed',
+      'ai_stream_complete',
+      'ai_stream_start',
+      'chat:conversation_added',
+      'chat:conversation_deleted',
+      'chat:conversation_renamed',
+      'chat:global_conversation_added',
+      'chat:message_deleted',
+      'chat:message_edited',
+      'chat:stream_complete',
+      'chat:stream_start',
+      'chat:undo_applied',
+      'chat:user_message',
+      'credits',
+      'credits:${payload.operation}',
+      'drive',
+      'drive:${payload.operation}',
+      'drive_member',
+      'inbox',
+      'inbox:${payload.operation}',
+      'page',
+      'page:${payload.operation}',
+      'shell_activity',
+      'task',
+      'thread_reply_count_updated',
+    ],
+    'apps/web/src/app/api/ai/chat/messages/[messageId]/undo/route.ts': ['message_deleted'],
+    'apps/web/src/app/api/channels/[pageId]/messages/route.ts': ['new_message'],
+    'apps/web/src/app/api/channels/[pageId]/messages/[messageId]/route.ts': ['message_deleted', 'message_edited'],
+    'apps/web/src/app/api/channels/[pageId]/messages/[messageId]/reactions/route.ts': [
+      'reaction_added',
+      'reaction_removed',
+    ],
+    'apps/web/src/app/api/messages/[conversationId]/route.ts': ['new_dm_message'],
+    'apps/web/src/app/api/messages/[conversationId]/[messageId]/route.ts': ['message_deleted', 'message_edited'],
+    'apps/web/src/app/api/messages/[conversationId]/[messageId]/reactions/route.ts': [
+      'reaction_added',
+      'reaction_removed',
+    ],
+    'apps/web/src/lib/ai/tools/channel-tools.ts': ['message_deleted', 'new_message'],
+    'apps/web/src/lib/channels/agent-mention-responder.ts': ['new_message'],
+    'packages/lib/src/billing/credit-emit.ts': ['credits:updated'],
+    'packages/lib/src/notifications/notifications.ts': ['notification:new'],
+    'packages/lib/src/services/page-webhook-service.ts': ['new_message'],
+  };
+
+  const scanEmitSites = (): Record<string, string[]> => {
+    const found: Record<string, string[]> = {};
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        if (entry.name.startsWith('.') || SKIP_DIR.has(entry.name)) continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
-        } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-          if (full.endsWith(`websocket${path.sep}conversation-events.ts`)) continue;
-          const content = fs.readFileSync(full, 'utf8');
-          // An emission is a broadcast body naming a conversation:* event —
-          // client-side *listeners* (`socket.on('conversation:*')`) are fine.
-          if (/event:\s*['"`]conversation:/.test(content)) {
-            offenders.push(path.relative(SRC_ROOT, full));
-          }
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        if (/\.(test|spec)\.tsx?$/.test(entry.name) || /\.d\.ts$/.test(entry.name)) continue;
+        const content = fs.readFileSync(full, 'utf8');
+        // A broadcast body is `{ channelId, event, payload }` — requiring
+        // `channelId` in the file is what separates real emitters from the
+        // many unrelated `event:` fields (Capacitor typings, log metadata).
+        if (!content.includes('channelId')) continue;
+        const events = new Set<string>();
+        for (const match of content.matchAll(EVENT_LITERAL)) events.add(match[2]);
+        if (events.size > 0) {
+          found[path.relative(REPO_ROOT, full).split(path.sep).join('/')] = [...events].sort();
         }
       }
     };
-    walk(SRC_ROOT);
+    for (const root of ROOTS) {
+      const full = path.join(REPO_ROOT, root);
+      if (fs.existsSync(full)) walk(full);
+    }
+    return found;
+  };
+
+  it('every broadcast emitter in apps/ and packages/ is registered, with exactly the events it emits', () => {
+    expect(scanEmitSites()).toEqual(REGISTERED);
+  });
+
+  it('no file outside conversation-events.ts emits a conversation:* event', () => {
+    const offenders = Object.entries(scanEmitSites())
+      .filter(([file]) => file !== 'apps/web/src/lib/websocket/conversation-events.ts')
+      .filter(([, events]) => events.some((event) => event.startsWith('conversation:')))
+      .map(([file]) => file);
     expect(offenders).toEqual([]);
   });
 });

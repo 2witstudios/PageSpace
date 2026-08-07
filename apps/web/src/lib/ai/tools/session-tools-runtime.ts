@@ -859,6 +859,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       const row = await findSessionForConversation(conversationId);
       return row ? { workspaceId: row.id } : null;
     },
+
+    // THE session-access decision, wired for the tool surface exactly as the
+    // verbs route wires it (security review HIGH 2). Resolving a conversation's
+    // binding says the workspace is addressable, never that it is still usable
+    // — drive membership can be revoked out from under a permanent binding.
+    checkWorkspaceAccess: (userId, workspaceId) => checkSessionAccess(userId, workspaceId),
     listWorkspaceWorkers,
     listOwnWorkspaces,
     listSharedWorkspaces,
@@ -962,8 +968,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // label-joining snapshot the layout GET serves, so a model and a browser
     // never see different names for the same pane; the write is the same
     // single writer (`applyWorkspaceLayoutVerb`) behind the verbs route.
-    readPaneGrid: async (workspaceId) => {
-      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId);
+    readPaneGrid: async (workspaceId, viewerId) => {
+      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId, viewerId);
       if (!snapshot.grid || snapshot.grid.length === 0) return null;
       return {
         columns: snapshot.grid.map((column) => ({

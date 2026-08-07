@@ -28,6 +28,8 @@ import {
   isKnownRoomId,
   roomsForDriveKick,
   roomsForPageKick,
+  roomsForConversationKick,
+  roomsForWorkspaceKick,
   ALL_ROOM_BUILDERS,
 } from '../rooms';
 
@@ -119,5 +121,55 @@ describe('kick room sets', () => {
 
   it('page kick covers the page room and the page activity room', () => {
     expect(roomsForPageKick(id)).toEqual([id, `activity:page:${id}`]);
+  });
+
+  it('conversation kick covers the conv content room', () => {
+    expect(roomsForConversationKick(id)).toEqual([`conv:${id}`]);
+  });
+
+  it('workspace kick covers the session layout room', () => {
+    expect(roomsForWorkspaceKick(id)).toEqual([`session:${id}`]);
+  });
+
+  /**
+   * THE GUARD THAT WAS MISSING (security review HIGH 3).
+   *
+   * These four sets used to be asserted one at a time, which pinned the
+   * `conv:` and `session:` rooms' ABSENCE as correct: the epic moved chat
+   * content off the page room onto `conv:<id>` and layout onto
+   * `session:<id>`, neither of which any revocation path kicked, and the
+   * suite stayed green because nothing ever asked "is every room shape
+   * accounted for?".
+   *
+   * So ask it. Every builder in the grammar is either revocation-scoped —
+   * some kick set must produce it — or explicitly PERSONAL: a room whose only
+   * member is the user it is named after, which no third party's revocation
+   * can ever need to evict them from. A new room shape is a compile-and-test
+   * failure here until it is classified.
+   */
+  it('every room shape in the grammar is either revocation-scoped or explicitly personal', () => {
+    const kickable = new Set([
+      ...roomsForDriveKick(id),
+      ...roomsForPageKick(id),
+      ...roomsForConversationKick(id),
+      ...roomsForWorkspaceKick(id),
+    ]);
+    /** Rooms named after the user themself — revoking someone else's grant never touches them. */
+    const personal = new Set([
+      notificationsRoom(id),
+      userTasksRoom(id),
+      userCalendarRoom(id),
+      userDrivesRoom(id),
+      userGlobalRoom(id),
+      userSessionsRoom(id),
+      // A DM room's membership is the participant list; leaving a drive does
+      // not end a direct message between two people.
+      dmRoom(id),
+    ]);
+
+    const unclassified = ALL_ROOM_BUILDERS.map((build) => build(id)).filter(
+      (room) => !kickable.has(room) && !personal.has(room),
+    );
+    expect(unclassified, 'every room shape must be kickable on revocation or personal').toEqual([]);
   });
 });

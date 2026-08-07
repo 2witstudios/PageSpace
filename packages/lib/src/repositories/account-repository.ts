@@ -10,6 +10,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
 
 export interface UserAccount {
@@ -74,10 +75,18 @@ export const accountRepository = {
   },
 
   /**
-   * Delete a drive by ID
+   * Delete a drive by ID.
+   *
+   * Takes the drive's chat history with it, explicitly and first: the drive
+   * cascade reaches `pages` and `drive_members` but NOT `conversations`, whose
+   * `contextId` has never been a foreign key. The `chat_messages.pageId`
+   * cascade that used to make this automatic went with the table in 0252.
    */
   deleteDrive: async (driveId: string): Promise<void> => {
-    await db.delete(drives).where(eq(drives.id, driveId));
+    await db.transaction(async (tx) => {
+      await deleteConversationsForDrive(tx, driveId);
+      await tx.delete(drives).where(eq(drives.id, driveId));
+    });
   },
 
   /**
@@ -120,8 +129,11 @@ export const accountRepository = {
         return { multiMemberDriveNames: multiMemberNames };
       }
 
-      // Safe to delete — no multi-member drives
+      // Safe to delete — no multi-member drives. Chat history first, while the
+      // drive's pages still exist to trace the page-scoped threads through
+      // (the drive cascade does not reach `conversations`).
       for (const driveId of soloDriveIds) {
+        await deleteConversationsForDrive(tx, driveId);
         await tx.delete(drives).where(eq(drives.id, driveId));
       }
 

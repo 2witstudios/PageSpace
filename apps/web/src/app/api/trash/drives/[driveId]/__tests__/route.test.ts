@@ -10,6 +10,7 @@ const {
   mockGetRecipients,
   mockBroadcast,
   mockAuditRequest,
+  mockDeleteConversationsForDrive,
 } = vi.hoisted(() => ({
   mockFindDrive: vi.fn(),
   mockDeleteWhere: vi.fn(),
@@ -17,13 +18,25 @@ const {
   mockGetRecipients: vi.fn(),
   mockBroadcast: vi.fn(),
   mockAuditRequest: vi.fn(),
+  mockDeleteConversationsForDrive: vi.fn(),
 }));
 
+// The delete now runs in a transaction, because the drive's chat history has
+// to go with it and the two must not be able to half-happen. `transaction`
+// hands the callback a tx with the same `delete` chain the route used before.
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { drives: { findFirst: (...args: unknown[]) => mockFindDrive(...args) } },
     delete: () => ({ where: (...args: unknown[]) => mockDeleteWhere(...args) }),
+    transaction: (fn: (tx: unknown) => unknown) => fn({
+      delete: () => ({ where: (...args: unknown[]) => mockDeleteWhere(...args) }),
+    }),
   },
+}));
+// A collaborator with its own live-DB coverage — see
+// `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
+  deleteConversationsForDrive: (...args: unknown[]) => mockDeleteConversationsForDrive(...args),
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((...args: unknown[]) => ({ eq: args })),
@@ -70,6 +83,7 @@ beforeEach(() => {
   mockGetRecipients.mockResolvedValue(['user-1']);
   mockBroadcast.mockResolvedValue(undefined);
   mockDeleteWhere.mockResolvedValue(undefined);
+  mockDeleteConversationsForDrive.mockResolvedValue({ conversations: 0, messages: 0 });
 });
 
 describe('DELETE /api/trash/drives/[driveId]', () => {
@@ -80,6 +94,13 @@ describe('DELETE /api/trash/drives/[driveId]', () => {
     expect(response.status).toBe(200);
     expect(body).toEqual({ success: true });
     expect(mockDeleteWhere).toHaveBeenCalledTimes(1);
+    // The drive's chat history goes with it, and goes FIRST: `pages.driveId`
+    // cascades, so after the drive row is gone nothing can find the
+    // page-scoped conversations any more. Before this, permanently deleting a
+    // drive left its whole chat history behind.
+    expect(mockDeleteConversationsForDrive).toHaveBeenCalledWith(expect.anything(), 'drive-1');
+    expect(mockDeleteConversationsForDrive.mock.invocationCallOrder[0])
+      .toBeLessThan(mockDeleteWhere.mock.invocationCallOrder[0]);
     expect(mockBroadcast).toHaveBeenCalledTimes(1);
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),

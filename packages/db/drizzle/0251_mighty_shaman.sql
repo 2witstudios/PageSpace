@@ -50,8 +50,15 @@ BEGIN
   -- blob whose `columns` is a jsonb array is promoted, a pane's absent/null
   -- `scope` becomes an unbound row (NULL kind/target), and the retired `tabs`
   -- field is never read.
+  --
+  -- And the same `DISTINCT ON` deduplication as 0246, for the same reason: the
+  -- blob is client-authored and may repeat a pane id across two columns, while
+  -- the row tables are keyed `(workspaceId, id)`. Without it this sweep would
+  -- drop the second occurrence on the floor and the guard below would then
+  -- refuse to drop the column over the pane the sweep had just eaten. First
+  -- occurrence wins, ordered by column position then pane position.
   INSERT INTO "agent_workspace_pane_columns" ("id", "workspaceId", "orderIndex", "createdAt", "updatedAt")
-  SELECT
+  SELECT DISTINCT ON (s."id", col.value ->> 'id')
     col.value ->> 'id',
     s."id",
     (col.ordinality - 1)::int,
@@ -66,6 +73,7 @@ BEGIN
     AND NOT EXISTS (
       SELECT 1 FROM "agent_workspace_pane_columns" c WHERE c."workspaceId" = s."id"
     )
+  ORDER BY s."id", col.value ->> 'id', col.ordinality
   ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS promoted_columns = ROW_COUNT;
 
@@ -73,7 +81,7 @@ BEGIN
   -- created this session's column rows, so re-using that anchor here would
   -- match nothing.
   INSERT INTO "agent_workspace_panes" ("id", "workspaceId", "columnId", "orderIndex", "kind", "targetId", "createdAt", "updatedAt")
-  SELECT
+  SELECT DISTINCT ON (s."id", pane.value ->> 'id')
     pane.value ->> 'id',
     s."id",
     col.value ->> 'id',
@@ -95,6 +103,7 @@ BEGIN
     AND NOT EXISTS (
       SELECT 1 FROM "agent_workspace_panes" p WHERE p."workspaceId" = s."id"
     )
+  ORDER BY s."id", pane.value ->> 'id', col.ordinality, pane.ordinality
   ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS promoted_panes = ROW_COUNT;
 
@@ -105,6 +114,7 @@ DECLARE
   losing_panes int;
   losing_sessions int;
   sample text;
+  forced boolean;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -119,7 +129,15 @@ BEGIN
     b."workspaceId",
     b."paneId"
   FROM (
-    SELECT
+    -- `DISTINCT ON` for the SAME reason the sweep has it: a pane id repeated
+    -- across two columns can only ever produce ONE row — the tables are keyed
+    -- `(workspaceId, id)` — so the second occurrence is not "data the rows
+    -- lost", it is data the schema cannot represent at all. Counting it as
+    -- drift made the guard refuse to drop over a pane no promotion could ever
+    -- satisfy, and its own HINT then looped the operator through a re-promotion
+    -- that failed identically. The guard must judge the blob by what a correct
+    -- promotion WOULD produce, which is exactly the first occurrence.
+    SELECT DISTINCT ON (s."id", pane.value ->> 'id')
       s."id" AS "workspaceId",
       pane.value ->> 'id' AS "paneId",
       pane.value -> 'scope' ->> 'kind' AS "kind",
@@ -133,6 +151,7 @@ BEGIN
       AND jsonb_typeof(col.value -> 'panes') = 'array'
       AND jsonb_typeof(pane.value) = 'object'
       AND pane.value ->> 'id' IS NOT NULL
+    ORDER BY s."id", pane.value ->> 'id', col.ordinality, pane.ordinality
   ) b
   -- A blob pane is "represented" when a row with the SAME id carries the SAME
   -- binding. `IS NOT DISTINCT FROM` because an unbound pane (picker) and a
@@ -154,13 +173,44 @@ BEGIN
     FROM (
       SELECT DISTINCT "workspaceId" FROM "_workspace_state_drift" ORDER BY "workspaceId" LIMIT 50
     ) s;
-    RAISE EXCEPTION
-      'Refusing to drop agent_sessions."workspaceState": % pane binding(s) across % session(s) exist ONLY in the blob. Dropping now would lose them. Session ids (up to 50): %',
-      losing_panes, losing_sessions, sample
-      USING HINT = 'Reconcile each session before re-running: open it in a current client (its verbs rewrite the rows), or DELETE its agent_workspace_pane_columns rows so this migration''s sweep promotes the blob wholesale.';
+
+    -- ESCAPE HATCH. The remaining drift shape is real: an old pod rewrote the
+    -- blob AFTER the promotion, so the blob genuinely holds a pane the rows
+    -- never saw. Halting is the right default — that pane is about to be
+    -- deleted forever.
+    --
+    -- But the original remedy ("open it in a current client") is CIRCULAR for
+    -- the operator who actually hits this: the current client is precisely the
+    -- deploy this migration is blocking, so a tenant/onprem upgrade can be
+    -- wedged with no way forward that does not involve hand-editing jsonb. An
+    -- explicitly-set database parameter breaks the loop without the app:
+    --
+    --   ALTER DATABASE <db> SET "pagespace.workspace_state_force_drop" = 'on';
+    --   -- re-run the migration, then:
+    --   ALTER DATABASE <db> RESET "pagespace.workspace_state_force_drop";
+    --
+    -- It is deliberately opt-in, never a default, and it still NAMES every
+    -- session it discards so the decision is on the deploy record.
+    forced := coalesce(
+      nullif(current_setting('pagespace.workspace_state_force_drop', true), ''),
+      'off'
+    ) IN ('on', 'true', '1', 'yes');
+
+    IF forced THEN
+      RAISE WARNING
+        'workspaceState drop FORCED by pagespace.workspace_state_force_drop: discarding % pane binding(s) across % session(s) that existed only in the blob. Session ids (up to 50): %',
+        losing_panes, losing_sessions, sample;
+    ELSE
+      RAISE EXCEPTION
+        'Refusing to drop agent_sessions."workspaceState": % pane binding(s) across % session(s) exist ONLY in the blob. Dropping now would lose them. Session ids (up to 50): %',
+        losing_panes, losing_sessions, sample
+        USING HINT = 'Reconcile each session before re-running: open it in a current client (its verbs rewrite the rows), or DELETE its agent_workspace_pane_columns AND agent_workspace_panes rows so this migration''s sweep promotes the blob wholesale. If the client is unavailable — a tenant/onprem upgrade this migration is itself blocking — accept the loss explicitly with: ALTER DATABASE <db> SET "pagespace.workspace_state_force_drop" = ''on''; then re-run, then RESET it.';
+    END IF;
   END IF;
 
   DROP TABLE "_workspace_state_drift";
-  RAISE NOTICE 'workspaceState drop guard: every persisted pane binding is represented in agent_workspace_panes';
+  IF losing_panes = 0 THEN
+    RAISE NOTICE 'workspaceState drop guard: every persisted pane binding is represented in agent_workspace_panes';
+  END IF;
 END $$;--> statement-breakpoint
 ALTER TABLE "agent_sessions" DROP COLUMN IF EXISTS "workspaceState";
