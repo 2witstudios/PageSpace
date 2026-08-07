@@ -119,7 +119,7 @@ export async function GET(request: Request) {
     const [shellsBySession, conversationsBySession, gridBySession] = await Promise.all([
       listShellsBulk(workspaceIds),
       listSessionConversationsBulk(workspaceIds),
-      readWorkspaceGridsBulk(workspaceIds),
+      readWorkspaceGridsBulk(workspaceIds, auth.userId),
     ]);
     const withChildren = sessions.map((session) => ({
       ...session,

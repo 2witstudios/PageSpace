@@ -1,0 +1,154 @@
+/**
+ * THE LAYOUT TOOLS RUN THE SESSION-ACCESS CHECK (security review HIGH 2).
+ *
+ * `openOwnGrid`'s docblock claimed "the runtime re-runs `checkSessionAccess`
+ * anyway on the way in, so the gate is one function in one place for both
+ * entry points." It did not. `openOwnGrid` resolved the caller's conversation
+ * to its workspace and stopped; neither wired dep checked anything
+ * (`readPaneGrid` → `readWorkspaceLayoutSnapshot`, `applyLayoutVerb` →
+ * `applyLayoutVerbForWorkspace`). `checkSessionAccess` was imported by the
+ * runtime and used only by `resolveWorkerPlacement`.
+ *
+ * The attack the structural argument misses: a conversation→workspace binding
+ * is PERMANENT by design, but drive membership is not. A member spawns a
+ * worker into a shared workspace (legitimate), then loses access to the
+ * drive. Every HTTP route 404s her afterwards — but the binding still
+ * resolves, so `list_panes` kept returning the whole labelled grid and
+ * `move_pane` / `resize_pane` / `arrange_panes` kept WRITING the victim's
+ * grid and broadcasting into their live UI. The tool surface was wider than
+ * the HTTP surface it claimed to mirror.
+ *
+ * The existing `session-tools-contract.test.ts` is single-workspace mocks
+ * where the caller always has access, and structurally cannot see this — so
+ * this suite carries a SECOND workspace and a REVOKED member.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Tool } from 'ai';
+import { createSessionTools, type SessionToolsDeps } from '../session-tools';
+import type { ToolExecutionContext } from '../../core/types';
+
+/** Alice's workspace. Mallory's worker conversation is bound into it. */
+const ALICE_WORKSPACE = 'ws-alice';
+const MALLORY = 'mallory';
+const MALLORY_WORKER_CONVERSATION = 'conv-mallory-worker';
+
+const GRID = {
+  columns: [
+    {
+      columnId: 'col-1',
+      widthFraction: null,
+      panes: [
+        { paneId: 'pane-1', kind: 'chat' as const, targetId: 'conv-alice-private', name: 'Q3 layoffs plan', heightFraction: null },
+      ],
+    },
+  ],
+};
+
+function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
+  return {
+    // The binding survives revocation — that is the whole point.
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE })),
+    // Mallory is no longer a member of the drive Alice's workspace lives in.
+    checkWorkspaceAccess: vi.fn(async () => ({ allowed: false, reason: 'not_a_member' })),
+    listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
+    listOwnWorkspaces: vi.fn(async () => []),
+    listSharedWorkspaces: vi.fn(async () => []),
+    findWorker: vi.fn(async () => null),
+    countOpenConversations: vi.fn(async () => 0),
+    canUseAgent: vi.fn(async () => true),
+    createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: ALICE_WORKSPACE })),
+    dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
+    readTranscript: vi.fn(async () => []),
+    killWorker: vi.fn(async () => ({ ok: true as const, spriteTornDown: false })),
+    ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
+    spawnShell: vi.fn(async () => ({ ok: false as const, reason: 'sandbox_unavailable' as const })),
+    findShell: vi.fn(async () => null),
+    killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
+    shellIo: {
+      read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: false, output: '' })),
+      send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),
+    },
+    readPaneGrid: vi.fn(async () => GRID),
+    applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: true })),
+    newId: vi.fn(() => 'minted-id'),
+    ...over,
+  };
+}
+
+const options = { experimental_context: { userId: MALLORY, conversationId: MALLORY_WORKER_CONVERSATION } as ToolExecutionContext, toolCallId: 'call-1' };
+
+async function run(toolDef: Tool, input: unknown): Promise<Record<string, unknown>> {
+  const execute = toolDef.execute as (input: unknown, options: unknown) => Promise<Record<string, unknown>>;
+  return execute(input, options);
+}
+
+/** Every layout tool, with an input that would otherwise succeed. */
+const LAYOUT_CALLS: Array<[string, unknown]> = [
+  ['list_panes', {}],
+  ['resize_pane', { columnId: 'col-1', size: 0.5 }],
+  ['move_pane', { paneId: 'pane-1', toColumnId: 'col-1' }],
+  ['arrange_panes', { columnIds: ['col-1'] }],
+];
+
+let deps: SessionToolsDeps;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  deps = makeDeps();
+});
+
+describe('a revoked member whose worker is still bound into the victim\'s workspace', () => {
+  for (const [toolName, input] of LAYOUT_CALLS) {
+    it(`${toolName}: refuses, and never touches the grid`, async () => {
+      const tools = createSessionTools(deps);
+      const result = await run((tools as Record<string, Tool>)[toolName], input);
+
+      expect(result.success, `${toolName} must refuse a revoked caller`).toBe(false);
+      // The reads and the writes both stop at the gate.
+      expect(deps.readPaneGrid).not.toHaveBeenCalled();
+      expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+      // Nothing about the victim's grid leaks into the refusal.
+      expect(JSON.stringify(result)).not.toContain('Q3 layoffs plan');
+      expect(JSON.stringify(result)).not.toContain('conv-alice-private');
+    });
+  }
+
+  it('asks the ONE session-access decision, for the caller and the bound workspace', async () => {
+    const tools = createSessionTools(deps);
+    await run(tools.list_panes as Tool, {});
+    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(MALLORY, ALICE_WORKSPACE);
+  });
+});
+
+describe('a caller who still has session access', () => {
+  beforeEach(() => {
+    deps = makeDeps({ checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })) });
+  });
+
+  it('list_panes reads the grid, labelled for THAT viewer', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_panes as Tool, {});
+    expect(result.success).toBe(true);
+    expect(result.columns).toEqual(GRID.columns);
+    // The label join is per-viewer (review HIGH 1) — the tool must say who is
+    // reading, not just which workspace.
+    expect(deps.readPaneGrid).toHaveBeenCalledWith(ALICE_WORKSPACE, MALLORY);
+  });
+
+  it('a rearrange reaches the single writer', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.resize_pane as Tool, { columnId: 'col-1', size: 0.5 });
+    expect(result.success).toBe(true);
+    expect(deps.applyLayoutVerb).toHaveBeenCalled();
+  });
+});
+
+describe('the gate is checked before anything else can answer', () => {
+  it('an unbound conversation still refuses without asking about access', async () => {
+    deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_panes as Tool, {});
+    expect(result.success).toBe(false);
+    expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
+  });
+});

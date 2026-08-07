@@ -31,6 +31,8 @@ const SHELL = {
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    // The layout family's session-access gate (security review HIGH 2).
+    checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),

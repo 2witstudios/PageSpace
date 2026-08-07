@@ -45,6 +45,8 @@ const OWN_WORKER = {
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    // The layout family's session-access gate (security review HIGH 2).
+    checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -465,7 +467,9 @@ describe('list_panes description: "Returns the columnIds and paneIds that resize
     const result = await run(tools.list_panes, {}, layoutOptions());
 
     expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: WORKSPACE_ID, columns: GRID.columns }));
-    expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID);
+    // The read is per-viewer (security review HIGH 1): the model sees exactly
+    // what this user's own layout GET would return, redactions included.
+    expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID, USER_ID);
     // The addressability claim, checked rather than assumed: every id the
     // listing hands out is one the rearrange tools accept.
     const columnIds = GRID.columns.map((column) => column.columnId);

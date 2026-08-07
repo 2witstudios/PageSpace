@@ -197,6 +197,26 @@ export function isKnownRoomId(roomId: string): boolean {
 // Kick room sets — the rooms a revocation must evict a user from
 // ---------------------------------------------------------------------------
 
+/**
+ * The kick sets come in two shapes, and the difference is load-bearing
+ * (security review HIGH 3).
+ *
+ * A DRIVE or PAGE revocation names one id, and the drive/page/activity rooms
+ * are all DERIVABLE from it — one pure function, no IO. The rooms the
+ * agent-session epic added are not: `conv:<conversationId>` and
+ * `session:<workspaceId>` are keyed by ids the revocation does not know, so
+ * they can only be reached by ENUMERATING what the revoked grant covered.
+ * That is why they are separate builders, fed by the enumeration in
+ * ../permissions/revocation-kick.ts, rather than extra entries below.
+ *
+ * The trap that produced the finding: because the two static sets were the
+ * ONLY sets, adding a room shape that these functions could not express meant
+ * silently adding a room no revocation kicked. `rooms.test.ts` now asserts
+ * that every shape in {@link ALL_ROOM_BUILDERS} is either covered by some
+ * kick set or explicitly personal, so a future shape cannot slip through the
+ * same gap.
+ */
+
 /** Every drive-scoped room a user must leave when their drive access is revoked. */
 export const roomsForDriveKick = (driveId: string): string[] => [
   driveRoom(driveId),
@@ -209,3 +229,24 @@ export const roomsForPageKick = (pageId: string): string[] => [
   pageRoom(pageId),
   pageActivityRoom(pageId),
 ];
+
+/**
+ * The content room of ONE conversation a revocation reached. Enumerated, not
+ * derived: a page revocation must find the conversations that page carried,
+ * because `conv:<id>` is keyed by conversation and the page id cannot produce
+ * it. Pre-epic this room did not exist and page-chat content rode the page
+ * room, which {@link roomsForPageKick} already covers — moving the content
+ * plane here without extending revocation is exactly what left a revoked
+ * member receiving full `conversation:message_created` payloads.
+ */
+export const roomsForConversationKick = (conversationId: string): string[] => [
+  conversationRoom(conversationId),
+];
+
+/**
+ * The layout room of ONE agent workspace a revocation reached. Enumerated for
+ * the same reason: `session:<workspaceId>` carries `workspace:updated` grids
+ * for a workspace in the drive whose membership was just revoked, and the
+ * drive id alone cannot name it.
+ */
+export const roomsForWorkspaceKick = (workspaceId: string): string[] => [sessionRoom(workspaceId)];

@@ -30,15 +30,25 @@
  * **Concurrency.** A stale `baseRev` answers `status: 'stale'` with the
  * current rev + grid — truth to rebase against (the route maps it to 409).
  *
- * Access control is NOT this module's job — the verbs route runs
- * `checkSessionAccess` first, same as every other session-scoped route.
+ * **Access control is split, deliberately.** Reaching a workspace at all is
+ * NOT this module's job — the verbs route runs `checkSessionAccess` first,
+ * same as every other session-scoped route, and binding a pane to a target
+ * is gated there too (`authorize-pane-scope.ts`). But the LABEL join is this
+ * module's job and always was a permission decision: a pane's `targetId` is
+ * whatever the verb that bound it supplied, so every read path names the
+ * viewer it is resolving for and every kind has its own gate
+ * (`resolvePaneLabels`). The `session:<id>` broadcast has no single viewer
+ * and therefore carries no labels at all.
  */
 
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
-import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceShells, agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { pages } from '@pagespace/db/schema/core';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import {
   applyVerbLocal,
   gridFromWorkspaceState,
@@ -70,8 +80,15 @@ export async function applyWorkspaceLayoutVerb(input: {
   opId: string;
   baseRev: number;
   verb: WorkspaceLayoutVerb;
+  /**
+   * Who the RESPONSE grid is labelled for. `null` labels nothing — correct
+   * for the server-side placement helpers, which discard the grid entirely.
+   * The broadcast never uses this: it has many viewers and gets its own
+   * label-free grid (see below).
+   */
+  viewerId: LabelViewerId;
 }): Promise<ApplyWorkspaceLayoutVerbResult> {
-  const { workspaceId, opId, baseRev, verb } = input;
+  const { workspaceId, opId, baseRev, verb, viewerId } = input;
 
   const outcome = await withWorkspaceLayoutLock(workspaceId, async (tx): Promise<VerbOutcomeRows> => {
     const store = await createDbWorkspaceLayoutStore(tx);
@@ -106,12 +123,34 @@ export async function applyWorkspaceLayoutVerb(input: {
   // Labels join OUTSIDE the lock: they are derived display data, so a racing
   // rename just means this response carries the title from a moment ago —
   // never a reason to hold the per-workspace serializing lock over more IO.
-  const grid = await labelGrid(outcome.rows);
+  //
+  // The response is labelled for the ONE caller who will read it; the 409
+  // stale body takes the same path, because "here is the truth to rebase
+  // against" is still an answer to that caller and must not say more than a
+  // GET would.
+  const grid = await labelGrid(workspaceId, outcome.rows, viewerId);
 
   if (outcome.status === 'stale') return { status: 'stale', rev: outcome.rev, grid };
 
   if (outcome.applied) {
-    broadcastWorkspaceUpdated({ workspaceId, rev: outcome.rev, verb: verb.type, opId, grid });
+    // THE BROADCAST IS LABEL-FREE (security review HIGH 1). `session:<id>` is
+    // a room: one payload reaches every member of a shared workspace at once,
+    // so there is no viewer to redact for and per-viewer redaction is not
+    // expressible on this wire. Shipping the structural grid — pane ids,
+    // kinds, targetIds, size shares, and the rev — keeps the live-apply that
+    // makes the layout feel shared (every geometry verb, which is most of
+    // them, lands with no refetch at all) while disclosing nothing a member
+    // could not already enumerate. Clients resolve names through their OWN
+    // authorized reads: the store carries labels forward for panes it already
+    // knows and calls `refreshWorkspaceSnapshot` — the access-checked
+    // `GET /workspace` — when a broadcast introduces a target it cannot name.
+    broadcastWorkspaceUpdated({
+      workspaceId,
+      rev: outcome.rev,
+      verb: verb.type,
+      opId,
+      grid: applyPaneLabels(outcome.rows, new Map()),
+    });
   }
   return { status: 'ok', rev: outcome.rev, grid, applied: outcome.applied };
 }
@@ -123,16 +162,40 @@ export interface WorkspaceLayoutSnapshot {
 }
 
 /**
+ * Who a labelled grid is being derived FOR.
+ *
+ * Labels are a PERMISSIONED join (security review HIGH 1), not free display
+ * data: a pane's `targetId` is whatever the verb that bound it supplied, so
+ * resolving a title without asking "may this viewer see it" turned the layout
+ * read into a title oracle over every conversation, shell, and page in the
+ * system. Every read path therefore names its viewer.
+ *
+ * `null` means NOBODY — the grid comes back label-free (structure, ids, and
+ * size shares only). That is the honest shape for the two paths that have no
+ * single viewer to redact for: the `session:<id>` room broadcast, which fans
+ * out to every member at once, and the server-side placement helpers, which
+ * discard the grid entirely.
+ */
+export type LabelViewerId = string | null;
+
+/**
  * Turn persisted rows into the wire grid, joining every bound pane's display
  * label at READ time — the conversation title, the shell name, the page
  * title, and the conversation's own `contextId` as `agentPageId`. This is
  * the whole reason rows carry no `name`: a renamed conversation can never
  * leave a stale pane label behind (the drift class the dead blob carried).
+ *
+ * Every label is gated on `viewerId`; see {@link resolvePaneLabels}.
  */
-async function labelGrid(grid: LayoutGridColumn[]): Promise<WorkspaceLayoutGridDTO> {
+async function labelGrid(
+  workspaceId: string,
+  grid: LayoutGridColumn[],
+  viewerId: LabelViewerId,
+): Promise<WorkspaceLayoutGridDTO> {
   if (grid.length === 0) return [];
-  const labels = await resolvePaneLabels(grid);
-  return applyPaneLabels(grid, labels);
+  if (viewerId === null) return applyPaneLabels(grid, new Map());
+  const labels = await resolvePaneLabels([{ workspaceId, grid }], viewerId);
+  return applyPaneLabels(grid, labels.get(workspaceId) ?? new Map());
 }
 
 /** The pure half of {@link labelGrid} — rows + resolved labels → the wire grid. */
@@ -164,11 +227,14 @@ function applyPaneLabels(grid: LayoutGridColumn[], labels: Map<string, PaneLabel
  * lock-free: a racing verb just means the snapshot is one rev behind, which
  * the rev itself reports.
  */
-export async function readWorkspaceLayoutSnapshot(workspaceId: string): Promise<WorkspaceLayoutSnapshot> {
+export async function readWorkspaceLayoutSnapshot(
+  workspaceId: string,
+  viewerId: LabelViewerId,
+): Promise<WorkspaceLayoutSnapshot> {
   const store = await createDbWorkspaceLayoutStore();
   const [grid, rev] = await Promise.all([store.getWorkspaceGrid(workspaceId), store.currentRev(workspaceId)]);
   if (grid.length === 0) return { rev, grid: null };
-  return { rev, grid: await labelGrid(grid) };
+  return { rev, grid: await labelGrid(workspaceId, grid, viewerId) };
 }
 
 /**
@@ -179,6 +245,7 @@ export async function readWorkspaceLayoutSnapshot(workspaceId: string): Promise<
  */
 export async function readWorkspaceGridsBulk(
   workspaceIds: string[],
+  viewerId: LabelViewerId,
 ): Promise<Map<string, WorkspaceLayoutGridDTO>> {
   const labelled = new Map<string, WorkspaceLayoutGridDTO>();
   if (workspaceIds.length === 0) return labelled;
@@ -187,9 +254,19 @@ export async function readWorkspaceGridsBulk(
   const grids = await store.getWorkspaceGridsBulk(workspaceIds);
   if (grids.size === 0) return labelled;
 
-  const labels = await resolvePaneLabels([...grids.values()].flat());
+  // One resolution across every listed workspace, but authorized PER
+  // workspace: the redaction rule turns on who owns the workspace a pane sits
+  // in, so a shared listing cannot borrow the viewer's authority in their own
+  // workspace to unmask a pane in someone else's.
+  const labels =
+    viewerId === null
+      ? new Map<string, Map<string, PaneLabel>>()
+      : await resolvePaneLabels(
+          [...grids].map(([workspaceId, grid]) => ({ workspaceId, grid })),
+          viewerId,
+        );
   for (const [workspaceId, grid] of grids) {
-    labelled.set(workspaceId, applyPaneLabels(grid, labels));
+    labelled.set(workspaceId, applyPaneLabels(grid, labels.get(workspaceId) ?? new Map()));
   }
   return labelled;
 }
@@ -217,57 +294,177 @@ interface PaneLabel {
   agentPageId: string | null;
 }
 
+/** One workspace's rows, for a label resolution that may span several of them. */
+interface LabelSubject {
+  workspaceId: string;
+  grid: LayoutGridColumn[];
+}
+
 /**
- * Bulk-resolve every bound pane's display label, one query per target kind
- * (grids are small; each list is a handful of ids). A target that no longer
- * exists simply resolves no label — the pane keeps its row and renders with
- * an empty name until the client repairs or rebinds it, exactly as the blob
- * behaved for deleted targets.
+ * Bulk-resolve every bound pane's display label FOR ONE VIEWER, across any
+ * number of workspaces at once — one query per target kind however many
+ * workspaces are in play (the bulk list read's whole point), then one
+ * authorization pass per workspace.
+ *
+ * **A label is authority, so every kind has a gate** (security review HIGH 1):
+ *
+ *  - `chat` — the conversation must be genuinely IN the workspace whose grid
+ *    this is, or be one the viewer may access on its own footing
+ *    (`canAccessConversation`'s rule: their own thread, or a shared page
+ *    thread whose page they can view). Containment is the load-bearing half:
+ *    without it, an attacker who binds a foreign conversation into a
+ *    workspace they OWN passes the redaction rule's owner branch and reads
+ *    the real title. The title that survives that gate still goes through
+ *    `redactConversationTitleForViewer` — the epic's ONE listing rule — so a
+ *    drive member looking into a shared workspace sees the same
+ *    `(private thread)` marker `list_sessions` shows them.
+ *  - `terminal` — the shell must belong to THIS workspace. Shells are
+ *    workspace-scoped rows, so containment is exact, and it lines up the pane
+ *    label with what the shells route (gated on session access alone) already
+ *    serves the same viewer.
+ *  - `page` — the viewer must have page access (`getUserAccessLevel`). Pages
+ *    are not workspace-scoped at all, so their own ACL is the only answer.
+ *
+ * A target that fails its gate — or no longer exists — simply resolves no
+ * label: the pane keeps its ROW and renders with an empty name, exactly as
+ * the blob behaved for deleted targets. Refusing to resolve is deliberately
+ * indistinguishable from "gone", so the label join is not an existence
+ * oracle either.
  */
-async function resolvePaneLabels(grid: LayoutGridColumn[]): Promise<Map<string, PaneLabel>> {
-  const targets = new Map<string, Set<string>>();
-  for (const column of grid) {
-    for (const pane of column.panes) {
-      if (pane.kind === null || pane.targetId === null) continue;
-      const set = targets.get(pane.kind) ?? new Set<string>();
-      set.add(pane.targetId);
-      targets.set(pane.kind, set);
+async function resolvePaneLabels(
+  subjects: readonly LabelSubject[],
+  viewerId: string,
+): Promise<Map<string, Map<string, PaneLabel>>> {
+  const chatIds = new Set<string>();
+  const shellIds = new Set<string>();
+  const pageIds = new Set<string>();
+  for (const subject of subjects) {
+    for (const column of subject.grid) {
+      for (const pane of column.panes) {
+        if (pane.kind === null || pane.targetId === null) continue;
+        if (pane.kind === 'chat') chatIds.add(pane.targetId);
+        else if (pane.kind === 'terminal') shellIds.add(pane.targetId);
+        else if (pane.kind === 'page') pageIds.add(pane.targetId);
+      }
     }
   }
 
-  const labels = new Map<string, PaneLabel>();
-  const chatIds = [...(targets.get('chat') ?? [])];
-  const shellIds = [...(targets.get('terminal') ?? [])];
-  const pageIds = [...(targets.get('page') ?? [])];
-
-  const [chatRows, shellRows, pageRows] = await Promise.all([
-    chatIds.length > 0
+  const workspaceIds = subjects.map((subject) => subject.workspaceId);
+  const [chatRows, shellRows, pageRows, workspaceRows] = await Promise.all([
+    chatIds.size > 0
       ? db
-          .select({ id: conversations.id, title: conversations.title, type: conversations.type, contextId: conversations.contextId })
+          .select({
+            id: conversations.id,
+            title: conversations.title,
+            type: conversations.type,
+            contextId: conversations.contextId,
+            // The two facts the redaction rule needs, plus the binding that
+            // decides whether this conversation belongs in the grid at all.
+            userId: conversations.userId,
+            isShared: conversations.isShared,
+            workspaceId: conversations.workspaceId,
+          })
           .from(conversations)
-          .where(inArray(conversations.id, chatIds))
+          .where(inArray(conversations.id, [...chatIds]))
       : Promise.resolve([]),
-    shellIds.length > 0
+    shellIds.size > 0
       ? db
-          .select({ id: agentWorkspaceShells.id, name: agentWorkspaceShells.name })
+          .select({
+            id: agentWorkspaceShells.id,
+            name: agentWorkspaceShells.name,
+            workspaceId: agentWorkspaceShells.workspaceId,
+          })
           .from(agentWorkspaceShells)
-          .where(inArray(agentWorkspaceShells.id, shellIds))
+          .where(inArray(agentWorkspaceShells.id, [...shellIds]))
       : Promise.resolve([]),
-    pageIds.length > 0
-      ? db.select({ id: pages.id, title: pages.title }).from(pages).where(inArray(pages.id, pageIds))
+    pageIds.size > 0
+      ? db.select({ id: pages.id, title: pages.title }).from(pages).where(inArray(pages.id, [...pageIds]))
+      : Promise.resolve([]),
+    workspaceIds.length > 0
+      ? db
+          .select({ id: agentWorkspaces.id, ownerId: agentWorkspaces.ownerId })
+          .from(agentWorkspaces)
+          .where(inArray(agentWorkspaces.id, workspaceIds))
       : Promise.resolve([]),
   ]);
 
-  for (const row of chatRows) {
-    labels.set(`chat:${row.id}`, {
-      name: row.title ?? '',
-      // Same derivation the session-conversation listings use: a page-agent
-      // conversation's contextId IS its agent page id; global has none.
-      agentPageId: row.type === 'page' ? row.contextId : null,
-    });
-  }
-  for (const row of shellRows) labels.set(`terminal:${row.id}`, { name: row.name, agentPageId: null });
-  for (const row of pageRows) labels.set(`page:${row.id}`, { name: row.title, agentPageId: null });
+  // Both viewer-scoped gates, resolved once per distinct target rather than
+  // once per pane — the same viewer answers the same question every time.
+  const [readablePages, accessibleConversations] = await Promise.all([
+    resolveReadablePages(pageRows, viewerId),
+    resolveAccessibleConversations(chatRows, viewerId),
+  ]);
 
-  return labels;
+  const owners = new Map(workspaceRows.map((row) => [row.id, row.ownerId]));
+  const byWorkspace = new Map<string, Map<string, PaneLabel>>();
+  for (const subject of subjects) {
+    // An unknown owner never matches a viewer, so the redaction rule's owner
+    // branch fails closed on a workspace row that has vanished.
+    const workspaceOwnerId = owners.get(subject.workspaceId) ?? '';
+    const labels = new Map<string, PaneLabel>();
+
+    for (const row of chatRows) {
+      const belongsHere = row.workspaceId === subject.workspaceId;
+      if (!belongsHere && !accessibleConversations.has(row.id)) continue;
+      labels.set(`chat:${row.id}`, {
+        name:
+          redactConversationTitleForViewer({
+            viewerId,
+            workspaceOwnerId,
+            conversation: { ownerId: row.userId, isShared: row.isShared === true, title: row.title },
+          }) ?? '',
+        // Same derivation the session-conversation listings use: a page-agent
+        // conversation's contextId IS its agent page id; global has none.
+        agentPageId: row.type === 'page' ? row.contextId : null,
+      });
+    }
+    for (const row of shellRows) {
+      if (row.workspaceId !== subject.workspaceId) continue;
+      labels.set(`terminal:${row.id}`, { name: row.name, agentPageId: null });
+    }
+    for (const row of pageRows) {
+      if (!readablePages.has(row.id)) continue;
+      labels.set(`page:${row.id}`, { name: row.title, agentPageId: null });
+    }
+
+    byWorkspace.set(subject.workspaceId, labels);
+  }
+
+  return byWorkspace;
+}
+
+/** The subset of `pageRows` this viewer may actually read. */
+async function resolveReadablePages(
+  pageRows: ReadonlyArray<{ id: string }>,
+  viewerId: string,
+): Promise<Set<string>> {
+  const decided = await Promise.all(
+    pageRows.map(async (row) => ((await getUserAccessLevel(viewerId, row.id)) !== null ? row.id : null)),
+  );
+  return new Set(decided.filter((id): id is string => id !== null));
+}
+
+/**
+ * The subset of `chatRows` this viewer may access on the conversation's OWN
+ * footing — their own thread, or a shared page thread whose page they can
+ * view. Routed through `canAccessConversation`, the SAME predicate the `conv:`
+ * room join and `/stream-join` enforce, rather than a second copy of the rule:
+ * the owner branch short-circuits with no IO, so the whole set costs at most
+ * one page check per shared thread.
+ */
+async function resolveAccessibleConversations(
+  chatRows: ReadonlyArray<{ id: string; userId: string; isShared: boolean | null; type: string; contextId: string | null }>,
+  viewerId: string,
+): Promise<Set<string>> {
+  const decided = await Promise.all(
+    chatRows.map(async (row) => {
+      const allowed = await canAccessConversation(
+        viewerId,
+        { userId: row.userId, isShared: row.isShared === true, type: row.type, contextId: row.contextId },
+        { getPageAccess: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null },
+      );
+      return allowed ? row.id : null;
+    }),
+  );
+  return new Set(decided.filter((id): id is string => id !== null));
 }
