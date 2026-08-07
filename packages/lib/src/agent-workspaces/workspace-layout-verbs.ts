@@ -857,8 +857,75 @@ const NOT_APPLIED = (state: WorkspaceState | null): WorkspaceLayoutVerbOutcome =
  * The client store layers additional client-only guards on top — see the
  * module doc's divergence note.
  */
-function isReplaceable(pane: PaneState): boolean {
+export function isReplaceable(pane: PaneState): boolean {
   return pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null);
+}
+
+/** Where "show me this target" resolves to, before any verb is built. */
+export type OpenPlacement =
+  /** No grid at all — the workspace has to be created around this target. */
+  | { kind: 'create' }
+  /** A pane is already showing it; focus is all that is needed. */
+  | { kind: 'focus'; paneId: string }
+  /** Fill this pane — it is replaceable, and preferred over the rest. */
+  | { kind: 'assign'; paneId: string }
+  /** Nothing is replaceable; open beside this pane instead of evicting anything. */
+  | { kind: 'split'; fromPaneId: string };
+
+/**
+ * WHERE DOES "SHOW ME THIS" GO? — the placement policy, once.
+ *
+ * The server (`open_conversation`, below) and the browser store both answer
+ * this question, and both used to answer it with their own ~25 lines: the same
+ * replaceable predicate, the same `preferSplit` and `excludeTargetId`
+ * narrowings, the same active-pane-first preference, the same split-right
+ * fallback. Five rules that had to stay in step across two files with nothing
+ * connecting them.
+ *
+ * They are NOT identical, and the difference is deliberate — which is exactly
+ * why this takes an injected `isReplaceable` rather than trying to unify them.
+ * The client refuses to evict a pane with unsaved edits (`useEditingStore`,
+ * which the server cannot see) or one showing a non-live conversation or a page
+ * (issue #2295). Those refusals are the reason the store emits `assign_pane` /
+ * `split_right` itself instead of sending the server's `open_conversation`
+ * verb. Shared rules here, caller-specific refusals injected on top.
+ *
+ * @param targetId the thing to show, or `null` for a mint still in flight
+ *        (which can never already be showing).
+ * @param options.isReplaceable ANDed with the shared predicate. Omit for the
+ *        server's own policy, which has no extra refusals.
+ */
+export function resolveOpenPlacement(
+  state: WorkspaceState | null,
+  targetId: string | null,
+  options?: {
+    preferSplit?: boolean;
+    excludeTargetId?: string;
+    isReplaceable?: (pane: PaneState) => boolean;
+  },
+): OpenPlacement {
+  if (!state) return { kind: 'create' };
+
+  if (targetId !== null) {
+    const showing = paneShowing(state, targetId);
+    if (showing) return { kind: 'focus', paneId: showing.id };
+  }
+
+  const canReplace = (pane: PaneState): boolean =>
+    isReplaceable(pane) &&
+    (options?.preferSplit !== true || pane.scope === null) &&
+    (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId) &&
+    (options?.isReplaceable === undefined || options.isReplaceable(pane));
+
+  // The ACTIVE pane wins when it qualifies — "show me this" means "here",
+  // where the user is looking, not "in the leftmost slot that happens to fit".
+  const panes = panesOf(state);
+  const active = panes.find((pane) => pane.id === state.activePaneId);
+  const replaceable = active && canReplace(active) ? active : panes.find(canReplace);
+
+  return replaceable
+    ? { kind: 'assign', paneId: replaceable.id }
+    : { kind: 'split', fromPaneId: state.activePaneId };
 }
 
 /**
@@ -920,30 +987,33 @@ export function applyVerbLocal(
           applied: true,
         };
       }
-      if (verb.scope.targetId !== null) {
-        const showing = paneShowing(state, verb.scope.targetId);
-        if (showing) {
-          const next = selectPane(state, showing.id);
+      // The policy is shared with the browser store; the server passes no
+      // extra refusals, because the two it would need (unsaved edits, the
+      // #2295 live-conversation guard) are facts only the client holds.
+      const placement = resolveOpenPlacement(state, verb.scope.targetId, {
+        preferSplit: verb.preferSplit,
+        excludeTargetId: verb.excludeTargetId,
+      });
+
+      switch (placement.kind) {
+        case 'focus': {
+          const next = selectPane(state, placement.paneId);
           return { state: next, applied: next !== state };
         }
+        case 'assign':
+          return { state: assignPane(state, placement.paneId, verb.scope), applied: true };
+        case 'split': {
+          // Nothing replaceable (every pane a running terminal or an in-flight
+          // mint) — open beside them instead of losing anything.
+          const split = splitRight(state, placement.fromPaneId, verb.newColumnId, verb.newPaneId);
+          if (split === state) return NOT_APPLIED(state);
+          return { state: assignPane(split, verb.newPaneId, verb.scope), applied: true };
+        }
+        case 'create':
+          // Unreachable: `state` is non-null in this branch (the null case
+          // returned above), and 'create' is what a null state resolves to.
+          return NOT_APPLIED(state);
       }
-      const panes = panesOf(state);
-      // The structural policy, narrowed by whatever the caller asked for —
-      // see the verb's own doc for why server-driven placement needs both.
-      const canReplace = (pane: PaneState): boolean =>
-        isReplaceable(pane) &&
-        (verb.preferSplit !== true || pane.scope === null) &&
-        (verb.excludeTargetId === undefined || pane.scope?.targetId !== verb.excludeTargetId);
-      const active = panes.find((pane) => pane.id === state.activePaneId);
-      const replaceable = active && canReplace(active) ? active : panes.find(canReplace);
-      if (replaceable) {
-        return { state: assignPane(state, replaceable.id, verb.scope), applied: true };
-      }
-      // Nothing replaceable (every pane a running terminal or an in-flight
-      // mint) — open beside them instead of losing anything.
-      const split = splitRight(state, state.activePaneId, verb.newColumnId, verb.newPaneId);
-      if (split === state) return NOT_APPLIED(state);
-      return { state: assignPane(split, verb.newPaneId, verb.scope), applied: true };
     }
 
     case 'replace_conversation': {

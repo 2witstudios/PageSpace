@@ -19,6 +19,7 @@ import {
   type WorkspaceLayoutVerb,
   type WorkspaceState,
 } from './pane-reducer';
+import { resolveOpenPlacement } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { adoptServerGrid, replayPending, type PendingVerbOp } from './verb-queue';
 import { carryPaneLabelsForward, hasUnknownBoundTarget, paneLabelIndex } from './pane-labels';
 
@@ -685,61 +686,59 @@ function focusOrAssignScope(
     store.ensureWorkspace(sessionId, scope);
     return;
   }
-  if (scope.targetId !== null) {
-    const showing = paneShowing(workspace, scope.targetId);
-    if (showing) {
+
+  // The structural policy — the replaceable predicate, the `preferSplit` and
+  // `excludeTargetId` narrowings, active-pane-first, and the split fallback —
+  // is the SHARED one the server's `open_conversation` runs. What this store
+  // adds are the two refusals the server cannot evaluate, injected on top:
+  //
+  //  - a pane with unsaved edits (`isPaneDirty`, via `useEditingStore`);
+  //  - when the caller passed `liveConversationIds` (only `openConversation`
+  //    does, from the selection/mount-seed paths): a BOUND pane whose scope is
+  //    not a live chat — a conversation closed out of this session (issue
+  //    #2295), or a PAGE pane, a deliberate persisted artifact a conversation
+  //    selection has no business evicting (a reload's seed effect used to eat
+  //    agent-opened page panes this way). Both fall through to the split
+  //    fallback instead, exactly like a terminal.
+  //
+  // Those refusals are precisely why this store resolves the policy locally
+  // and posts the RESULT (`assign_pane`, or `split_right` + `assign_pane`)
+  // rather than sending the server's `open_conversation` verb.
+  const placement = resolveOpenPlacement(workspace, scope.targetId, {
+    preferSplit: options?.preferSplit,
+    excludeTargetId: options?.excludeTargetId,
+    isReplaceable: (pane) =>
+      !isPaneDirty(pane) &&
+      (options?.liveConversationIds === undefined ||
+        pane.scope === null ||
+        (pane.scope.kind === 'chat' &&
+          (pane.scope.targetId === null || options.liveConversationIds.has(pane.scope.targetId)))),
+  });
+
+  switch (placement.kind) {
+    case 'focus':
       // Already visible — focus is client-local, so nothing crosses the wire.
-      store.selectPane(sessionId, showing.id);
+      store.selectPane(sessionId, placement.paneId);
+      return;
+    case 'assign':
+      enqueueVerb(sessionId, { type: 'assign_pane', paneId: placement.paneId, scope });
+      return;
+    case 'split': {
+      // Two verbs, in order: the split, then the binding.
+      const newPaneId = mintId('pane');
+      enqueueVerb(sessionId, {
+        type: 'split_right',
+        fromPaneId: placement.fromPaneId,
+        newColumnId: mintId('col'),
+        newPaneId,
+      });
+      enqueueVerb(sessionId, { type: 'assign_pane', paneId: newPaneId, scope });
       return;
     }
+    case 'create':
+      // Unreachable: the `!workspace` case returned above.
+      return;
   }
-  const panes = panesOf(workspace);
-  const active = panes.find((pane) => pane.id === workspace.activePaneId);
-  // Replaceable = unbound (picker), or bound to a resolved, non-terminal
-  // row. A pane whose mint is still in flight (`targetId === null`) is
-  // EXCLUDED even though its kind isn't terminal: landing a different
-  // selection there now means the mint's own success callback later
-  // overwrites it with the stale pick. Also excluded: a pane with unsaved
-  // edits (`isPaneDirty`), and — when the caller passed `excludeTargetId` —
-  // the pane already showing THAT target (the `open_page_pane` tool's own
-  // invoking conversation must never be evicted by its own tool call; it
-  // should get a split beside it instead). Also excluded when the caller
-  // passed `liveConversationIds` (only `openConversation` ever does, from
-  // the selection/mount-seed paths): a BOUND pane whose scope is not a live
-  // chat — a conversation closed out of this session (issue #2295), or a
-  // PAGE pane, a deliberate persisted artifact a conversation selection has
-  // no business evicting (a reload's seed effect used to eat agent-opened
-  // page panes this way) — must never be silently overwritten by an
-  // unrelated later selection; both fall through to the split fallback
-  // instead, exactly like a terminal. And excluded wholesale under
-  // `preferSplit` (the agent-driven `openPage` path): an agent adds a
-  // surface, it never navigates the user's panes, so only an unbound picker
-  // pane may be filled.
-  const isReplaceable = (pane: PaneState) =>
-    (pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null)) &&
-    !isPaneDirty(pane) &&
-    (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId) &&
-    (options?.preferSplit !== true || pane.scope === null) &&
-    (options?.liveConversationIds === undefined ||
-      pane.scope === null ||
-      (pane.scope.kind === 'chat' &&
-        (pane.scope.targetId === null || options.liveConversationIds.has(pane.scope.targetId))));
-  const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
-  if (replaceable) {
-    enqueueVerb(sessionId, { type: 'assign_pane', paneId: replaceable.id, scope });
-    return;
-  }
-  // Nothing replaceable (every pane is a running terminal, dirty, or the
-  // excluded invoker) — open beside them instead of losing anything. Two
-  // verbs, in order: the split, then the binding.
-  const newPaneId = mintId('pane');
-  enqueueVerb(sessionId, {
-    type: 'split_right',
-    fromPaneId: workspace.activePaneId,
-    newColumnId: mintId('col'),
-    newPaneId,
-  });
-  enqueueVerb(sessionId, { type: 'assign_pane', paneId: newPaneId, scope });
 }
 
 export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
