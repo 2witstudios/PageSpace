@@ -41,14 +41,21 @@ export interface LocationPromptInput {
 
 export function buildLocationTurnPrompt(input: LocationPromptInput | undefined): string {
   if (!input || (!input.currentPage && !input.currentDrive)) {
+    // The guard and the hint have to be worded as one rule, not two adjacent
+    // ones. "Do NOT assume the Home drive" followed immediately by the Home
+    // driveId reads as a contradiction the model has to resolve on its own —
+    // and resolving it the wrong way is exactly the bug the guard was added to
+    // prevent (agents dumping content into Home instead of the user's
+    // workspace). So the guard is scoped to general work, and the id is
+    // labelled as reference data that is off-limits unless something names it.
     const homeLine = input?.homeDriveId
-      ? `\n• Your Home drive (private to this user) is driveId: ${input.homeDriveId} — use it only when a skill or the user explicitly calls for it`
+      ? `\n• Home drive reference (private to this user), driveId: ${input.homeDriveId} — do NOT write here unless a loaded skill or the user explicitly names Home as the destination`
       : '';
     return `LOCATION (current, this turn):
 • Operating from the dashboard — no specific workspace or page is currently in view
 • Use list_drives to discover available workspaces before suggesting new drive creation
 • When the user says "here" or "this", ask which workspace/page they mean, or use list_drives/list_pages to find out
-• Do NOT assume the Home drive — ask which workspace, or use list_drives${homeLine}`;
+• Do NOT default to the Home drive for general work — ask which workspace, or use list_drives${homeLine}`;
   }
 
   const lines: string[] = ['LOCATION (current, this turn):'];

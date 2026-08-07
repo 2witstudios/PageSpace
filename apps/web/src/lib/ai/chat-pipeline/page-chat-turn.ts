@@ -1537,7 +1537,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
 
     const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation);
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
 
     const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
       currentPage: turnLocation.currentPage,

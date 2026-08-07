@@ -31,6 +31,25 @@ interface MessagePart {
   type?: string;
   toolName?: string;
   state?: string;
+  input?: unknown;
+}
+
+/**
+ * The tool name a part represents, unwrapping `execute_tool`.
+ *
+ * Unwrapping is not an edge case: `set_plan`/`clear_plan` are not in
+ * `CORE_TOOL_NAMES`, and the Global Assistant route always splits its toolset,
+ * so on that surface the agent can ONLY reach them as
+ * `execute_tool({ tool_name: 'set_plan' })`. Matching the top-level part name
+ * alone would make this component's revalidation dead code exactly where the
+ * chip is mounted.
+ */
+function resolveToolName(part: MessagePart): string | undefined {
+  const direct =
+    part.toolName ?? (part.type?.startsWith('tool-') ? part.type.slice('tool-'.length) : undefined);
+  if (direct !== 'execute_tool') return direct;
+  const wrapped = (part.input as { tool_name?: unknown } | undefined)?.tool_name;
+  return typeof wrapped === 'string' ? wrapped : undefined;
 }
 
 /**
@@ -50,8 +69,7 @@ function useCompletedPlanToolCount(messages: UIMessage[] | undefined): number {
     let count = 0;
     for (const message of messages) {
       for (const part of ((message as { parts?: MessagePart[] }).parts ?? [])) {
-        const toolName =
-          part.toolName ?? (part.type?.startsWith('tool-') ? part.type.slice('tool-'.length) : undefined);
+        const toolName = resolveToolName(part);
         if (!toolName || !PLAN_TOOL_NAMES.has(toolName)) continue;
         if (part.state === 'output-available' || part.state === 'done') count += 1;
       }

@@ -34,14 +34,26 @@ const planLogger = loggers.ai.child({ module: 'plan-tools' });
  * synthesize an ephemeral id (`workflow-<id>-<ts>`, see workflow-executor) that
  * has no row, so the UPDATE would silently match nothing — say so instead of
  * reporting a success that didn't happen.
+ *
+ * Writability mirrors the chat route's own gate (owner OR `isShared`, see the
+ * `ownsIt || isSharedConversation` check in api/ai/chat/route.ts). Requiring
+ * strict ownership here would mean a collaborator the route explicitly lets
+ * post to a shared conversation could run /plan, watch the agent write the plan
+ * page, and then be told the binding failed — leaving exactly the
+ * lost-after-compaction hole this feature exists to close.
  */
-async function loadOwnedConversation(conversationId: string, userId: string) {
+async function loadWritableConversation(conversationId: string, userId: string) {
   const [row] = await db
-    .select({ id: conversations.id, userId: conversations.userId })
+    .select({
+      id: conversations.id,
+      userId: conversations.userId,
+      isShared: conversations.isShared,
+    })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1);
-  return row && row.userId === userId ? row : null;
+  if (!row) return null;
+  return row.userId === userId || row.isShared === true ? row : null;
 }
 
 export const planTools = {
@@ -93,7 +105,7 @@ export const planTools = {
           };
         }
 
-        const conversation = await loadOwnedConversation(conversationId, userId);
+        const conversation = await loadWritableConversation(conversationId, userId);
         if (!conversation) {
           return {
             success: false,
@@ -137,7 +149,7 @@ export const planTools = {
       if (!conversationId) return { success: false, error: 'This context has no conversation.' };
 
       try {
-        const conversation = await loadOwnedConversation(conversationId, userId);
+        const conversation = await loadWritableConversation(conversationId, userId);
         if (!conversation) return { success: false, error: 'This conversation cannot hold a plan binding.' };
 
         // Same single writer as `set_plan` — the clear is just as much a
