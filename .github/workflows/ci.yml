@@ -210,7 +210,7 @@ jobs:
         working-directory: apps/e2e
 
       - name: Start realtime server
-        run: bun run start > /tmp/realtime.log 2>&1 &
+        run: nohup bun run start > /tmp/realtime.log 2>&1 &
         working-directory: apps/realtime
         env:
           PORT: '3001'
@@ -219,7 +219,7 @@ jobs:
       # Web listens on 3100, NOT the origin the browser uses. The browser only ever talks to
       # the proxy on 3000.
       - name: Start web (production server)
-        run: bun run start --port 3100 > /tmp/web.log 2>&1 &
+        run: nohup bun run start --port 3100 > /tmp/web.log 2>&1 &
         working-directory: apps/web
 
       # THE PIECE THAT IS EASY TO GET WRONG AND FAILS SILENTLY.
@@ -235,7 +235,7 @@ jobs:
       # same-origin. Do not "simplify" this by relaxing the CSP or setting bypassCSP — both
       # stop the run testing the shipped policy.
       - name: Start same-origin proxy (/socket.io -> realtime, rest -> web)
-        run: bun run support/e2e-proxy.ts > /tmp/proxy.log 2>&1 &
+        run: nohup bun run support/e2e-proxy.ts > /tmp/proxy.log 2>&1 &
         working-directory: apps/e2e
         env:
           E2E_PROXY_PORT: '3000'
