@@ -177,7 +177,7 @@
         },
         {
           "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
-          "name": "no file outside conversation-events.ts emits a conversation:* socket event",
+          "name": "no file outside conversation-events.ts emits a conversation:* event",
           "suite": "web-unit"
         },
         {
