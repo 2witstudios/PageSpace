@@ -87,7 +87,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { db } from '@pagespace/db/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
-import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
@@ -104,7 +103,6 @@ interface MockDb {
 const mockDb = vi.mocked(db) as unknown as MockDb;
 const mockPreviewRollback = vi.mocked(previewRollback);
 const mockExecuteRollback = vi.mocked(executeRollback);
-const mockLoggers = vi.mocked(loggers);
 
 // Test fixtures
 const mockUserId = 'user_123';
