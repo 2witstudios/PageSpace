@@ -121,7 +121,8 @@ describe('tool renderer coverage', () => {
 
   it('keeps the pending-renderer ledger honest', () => {
     // An entry that gained a renderer, or that no longer names a real tool, is
-    // stale: it must be deleted so the ledger can only ever shrink.
+    // stale: it must be deleted, so the ledger can never outlive the gap it
+    // records.
     const known = new Set(toolNames);
     const stale = [...PENDING_RICH_RENDERERS].filter((name) => covered.has(name) || !known.has(name)).sort();
     expect(
