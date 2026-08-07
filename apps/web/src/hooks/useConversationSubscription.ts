@@ -23,6 +23,10 @@ import {
   syncWatchedConversationRevs,
   unregisterConversationWatch,
 } from '@/lib/realtime/conversation-rev-sync';
+import {
+  acquireConversationRoom,
+  releaseConversationRoom,
+} from '@/lib/realtime/conversation-room-membership';
 import { shouldRefreshOnReconnect, type ConnectionStatus } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import type {
   ConversationMessagePayload,
@@ -104,11 +108,6 @@ export interface ConversationSubscriptionContext {
    * pane may be present while this is null.
    */
   agentPageId: string | null;
-  /**
-   * Extra channel-socket options merged into the shared cache handlers (undo
-   * refresh, conversation-added, ...). Ignored when `channelId` is absent.
-   */
-  streamOptions?: UseChannelStreamSocketOptions;
 }
 
 export interface ConversationSubscription {
@@ -121,7 +120,7 @@ export function useConversationSubscription(
   ctx: ConversationSubscriptionContext,
 ): ConversationSubscription {
   const socket = useSocket();
-  const { channelId, agentPageId, streamOptions } = ctx;
+  const { channelId, agentPageId } = ctx;
 
   // Refetch endpoint selector, stable per (agentPageId) so handlers registered
   // once don't need re-registering when unrelated props move.
@@ -147,17 +146,24 @@ export function useConversationSubscription(
   }, [conversationId, loadConversation]);
 
   // ── 2. Join the conversation's content room ───────────────────────────────
+  // REFCOUNTED, for the same reason the rev-watch registry below is: room
+  // membership is per-SOCKET and a tab has one socket, so an unconditional
+  // `leave_conversation` on unmount evicted every OTHER subscription in the
+  // tab watching the same conversation — which is the documented expected
+  // shape, not an edge case. Joins stay unconditional (idempotent, and a
+  // socket swap has to re-join); only the leave waits for the last holder.
   useEffect(() => {
     if (!socket || !conversationId) return;
-    const join = () => socket.emit('join_conversation', conversationId);
-    join();
-    // socket.io rejoins no rooms on reconnect — the server's socket is brand new.
-    socket.on('connect', join);
+    acquireConversationRoom(socket, conversationId);
+    // socket.io rejoins no rooms on reconnect — the server's socket is brand
+    // new. A bare re-join, NOT a second `acquire`: this mount already holds its
+    // one reference, and taking another here would leak it (nothing releases
+    // per reconnect) and strand the room joined after the last unmount.
+    const rejoin = () => socket.emit('join_conversation', conversationId);
+    socket.on('connect', rejoin);
     return () => {
-      socket.off('connect', join);
-      // Best-effort: on a disconnected socket this is a no-op, which is correct —
-      // the server already dropped every room for that socket.
-      socket.emit('leave_conversation', conversationId);
+      socket.off('connect', rejoin);
+      releaseConversationRoom(socket, conversationId);
     };
   }, [socket, conversationId]);
 
@@ -276,9 +282,15 @@ export function useConversationSubscription(
         reloadConversation: (id) => loadConversation(id),
         refreshSnapshot: (id) => refreshConversationSnapshot(agentPageIdRef.current, id),
       }),
-      ...streamOptions,
     }),
-    [loadConversation, streamOptions],
+    // `loadConversation` alone, and it is `useCallback`'d with no deps. This
+    // memo used to spread a caller-supplied `streamOptions` that no call site
+    // ever passed (review finding — all three omit it), which made an OBJECT
+    // the memo's dependency: the first caller to pass an unmemoized literal
+    // would have re-registered every handler on every render, the exact churn
+    // `16e3d2b90` was fixing. Removed rather than documented — an extension
+    // point with no extenders is a hazard with no payer.
+    [loadConversation],
   );
 
   // A `undefined` channelId makes this a no-op by the hook's own contract (and

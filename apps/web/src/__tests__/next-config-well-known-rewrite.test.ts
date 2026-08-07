@@ -29,8 +29,12 @@ describe('next.config rewrites — agent-sessions → agent-workspaces compat al
     // afterFiles, NOT beforeFiles: the real /api/agent-workspaces/** handlers
     // must win on their own paths, and this only catches requests that would
     // otherwise 404.
+    // The SOURCE is the old spelling on both rules — that is the whole point
+    // of a compat alias. This one used to read agent-workspaces →
+    // agent-workspaces, a rewrite to itself that aliased nothing, and this
+    // assertion pinned the typo in place.
     expect(afterFiles).toContainEqual({
-      source: '/api/agent-workspaces',
+      source: '/api/agent-sessions',
       destination: '/api/agent-workspaces',
     });
     expect(afterFiles).toContainEqual({

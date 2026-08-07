@@ -96,7 +96,15 @@ export interface ConversationMessageRef {
   id: string;
   role: string;
   status: string;
-  createdAt: string;
+  /**
+   * ABSENT when the message carries no timestamp — never "now" (review
+   * finding). `createdAt` is the key clients order on, so a fabricated one is
+   * the single value guaranteed to be wrong for the messages that reach this
+   * shape: a backfill or a replay lands at the bottom of the transcript rather
+   * than where it belongs. Missing is a fact a reader can act on; a plausible
+   * wrong answer is not.
+   */
+  createdAt?: string;
 }
 
 export type ConversationMessagePayload = ConversationEventBase &
@@ -249,17 +257,21 @@ export const shapeMessageForEvent = (
   if (serializedLength <= MAX_INLINE_MESSAGE_BYTES) {
     return { message };
   }
+  // Reported only when the message HAS one. The old fallback to `new Date()`
+  // read as a tidy default and was the one answer certain to be wrong: this
+  // shape is reached by oversized messages, which is exactly where a backfill
+  // or a replay shows up, and `createdAt` is what the client orders on.
   const createdAt = message.createdAt instanceof Date
     ? message.createdAt.toISOString()
     : typeof message.createdAt === 'string'
       ? message.createdAt
-      : new Date().toISOString();
+      : undefined;
   return {
     messageRef: {
       id: message.id,
       role: message.role,
       status: typeof message.status === 'string' ? message.status : 'complete',
-      createdAt,
+      ...(createdAt === undefined ? {} : { createdAt }),
     },
     truncated: true,
   };

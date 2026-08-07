@@ -1,6 +1,6 @@
 /**
- * Production wiring for the agent-session services (`@pagespace/lib`
- * services/agent-sessions) — DI of the DB-backed stores, the Sprites host, the
+ * Production wiring for the agent-workspace services (`@pagespace/lib`
+ * services/agent-workspaces) — DI of the DB-backed stores, the Sprites host, the
  * squat-guarded conversation creators, and the permission/capability lookups.
  *
  * ZERO decision logic lives here, by mandate: every `if` below turns a null

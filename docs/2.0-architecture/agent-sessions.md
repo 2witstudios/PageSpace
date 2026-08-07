@@ -483,6 +483,34 @@ this list.
 The one pair with NO shim is `conversations.sessionId` / `closedInSessionAt` — a table that
 keeps its own name leaves no name to hang a view on; see `infrastructure/UPGRADE.md`.
 
+**Deferred work that is NOT a shim — also PR 17's, for want of anywhere else.** These are
+not compat surfaces to delete; they are things this epic left owed. They are listed here
+because the alternative is where they were: a migration header pointing at a PR that came
+and went, and a `Set` inside a unit test. Both were found by review, not by the list.
+
+7. **The four `NOT VALID` constraints from `0250_cooing_klaw`** —
+   `ai_stream_sessions_conversation_id_conversations_id_fk`,
+   `conversations_global_context_null_chk`, `conversations_page_context_present_chk`,
+   `conversations_drive_context_present_chk`. 0250's own header defers `VALIDATE
+   CONSTRAINT` to "the PR that has looked at real data (Phase 4 PR 14)", and PR 14
+   (`0251_messages_unification_validate_fk`) validated only 0249's `chat_messages` FK — on
+   a table 0253 then dropped. `grep -rn 'VALIDATE CONSTRAINT' packages/db/drizzle/` returns
+   exactly one executable statement, and none of these four. Until they are validated,
+   pre-0250 rows that already violate them stay: `purge-stream-state.ts` records the
+   concrete consequence — `ai_stream_sessions` rows whose conversation was hard-deleted
+   before 0250 landed dangle with no cascade to ride, and they carry `parts`. Article 17
+   erasure compensates with a user-scoped delete, so erasure is covered; the
+   CONVERSATION-scoped retention purge (`retention-engine.ts`) is not. `VALIDATE` takes
+   only `SHARE UPDATE EXCLUSIVE`, and 0250's pre-audit NOTICE already reports the counts
+   an operator needs first.
+8. **Rich renderers for the four pane-grid verbs** — `list_panes`, `resize_pane`,
+   `move_pane`, `arrange_panes`, all new in this epic and all currently rendering to the
+   user as raw payloads. Tracked in `PENDING_RICH_RENDERERS` in
+   `registry-coverage.test.ts`, which fails in both directions and cannot grow silently —
+   but a ledger inside a test stops CI forgetting, not the epic. The stated reason for the
+   deferral (a grid card is a layout-diagram design task, not a formatting one) stands;
+   it just needs an owner outside the test file.
+
 ## 5. Keeping this honest
 
 Tool guidance has lied to the model before — this is a recurring bug class, not a

@@ -40,7 +40,7 @@ export const channelMessages = pgTable('channel_messages', {
   // File attachment (optional)
   fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
   attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
-  // Soft-delete flag for rollback support (matches messages/chatMessages pattern)
+  // Soft-delete flag for rollback support (matches the `messages` pattern)
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
   // AI sender metadata: set when message is posted by an AI tool

@@ -226,7 +226,19 @@ export async function handleChatTurn(
           });
           return null;
         });
-      if (conversation && conversation.type === 'global') {
+      // OWNERSHIP IS PART OF THE SELECTION, not because the global strategy
+      // needs it — `resolveOrCreateConversation` re-enforces owner + type +
+      // isActive independently — but because WITHOUT it the two branches
+      // refuse differently and the difference is observable (review finding —
+      // MINOR 3). Someone else's existing global conversation routed to the
+      // global strategy and came back `404 "Conversation not found"`, while
+      // every other id fell through to `400 "chatId is required"`, so an
+      // authenticated caller could tell "this id is an existing global
+      // conversation" from everything else. Nothing beyond existence leaked
+      // and cuid2 ids are not enumerable, but this codebase refuses uniformly
+      // across "forbidden" and "does not exist" everywhere else it decides
+      // anything (`authorize-pane-scope.ts`), and the row is already in hand.
+      if (conversation && conversation.type === 'global' && conversation.userId === auth.userId) {
         // An MCP token has never been able to drive the global assistant, and
         // this entry must not become the door that lets it. Re-running the
         // session-only options produces the SAME refusal the global URL would

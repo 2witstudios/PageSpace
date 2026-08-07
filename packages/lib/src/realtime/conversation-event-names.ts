@@ -21,6 +21,12 @@
  *  - DIRECTORY goes to the owner's own socket room and the page room, and
  *    carries METADATA ONLY — never message content. See the audience invariant
  *    suite for why that separation is load-bearing.
+ *
+ * There is deliberately no `ConversationEventName` union over both planes. One
+ * existed, unused, and knip found it (review finding): a type that spans the
+ * two planes is a type whose values cannot be routed without re-deciding which
+ * plane they belong to, which is the distinction this module exists to make
+ * unavoidable. Consumers take the narrower union they actually mean.
  */
 
 /** Content plane: what happened to the messages inside one conversation. */
@@ -49,4 +55,3 @@ export type ConversationContentEventName =
   (typeof CONVERSATION_CONTENT_EVENTS)[keyof typeof CONVERSATION_CONTENT_EVENTS];
 export type ConversationDirectoryEventName =
   (typeof CONVERSATION_DIRECTORY_EVENTS)[keyof typeof CONVERSATION_DIRECTORY_EVENTS];
-export type ConversationEventName = ConversationContentEventName | ConversationDirectoryEventName;

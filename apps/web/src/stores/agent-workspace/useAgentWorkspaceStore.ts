@@ -277,6 +277,25 @@ const MAX_TRANSPORT_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [300, 900, 2400, 5000];
 
 /**
+ * A NEW value on every page load, mixed into the counter fallback below.
+ *
+ * Without it the fallback restarted at 1 on every load, and both id families it
+ * mints are compound-PK'd per workspace — so a reload re-minting `col-1` into
+ * the same workspace wrote a duplicate id (the 500-then-discard path
+ * `verb-queue.ts` documents), and a re-minted `op-1` was worse: the ops table
+ * is PK'd `(workspaceId, opId)`, so `findOp` read it as a REPLAY, returned the
+ * recorded rev and never applied the verb. No error, no retry, no toast — the
+ * user's split or resize simply did not happen (review finding).
+ *
+ * Not hypothetical: the fallback is taken whenever `crypto.randomUUID` is
+ * missing, which means any non-secure context — for this product, an
+ * onprem/self-hosted deployment reached over plain HTTP on a LAN address.
+ * `Math.random` needs no secure context, so the degraded path now degrades to
+ * ugly ids rather than to ids that collide with the previous load's.
+ */
+const FALLBACK_MINT_NONCE = Math.random().toString(36).slice(2, 10);
+
+/**
  * `crypto.randomUUID` where available, with a counter fallback so a
  * non-secure-context browser (or a test environment without it) still mints
  * distinct pane ids rather than colliding on one.
@@ -287,7 +306,7 @@ function mintId(prefix: string): string {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   paneCounter += 1;
-  return `${prefix}-${paneCounter}`;
+  return `${prefix}-${FALLBACK_MINT_NONCE}-${paneCounter}`;
 }
 
 function emptySync(): WorkspaceSync {
@@ -301,6 +320,17 @@ function emptySync(): WorkspaceSync {
  * slow POST could resurrect a grid the user just ended, or overwrite a
  * rollback with the state it rolled back from. Module-level, so it survives
  * the sync entry itself being deleted.
+ *
+ * ENTRIES ARE DELIBERATELY NEVER REMOVED, which is why `drop` bumps rather
+ * than deletes (review finding — the Map grows for the lifetime of the tab).
+ * Deleting would reset the counter to 0, and a response still in flight from
+ * before the drop — minted at generation 0, because this workspace had never
+ * been reset — would then MATCH the re-hydrated entry's fresh 0 and be
+ * applied: precisely the resurrection the generation exists to prevent. The
+ * cost of keeping them is one integer per workspace id the tab has ever
+ * opened; the cost of dropping them is the bug. Giving the queue a
+ * per-workspace controller created and disposed with the sync entry would
+ * retire both, and is the shape to reach for if this ever needs to change.
  */
 const queueGeneration = new Map<string, number>();
 

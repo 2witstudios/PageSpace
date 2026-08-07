@@ -192,8 +192,15 @@ export const nextConfig: NextConfig = {
       // its `/api/:path*` matcher covers both spellings identically, so auth is
       // unchanged. The contract PR deletes this block.
       afterFiles: [
+        // The BARE old path. It read `/api/agent-workspaces` →
+        // `/api/agent-workspaces`, a rewrite to itself and a no-op — a sed
+        // casualty from the rename, since the source is the one spelling here
+        // that must stay OLD (review finding). Kept rather than deleted: the
+        // `:path*` rule below happens to cover the bare path too, but relying
+        // on whether `:path*` matches zero segments is not what a compat shim
+        // should rest on.
         {
-          source: "/api/agent-workspaces",
+          source: "/api/agent-sessions",
           destination: "/api/agent-workspaces",
         },
         {

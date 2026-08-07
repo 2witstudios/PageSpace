@@ -439,6 +439,17 @@ async function resolvePaneLabels(
           }) ?? '',
         // Same derivation the session-conversation listings use: a page-agent
         // conversation's contextId IS its agent page id; global has none.
+        //
+        // The `client` branch that `derivedPageId` carries is deliberately
+        // absent, not forgotten (review finding — this is the one other place
+        // that spells the rule out). `client` threads are minted by the embed
+        // SDK and are never pane targets: a pane's `chat:` scope can only name
+        // a conversation the workspace holds, and `open_chat_pane` /
+        // `spawn_session` mint `page` and `global` rows only. Were one ever to
+        // reach a pane, `null` here is the fail-quiet answer — an unlabelled
+        // agent slot, not a wrong page id — but the rule's real home stays
+        // `unified-message-scope.ts`, and a JS twin of it here would be a
+        // third spelling of a rule this epic just finished consolidating.
         agentPageId: row.type === 'page' ? row.contextId : null,
       });
     }

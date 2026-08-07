@@ -294,12 +294,20 @@ export function resolveShellCommand({
   command,
   args,
   commandOverride,
+  // The interactive shell binary, injected like everything else this function
+  // needs (review finding). It read `process.env.SHELL` directly, which made
+  // the one impure line in a file whose three sibling resolvers are labelled
+  // `Pure:` — and made "what does this resolve to" a question about the
+  // process rather than about the arguments. The default keeps every call site
+  // that does not care unchanged, and the ambient read now happens once, at
+  // the boundary that already knows about the environment.
+  shell = process.env.SHELL || 'bash',
 }: {
   command: string;
   args: string[];
   commandOverride: string | null;
+  shell?: string;
 }): { command: string; args: string[] } {
-  const shell = process.env.SHELL || 'bash';
   if (commandOverride) return { command: shell, args: ['-c', commandOverride] };
   if (command === 'shell') return { command: shell, args: [] };
   return { command, args };
