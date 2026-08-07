@@ -20,8 +20,10 @@
  * are about what the LISTING returns, not about which table it read.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors `reorder-task-list.integration.test.ts` in this same convention.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors `reorder-task-list.integration.test.ts` in this same convention.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -31,6 +33,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { listAllConversationsPaginated, decodeCursor } from '../agent-sessions-conversations-runtime';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -64,7 +67,8 @@ describe('listAllConversationsPaginated — hasActiveMessage against a real Post
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('agent-sessions-conversations-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });
@@ -235,7 +239,8 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('agent-sessions-conversations-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });

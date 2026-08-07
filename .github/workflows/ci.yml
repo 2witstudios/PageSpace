@@ -63,6 +63,15 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/db' db:migrate
 
+      # A SECOND, empty database on the same service, for the suites that need a
+      # scratch Admin PG (packages/db's admin-migrate/grants/login-users/partition
+      # integration tests and scripts/__tests__/backfill-audit-db.integration).
+      # Those suites DROP SCHEMA public on whatever ADMIN_DATABASE_URL points at,
+      # so it must never be the app database — hence a separate one rather than a
+      # second Postgres service container.
+      - name: Create scratch Admin database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pagespace_admin_test'
+
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
@@ -94,10 +103,32 @@ jobs:
       # docker-compose.test.yml-only port otherwise); the config's singleFork
       # pool keeps them from racing each other or the earlier coverage run over
       # the same DB.
+      # ADMIN_DATABASE_URL unlocks backfill-audit-db.integration.test.ts, whose
+      # `describe.skipIf(!url)` had been reporting the whole audit-store cutover
+      # rehearsal as "skipped" in every run that ever executed it.
       - name: Run backfill script tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: cd scripts && bunx vitest run
+
+      # packages/db's integration suites are EXCLUDED from its default vitest
+      # config (they need a live Postgres), and until now nothing invoked the
+      # config that includes them — five suites, 108 assertions, running in no
+      # job at all. They go last because accessible-page-ids truncates the app
+      # database's users/drives/pages between cases.
+      - name: Run packages/db integration suites
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
+        run: bun run --filter '@pagespace/db' test:integration
+
+      # infrastructure/ is not a bun workspace (see infrastructure/vitest.config.ts
+      # for why it should not become one), so turbo never sees it and its ~15 test
+      # files — including upgrade-doc.test.ts, the only check on the operator
+      # upgrade notes — ran nowhere. Invoked directly instead.
+      - name: Run infrastructure tests
+        run: bun run test:infra
 
       - name: Coverage report
         if: always()

@@ -21,8 +21,9 @@
  * compliance query keyed on it alone silently skips the agent side of the
  * subject's own conversations.
  *
- * Requires DATABASE_URL → a Postgres with migrations applied. Skipped when no
- * DB is reachable, mirroring `unified-reader-parity.integration.test.ts`.
+ * Requires DATABASE_URL → a Postgres with migrations applied. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -37,6 +38,7 @@ import { collectUserMessages } from '@pagespace/lib/compliance/export/gdpr-expor
 import { cleanupSoftDeletedChatRecords } from '@pagespace/lib/compliance/retention/retention-engine';
 import { deleteStreamStateForUser } from '@pagespace/lib/compliance/erasure/purge-stream-state';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -64,7 +66,8 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('unified-compliance-legs.integration.test.ts', error);
       dbAvailable = false;
     }
   });

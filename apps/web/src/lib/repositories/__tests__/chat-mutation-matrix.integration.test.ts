@@ -28,8 +28,9 @@
  * process has no realtime service to POST to). The database, the repository,
  * the undo service and the cron handler are all real.
  *
- * Requires DATABASE_URL → a Postgres with migrations applied; skipped when no
- * DB is reachable, mirroring `unified-reader-parity.integration.test.ts`.
+ * Requires DATABASE_URL → a Postgres with migrations applied. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -71,6 +72,7 @@ import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -168,7 +170,8 @@ describe('chat mutation matrix — one message table', () => {
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('chat-mutation-matrix.integration.test.ts', error);
       dbAvailable = false;
     }
   });

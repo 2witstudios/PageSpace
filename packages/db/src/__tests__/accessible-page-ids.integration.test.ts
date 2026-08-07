@@ -7,9 +7,10 @@
  *   bun run --filter '@pagespace/db' test -- src/__tests__/accessible-page-ids.integration.test.ts
  *
  * The function is the canonical "what pages can this user view?" primitive that
- * collapses the (owner | drive-admin | explicit-grant) authorization graph into
- * one DB-side call. Trashed pages, trashed drives, and expired explicit grants
- * are all excluded by the function definition.
+ * collapses the (owner | drive-admin | explicit-grant | accepted-member-on-a-
+ * non-private-page) authorization graph into one DB-side call. Trashed pages,
+ * trashed drives, and expired explicit grants are all excluded by the function
+ * definition. The current rule set is `drizzle/0133_default_member_read.sql`.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '../test/factories';
@@ -92,11 +93,32 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     expect(accessible).toEqual([]);
   });
 
-  it('does NOT grant regular MEMBER access to pages without explicit grants', async () => {
+  /**
+   * Migration 0133 (`0133_default_member_read.sql`) added rule 4 — "Discord-style
+   * open-by-default": an ACCEPTED drive member of any role reads every page in the
+   * drive that is not explicitly `isPrivate`. This file asserted the pre-0133
+   * closed-by-default rule and kept asserting it for 120+ migrations, because the
+   * suite ran in no job. `packages/lib/src/permissions/permissions.ts` (the TS leg
+   * of the same decision) has agreed with 0133 the whole time; only these two
+   * assertions were stale.
+   */
+  it('grants an accepted regular MEMBER read on NON-private pages (0133 rule 4)', async () => {
     const owner = await factories.createUser();
     const member = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
-    await factories.createPage(drive.id);
+    const open = await factories.createPage(drive.id);
+    await factories.createDriveMember(drive.id, member.id, { role: 'MEMBER' });
+
+    const accessible = await callFunction(member.id);
+
+    expect(accessible).toEqual([open.id]);
+  });
+
+  it('does NOT grant a regular MEMBER access to an isPrivate page without an explicit grant', async () => {
+    const owner = await factories.createUser();
+    const member = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    await factories.createPage(drive.id, { isPrivate: true });
     await factories.createDriveMember(drive.id, member.id, { role: 'MEMBER' });
 
     const accessible = await callFunction(member.id);
@@ -220,6 +242,7 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     const grantDrive = await factories.createDrive(adminTarget.id);
 
     const ownPage = await factories.createPage(ownDrive.id);
+    const ownPrivatePage = await factories.createPage(ownDrive.id, { isPrivate: true });
     const adminPage = await factories.createPage(adminDrive.id);
     const grantedPage = await factories.createPage(grantDrive.id);
     const blockedPage = await factories.createPage(grantDrive.id);
@@ -235,10 +258,13 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
 
     const accessible = await callFunction(second.id);
 
-    // Owns nothing, ADMIN of adminDrive (sees adminPage), explicit grant for grantedPage,
-    // MEMBER of ownDrive without explicit grants (does NOT see ownPage).
-    expect(accessible).toEqual(sorted([adminPage.id, grantedPage.id]));
-    expect(accessible).not.toContain(ownPage.id);
+    // Owns nothing, ADMIN of adminDrive (sees adminPage), explicit grant for
+    // grantedPage, and — since 0133 rule 4 — accepted MEMBER of ownDrive, so the
+    // NON-private ownPage is readable while the isPrivate one is not.
+    expect(accessible).toEqual(sorted([adminPage.id, grantedPage.id, ownPage.id]));
+    expect(accessible).not.toContain(ownPrivatePage.id);
+    // blockedPage lives in a drive where `second` is neither owner, admin, nor
+    // member — no membership, so rule 4 cannot reach it.
     expect(accessible).not.toContain(blockedPage.id);
   });
 });

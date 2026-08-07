@@ -9,7 +9,9 @@
  * exactly one slips through when the balance covers only one call.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied (scripts/test-with-db.sh,
- * port 5433). Skipped when no DB is reachable.
+ * port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  *
  * NOTE (manual lock proof): temporarily delete `.for('update')` from canConsumeAI's
  * balance read and the first test below should FAIL (multiple calls allowed / multiple
@@ -23,6 +25,7 @@ import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/
 import { factories } from '@pagespace/db/test/factories';
 import { canConsumeAI, addOneMonth } from '../credit-gate';
 import { RESERVE_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '../credit-pricing';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -55,7 +58,8 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
     try {
       await db.select().from(creditBalances).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('credit-gate-concurrency.integration.test.ts', error);
       dbAvailable = false;
     }
   });
