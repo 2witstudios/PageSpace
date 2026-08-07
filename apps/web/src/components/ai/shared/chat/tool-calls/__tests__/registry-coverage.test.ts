@@ -60,9 +60,12 @@ function collectToolNames(): string[] {
  * surface. Widening the scan makes them visible; recording them here keeps the
  * assertion enforcing on everything else while the renderers are designed.
  *
- * The two guards below make this ledger self-cleaning: it can never grow (a new
- * uncovered tool still fails), and an entry that gains a renderer — or stops
- * existing — must be deleted from here or the test fails.
+ * The two guards below keep the ledger honest in both directions: it cannot
+ * grow SILENTLY — a new uncovered tool fails the coverage assertion until
+ * someone adds it here deliberately, in a reviewable diff, with a reason — and
+ * an entry that gains a renderer (or stops existing) must be deleted from here
+ * or the test fails. Adding a line is a decision to defer a renderer, never a
+ * way to make an unexpected failure go away.
  */
 const PENDING_RICH_RENDERERS = new Set<string>([
   // session family (createSessionTools)
