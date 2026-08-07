@@ -18,7 +18,7 @@ import path from 'path';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0247_.*\.sql$/.test(f));
+const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0248_.*\.sql$/.test(f));
 const sql = readFileSync(path.join(MIGRATIONS_DIR, migrationFile ?? ''), 'utf8');
 /** SQL with line comments stripped, so assertions never match prose. */
 const code = sql
@@ -26,13 +26,13 @@ const code = sql
   .filter((line) => !line.trimStart().startsWith('--'))
   .join('\n');
 
-describe('drizzle/0247 conversations.rev migration', () => {
-  it('should exist in the journal as migration 0247', () => {
+describe('drizzle/0248 conversations.rev migration', () => {
+  it('should exist in the journal as migration 0248', () => {
     expect(migrationFile).toBeDefined();
     const journal = JSON.parse(
       readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    const entry = journal.entries.find((e) => e.idx === 247);
+    const entry = journal.entries.find((e) => e.idx === 248);
     expect(entry?.tag).toBe(migrationFile?.replace(/\.sql$/, ''));
   });
 

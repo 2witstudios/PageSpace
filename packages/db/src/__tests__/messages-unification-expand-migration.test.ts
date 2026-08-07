@@ -1,20 +1,20 @@
 /**
- * Migrations 0248 (messages-unification EXPAND) and 0249 (integrity
+ * Migrations 0249 (messages-unification EXPAND) and 0250 (integrity
  * constraints) — epic "Agent-Session Single Source of Truth", Phase 4
  * (docs/2.0-architecture/agent-sessions.md; plan D6).
  *
  * Two layers, deliberately:
  *
  *   1. STATIC invariants of the migration SQL, which run everywhere with no
- *     database (the repo's `*-migration.test.ts` precedent — 0246/0247). They
+ *     database (the repo's `*-migration.test.ts` precedent — 0247/0248). They
  *     catch a regenerated or hand-edited migration silently losing the orphan
  *     synthesis, the NOT VALID qualifiers, or the expand-only guarantee.
  *
  *   2. LIVE behavior against a real Postgres, run whenever DATABASE_URL is set
  *      (which it is for `bun run test`, `./scripts/test-with-db.sh` and CI).
- *      A fresh database is migrated to 0247, kept as a TEMPLATE, and each
+ *      A fresh database is migrated to 0248, kept as a TEMPLATE, and each
  *      scenario gets its own copy of it — so every scenario seeds a legacy
- *      corpus and then watches 0248/0249 actually run against it. The app's
+ *      corpus and then watches 0249/0250 actually run against it. The app's
  *      own database is never touched: everything happens in throwaway
  *      databases created and dropped by this file.
  */
@@ -41,16 +41,16 @@ function readMigration(idx: number): { file: string; sql: string; code: string }
   return { file, sql, code };
 }
 
-const expand = readMigration(248);
-const integrity = readMigration(249);
+const expand = readMigration(249);
+const integrity = readMigration(250);
 
 const journal = JSON.parse(
   readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
 ) as { entries: Array<{ idx: number; tag: string }> };
 
-describe('drizzle/0248 messages unification — expand', () => {
-  it('should be migration 0248 in the journal', () => {
-    expect(journal.entries.find((e) => e.idx === 248)?.tag).toBe(
+describe('drizzle/0249 messages unification — expand', () => {
+  it('should be migration 0249 in the journal', () => {
+    expect(journal.entries.find((e) => e.idx === 249)?.tag).toBe(
       path.basename(expand.file, '.sql'),
     );
   });
@@ -143,9 +143,9 @@ describe('drizzle/0248 messages unification — expand', () => {
       'CREATE INDEX IF NOT EXISTS "messages_page_id_is_active_created_at_idx"',
     );
     // The above-the-gate path names a deferred operator script. That script
-    // is GONE as of 0252, and deliberately: both indexes it built are on
-    // `messages."pageId"`, the transitional column 0252 drops, so anything
-    // still holding it would either be redundant (0248 and 0252 apply in the
+    // is GONE as of 0253, and deliberately: both indexes it built are on
+    // `messages."pageId"`, the transitional column 0253 drops, so anything
+    // still holding it would either be redundant (0249 and 0253 apply in the
     // same batch) or actively broken (`CREATE INDEX CONCURRENTLY` on a column
     // that no longer exists). The migration text keeps naming it because
     // applied migrations are never edited.
@@ -165,9 +165,9 @@ describe('drizzle/0248 messages unification — expand', () => {
   });
 });
 
-describe('drizzle/0249 integrity constraints', () => {
-  it('should be migration 0249 in the journal', () => {
-    expect(journal.entries.find((e) => e.idx === 249)?.tag).toBe(
+describe('drizzle/0250 integrity constraints', () => {
+  it('should be migration 0250 in the journal', () => {
+    expect(journal.entries.find((e) => e.idx === 250)?.tag).toBe(
       path.basename(integrity.file, '.sql'),
     );
   });
@@ -209,15 +209,15 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 /** All migrations, in journal order. Index N === journal idx N. */
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
 /** Everything BEFORE this PR's two migrations — the "yesterday" schema. */
-const baseMigrations = allMigrations.slice(0, 248);
+const baseMigrations = allMigrations.slice(0, 249);
 /**
- * Base + 0248 + 0249, and nothing after. Bounded on purpose: later migrations
- * are entitled to reject corpora these scenarios deliberately construct (0250
+ * Base + 0249 + 0250, and nothing after. Bounded on purpose: later migrations
+ * are entitled to reject corpora these scenarios deliberately construct (0251
  * aborts on the unresolvable-orphan scenario below, which is exactly its job),
- * and this suite is about what 0248/0249 do to a database, not about the head
+ * and this suite is about what 0249/0250 do to a database, not about the head
  * of the journal.
  */
-const throughThisPr = allMigrations.slice(0, 250);
+const throughThisPr = allMigrations.slice(0, 251);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -242,11 +242,11 @@ const createdDatabases: string[] = [];
 
 let adminPool: Pool;
 
-/** A scratch database seeded to 0247, plus the notices its migrations emitted. */
+/** A scratch database seeded to 0248, plus the notices its migrations emitted. */
 interface Scenario {
   pool: Pool;
   notices: string[];
-  /** Applies 0248 + 0249. Resolves to the error when the migration aborts. */
+  /** Applies 0249 + 0250. Resolves to the error when the migration aborts. */
   migrate: () => Promise<Error | null>;
   query: <T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -333,13 +333,13 @@ async function insertChatMessage(
   );
 }
 
-describeLive('0248/0249 against a real Postgres', () => {
+describeLive('0249/0250 against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
-    // Migrate the template to 0247 — the schema as it stands BEFORE this PR —
+    // Migrate the template to 0248 — the schema as it stands BEFORE this PR —
     // then disconnect, because a template with open connections cannot be
     // copied.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
@@ -361,11 +361,11 @@ describeLive('0248/0249 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: the scenarios below apply exactly 0248 and 0249', () => {
+  it('pins the base: the scenarios below apply exactly 0249 and 0250', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
     expect(throughThisPr.length - baseMigrations.length).toBe(2);
-    expect(journal.entries[248]?.idx).toBe(248);
     expect(journal.entries[249]?.idx).toBe(249);
+    expect(journal.entries[250]?.idx).toBe(250);
   });
 
   it('resolves ownership by the ladder, quarantines tombstoned threads, and is idempotent', async () => {
@@ -444,7 +444,7 @@ describeLive('0248/0249 against a real Postgres', () => {
       await s.query(`DELETE FROM "conversations" WHERE "id" = 'c_drive'`);
       expect(await s.query(`SELECT 1 FROM "chat_messages" WHERE "conversationId" = 'c_drive'`)).toHaveLength(0);
 
-      // Idempotency: replaying every hand-appended block of 0248 (the audit,
+      // Idempotency: replaying every hand-appended block of 0249 (the audit,
       // the synthesis, the FK, the index gate) changes nothing. The generated
       // `ADD COLUMN` statements above them are not replayable and do not need
       // to be — the journal hash is what stops a migration running twice; the
@@ -509,7 +509,7 @@ describeLive('0248/0249 against a real Postgres', () => {
       //
       // The pre-audit's premise ("a conversationId must name exactly one page,
       // because contextId has to represent it") simply does not apply here:
-      // this conversation's `contextId` is the drive, and 0252 later derives
+      // this conversation's `contextId` is the drive, and 0253 later derives
       // its page into `agentPageId`, anchoring to the earliest and merely
       // WARNING (`% client conversation(s) named more than one agent page`).
       // Aborting on it makes the upgrade impossible for any deployment that
@@ -609,7 +609,7 @@ describeLive('0248/0249 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('enforces 0249 on new writes while grandfathering legacy-shaped rows', async () => {
+  it('enforces 0250 on new writes while grandfathering legacy-shaped rows', async () => {
     const s = await openScenario('integrity');
     try {
       await seedFixtures(s);

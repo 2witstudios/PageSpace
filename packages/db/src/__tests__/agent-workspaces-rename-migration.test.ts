@@ -1,5 +1,5 @@
 /**
- * The `agent_sessions` → `agent_workspaces` rename (0253, epic Phase 5).
+ * The `agent_sessions` → `agent_workspaces` rename (0254, epic Phase 5).
  *
  * Two classes of assertion, and both matter for different reasons.
  *
@@ -32,7 +32,7 @@ import { Client } from 'pg';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0253_.*\.sql$/.test(f));
+const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0254_.*\.sql$/.test(f));
 const sql = readFileSync(path.join(MIGRATIONS_DIR, migrationFile ?? ''), 'utf8');
 /** SQL with line comments stripped, so assertions never match the prose header. */
 const code = sql
@@ -40,13 +40,13 @@ const code = sql
   .filter((line) => !line.trimStart().startsWith('--'))
   .join('\n');
 
-describe('drizzle/0253 agent_workspaces rename — migration text', () => {
-  it('should exist in the journal as migration 0253', () => {
+describe('drizzle/0254 agent_workspaces rename — migration text', () => {
+  it('should exist in the journal as migration 0254', () => {
     expect(migrationFile).toBeDefined();
     const journal = JSON.parse(
       readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 253)?.tag).toBe(
+    expect(journal.entries.find((e) => e.idx === 254)?.tag).toBe(
       path.basename(migrationFile ?? '', '.sql'),
     );
   });
@@ -130,7 +130,7 @@ describe('drizzle/0253 agent_workspaces rename — migration text', () => {
   });
 });
 
-describe('drizzle/0253 agent_workspaces rename — live schema', () => {
+describe('drizzle/0254 agent_workspaces rename — live schema', () => {
   const url = process.env.DATABASE_URL;
   let client: Client;
 

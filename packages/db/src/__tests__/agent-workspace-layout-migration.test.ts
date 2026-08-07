@@ -1,5 +1,5 @@
 /**
- * Static invariants of the agent-workspace-layout migration (0246, epic
+ * Static invariants of the agent-workspace-layout migration (0247, epic
  * Phase 3 — the #2202 machine-panes pattern re-cut for sessions).
  *
  * These tests pin the migration SQL itself so CI catches a regenerated or
@@ -7,7 +7,7 @@
  * strictly-additive guarantee — without a database.
  *
  * The LIVE behavior of this promotion is exercised in
- * `workspace-state-drop-migration.test.ts`, which drives the whole 0245 → 0251
+ * `workspace-state-drop-migration.test.ts`, which drives the whole 0245 → 0252
  * chain against a real Postgres. That matters: this file's header used to
  * claim the promotion "was verified against a scratch Postgres 17" by hand,
  * and the claim was wrong — the promotion silently ate a pane whose id
@@ -20,7 +20,7 @@ import path from 'path';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0246_.*\.sql$/.test(f));
+const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0247_.*\.sql$/.test(f));
 const sql = readFileSync(path.join(MIGRATIONS_DIR, migrationFile ?? ''), 'utf8');
 /** SQL with line comments stripped, so assertions never match prose. */
 const code = sql
@@ -28,12 +28,12 @@ const code = sql
   .filter((line) => !line.trimStart().startsWith('--'))
   .join('\n');
 
-describe('drizzle/0246 agent workspace layout promotion', () => {
-  it('should exist in the journal as migration 0246', () => {
+describe('drizzle/0247 agent workspace layout promotion', () => {
+  it('should exist in the journal as migration 0247', () => {
     const journal = JSON.parse(
       readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 246)?.tag).toBe(
+    expect(journal.entries.find((e) => e.idx === 247)?.tag).toBe(
       path.basename(migrationFile ?? '', '.sql'),
     );
   });
@@ -110,7 +110,7 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
   it('should DEDUPLICATE client-minted ids before insert, not lean on ON CONFLICT to hide collisions', () => {
     // The blob has never constrained pane/column id uniqueness while the row
     // tables are keyed `(workspaceId, id)`. Without `DISTINCT ON` the second
-    // occurrence is silently swallowed by `ON CONFLICT DO NOTHING` and 0251
+    // occurrence is silently swallowed by `ON CONFLICT DO NOTHING` and 0252
     // then refuses to drop the column over the pane this migration ate.
     expect(code).toContain(`SELECT DISTINCT ON (s."id", col.value ->> 'id')`);
     expect(code).toContain(`SELECT DISTINCT ON (s."id", pane.value ->> 'id')`);
@@ -121,7 +121,7 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
     expect(code).toMatch(/RAISE WARNING[^;]*duplicate pane id/);
   });
 
-  it('should be strictly additive — 0246 EXPANDS only; the blob is dropped later, by 0250', () => {
+  it('should be strictly additive — 0247 EXPANDS only; the blob is dropped later, by 0252', () => {
     expect(code).not.toContain('DROP COLUMN');
     expect(code).not.toContain('DROP TABLE');
     expect(code).not.toMatch(/\bRENAME\b/);

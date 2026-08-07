@@ -1,5 +1,5 @@
 /**
- * Migration 0252 (DROP chat_messages) — epic "Agent-Session Single Source of
+ * Migration 0253 (DROP chat_messages) — epic "Agent-Session Single Source of
  * Truth", Phase 4 PR 15, the contract step and the ONLY irreversible migration
  * in the epic (docs/2.0-architecture/agent-sessions.md §3a; plan D6).
  *
@@ -21,12 +21,12 @@
  *      pagespace-cli's edit/delete.
  *   5. Re-running the whole block is a no-op.
  *
- * Two layers, matching the 0248/0249/0250 suites next door:
+ * Two layers, matching the 0249/0250/0251 suites next door:
  *
  *   1. STATIC invariants of the SQL, which run with no database at all.
  *   2. LIVE behavior against a real Postgres whenever DATABASE_URL is set. A
- *      database is migrated to 0250 and kept as a TEMPLATE; each scenario gets
- *      its own copy, seeds a corpus, and watches 0252 actually run. The app's
+ *      database is migrated to 0252 and kept as a TEMPLATE; each scenario gets
+ *      its own copy, seeds a corpus, and watches 0253 actually run. The app's
  *      own database is never touched.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -52,15 +52,15 @@ function readMigration(idx: number): { file: string; sql: string; code: string }
   return { file, sql, code };
 }
 
-const drop = readMigration(252);
+const drop = readMigration(253);
 
 const journal = JSON.parse(
   readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
 ) as { entries: Array<{ idx: number; tag: string }> };
 
-describe('drizzle/0252 — drop chat_messages', () => {
-  it('should be migration 0252 in the journal', () => {
-    expect(journal.entries.find((e) => e.idx === 252)?.tag).toBe(
+describe('drizzle/0253 — drop chat_messages', () => {
+  it('should be migration 0253 in the journal', () => {
+    expect(journal.entries.find((e) => e.idx === 253)?.tag).toBe(
       path.basename(drop.file, '.sql'),
     );
   });
@@ -122,15 +122,15 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 
 /** All migrations, in journal order. */
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
-/** Everything BEFORE 0252 (… 0251). */
-const baseMigrations = allMigrations.slice(0, 252);
+/** Everything BEFORE 0253 (… 0252). */
+const baseMigrations = allMigrations.slice(0, 253);
 /**
- * Through 0252 and no further. Bounded by INDEX, not by `length - 1`: this
- * suite is about what 0252 does to a database, not about the head of the
+ * Through 0253 and no further. Bounded by INDEX, not by `length - 1`: this
+ * suite is about what 0253 does to a database, not about the head of the
  * journal, and the next migration to land must not silently join the scenario
- * (same fix as the 0250 suite's).
+ * (same fix as the 0251 suite's).
  */
-const throughThisPr = allMigrations.slice(0, 253);
+const throughThisPr = allMigrations.slice(0, 254);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -155,11 +155,11 @@ const createdDatabases: string[] = [];
 
 let adminPool: Pool;
 
-/** A scratch database seeded to 0250, plus the notices its migrations emitted. */
+/** A scratch database seeded to 0252, plus the notices its migrations emitted. */
 interface Scenario {
   pool: Pool;
   notices: string[];
-  /** Applies 0252. Resolves to the error when the migration aborts. */
+  /** Applies 0253. Resolves to the error when the migration aborts. */
   migrate: () => Promise<Error | null>;
   query: <T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -274,13 +274,13 @@ async function columnExists(s: Scenario, table: string, column: string): Promise
   return rows[0].n > 0;
 }
 
-describeLive('0252 against a real Postgres', () => {
+describeLive('0253 against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
-    // Migrate the template to 0250 — the schema as it stands BEFORE this PR —
+    // Migrate the template to 0252 — the schema as it stands BEFORE this PR —
     // then disconnect, because a template with open connections cannot be
     // copied.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
@@ -302,10 +302,10 @@ describeLive('0252 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: 0252 is the only migration under test here', () => {
+  it('pins the base: 0253 is the only migration under test here', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
     expect(throughThisPr.length - baseMigrations.length).toBe(1);
-    expect(journal.entries[252]?.idx).toBe(252);
+    expect(journal.entries[253]?.idx).toBe(253);
   });
 
   it('starts from a schema that still has both', async () => {
@@ -428,7 +428,7 @@ describeLive('0252 against a real Postgres', () => {
     try {
       await seedFixtures(s);
       await seedTwinnedCorpus(s);
-      // A row whose conversation does not exist. The FK 0250 validated makes
+      // A row whose conversation does not exist. The FK 0251 validated makes
       // this unreachable through normal writes, so it has to be dropped to
       // create — which is the point: it is the shape of a corpus that predates
       // the constraint, and it is precisely what must NOT be silently dropped.
@@ -471,7 +471,7 @@ describeLive('0252 against a real Postgres', () => {
       // documented `UNIFIED_MESSAGES_DUAL_WRITE=off` kill switch makes that
       // window operator-controllable and arbitrarily long. Nothing repairs it
       // afterwards: the backfill only ever INSERTs rows that are missing, and
-      // the 0252 sweep skips any row that already has a twin.
+      // the 0253 sweep skips any row that already has a twin.
       //
       // After the freeze the legacy leg is immutable, so each of these shapes
       // is positive proof of a lost write rather than normal divergence.

@@ -1,22 +1,22 @@
 /**
- * Migration 0250 (messages-unification VALIDATE) — epic "Agent-Session Single
+ * Migration 0251 (messages-unification VALIDATE) — epic "Agent-Session Single
  * Source of Truth", Phase 4 PR 14, the soak gate
  * (docs/2.0-architecture/agent-sessions.md; plan D6).
  *
- * 0248 added `chat_messages.conversationId`'s FK `NOT VALID`: enforced for new
- * rows, the legacy corpus left unscanned. 0250 scans it. The value of that is
+ * 0249 added `chat_messages.conversationId`'s FK `NOT VALID`: enforced for new
+ * rows, the legacy corpus left unscanned. 0251 scans it. The value of that is
  * not the constraint — the table is dropped at PR 15 — it is the RECEIPT: a
  * legacy row whose conversation does not exist is a row `messages` could never
  * have accepted (its own FK is validated and cascading), so a passing VALIDATE
  * is the proof that the copy PR 15 keeps is not missing anything the original
  * held.
  *
- * Two layers, matching the 0248/0249 suite next door:
+ * Two layers, matching the 0249/0250 suite next door:
  *
  *   1. STATIC invariants of the SQL, which run with no database at all.
  *   2. LIVE behavior against a real Postgres whenever DATABASE_URL is set.
- *      A database is migrated to 0249 and kept as a TEMPLATE; each scenario
- *      gets its own copy, seeds a corpus, and watches 0250 actually run. The
+ *      A database is migrated to 0250 and kept as a TEMPLATE; each scenario
+ *      gets its own copy, seeds a corpus, and watches 0251 actually run. The
  *      app's own database is never touched.
  *
  * The three behaviours pinned live are the three the PR promises: it validates
@@ -48,23 +48,23 @@ function readMigration(idx: number): { file: string; sql: string; code: string }
   return { file, sql, code };
 }
 
-const validate = readMigration(250);
+const validate = readMigration(251);
 
 const journal = JSON.parse(
   readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
 ) as { entries: Array<{ idx: number; tag: string }> };
 
-describe('drizzle/0250 messages unification — validate the FK', () => {
-  it('should be migration 0250 in the journal', () => {
-    expect(journal.entries.find((e) => e.idx === 250)?.tag).toBe(
+describe('drizzle/0251 messages unification — validate the FK', () => {
+  it('should be migration 0251 in the journal', () => {
+    expect(journal.entries.find((e) => e.idx === 251)?.tag).toBe(
       path.basename(validate.file, '.sql'),
     );
   });
 
-  it('should validate the constraint 0248 added, by its exact name', () => {
+  it('should validate the constraint 0249 added, by its exact name', () => {
     expect(validate.code).toContain(`ALTER TABLE "chat_messages" VALIDATE CONSTRAINT "${FK}"`);
-    // The name is not guessable — it must be the one 0248 wrote.
-    expect(readMigration(248).code).toContain(`ADD CONSTRAINT "${FK}"`);
+    // The name is not guessable — it must be the one 0249 wrote.
+    expect(readMigration(249).code).toContain(`ADD CONSTRAINT "${FK}"`);
   });
 
   it('should be idempotent by gating on convalidated, not on a re-run failing', () => {
@@ -107,17 +107,17 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 /** All migrations, in journal order. Index N === journal idx N. */
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
 /** Everything BEFORE this PR's migration. */
-const baseMigrations = allMigrations.slice(0, 250);
+const baseMigrations = allMigrations.slice(0, 251);
 /**
- * Base + 0250, and nothing after — the same bound, for the same reason, as
+ * Base + 0251, and nothing after — the same bound, for the same reason, as
  * the sibling expand suite's `throughThisPr`. Later migrations are entitled
- * to reject corpora these scenarios deliberately construct (0251's pre-drop
+ * to reject corpora these scenarios deliberately construct (0252's pre-drop
  * guard aborts on a pane grid that exists only in the legacy blob, which is
- * exactly its job), and 0252 DROPs `chat_messages` outright while every
+ * exactly its job), and 0253 DROPs `chat_messages` outright while every
  * scenario below inspects that table after migrating. This suite is about
- * what 0250 does to a database, not about the head of the journal.
+ * what 0251 does to a database, not about the head of the journal.
  */
-const throughThisPr = allMigrations.slice(0, 251);
+const throughThisPr = allMigrations.slice(0, 252);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -142,11 +142,11 @@ const createdDatabases: string[] = [];
 
 let adminPool: Pool;
 
-/** A scratch database seeded to 0249, plus the notices its migrations emitted. */
+/** A scratch database seeded to 0250, plus the notices its migrations emitted. */
 interface Scenario {
   pool: Pool;
   notices: string[];
-  /** Applies 0250. Resolves to the error when the migration aborts. */
+  /** Applies 0251. Resolves to the error when the migration aborts. */
   migrate: () => Promise<Error | null>;
   query: <T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -210,8 +210,8 @@ async function fkState(s: Scenario): Promise<Array<{ convalidated: boolean }>> {
 
 /**
  * Seeds a row that VIOLATES the FK. It has to drop the constraint to do it —
- * which is the point: since 0248 the ONLY way such a row can exist is to have
- * predated the constraint, exactly like the orphans 0248 could not give a
+ * which is the point: since 0249 the ONLY way such a row can exist is to have
+ * predated the constraint, exactly like the orphans 0249 could not give a
  * parent to.
  */
 async function seedOrphanRows(s: Scenario, conversationId: string, ids: string[]): Promise<void> {
@@ -230,13 +230,13 @@ async function seedOrphanRows(s: Scenario, conversationId: string, ids: string[]
   `);
 }
 
-describeLive('0250 against a real Postgres', () => {
+describeLive('0251 against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
-    // Migrate the template to 0249 — the schema as it stands BEFORE this PR —
+    // Migrate the template to 0250 — the schema as it stands BEFORE this PR —
     // then disconnect, because a template with open connections cannot be
     // copied.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
@@ -258,10 +258,10 @@ describeLive('0250 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: the scenarios below apply exactly 0250', () => {
+  it('pins the base: the scenarios below apply exactly 0251', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
     expect(throughThisPr.length - baseMigrations.length).toBe(1);
-    expect(journal.entries[250]?.idx).toBe(250);
+    expect(journal.entries[251]?.idx).toBe(251);
   });
 
   it('leaves the constraint NOT VALID until this migration runs', async () => {

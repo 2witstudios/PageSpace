@@ -1,7 +1,7 @@
 /**
- * Static invariants of the `workspaceState` DROP migration (0251, epic
+ * Static invariants of the `workspaceState` DROP migration (0252, epic
  * Phase 3 — the CONTRACT step of the relational pane-grid promotion started
- * in 0246).
+ * in 0247).
  *
  * These tests pin the migration SQL itself so CI catches a regenerated or
  * hand-edited migration losing the sweep, the guard, or the ORDER of the
@@ -11,7 +11,7 @@
  * The header here used to list six scenarios a human had once replayed by
  * hand against a scratch Postgres. They are now a LIVE suite at the bottom of
  * this file, run by CI on every change, because the hand-run had missed the
- * defect that mattered: 0246 ate a duplicate pane id and this migration then
+ * defect that mattered: 0247 ate a duplicate pane id and this migration then
  * refused to deploy over it, in a loop its own HINT could not break.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -24,7 +24,7 @@ import { runMigrations, type RunnableMigration } from '../migration-runner';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0251_.*\.sql$/.test(f));
+const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0252_.*\.sql$/.test(f));
 const sql = readFileSync(path.join(MIGRATIONS_DIR, migrationFile ?? ''), 'utf8');
 /** SQL with line comments stripped, so assertions never match prose. */
 const code = sql
@@ -32,12 +32,12 @@ const code = sql
   .filter((line) => !line.trimStart().startsWith('--'))
   .join('\n');
 
-describe('drizzle/0251 workspaceState drop', () => {
-  it('should exist in the journal as migration 0251', () => {
+describe('drizzle/0252 workspaceState drop', () => {
+  it('should exist in the journal as migration 0252', () => {
     const journal = JSON.parse(
       readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 251)?.tag).toBe(
+    expect(journal.entries.find((e) => e.idx === 252)?.tag).toBe(
       path.basename(migrationFile ?? '', '.sql'),
     );
   });
@@ -69,12 +69,12 @@ describe('drizzle/0251 workspaceState drop', () => {
     expect((code.match(/ON CONFLICT DO NOTHING/g) ?? []).length).toBe(2);
   });
 
-  it('should keep the sweep exactly as tolerant as persistedWorkspaceStateSchema (0246 parity)', () => {
+  it('should keep the sweep exactly as tolerant as persistedWorkspaceStateSchema (0247 parity)', () => {
     expect(code).toContain(`jsonb_typeof(s."workspaceState" -> 'columns') = 'array'`);
     expect(code).toContain(`jsonb_typeof(col.value -> 'panes') = 'array'`);
     expect(code).toContain(`pane.value -> 'scope' ->> 'kind'`);
     expect(code).toContain(`pane.value -> 'scope' ->> 'targetId'`);
-    // The retired `tabs` field is never read — same as the 0246 promotion.
+    // The retired `tabs` field is never read — same as the 0247 promotion.
     expect(code).not.toContain(`'tabs'`);
   });
 
@@ -128,26 +128,26 @@ describe('the schema no longer declares the blob', () => {
 // ───────────────────────────── live behavior ──────────────────────────────
 /**
  * The static assertions above never open a database, so for a long time the
- * ONLY evidence that 0246's promotion and 0251's guard behaved was a prose
+ * ONLY evidence that 0247's promotion and 0252's guard behaved was a prose
  * note in this file's header saying a human had once run them by hand. That
  * note was wrong: the promotion silently DROPPED a pane whose id appeared in
- * two columns (`ON CONFLICT DO NOTHING` on the compound PK), and 0251's guard
- * then refused to deploy over the very pane 0246 had eaten — with a HINT whose
+ * two columns (`ON CONFLICT DO NOTHING` on the compound PK), and 0252's guard
+ * then refused to deploy over the very pane 0247 had eaten — with a HINT whose
  * documented remedy re-ran the same losing promotion and failed identically.
  * Unrecoverable through any documented path, and invisible to a suite that
  * only grepped the SQL.
  *
- * These scenarios drive the real chain (0245 → 0246 → … → 0251) against a real
+ * These scenarios drive the real chain (0246 → 0247 → … → 0252) against a real
  * Postgres, which is the only thing that could have caught it.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeLive = DATABASE_URL ? describe : describe.skip;
 
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
-/** Everything BEFORE the pane-grid promotion (… 0245). */
-const preGrid = allMigrations.slice(0, 246);
-/** Index one past 0251 — the contract step this file is named for. */
-const THROUGH_CONTRACT = 252;
+/** Everything BEFORE the pane-grid promotion (… 0246). */
+const preGrid = allMigrations.slice(0, 247);
+/** Index one past 0252 — the contract step this file is named for. */
+const THROUGH_CONTRACT = 253;
 
 function errorChain(err: unknown): string {
   const parts: string[] = [];
@@ -239,7 +239,7 @@ async function seedFixtures(s: Scenario): Promise<void> {
   `);
 }
 
-/** A session carrying a client-authored `workspaceState` blob, pre-0246. */
+/** A session carrying a client-authored `workspaceState` blob, pre-0247. */
 async function seedSession(s: Scenario, id: string, blob: unknown): Promise<void> {
   await s.query(
     `INSERT INTO "agent_sessions" ("id", "driveId", "ownerId", "name", "workspaceState", "createdAt", "updatedAt")
@@ -271,13 +271,13 @@ async function columnExists(s: Scenario, table: string, column: string): Promise
   return rows[0].n > 0;
 }
 
-describeLive('0246 → 0251 pane grid against a real Postgres', () => {
+describeLive('0247 → 0252 pane grid against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
-    // Template at 0245 — BEFORE the pane grid exists, so each scenario can
+    // Template at 0246 — BEFORE the pane grid exists, so each scenario can
     // seed a blob and watch the promotion itself run.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
     try {
@@ -338,11 +338,11 @@ describeLive('0246 → 0251 pane grid against a real Postgres', () => {
     try {
       await seedFixtures(s);
       // A client-authored blob is not constrained to unique pane ids, but the
-      // relational PK is `(workspaceId, id)`. 0246's `ON CONFLICT DO NOTHING`
-      // therefore silently DISCARDED the second occurrence — and 0251's guard
+      // relational PK is `(workspaceId, id)`. 0247's `ON CONFLICT DO NOTHING`
+      // therefore silently DISCARDED the second occurrence — and 0252's guard
       // then saw a blob pane binding the rows lacked and refused to deploy.
       //
-      // Following 0251's own documented HINT ("DELETE its
+      // Following 0252's own documented HINT ("DELETE its
       // agent_workspace_pane_columns rows so the sweep promotes the blob
       // wholesale") re-ran the identical losing INSERT and failed identically:
       // an unrecoverable loop with no documented way out.
@@ -438,7 +438,7 @@ describeLive('0246 → 0251 pane grid against a real Postgres', () => {
     try {
       await seedFixtures(s);
       expect(await s.migrate(247)).toBeNull();
-      // Born on an old instance AFTER 0246 ran: blob written, rows never.
+      // Born on an old instance AFTER 0247 ran: blob written, rows never.
       await seedSession(s, 'ses_late', {
         columns: [{ id: 'col-a', panes: [pane('pane-late', 'page', 't1')] }],
       });
@@ -449,7 +449,7 @@ describeLive('0246 → 0251 pane grid against a real Postgres', () => {
       ]);
 
       // Re-running the file against an already-contracted database is clean.
-      const file = readdirSync(MIGRATIONS_DIR).find((f) => /^0251_.*\.sql$/.test(f)) as string;
+      const file = readdirSync(MIGRATIONS_DIR).find((f) => /^0252_.*\.sql$/.test(f)) as string;
       await s.query(
         readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').split('--> statement-breakpoint').join(''),
       );
