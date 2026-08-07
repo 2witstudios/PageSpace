@@ -58,10 +58,29 @@ CREATE INDEX "agent_workspace_panes_workspace_idx" ON "agent_workspace_panes" US
 -- is simply never read. Session counts are small, so this in-migration sweep
 -- IS the backfill — no separate cloud script, which also covers
 -- version-skipping tenant/onprem upgrades that have no operator to run one.
+--
+-- DEDUPLICATION (`DISTINCT ON`) is load-bearing, not tidiness. The blob is
+-- CLIENT-AUTHORED and has never had a uniqueness constraint on pane or column
+-- ids, but the relational tables are keyed by the compound `(workspaceId, id)`.
+-- A blob that repeats one pane id in two columns therefore produces two rows
+-- that collide, and a bare `ON CONFLICT DO NOTHING` would SILENTLY DISCARD the
+-- second — leaving 0251's drop guard staring at a blob pane the rows lack, and
+-- refusing to drop the column over a pane THIS statement had just eaten.
+-- (0251's documented remedy, "delete the rows and let the sweep re-promote",
+-- re-ran the identical losing insert: an unrecoverable loop.)
+--
+-- Collapsing to the FIRST occurrence — ordered by column position, then pane
+-- position — matches how the client itself resolves a duplicate id when it
+-- renders the blob, so the row that survives is the pane the user was actually
+-- looking at. `ON CONFLICT DO NOTHING` is KEPT, but now only to make the
+-- statement re-runnable rather than to paper over in-batch collisions.
 DO $$
+DECLARE
+  dup_columns bigint;
+  dup_panes bigint;
 BEGIN
   INSERT INTO "agent_workspace_pane_columns" ("id", "workspaceId", "orderIndex", "createdAt", "updatedAt")
-  SELECT
+  SELECT DISTINCT ON (s."id", col.value ->> 'id')
     col.value ->> 'id',
     s."id",
     (col.ordinality - 1)::int,
@@ -73,10 +92,11 @@ BEGIN
     AND jsonb_typeof(s."workspaceState" -> 'columns') = 'array'
     AND jsonb_typeof(col.value) = 'object'
     AND col.value ->> 'id' IS NOT NULL
+  ORDER BY s."id", col.value ->> 'id', col.ordinality
   ON CONFLICT DO NOTHING;
 
   INSERT INTO "agent_workspace_panes" ("id", "workspaceId", "columnId", "orderIndex", "kind", "targetId", "createdAt", "updatedAt")
-  SELECT
+  SELECT DISTINCT ON (s."id", pane.value ->> 'id')
     pane.value ->> 'id',
     s."id",
     col.value ->> 'id',
@@ -95,7 +115,44 @@ BEGIN
     AND jsonb_typeof(col.value -> 'panes') = 'array'
     AND jsonb_typeof(pane.value) = 'object'
     AND pane.value ->> 'id' IS NOT NULL
+  ORDER BY s."id", pane.value ->> 'id', col.ordinality, pane.ordinality
   ON CONFLICT DO NOTHING;
+
+  -- Report what was collapsed. A silently deduplicated pane is still a pane
+  -- the user loses, so the number belongs on the deploy record even though
+  -- keeping one of the two is the only representable outcome.
+  SELECT count(*) INTO dup_columns FROM (
+    SELECT s."id" AS ws, col.value ->> 'id' AS cid
+    FROM "agent_sessions" s,
+      LATERAL jsonb_array_elements(s."workspaceState" -> 'columns') WITH ORDINALITY AS col(value, ordinality)
+    WHERE s."workspaceState" IS NOT NULL
+      AND jsonb_typeof(s."workspaceState" -> 'columns') = 'array'
+      AND jsonb_typeof(col.value) = 'object'
+      AND col.value ->> 'id' IS NOT NULL
+    GROUP BY 1, 2 HAVING count(*) > 1
+  ) d;
+
+  SELECT count(*) INTO dup_panes FROM (
+    SELECT s."id" AS ws, pane.value ->> 'id' AS pid
+    FROM "agent_sessions" s,
+      LATERAL jsonb_array_elements(s."workspaceState" -> 'columns') WITH ORDINALITY AS col(value, ordinality),
+      LATERAL jsonb_array_elements(col.value -> 'panes') WITH ORDINALITY AS pane(value, ordinality)
+    WHERE s."workspaceState" IS NOT NULL
+      AND jsonb_typeof(s."workspaceState" -> 'columns') = 'array'
+      AND jsonb_typeof(col.value) = 'object'
+      AND col.value ->> 'id' IS NOT NULL
+      AND jsonb_typeof(col.value -> 'panes') = 'array'
+      AND jsonb_typeof(pane.value) = 'object'
+      AND pane.value ->> 'id' IS NOT NULL
+    GROUP BY 1, 2 HAVING count(*) > 1
+  ) d;
+
+  IF dup_panes > 0 THEN
+    RAISE WARNING 'agent_workspace_panes backfill: % duplicate pane id(s) appeared more than once in their session blob; kept the first occurrence', dup_panes;
+  END IF;
+  IF dup_columns > 0 THEN
+    RAISE WARNING 'agent_workspace_panes backfill: % duplicate column id(s) appeared more than once in their session blob; kept the first occurrence', dup_columns;
+  END IF;
 
   RAISE NOTICE 'agent_workspace_panes backfill complete (agent-session SSoT epic, Phase 3)';
 END $$;

@@ -2,12 +2,17 @@
  * Static invariants of the agent-workspace-layout migration (0246, epic
  * Phase 3 — the #2202 machine-panes pattern re-cut for sessions).
  *
- * The live behavior was verified against a scratch Postgres 17 (fresh
- * 247-migration full run; seeded-blob promotion incl. a legacy `tabs` pane,
- * a null scope, a malformed blob, and a NULL column; idempotent re-run;
- * FK-cascade teardown). These tests pin the migration SQL itself so CI
- * catches a regenerated or hand-edited migration losing the backfill, the
- * cascade topology, or the strictly-additive guarantee — without a database.
+ * These tests pin the migration SQL itself so CI catches a regenerated or
+ * hand-edited migration losing the backfill, the cascade topology, or the
+ * strictly-additive guarantee — without a database.
+ *
+ * The LIVE behavior of this promotion is exercised in
+ * `workspace-state-drop-migration.test.ts`, which drives the whole 0245 → 0251
+ * chain against a real Postgres. That matters: this file's header used to
+ * claim the promotion "was verified against a scratch Postgres 17" by hand,
+ * and the claim was wrong — the promotion silently ate a pane whose id
+ * appeared in two columns, which no string assertion here could have seen.
+ * A hand-run that nobody can re-run is not a test.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
@@ -100,6 +105,20 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
     expect(code).toContain(`pane.value -> 'scope' ->> 'kind'`);
     expect(code).toContain(`pane.value -> 'scope' ->> 'targetId'`);
     expect(code).not.toContain(`'tabs'`);
+  });
+
+  it('should DEDUPLICATE client-minted ids before insert, not lean on ON CONFLICT to hide collisions', () => {
+    // The blob has never constrained pane/column id uniqueness while the row
+    // tables are keyed `(workspaceId, id)`. Without `DISTINCT ON` the second
+    // occurrence is silently swallowed by `ON CONFLICT DO NOTHING` and 0251
+    // then refuses to drop the column over the pane this migration ate.
+    expect(code).toContain(`SELECT DISTINCT ON (s."id", col.value ->> 'id')`);
+    expect(code).toContain(`SELECT DISTINCT ON (s."id", pane.value ->> 'id')`);
+    // First occurrence wins, in the client's own read order.
+    expect(code).toContain(`ORDER BY s."id", col.value ->> 'id', col.ordinality`);
+    expect(code).toContain(`ORDER BY s."id", pane.value ->> 'id', col.ordinality, pane.ordinality`);
+    // And a collapse is reported rather than silent.
+    expect(code).toMatch(/RAISE WARNING[^;]*duplicate pane id/);
   });
 
   it('should be strictly additive — 0246 EXPANDS only; the blob is dropped later, by 0250', () => {

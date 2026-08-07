@@ -73,7 +73,7 @@ describe('drizzle/0248 messages unification — expand', () => {
   });
 
   it('should audit conversationId → pageId as 1:1 BEFORE writing anything, and raise on violation', () => {
-    const auditAt = expand.code.indexOf('count(DISTINCT "pageId") > 1');
+    const auditAt = expand.code.indexOf('count(DISTINCT cm."pageId") > 1');
     const insertAt = expand.code.indexOf('INSERT INTO "conversations"');
     expect(auditAt).toBeGreaterThan(-1);
     expect(insertAt).toBeGreaterThan(auditAt);
@@ -81,6 +81,19 @@ describe('drizzle/0248 messages unification — expand', () => {
     // The offending ids are listed, not merely counted — a migration that
     // fails without naming the rows to repair is a dead end.
     expect(expand.code).toContain('string_agg');
+  });
+
+  it('should scope the fatal straddle audit to NON-client conversations', () => {
+    // A `type='client'` (API) thread is anchored to a drive and may legitimately
+    // address several agent pages, so it can never satisfy the 1:1 premise and
+    // must not abort the upgrade. Both the count and the sample must carry the
+    // exclusion — a sample that still names excused threads would send the
+    // operator hunting for a straddle that is allowed.
+    const exclusions = expand.code.match(/c[v]?\."type" = 'client'\s*\)/g) ?? [];
+    expect(exclusions.length).toBe(2);
+    expect(expand.code).toMatch(
+      /NOT EXISTS \(\s*SELECT 1 FROM "conversations" c\s+WHERE c\."id" = cm\."conversationId" AND c\."type" = 'client'/,
+    );
   });
 
   it('should synthesize orphan conversations by the locked ownership ladder', () => {
@@ -479,6 +492,81 @@ describeLive('0248/0249 against a real Postgres', () => {
       expect(
         await s.query(`SELECT 1 FROM pg_constraint WHERE conname = 'chat_messages_conversationId_conversations_id_fk'`),
       ).toHaveLength(0);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('lets a type=client thread that spoke to TWO agent pages through, instead of aborting the upgrade', async () => {
+    const s = await openScenario('clientstraddle');
+    try {
+      await seedFixtures(s);
+      // A `type='client'` (API) thread is anchored to a DRIVE, not a page, and
+      // is DOCUMENTED as being able to address more than one agent page over
+      // its life (docs/2.0-architecture/agent-sessions.md). Its rows therefore
+      // straddle two pageIds BY DESIGN — that is a supported production shape,
+      // not the drift the pre-audit exists to catch.
+      //
+      // The pre-audit's premise ("a conversationId must name exactly one page,
+      // because contextId has to represent it") simply does not apply here:
+      // this conversation's `contextId` is the drive, and 0252 later derives
+      // its page into `agentPageId`, anchoring to the earliest and merely
+      // WARNING (`% client conversation(s) named more than one agent page`).
+      // Aborting on it makes the upgrade impossible for any deployment that
+      // ever served a two-agent API thread.
+      await s.query(`
+        INSERT INTO "conversations" ("id", "userId", "type", "contextId", "isActive", "updatedAt") VALUES
+          ('c_client_multi', 'u_speaker', 'client', 'd_main', true, now());
+      `);
+      await insertChatMessage(s, { id: 'mc1', pageId: 'p_with_creator', conversationId: 'c_client_multi', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 10:00:00' });
+      await insertChatMessage(s, { id: 'mc2', pageId: 'p_no_creator', conversationId: 'c_client_multi', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 11:00:00' });
+
+      // THE ASSERTION: it survives.
+      expect(await s.migrate()).toBeNull();
+
+      // The client conversation is untouched — still a client thread, still
+      // anchored to its drive. Synthesis never had anything to do here.
+      const rows = await s.query<{ id: string; type: string; contextId: string | null }>(
+        `SELECT "id", "type", "contextId" FROM "conversations" WHERE "id" = 'c_client_multi'`,
+      );
+      expect(rows).toEqual([{ id: 'c_client_multi', type: 'client', contextId: 'd_main' }]);
+
+      // And the expand actually happened rather than being rolled back.
+      expect(
+        await s.query(`SELECT 1 FROM information_schema.columns WHERE table_name = 'messages' AND column_name = 'pageId'`),
+      ).toHaveLength(1);
+
+      // It is still REPORTED — a client straddle is expected, but the operator
+      // should see it on the deploy record (the second, non-fatal audit).
+      expect(s.notices.join('\n')).toMatch(/disagree with their chat_messages about the page/);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('still ABORTS on a genuine page-conversation straddle even when a client straddle is present', async () => {
+    const s = await openScenario('mixedstraddle');
+    try {
+      await seedFixtures(s);
+      // Both shapes in one corpus. The client straddle must be excused; the
+      // page straddle must still stop the migration dead. Excusing the first
+      // must not blunt the guard for the second.
+      await s.query(`
+        INSERT INTO "conversations" ("id", "userId", "type", "contextId", "isActive", "updatedAt") VALUES
+          ('c_client_ok', 'u_speaker', 'client', 'd_main', true, now());
+      `);
+      await insertChatMessage(s, { id: 'mc1', pageId: 'p_with_creator', conversationId: 'c_client_ok', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 10:00:00' });
+      await insertChatMessage(s, { id: 'mc2', pageId: 'p_no_creator', conversationId: 'c_client_ok', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 11:00:00' });
+      // The genuine offender: no conversations row at all, so synthesis would
+      // have to GUESS which page it belongs to.
+      await insertChatMessage(s, { id: 'mp1', pageId: 'p_with_creator', conversationId: 'c_page_split', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 10:00:00' });
+      await insertChatMessage(s, { id: 'mp2', pageId: 'p_no_creator', conversationId: 'c_page_split', role: 'user', userId: 'u_speaker', createdAt: '2024-01-01 11:00:00' });
+
+      const reported = errorChain(await s.migrate());
+      expect(reported).toMatch(/span more than one pageId/);
+      expect(reported).toContain('c_page_split');
+      // The excused client thread is NOT named as an offender.
+      expect(reported).not.toContain('c_client_ok');
     } finally {
       await s.pool.end();
     }
