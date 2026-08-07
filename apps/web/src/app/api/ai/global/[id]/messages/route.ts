@@ -33,7 +33,7 @@ import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusi
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
@@ -886,7 +886,10 @@ export async function POST(
     );
 
     const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation);
+    // Session-only route (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
+    // ceiling is always empty here. Passed explicitly anyway so this stays correct
+    // by construction if the allowed auth methods ever widen.
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation, getAllowedDriveIds(auth));
 
     const locationPrompt = buildLocationTurnPrompt(locationContext ? {
       currentPage: locationContext.currentPage,

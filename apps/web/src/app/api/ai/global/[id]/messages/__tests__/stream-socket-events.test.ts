@@ -78,6 +78,9 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({

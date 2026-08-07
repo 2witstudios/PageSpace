@@ -9,6 +9,21 @@
  * run, and the backfill script must be safely re-runnable after a partial
  * failure. Only the stamp gives both.
  *
+ * KNOWN LIMITATION — read before adding a second starter skill. The stamp is a
+ * ONE-SHOT marker, not a high-water mark: it records "the initial install ran",
+ * and is only ever tested for null-ness. So appending to `STARTER_SKILLS` after
+ * launch reaches NEW users only — every already-stamped user is skipped here,
+ * and `scripts/backfill-starter-skills.ts` cannot even see them, because its
+ * query filters on `starterSkillsInstalledAt IS NULL`.
+ *
+ * This is latent today (there is exactly one starter) but it directly blocks the
+ * planned `orchestrate`/`research`/`execute`/`brainstorm` follow-ups. Fixing it
+ * needs PER-TRIGGER provenance, which a single timestamp cannot express: to add
+ * a starter without resurrecting one the user deleted, you must know which
+ * triggers were ever installed for that user, not merely that some install
+ * happened. That is a schema change (an installed-starters ledger), and it
+ * belongs to whichever PR adds the second starter — not to this one.
+ *
  * SERVER-ONLY — see the note in starter-skills.ts.
  */
 
@@ -87,18 +102,25 @@ async function resolveSkillsFolder(client: DbClient, homeDriveId: string): Promi
  * Safe to call inside an existing transaction (pass the tx as `client`) — the
  * provisioning path does exactly that so a half-installed Home is impossible.
  *
- * Serialization is OWNED BY THIS FUNCTION, not by callers. Provisioning happens
- * to hold a `FOR UPDATE` on the user row already, but the backfill script does
- * not — and without a lock two concurrent runs can both read a NULL stamp,
- * both pass the "already installed?" gate, and both create a Skills folder and
- * a page. Re-locking a row this transaction already holds is a no-op in
- * Postgres, so taking it here is free for the provisioning path and correct for
- * every other caller.
+ * `client` MUST be a transaction, and is deliberately required rather than
+ * defaulted to `db`. The `FOR UPDATE` below only serializes anything while a
+ * transaction is open — on a bare connection each statement autocommits and
+ * releases the lock immediately, so a default of `db` would have silently
+ * offered neither the serialization nor the all-or-nothing install this function
+ * documents. Both callers already pass one (provisioning passes its own tx; the
+ * backfill wraps each user in `db.transaction`).
+ *
+ * Given that, serialization is owned here rather than by callers: provisioning
+ * happens to hold a `FOR UPDATE` on the user row already, but the backfill does
+ * not, and without a lock two concurrent runs can both read a NULL stamp, both
+ * pass the "already installed?" gate, and both create a Skills folder. Re-locking
+ * a row the transaction already holds is a no-op in Postgres, so taking it here
+ * costs provisioning nothing.
  */
 export async function installStarterSkills(
   userId: string,
   homeDriveId: string,
-  client: DbClient = db,
+  client: DbClient,
 ): Promise<InstallStarterSkillsResult> {
   if (STARTER_SKILLS.length === 0) return emptyResult(false);
 
