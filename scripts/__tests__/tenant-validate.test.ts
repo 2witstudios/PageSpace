@@ -128,7 +128,7 @@ describe('validateData', () => {
     expect(result.fileResults.mismatches[0].reason).toContain('checksum mismatch');
   });
 
-  it('validates all 21 exported tables', async () => {
+  it('validates every table in TABLE_IMPORT_ORDER', async () => {
     const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),

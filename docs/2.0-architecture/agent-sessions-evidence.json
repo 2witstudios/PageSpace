@@ -96,13 +96,30 @@
           "suite": "web-unit"
         }
       ],
-      "notes": "RESIDUAL SEAM, deliberately recorded rather than glossed: the listener test proves the cache write happens with `revalidate: false` (no round-trip), and the create test proves the payload carries the label the sidebar renders. Nothing asserts that the listener's mutate key equals the key AgentsSidebar subscribes to — that link holds by construction only. AgentsSidebar.test.tsx mocks SWR data directly and contains nothing socket-driven, and the sidebar still carries a 120s refreshInterval documented in-file as a backstop slated for deletion. A component-level or e2e test closing that seam is tracked as the gap `sidebar-renders-server-created-conversation-end-to-end`."
+      "notes": "These three prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. CAVEAT WORTH KEEPING, found by writing that spec: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted. Creation and session-binding are decoupled by design (`create-conversation-in-session.ts` — a sessionless conversation is an ordinary state), so `conversation:created` fires first with `workspaceId: null`, which the listener correctly declines to insert anywhere, and it is the CLAIM's `conversation:updated { workspaceId }` that updates the sidebar, via `revalidateSessionListings`. So the no-round-trip property these tests pin is real for the branch they exercise, but the spawn story is served by one event-driven refetch rather than by that branch. Event-driven either way — which is the guarantee — but not request-free, and the difference is worth not overclaiming."
     },
     {
       "id": "sidebar-renders-server-created-conversation-end-to-end",
       "guarantee": "The sidebar component itself re-renders with a server-created conversation off the socket event (not merely the cache layer beneath it).",
-      "status": "gap",
-      "gap": "TODO(agent-sessions-epic): no executing evidence. The listener→SWR-key→AgentsSidebar seam is untested; add either an AgentsSidebar test driven by a real socket event or an e2e spec asserting the sidebar row appears with polling disabled. Until then `server-created-conversation-reaches-sidebar` is proven one layer below the user-visible claim."
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "a server-spawned conversation reaches the sidebar off the directory plane, not off the backstop poll",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "a server-side close removes the row with the listing fetch cut off at the network",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "the row lands in the spawning session only, not in every session listing",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The seam, closed against the real thing: a production build, a real socket on the shipped CSP (realtime same-origin behind the e2e proxy, `NEXT_PUBLIC_REALTIME_URL` unset — no `bypassCSP`), writes issued by a DIFFERENT HTTP client than the page (Playwright's API context, so the browser has no optimistic write and no pending request), and the real `AgentsSidebar` reading its own SWR key. That key is genuinely at risk of drifting, which is why this is not ceremony: the listener writes through the `isSessionListingKey` / `isAgentSessionsKey` PREDICATES while the sidebar builds its key as an inline template literal instead of calling the shared `agentSessionsKey()` helper. WHY THREE CITATIONS AND NOT ONE, which is the honest part: the first covers the user story but CANNOT cut the network, because on the spawn path the refetch IS the mechanism (create and claim are decoupled — see the note on `server-created-conversation-reaches-sidebar`). It rules the poll out with a control instead: a quiet window the same length as the assertion window, asserted to contain zero listing fetches, so demoting the 120s refreshInterval fails the control loudly rather than letting the assertion pass for the wrong reason. The second citation is the seam at full strength — `conversation:closed` is answered by `forgetConversationInCache`, a genuinely request-free local write, so there the listing GET IS aborted for the whole window and the row still has to leave. The third covers the opposite error, an insert into every session's row rather than the spawning one. VERIFIED THEY CAN FAIL: diverging the listener's key predicates from the sidebar's key fails all three on the assertion (Expected 2, Received 1), not on setup. TWO HARNESS TRAPS THIS SPEC HAD TO SURVIVE, recorded because both made it green while proving nothing: the app registers `/sw.js`, and Playwright cannot intercept a fetch that goes through a Service Worker, so the block silently intercepted NOTHING until the context set `serviceWorkers: 'block'`; and a `'**/api/agent-workspaces**'` URL glob matched nothing where an exact-pathname URL predicate matches. A blocker that quietly blocks nothing turns a spec like this into a tautology — the failure-case run is what caught both."
     },
     {
       "id": "pane-grid-converges-across-devices",
@@ -285,7 +302,7 @@
           "suite": "web-unit"
         }
       ],
-      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 128 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. Still open and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_workspaces but not agent_workspace_shells or ai_stream_sessions, so the separate TENANT export has an adjacent hole this does not touch."
+      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 128 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. The adjacent TENANT-export hole this note used to flag as open — TABLE_IMPORT_ORDER carrying agent_workspaces but neither agent_workspace_shells nor ai_stream_sessions — is closed under `tenant-export-column-drift-guarded`, and closed with DIFFERENT answers on purpose: the shells now travel, ai_stream_sessions deliberately does not. Art 15 asks what data about you exists; a tenant bundle asks what a working instance should be reconstituted from, and a `status = streaming` checkpoint row answers the first question and not the second."
     },
     {
       "id": "erasure-reaches-stream-session-content",
@@ -335,7 +352,7 @@
     },
     {
       "id": "tenant-export-column-drift-guarded",
-      "guarantee": "The tenant export carries every schema column or explicitly excuses it, so a new column cannot silently stop being exported.",
+      "guarantee": "The tenant export carries every schema column or explicitly excuses it, and every table hanging off a migrated session or thread is a recorded carry-or-exclude decision — so neither a new column nor a whole new table can silently stop being exported.",
       "status": "proven",
       "evidence": [
         {
@@ -347,9 +364,29 @@
           "file": "scripts/__tests__/tenant-export-columns.test.ts",
           "name": "states a reason for every deliberately excluded column",
           "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "records a carry-or-exclude decision for every table hanging off a session or a thread",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "states a reason for every deliberately excluded table, and excludes nothing it also carries",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-import.test.ts",
+          "name": "carries the session's terminal AND its scrollback, without the source-fleet exec id",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-import.test.ts",
+          "name": "leaves ai_stream_sessions behind — a deliberate exclusion, not an omission",
+          "suite": "scripts-vitest"
         }
       ],
-      "notes": "Found independently twice: these 64 tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI — and the drift they guard had in fact already reached a pushed branch (the agent_workspaces rename left spriteKey unaccounted). PR #2358 closed it by deleting that hand-list so the step runs the whole scripts vitest context, which is why this suite no longer sets requiresFileListedInCi: there is no list left for a file to be missing from."
+      "notes": "Found independently twice: these tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI — and the drift they guard had in fact already reached a pushed branch (the agent_workspaces rename left spriteKey unaccounted). PR #2358 closed it by deleting that hand-list so the step runs the whole scripts vitest context, which is why this suite no longer sets requiresFileListedInCi: there is no list left for a file to be missing from. THE COLUMN GUARD IS STRUCTURALLY BLIND TO A MISSING TABLE — a table absent from TABLE_IMPORT_ORDER has no columns to check, so dropping the whole thing tripped nothing, which is how agent_workspace_shells came to be carried by the GDPR export and silently dropped by the tenant one (losing `coldTail`, a shell's scrollback, which is overwritten in place on every teardown and has no other home in the bundle). The table-level citations close that class over the agent-session FK closure, derived from the Drizzle schema at runtime rather than hand-listed: every table transitively reachable by foreign key from agent_workspaces or conversations must be in TABLE_IMPORT_ORDER or in TENANT_EXPORT_EXCLUDED_TABLES with a reason. Bounded there on purpose — a 'you forgot this table' assertion only means something where the bundle already carries the parent row; that is where an omission is data loss for a user who did migrate rather than a feature the bundle was never scoped to. The two round-trip citations are the behavioural half: one proves the shell scrollback survives export→import while its source-fleet `spriteExecId` does not, the other proves ai_stream_sessions is absent from a bundle that was asked for everything. VERIFIED THEY CAN FAIL: removing agent_workspace_shells from TABLE_IMPORT_ORDER fails the decision guard by name, and moving `coldTail` from carried to excluded fails the round trip."
     }
   ]
 }

@@ -297,6 +297,24 @@ export async function exportData(
   const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
   nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'workspaceId');
 
+  /**
+   * The sessions' TERMINALS. Scoped to the sessions that survived the owner
+   * filter above, then filtered again on `ownerId`: both of this table's FKs
+   * are NOT NULL with `ON DELETE CASCADE`, so unlike a conversation there is
+   * no "orphan it and carry it anyway" shape — a shell whose owner is outside
+   * the migration simply does not travel. In practice the second filter is a
+   * no-op (a session's shells are its owner's), and it is here so that stops
+   * being an assumption the export relies on silently.
+   */
+  const shellsDataRaw = exportedSessionIdSet.size > 0
+    ? await queryRows(db, sql.raw(
+        `SELECT * FROM agent_workspace_shells WHERE "workspaceId" IN (${toSqlInList(exportedSessionIdSet)})`,
+      ))
+    : [];
+  const agentShellsData = shellsDataRaw.filter(
+    (s) => allExportedUserIdSet.has(s.ownerId as string),
+  );
+
   // `conversations.agentPageId` FKs `pages` (ON DELETE SET NULL) and is a
   // `type='client'` thread's only page link. A thread whose agent page is
   // outside the bundle becomes page-less rather than a dangling reference —
@@ -387,6 +405,11 @@ export async function exportData(
     // `agent_workspaces` precedes `conversations`: `conversations.workspaceId`
     // FKs it, and a session row also needs its drive and owner, both above.
     buildInsert('agent_workspaces', cols('agent_workspaces'), agentSessionsData),
+    // Both of this table's FKs (`workspaceId`, `ownerId`) are NOT NULL, so it
+    // must follow `agent_workspaces` and `users`. It does NOT have to precede
+    // `conversations` — nothing references a shell — but it sits with its
+    // parent to keep the session's rows together.
+    buildInsert('agent_workspace_shells', cols('agent_workspace_shells'), agentShellsData),
     // `conversations` MUST precede `messages`: the latter has a real
     // (non-deferrable) FK onto the former, and the whole bundle replays inside
     // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
@@ -421,6 +444,7 @@ export async function exportData(
     channelMessageReactions: channelReactionsData.length,
     channelReadStatus: channelReadStatusData.length,
     agentWorkspaces: agentSessionsData.length,
+    agentWorkspaceShells: agentShellsData.length,
     conversations: conversationsData.length,
     messages: messagesData.length,
     files: filesData.length,

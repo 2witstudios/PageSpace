@@ -24,6 +24,7 @@ import {
 import { exportData } from '../tenant-export';
 import { runImport } from '../tenant-import';
 import { validateChecksums } from '../lib/migration-utils';
+import { TENANT_EXPORT_EXCLUDED_TABLES } from '../lib/tenant-export-columns';
 import type { DbClient, ExportManifest } from '../lib/migration-types';
 
 let db: TestDb;
@@ -160,6 +161,53 @@ describe('runImport', () => {
       expect(rows[0].spriteInstanceId).toBeNull();
       expect(rows[0].spriteKey).toBeNull();
       expect(rows[0].storageMeasuredBytes).toBeNull();
+    });
+
+    it("carries the session's terminal AND its scrollback, without the source-fleet exec id", async () => {
+      await reimport('shell');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "workspaceId", "ownerId", name, "agentType", command, "coldTail", "coldTailAt", "coldTailHasOutput", "spriteExecId" FROM agent_workspace_shells WHERE id = '${FIXTURES.agentWorkspaceShells.shell.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
+      expect(rows[0].ownerId).toBe(FIXTURES.users.owner.id);
+      expect(rows[0].name).toBe(FIXTURES.agentWorkspaceShells.shell.name);
+      expect(rows[0].agentType).toBe(FIXTURES.agentWorkspaceShells.shell.agentType);
+      expect(rows[0].command).toBe(FIXTURES.agentWorkspaceShells.shell.command);
+      // THE POINT OF CARRYING THIS TABLE. `coldTail` is the scrollback of the
+      // shell's last dead incarnation — overwritten in place on every teardown
+      // and present nowhere else in the bundle, so if it does not survive the
+      // round trip it is gone for good. `coldTailHasOutput` travels with it
+      // because an empty tail is ambiguous alone (a burst larger than the ring
+      // also empties it), and "was screaming" must not migrate as "was silent".
+      expect(rows[0].coldTail).toBe(FIXTURES.agentWorkspaceShells.shell.coldTail);
+      expect(rows[0].coldTailHasOutput).toBe(true);
+      expect(rows[0].coldTailAt).not.toBeNull();
+      // Same rule as the parent session's Sprite columns: this names an exec
+      // session inside a SOURCE-fleet VM the tenant does not own.
+      expect(rows[0].spriteExecId).toBeNull();
+    });
+
+    it('leaves ai_stream_sessions behind — a deliberate exclusion, not an omission', async () => {
+      // The Art 17 purge and the Art 15 export both reach this table (see
+      // `packages/lib/src/compliance/export/gdpr-export-coverage.ts`); the
+      // TENANT bundle deliberately does not, because a `status = streaming`
+      // row would import as a phantom live stream in an instance that has no
+      // worker producing it and no abort registry that can reach it. The
+      // durable half of the turn is in `messages`, which the bundle carries.
+      //
+      // Asserted as an absence FROM A BUNDLE THAT WAS ASKED FOR EVERYTHING, so
+      // this fails the moment someone adds the table to TABLE_IMPORT_ORDER
+      // without also deleting the recorded exclusion.
+      expect(TENANT_EXPORT_EXCLUDED_TABLES).toHaveProperty('ai_stream_sessions');
+      const sqlContent = await readFile(path.join(bundleDir, 'data.sql'), 'utf-8');
+      expect(sqlContent).not.toContain('ai_stream_sessions');
+      // …and the conversation whose rows they would have been is present, so
+      // the absence above is a decision about this table rather than an empty
+      // bundle trivially satisfying it.
+      expect(sqlContent).toContain(FIXTURES.conversations.pageChat.id);
     });
 
     it("restores the user's email blind index — the lookup key a migrated account logs in through", async () => {

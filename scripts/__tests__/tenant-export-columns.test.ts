@@ -21,18 +21,19 @@
  *
  * It needs no database: the table objects describe themselves.
  *
- * SCOPE: this guards the COLUMNS of the tables the export carries. Whether the
- * right set of TABLES is carried is a separate question, owned by
- * `TABLE_IMPORT_ORDER`; the coverage test below only pins the two lists to
- * each other so a new table cannot be added to one and forgotten in the other.
+ * SCOPE: the first describe below guards the COLUMNS of the tables the export
+ * carries. The second guards which TABLES are carried, over the agent-session
+ * FK closure — see its own header for why that boundary and not the whole
+ * schema.
  */
 import { describe, it, expect } from 'vitest';
 import { getTableColumns, getTableName, is } from 'drizzle-orm';
-import { PgTable } from 'drizzle-orm/pg-core';
+import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 import * as dbSchema from '@pagespace/db/schema';
 import { TABLE_IMPORT_ORDER, type ExportTableName } from '../lib/migration-types';
 import {
   TENANT_EXPORT_COLUMNS,
+  TENANT_EXPORT_EXCLUDED_TABLES,
   carriedColumns,
   exportColumns,
   deferredColumns,
@@ -163,6 +164,11 @@ describe('tenant export column registry', () => {
       channel_messages: ['editedAt', 'parentId', 'replyCount', 'lastReplyAt', 'mirroredFromId', 'quotedMessageId'],
       conversations: ['workspaceId', 'closedInWorkspaceAt', 'rev', 'isShared', 'agentPageId'],
       messages: ['sourceAgentId'],
+      // The terminal half of a session. `coldTail` is the one carried column
+      // that is irreplaceable user OUTPUT rather than configuration: it is
+      // overwritten in place on every teardown and has no other home in the
+      // bundle, so a migration that drops it loses the scrollback outright.
+      agent_workspace_shells: ['coldTail', 'coldTailHasOutput', 'name', 'command'],
     };
 
     for (const [table, columns] of Object.entries(pins) as [ExportTableName, string[]][]) {
@@ -170,5 +176,99 @@ describe('tenant export column registry', () => {
         expect(carriedColumns(table), `${table}.${column}`).toContain(column);
       }
     }
+  });
+});
+
+/**
+ * The FK closure of the agent-session tables: every table reachable by foreign
+ * key from `agent_workspaces` or `conversations`, transitively. Derived from
+ * the schema at runtime for the same reason the column set is — a hand-written
+ * copy is what drifted in the first place.
+ */
+function agentSessionFkClosure(): string[] {
+  const referencesOf = new Map<string, string[]>();
+  for (const table of TABLES.values()) {
+    referencesOf.set(
+      getTableName(table),
+      getTableConfig(table).foreignKeys.map((fk) => getTableName(fk.reference().foreignTable)),
+    );
+  }
+
+  const closure = new Set(['agent_workspaces', 'conversations']);
+  // Bounded fixpoint: each pass can only add tables, and there are finitely
+  // many, so |TABLES| passes is guaranteed to saturate.
+  for (let pass = 0; pass < referencesOf.size; pass++) {
+    const before = closure.size;
+    for (const [table, references] of referencesOf) {
+      if (references.some((ref) => closure.has(ref))) closure.add(table);
+    }
+    if (closure.size === before) break;
+  }
+  return [...closure].sort();
+}
+
+/**
+ * DRIFT GUARD for which TABLES a tenant bundle carries.
+ *
+ * The column registry above cannot see this class of loss at all: a table
+ * absent from `TABLE_IMPORT_ORDER` has no columns to check, so dropping the
+ * whole thing is invisible to every assertion in it. That is exactly how
+ * `agent_workspace_shells` came to be carried by the GDPR export and dropped
+ * by the tenant one — the shell scrollback (`coldTail`) simply did not travel,
+ * and nothing said so.
+ *
+ * WHY THE FK CLOSURE AND NOT THE WHOLE SCHEMA. A "you forgot this table"
+ * assertion is only meaningful where the bundle already carries the PARENT
+ * row: those are the tables whose absence is silent data loss for a user who
+ * did migrate, rather than a feature the bundle was never scoped to
+ * (`credit_ledger`, `audit_logs`, `ai_usage_logs` — instance accounting that
+ * belongs to the source deployment). Anchoring on `agent_workspaces` and
+ * `conversations` makes the guard exactly as wide as the region this epic
+ * moved user work into, and it is derived, so a new child table added to
+ * either one is caught without anyone remembering to widen a list.
+ */
+describe('tenant export table registry', () => {
+  it('records a carry-or-exclude decision for every table hanging off a session or a thread', () => {
+    const decided = new Set<string>([
+      ...TABLE_IMPORT_ORDER,
+      ...Object.keys(TENANT_EXPORT_EXCLUDED_TABLES),
+    ]);
+
+    const undecided = agentSessionFkClosure().filter((table) => !decided.has(table));
+
+    expect(
+      undecided,
+      `${undecided.join(', ')} reference a table the tenant export carries, but nothing ` +
+      'says whether they travel. Add them to TABLE_IMPORT_ORDER (plus a spec in ' +
+      'TENANT_EXPORT_COLUMNS and a query in tenant-export.ts / tenant-validate.ts), or to ' +
+      'TENANT_EXPORT_EXCLUDED_TABLES with a reason. A table nobody decided about is ' +
+      'dropped from every tenant migration and no test notices.',
+    ).toEqual([]);
+  });
+
+  it('states a reason for every deliberately excluded table, and excludes nothing it also carries', () => {
+    const carried = new Set<string>(TABLE_IMPORT_ORDER);
+    for (const [table, reason] of Object.entries(TENANT_EXPORT_EXCLUDED_TABLES)) {
+      expect(TABLES.has(table), `${table} is excluded but no such table exists in the schema`).toBe(true);
+      expect(
+        carried.has(table),
+        `${table} is listed as excluded AND appears in TABLE_IMPORT_ORDER`,
+      ).toBe(false);
+      expect(
+        reason.trim().length,
+        `${table} is excluded from the tenant export with no stated reason`,
+      ).toBeGreaterThan(20);
+    }
+  });
+
+  it('carries the session tables whose loss motivated this guard', () => {
+    // The named half of the decision, pinned so a future edit that quietly
+    // drops the table fails with the table, not just a set difference.
+    expect(TABLE_IMPORT_ORDER).toContain('agent_workspace_shells');
+    // …and the excluded half, pinned for the same reason: `ai_stream_sessions`
+    // must stay a WRITTEN DOWN exclusion. Its content is reachable on Art 15
+    // through the GDPR export's `stream-state.json`; the two exports answer
+    // different questions and are allowed to differ, but only out loud.
+    expect(Object.keys(TENANT_EXPORT_EXCLUDED_TABLES)).toContain('ai_stream_sessions');
   });
 });

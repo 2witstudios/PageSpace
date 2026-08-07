@@ -162,6 +162,9 @@ export async function validateData(
     // Mirrors the export's rule: the sessions the migrated conversations are
     // bound to, owned by a migrated user.
     agent_workspaces: sql.raw(`SELECT id FROM agent_workspaces WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "workspaceId" FROM conversations WHERE "userId" IN (${userIn}) AND "workspaceId" IS NOT NULL)`),
+    // Mirrors the export's rule: the shells of those same sessions, owned by a
+    // migrated user.
+    agent_workspace_shells: sql.raw(`SELECT id FROM agent_workspace_shells WHERE "ownerId" IN (${userIn}) AND "workspaceId" IN (SELECT id FROM agent_workspaces WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "workspaceId" FROM conversations WHERE "userId" IN (${userIn}) AND "workspaceId" IS NOT NULL))`),
     // Mirrors the export's rule exactly: owned by a migrated user, OR
     // attached to a migrated page (`type='page'` names it in `contextId`,
     // `type='client'` in `agentPageId`).

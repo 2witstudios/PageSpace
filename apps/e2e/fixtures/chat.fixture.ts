@@ -36,14 +36,23 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * Opening TWO contexts on the same token is expected and safe (7.4 does exactly that): the
  * per-tab identity the app dedups on is the client-generated `X-Browser-Session-Id`, which
  * each context generates independently.
+ *
+ * `options` is merged into `newContext` for the rare spec that needs a context-level
+ * capability the cookie shape has nothing to do with — today only
+ * `18-sidebar-directory-live.spec.ts`'s `serviceWorkers: 'block'`, which it needs because the
+ * app registers `/sw.js` and Playwright's request interception cannot see a fetch that goes
+ * through a Service Worker. Keep it for capabilities, not for auth: `baseURL` and the cookies
+ * below are the contract this helper exists to own, and are applied after the spread so a
+ * caller cannot accidentally break them.
  */
 export async function authedContext(
   browser: Browser,
   sessionToken: string,
   baseURL: string,
+  options: Parameters<Browser['newContext']>[0] = {},
 ): Promise<BrowserContext> {
   const url = new URL(baseURL);
-  const context = await browser.newContext({ baseURL });
+  const context = await browser.newContext({ ...options, baseURL });
   await context.addCookies([
     {
       name: 'session',
