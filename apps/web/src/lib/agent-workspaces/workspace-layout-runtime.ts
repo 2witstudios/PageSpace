@@ -47,6 +47,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells, agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import {
   applyVerbLocal,
@@ -446,9 +447,10 @@ async function resolveReadablePages(
 /**
  * The subset of `chatRows` this viewer may access on the conversation's OWN
  * footing — their own thread, or a shared page thread whose page they can
- * view. Deliberately the same rule `canAccessConversation` enforces at the
- * `conv:` room join and at `/stream-join`, inlined over rows already in hand
- * so the whole set costs at most one page check per shared thread.
+ * view. Routed through `canAccessConversation`, the SAME predicate the `conv:`
+ * room join and `/stream-join` enforce, rather than a second copy of the rule:
+ * the owner branch short-circuits with no IO, so the whole set costs at most
+ * one page check per shared thread.
  */
 async function resolveAccessibleConversations(
   chatRows: ReadonlyArray<{ id: string; userId: string; isShared: boolean | null; type: string; contextId: string | null }>,
@@ -456,11 +458,12 @@ async function resolveAccessibleConversations(
 ): Promise<Set<string>> {
   const decided = await Promise.all(
     chatRows.map(async (row) => {
-      if (row.userId === viewerId) return row.id;
-      // Only a shared PAGE conversation has a page to share through; a shared
-      // global thread is owner-only, matching decide-session-access.ts.
-      if (row.isShared !== true || row.type !== 'page' || !row.contextId) return null;
-      return (await getUserAccessLevel(viewerId, row.contextId)) !== null ? row.id : null;
+      const allowed = await canAccessConversation(
+        viewerId,
+        { userId: row.userId, isShared: row.isShared === true, type: row.type, contextId: row.contextId },
+        { getPageAccess: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null },
+      );
+      return allowed ? row.id : null;
     }),
   );
   return new Set(decided.filter((id): id is string => id !== null));

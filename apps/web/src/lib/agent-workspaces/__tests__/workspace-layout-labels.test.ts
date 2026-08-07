@@ -186,6 +186,48 @@ describe('Attack B — an arbitrary targetId bound into the attacker\'s OWN work
     expect(nameOf(snapshot.grid!)).toBe('');
   });
 
+  it('DOES resolve a foreign conversation the viewer may access on its own footing', async () => {
+    // Not in Mallory's workspace, but deliberately shared on a page he can
+    // view — `canAccessConversation`'s rule, the same predicate the conv: room
+    // join and /stream-join enforce. Refusing this would break a legitimate
+    // pane; the gate is authority, not containment for its own sake.
+    rows.conversations = [
+      {
+        id: 'conv-shared',
+        title: 'Team retro',
+        type: 'page',
+        contextId: 'page-team',
+        userId: ALICE,
+        isShared: true,
+        workspaceId: WORKSPACE,
+      },
+    ];
+    pageAccess.add(`${MALLORY}:page-team`);
+    storeRef.current = createFakeStore({ [MALLORY_WORKSPACE]: gridOf('chat', 'conv-shared') });
+
+    const snapshot = await readWorkspaceLayoutSnapshot(MALLORY_WORKSPACE, MALLORY);
+    expect(nameOf(snapshot.grid!)).toBe('Team retro');
+  });
+
+  it('refuses that same shared conversation once the viewer loses the page', async () => {
+    rows.conversations = [
+      {
+        id: 'conv-shared',
+        title: 'Team retro',
+        type: 'page',
+        contextId: 'page-team',
+        userId: ALICE,
+        isShared: true,
+        workspaceId: WORKSPACE,
+      },
+    ];
+    // No page access this time.
+    storeRef.current = createFakeStore({ [MALLORY_WORKSPACE]: gridOf('chat', 'conv-shared') });
+
+    const snapshot = await readWorkspaceLayoutSnapshot(MALLORY_WORKSPACE, MALLORY);
+    expect(nameOf(snapshot.grid!)).toBe('');
+  });
+
   it('resolves no shell name for a shell belonging to a different workspace', async () => {
     rows.shells = [{ id: 'shell-victim', name: 'prod-deploy-key-rotation', workspaceId: WORKSPACE }];
     storeRef.current = createFakeStore({ [MALLORY_WORKSPACE]: gridOf('terminal', 'shell-victim') });
