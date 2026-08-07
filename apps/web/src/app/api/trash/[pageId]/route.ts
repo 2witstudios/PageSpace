@@ -4,7 +4,7 @@ import { eq, sql } from '@pagespace/db/operators'
 import { pages, favorites, pageTags } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { deleteConversationsForPages } from '@pagespace/lib/repositories/conversation-cleanup';
+import { deleteConversationsForPages, type DbHandle } from '@pagespace/lib/repositories/conversation-cleanup';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -15,7 +15,11 @@ import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // Note: taskItems linked to this page are automatically deleted via FK cascade (onDelete: 'cascade')
-async function recursivelyDelete(pageId: string, tx: typeof db) {
+// `tx` is a TRANSACTION handle, not `typeof db`: this walks a subtree issuing
+// many deletes that only make sense together, and `deleteConversationsForPages`
+// below states the same requirement. Typed loosely, the recursion was a hole
+// one level above the helper's own guard.
+async function recursivelyDelete(pageId: string, tx: DbHandle) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
     for (const child of children) {

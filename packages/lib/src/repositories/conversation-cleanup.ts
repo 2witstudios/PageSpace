@@ -53,8 +53,17 @@ import { and, eq, inArray, or } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 
-/** A `db` handle or a transaction handle — both satisfy the calls made here. */
-export type DbHandle = typeof db;
+/**
+ * A TRANSACTION handle, specifically — not the module `db`.
+ *
+ * The header above says "Call inside the same transaction as the delete it
+ * accompanies", and every caller does. But this used to alias `typeof db`, so
+ * passing the module handle compiled cleanly and split the two deletes below
+ * into separate transactions — the messages gone, the conversation shells left
+ * behind if the second statement failed. A comment is not an enforcement
+ * mechanism; this makes the compiler say it too.
+ */
+export type DbHandle = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface ConversationCleanupResult {
   /** `conversations` rows deleted (each takes its messages + stream state). */
