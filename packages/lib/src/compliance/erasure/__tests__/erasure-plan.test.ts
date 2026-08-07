@@ -45,6 +45,22 @@ describe('buildErasurePlan', () => {
     expect(ids.indexOf('ai-provider-erasure')).toBeLessThan(ids.indexOf('purge-ai-usage'));
   });
 
+  describe('purge-stream-state (Phase 4 PR 13 — the cascade audit finding)', () => {
+    it('runs BEFORE delete-user, so the evidence lands on the DSR row while the subject still exists', () => {
+      const ids = cloudPlan().map((s) => s.id);
+      expect(ids.indexOf('purge-stream-state')).toBeLessThan(ids.indexOf('delete-user'));
+    });
+
+    it('is FATAL — it is the ONLY eraser ai_stream_sessions has (no TTL, no retention sweep, and no cascade for a shared conversation the subject does not own), so a swallowed failure would complete an erasure with the subject\'s checkpointed message content still on disk', () => {
+      expect(cloudPlan().find((s) => s.id === 'purge-stream-state')?.fatal).toBe(true);
+    });
+
+    it('runs on-prem too — the rows are in our own Postgres, not a sub-processor', () => {
+      const ids = buildErasurePlan({ deploymentMode: 'onprem', clickHouseInPlay: false }).map((s) => s.id);
+      expect(ids).toContain('purge-stream-state');
+    });
+  });
+
   it('every step id is unique', () => {
     const plan = cloudPlan();
     const ids = plan.map((s) => s.id);

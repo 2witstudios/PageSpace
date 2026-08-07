@@ -30,6 +30,7 @@ import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/r
 import { syncEmailSuppression } from '@pagespace/lib/compliance/erasure/email-suppression';
 import { createResendSuppressionClient } from '@pagespace/lib/compliance/erasure/resend-suppression-client';
 import { eraseAiProviderData } from '@pagespace/lib/compliance/erasure/ai-provider-erasure';
+import { deleteStreamStateForUser } from '@pagespace/lib/compliance/erasure/purge-stream-state';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { logActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { isClickHouseAnalyticsInPlay } from '@pagespace/lib/observability/clickhouse-client';
@@ -166,6 +167,13 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
       return ok(
         `providers=${result.evidence.length} forwarded=${result.forwarded} ` +
           `manualReview=${result.evidence.filter((e) => e.action === 'manual_review').length}`
+      );
+    },
+
+    'purge-stream-state': async () => {
+      const result = await deleteStreamStateForUser(userId);
+      return ok(
+        `streamSessions=${result.streamSessions} abortIntents=${result.abortIntents}`
       );
     },
 
