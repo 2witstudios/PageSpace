@@ -49,8 +49,10 @@ CREATE INDEX "agent_workspace_panes_workspace_idx" ON "agent_workspace_panes" US
 -- for observability). Epic Phase 3: `agent_sessions.workspaceState` stops
 -- being the source of truth for the pane grid; the column is KEPT (not
 -- dropped) as a rolling-deploy shim — old web instances still read/write
--- only the blob during a deploy window, and the verb engine dual-writes it —
--- to be dropped in a later contract PR.
+-- only the blob during a deploy window, and the verb engine dual-writes it.
+-- 0252 drops it, in this same branch — so this shim is already retired here and
+-- is NOT part of the follow-up PR 17 checklist
+-- (docs/2.0-architecture/agent-sessions.md §4).
 --
 -- The parse is exactly as tolerant as `persistedWorkspaceStateSchema`: only
 -- blobs whose `columns` is a jsonb array are promoted; a pane's absent/null

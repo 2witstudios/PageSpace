@@ -68,11 +68,13 @@ describe('paneScopesOfVerb — every verb that can bind a target', () => {
    * someone has decided, in this file, which list it belongs in.
    */
   it('pins the verb union, so a new verb cannot be added without classifying it here', () => {
-    const options = (
-      workspaceLayoutVerbSchema as unknown as {
-        options: { shape: { type: { value: string } } }[];
-      }
-    ).options;
+    // No cast: `workspaceLayoutVerbSchema` is a `z.discriminatedUnion`, so
+    // `.options[i].shape.type.value` is already typed. An `as unknown as {...}`
+    // here would assert the shape rather than read it — and would turn a future
+    // change in zod's internals into a silent pass (every `.value` reading
+    // `undefined`, `declared` becoming `[undefined × 12]`) instead of the
+    // compile error that should stop it.
+    const options = workspaceLayoutVerbSchema.options;
     const declared = options.map((o) => o.shape.type.value).sort();
 
     expect(declared).toEqual(
@@ -95,7 +97,7 @@ describe('paneScopesOfVerb — every verb that can bind a target', () => {
     // And the split is exactly the one the gate implements: a verb whose schema
     // declares `scope` must yield it, every other verb must yield nothing.
     const scopeCarrying = options
-      .filter((o) => 'scope' in (o.shape as Record<string, unknown>))
+      .filter((o) => 'scope' in o.shape)
       .map((o) => o.shape.type.value)
       .sort();
     expect(scopeCarrying).toEqual(
