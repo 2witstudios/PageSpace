@@ -448,26 +448,22 @@ async function listOwnWorkspaces({
   const owned = (await listSessions({ ownerId: userId })).filter(
     (session) => session.workspaceId !== excludeWorkspaceId,
   );
-  if (owned.length === 0) return [];
 
   // OWNERSHIP IS NOT ACCESS (review finding — MAJOR, `list_sessions`).
   //
-  // This listing used to filter on `ownerId` alone, which made it the one
+  // This listing filtered on `ownerId` alone, which made it the one
   // session-surface read with no access predicate — `listSharedWorkspaces`
   // below runs `decideAgentSessionAccess` per row, and so does every route.
-  // `decideAgentSessionAccess` is explicit that the gate applies to the OWNER
-  // too ("losing the drive loses its working contexts"), so an owner removed
-  // from a drive was refused the detail view by `list_sessions`' own
-  // revocation re-check and then handed the same workspace one field over,
-  // under `otherWorkspaces` — its name, driveId, live sandbox status, and
-  // every worker's sessionId and title. One documented rule, enforced in one
-  // branch and waived in its sibling.
+  // The decision is explicit that the gate binds the OWNER too ("losing the
+  // drive loses its working contexts"), so an owner removed from a drive was
+  // refused the detail view by `list_sessions`' own revocation re-check and
+  // then handed the same workspace one field over, under `otherWorkspaces`.
+  // One documented rule, enforced in one branch and waived in its sibling.
   //
-  // The SAME one decision, never a second predicate: membership is resolved
-  // once per distinct drive rather than per session, since an owner's
-  // workspaces cluster into few drives. A global-assistant workspace
-  // (`driveId` null) is owner-only by construction and passes on `isOwner`
-  // without a membership lookup.
+  // The SAME one decision, never a second predicate. Membership resolves once
+  // per distinct drive rather than per workspace, since an owner's workspaces
+  // cluster into few drives; a global-assistant workspace (`driveId` null) is
+  // owner-only by construction and needs no lookup at all.
   const driveIds = [...new Set(owned.flatMap((s) => (s.driveId ? [s.driveId] : [])))];
   const membershipByDrive = new Map(
     await Promise.all(

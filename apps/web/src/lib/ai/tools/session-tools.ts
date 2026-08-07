@@ -928,26 +928,18 @@ export function createSessionTools(deps: SessionToolsDeps): {
           (await deps.checkWorkspaceAccess(actor.userId, boundWorkspace.workspaceId)).allowed
             ? boundWorkspace
             : null;
-        // Own and member-visible sets in parallel — the SAME exclusion for
-        // both: the caller's current workspace is the top-level detail view
-        // whoever owns it (a caller spawned into a shared workspace has a
-        // current workspace they do not own).
+        // Own and member-visible sets in parallel, both minus the workspace
+        // this conversation is BOUND to — shown at top level when the caller
+        // may see it, and withheld entirely when they may not.
         //
-        // THE EXCLUSION IS `boundWorkspace`, NOT `workspace` (review finding —
-        // MAJOR). They differ on exactly one path: the revocation denial above,
-        // where `workspace` collapses to null. Excluding `workspace` there
+        // The exclusion keys on `boundWorkspace`, not `workspace` (review
+        // finding — MAJOR). The two differ on exactly one path: the revocation
+        // denial above, which nulls `workspace`. Excluding `workspace` there
         // excluded nothing, so the workspace the check had just refused came
-        // straight back under `otherWorkspaces` — richer than a bare id, since
-        // that listing carries every worker's sessionId. Keying the exclusion
-        // on the BINDING means a refused binding is never re-listed by either
-        // sibling, whatever the reason for the refusal.
-        //
-        // Belt and braces, deliberately: `listOwnWorkspaces` now runs the same
-        // per-row access decision `listSharedWorkspaces` does, so a revoked
-        // workspace is dropped there too. This exclusion is the tool-level
-        // half — it holds for any deps implementation, including the stubs in
-        // tests, and it is what makes the denial local to the code that
-        // decided it.
+        // back one field over under `otherWorkspaces` — with its name, driveId,
+        // sandbox status and every worker's sessionId. The binding survives the
+        // denial, so keying on it withholds a refused workspace whatever the
+        // reason for the refusal, and for any `deps` implementation.
         const excludeWorkspaceId = boundWorkspace?.workspaceId;
         const [otherWorkspaces, sharedWorkspaces] = await Promise.all([
           deps.listOwnWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
