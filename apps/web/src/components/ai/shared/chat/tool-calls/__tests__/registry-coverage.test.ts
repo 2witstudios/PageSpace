@@ -11,9 +11,11 @@ import { DIFF_TOOL_NAMES } from '../tool-significance';
  *
  * We derive the authoritative tool list straight from the tool definition files
  * in `apps/web/src/lib/ai/tools/*-tools.ts` (the same modules assembled into
- * `pageSpaceTools`) by scanning for top-level `<name>: tool({` declarations.
- * This avoids importing the server tool graph (db pool, dns, etc.) into a unit
- * test while still failing the moment a tool is added without a renderer.
+ * `pageSpaceTools`) by scanning for `<name>: tool({` declarations — in a plain
+ * exported object literal or nested in a DI factory, both of which reach
+ * `pageSpaceTools` via their `*-tools-runtime.ts` wrapper. This avoids
+ * importing the server tool graph (db pool, dns, etc.) into a unit test while
+ * still failing the moment a tool is added without a renderer.
  *
  * A tool is "covered" if it is registered in `toolRenderers` or listed in
  * `SPECIAL_HANDLED_TOOLS` (tools rendered as full-width cards outside the
@@ -23,8 +25,18 @@ import { DIFF_TOOL_NAMES } from '../tool-significance';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOOLS_DIR = path.resolve(__dirname, '../../../../../..', 'lib/ai/tools');
 
-// Matches a top-level tool declaration: two-space indent, snake_case key, `: tool(`.
-const TOOL_KEY_RE = /^ {2}([a-z_]+): tool\(/gm;
+/**
+ * Matches a tool declaration key: `<name>: tool(`, at any indent.
+ *
+ * Tools are declared in two shapes, both of which end up in `pageSpaceTools`:
+ * directly inside an exported object literal (two-space indent), or inside a
+ * dependency-injection factory — `createSessionTools`, `createSandboxTools`,
+ * `createPagePaneTools` — whose `*-tools-runtime.ts` wrapper binds the deps and
+ * folds the result into `pageSpaceTools` all the same. Pinning the scan to a
+ * two-space indent made a formatting detail decide which tools exist, which
+ * silently hid every factory-declared tool from the assertions below.
+ */
+const TOOL_KEY_RE = /^ {2,}([a-zA-Z_][a-zA-Z0-9_]*): tool\(/gm;
 
 function collectToolNames(): string[] {
   const files = readdirSync(TOOLS_DIR).filter((f) => f.endsWith('-tools.ts'));
@@ -38,6 +50,40 @@ function collectToolNames(): string[] {
   return [...names].sort();
 }
 
+/**
+ * Tools that ride `pageSpaceTools` today with no rich renderer yet.
+ *
+ * These are NOT an excuse list: they are the pre-existing gap the old
+ * two-space-indent scan hid. Every entry here is declared inside a DI factory
+ * (`createSessionTools` / `createSandboxTools`), so the scan never saw them and
+ * the coverage assertion below passed vacuously for the whole session + shell
+ * surface. Widening the scan makes them visible; recording them here keeps the
+ * assertion enforcing on everything else while the renderers are designed.
+ *
+ * The two guards below keep the ledger honest in both directions: it cannot
+ * grow SILENTLY — a new uncovered tool fails the coverage assertion until
+ * someone adds it here deliberately, in a reviewable diff, with a reason — and
+ * an entry that gains a renderer (or stops existing) must be deleted from here
+ * or the test fails. Adding a line is a decision to defer a renderer, never a
+ * way to make an unexpected failure go away.
+ */
+const PENDING_RICH_RENDERERS = new Set<string>([
+  // session family (createSessionTools)
+  'list_sessions',
+  'spawn_session',
+  'send_session',
+  'read_session',
+  'kill_session',
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
+  // sandbox file family (createSandboxTools); its `bash` shares the CLI renderer
+  'writeFile',
+  'readFile',
+  'editFile',
+]);
+
 describe('tool renderer coverage', () => {
   const toolNames = collectToolNames();
   const covered = new Set<string>([...Object.keys(toolRenderers), ...SPECIAL_HANDLED_TOOLS]);
@@ -45,17 +91,36 @@ describe('tool renderer coverage', () => {
   it('scans the canonical tool definitions', () => {
     // Sanity: the scan found a realistic number of tools, so a path/regex
     // regression doesn't silently pass the coverage assertion below.
-    expect(toolNames.length).toBeGreaterThan(40);
+    expect(toolNames.length).toBeGreaterThan(80);
     expect(toolNames).toContain('create_page');
     expect(toolNames).toContain('list_calendar_events');
+    // Shape pins: one tool from each declaration shape, so narrowing the regex
+    // back to a single indent (and re-hiding the factory families) fails here
+    // instead of silently shrinking the tool universe.
+    expect(toolNames).toContain('spawn_session'); // createSessionTools factory
+    expect(toolNames).toContain('open_page_pane'); // createPagePaneTools factory
+    expect(toolNames).toContain('writeFile'); // createSandboxTools factory (camelCase key)
   });
 
   it('has a rich renderer for every AI tool', () => {
-    const missing = toolNames.filter((name) => !covered.has(name));
+    const missing = toolNames.filter((name) => !covered.has(name) && !PENDING_RICH_RENDERERS.has(name));
     expect(
       missing,
       `Tools without a rich renderer: ${missing.join(', ')}.\n` +
         'Add an entry to toolRenderers in registry.tsx (or SPECIAL_HANDLED_TOOLS for full-card renderers).'
+    ).toEqual([]);
+  });
+
+  it('keeps the pending-renderer ledger honest', () => {
+    // An entry that gained a renderer, or that no longer names a real tool, is
+    // stale: it must be deleted, so the ledger can never outlive the gap it
+    // records.
+    const known = new Set(toolNames);
+    const stale = [...PENDING_RICH_RENDERERS].filter((name) => covered.has(name) || !known.has(name)).sort();
+    expect(
+      stale,
+      `PENDING_RICH_RENDERERS is stale for: ${stale.join(', ')}.\n` +
+        'These tools now have a renderer (or no longer exist) — remove them from the ledger.'
     ).toEqual([]);
   });
 
