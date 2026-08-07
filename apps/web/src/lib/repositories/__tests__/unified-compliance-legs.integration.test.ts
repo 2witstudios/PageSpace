@@ -59,7 +59,7 @@ async function seedStreamSession(args: {
   return messageId;
 }
 
-describe('compliance over a dual-written message corpus (Phase 4 PR 13)', () => {
+describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy leg since PR 14)', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -111,7 +111,9 @@ describe('compliance over a dual-written message corpus (Phase 4 PR 13)', () => 
       const globalQuestionId = createId();
       const globalReplyId = createId();
 
-      // THE DUAL-WRITE PATH — the production writer, both legs, one transaction.
+      // THE PRODUCTION WRITER. Since Phase 4 PR 14 it writes `messages` and
+      // nothing else, so the legacy twins this suite needs are seeded by hand
+      // below — see the note there.
       await messageRepository.savePageMessage({
         messageId: ownerQuestionId,
         pageId: agentPage.id,
@@ -140,6 +142,18 @@ describe('compliance over a dual-written message corpus (Phase 4 PR 13)', () => 
         role: 'user',
         content: 'bystander question',
       });
+
+      // THE PRE-FREEZE LEGACY TWINS. Every page row above ALSO exists in
+      // `chat_messages` on any real database that predates PR 14, under the
+      // SAME primary key — that is exactly what makes "read both tables"
+      // duplicate each row, which is what RULE 1 exists to forbid. The writer
+      // no longer produces them (the legacy leg is frozen), so the corpus
+      // states the history explicitly instead of pretending it never existed.
+      await db.insert(chatMessages).values([
+        { id: ownerQuestionId, pageId: agentPage.id, conversationId: pageConversationId, userId: owner.id, role: 'user', content: 'owner question', isActive: true, status: 'complete' },
+        { id: agentReplyId, pageId: agentPage.id, conversationId: pageConversationId, userId: null, role: 'assistant', content: 'agent reply', sourceAgentId: agentPage.id, isActive: true, status: 'complete' },
+        { id: bystanderMessageId, pageId: agentPage.id, conversationId: pageConversationId, userId: bystander.id, role: 'user', content: 'bystander question', isActive: true, status: 'complete' },
+      ]);
 
       // Global history — one leg, always has been.
       await messageRepository.saveGlobalMessage({
@@ -171,7 +185,7 @@ describe('compliance over a dual-written message corpus (Phase 4 PR 13)', () => 
       };
     });
 
-    it('the dual-writer really did populate BOTH legs — without this the rest of the suite proves nothing', async () => {
+    it('the corpus really does hold a legacy twin per page row — without this the rest of the suite proves nothing', async () => {
       if (!dbAvailable) return;
 
       const legacy = await db
@@ -242,7 +256,7 @@ describe('compliance over a dual-written message corpus (Phase 4 PR 13)', () => 
       expect(globalRow?.pageId).toBeUndefined();
     });
 
-    it('covers every legacy-leg row the subject authored — the unified leg is a SUPERSET, which is the premise of reading it alone', async () => {
+    it('covers every frozen legacy row the subject authored — the unified table is a SUPERSET, which is the premise of reading it alone', async () => {
       if (!dbAvailable) return;
 
       const legacyOwn = await db

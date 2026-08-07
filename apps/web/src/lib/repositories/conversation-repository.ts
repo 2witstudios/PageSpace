@@ -6,7 +6,7 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
-import { chatMessages, pages } from '@pagespace/db/schema/core'
+import { pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { isClickHouseEnabled } from '@pagespace/lib/observability/clickhouse-client';
@@ -455,8 +455,8 @@ export const conversationRepository = {
     // The page-agent chat route's own atomic active-conversation re-check
     // (agent-sessions-runtime's sibling, apps/web/src/app/api/ai/chat/
     // route.ts) takes `SELECT ... FOR UPDATE` on THIS conversations row
-    // before persisting a message. If this transaction touched
-    // `chatMessages` first, that lock stays free for the whole message
+    // before persisting a message. If this transaction touched the message
+    // table first, that lock stays free for the whole message
     // sweep — a concurrent send can acquire it, read `isActive: true`
     // (still true, since this transaction hasn't reached the conversations
     // UPDATE yet), insert a new active message, and commit, ALL before this
@@ -484,18 +484,13 @@ export const conversationRepository = {
       // deleted from History as live forever — including, most concretely,
       // letting the agents console's reopen affordance resurrect one with
       // no messages left.
-      await tx
-        .update(chatMessages)
-        .set({ isActive: false })
-        .where(and(
-          eq(chatMessages.pageId, agentId),
-          eq(chatMessages.conversationId, conversationId)
-        ));
-      // UNIFIED LEG (Phase 4 PR 10) — the ONE message write outside
-      // message-repository.ts that a real user can trigger, so it dual-writes
-      // through the same shared unified-leg writer. Without it, deleting a
-      // conversation from History would tombstone only `chat_messages` and
-      // the post-cutover reader would resurrect every message in it.
+      // The ONE message write outside message-repository.ts that a real user
+      // can trigger, so it goes through the same shared page writer. The
+      // mirrored `chat_messages` sweep that used to sit beside it is gone
+      // (Phase 4 PR 14): `messages` is the only table anyone reads OR writes,
+      // and tombstoning a frozen table would be writing history nobody can
+      // see. `agentId` no longer scopes the statement — the conversation id
+      // already names one thread, and the page is `conversations.contextId`.
       await deactivateUnifiedMessagesForConversation(tx, conversationId);
       return row ?? null;
     });
@@ -521,17 +516,13 @@ export const conversationRepository = {
         .set({ isActive: false, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
         .where(eq(conversations.id, conversationId))
         .returning();
-      await tx
-        .update(chatMessages)
-        .set({ isActive: false })
-        .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.isActive, true)));
-      // UNIFIED LEG — see softDeleteConversation above, but gated on
-      // `type='page'` here because this shape accepts ANY conversation id,
-      // including a global one. For a global conversation `messages` is not a
-      // second leg, it is the ONLY leg, and the legacy sweep above matches
-      // nothing — so an ungated unified sweep would not be mirroring a write,
-      // it would be inventing one (tombstoning global messages this route has
-      // never touched). The dual-write mirrors; it does not fix.
+      // Still gated on `type='page'`, and deliberately so even now that the
+      // legacy sweep beside it is gone (Phase 4 PR 14). This shape accepts ANY
+      // conversation id, including a global one, and for a global conversation
+      // this route has NEVER tombstoned messages — the legacy statement it
+      // used to run matched nothing there. Dropping the gate would be a
+      // behaviour change smuggled in by a write-removal PR; the global leg of
+      // this route is its own decision, for its own PR.
       if (row?.type === 'page') {
         await deactivateUnifiedMessagesForConversation(tx, conversationId);
       }

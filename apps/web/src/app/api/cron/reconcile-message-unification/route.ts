@@ -5,21 +5,24 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { reconcileMessageUnification } from '@/lib/repositories/message-unification-reconcile';
 
 /**
- * Cron endpoint that compares the two legs of the message-table dual-write —
- * `chat_messages` (legacy) and `messages` (unified) — for recently-active
- * page conversations, and logs at ERROR level when they disagree.
+ * Cron endpoint that checks the LEGACY message table is still FROZEN.
+ *
+ * Since Phase 4 PR 14 `messages` is the sole write target and `chat_messages`
+ * takes no INSERT or UPDATE from anywhere. This asks the database whether that
+ * is actually true, for recently-active page conversations: every legacy row
+ * must still have an identical `messages` twin. A legacy row without one means
+ * a writer PR 14 missed is still live — invisible to every reader, and a
+ * blocker for PR 15's DROP TABLE. It logs at ERROR level.
  *
  * The second half of epic #2161's rule for a forced copy: a drift-guard TEST
- * proves the writers touch both legs, this proves the rows actually landed.
- * See `@/lib/repositories/message-unification-reconcile` for what is compared
- * and — just as importantly — what is deliberately excluded (global
- * conversations have only one leg; conversations older than the window are
- * the backfill's job, not a drift signal).
+ * proves no writer names the legacy table, this proves no ROWS appeared in it.
+ * See `@/lib/repositories/message-unification-reconcile` for the exact
+ * fingerprint compared and what is deliberately excluded (global conversations
+ * never had a legacy leg; legacy DELETEs are legitimate and stay invisible).
  *
- * READ-ONLY. It never repairs: the repair is
- * `scripts/backfill-unify-messages.ts`, which is reviewable and resumable,
- * and silent self-healing here would erase the evidence of whichever writer
- * caused the drift.
+ * READ-ONLY. It never repairs: silent self-healing here would erase the
+ * evidence of whichever writer caused the drift, and the repair for a live
+ * legacy writer is to DELETE THE WRITER, not to copy its rows across.
  *
  * A 200 with `diverged > 0` is NOT success — the HTTP status reports whether
  * the CHECK ran, and the payload reports what it found. Alerting reads the
@@ -38,7 +41,7 @@ export async function GET(request: Request) {
     const run = await reconcileMessageUnification();
 
     console.log(
-      `[Cron] Message unification reconcile: checked ${run.checked}, diverged ${run.diverged}, missing rows ${run.missingRows}, window ${run.windowHours}h${run.capped ? ' (CAPPED — more conversations may diverge beyond the scan cap)' : ''}`,
+      `[Cron] Message unification reconcile: checked ${run.checked}, diverged ${run.diverged}, unmirrored legacy rows ${run.unmirroredRows}, window ${run.windowHours}h${run.capped ? ' (CAPPED — more conversations may diverge beyond the scan cap)' : ''}`,
     );
 
     audit({
@@ -48,7 +51,7 @@ export async function GET(request: Request) {
       details: {
         checked: run.checked,
         diverged: run.diverged,
-        missingRows: run.missingRows,
+        unmirroredRows: run.unmirroredRows,
         windowHours: run.windowHours,
         capped: run.capped,
       },
@@ -58,7 +61,7 @@ export async function GET(request: Request) {
       success: true,
       checked: run.checked,
       diverged: run.diverged,
-      missingRows: run.missingRows,
+      unmirroredRows: run.unmirroredRows,
       samples: run.samples,
       windowHours: run.windowHours,
       capped: run.capped,

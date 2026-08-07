@@ -146,17 +146,21 @@ beforeEach(() => {
   mockBumpConversationRev.mockResolvedValue(null);
 });
 
-describe('savePageMessage — scoped upsert (chatMessages)', () => {
+describe('savePageMessage — scoped upsert (messages)', () => {
   it('scopes ON CONFLICT DO UPDATE to a row already in the CALLER conversation AND role', async () => {
     await messageRepository.savePageMessage({ ...baseArgs });
 
+    // ONE upsert since Phase 4 PR 14 froze `chat_messages`, and it carries the
+    // gate the legacy statement used to hold: a client-supplied id colliding
+    // with a row in another conversation (or another role) declines the
+    // conflict action instead of overwriting or re-parenting it.
     expect(mockOnConflictDoUpdate).toHaveBeenCalledTimes(1);
     const call = mockOnConflictDoUpdate.mock.calls[0][0] as { where?: unknown };
     expect(call.where).toEqual({
       kind: 'and',
       conds: [
-        { kind: 'eq', field: 'chat_messages.conversation_id', value: 'conv-1' },
-        { kind: 'eq', field: 'chat_messages.role', value: 'user' },
+        { kind: 'eq', field: 'messages.conversation_id', value: 'conv-1' },
+        { kind: 'eq', field: 'messages.role', value: 'user' },
       ],
     });
   });

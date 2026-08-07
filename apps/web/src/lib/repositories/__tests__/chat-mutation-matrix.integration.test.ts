@@ -69,7 +69,12 @@ let dbAvailable = false;
 
 const triggeredBy = { userId: 'test', displayName: 'Test', browserSessionId: 'test-session' };
 
-/** One page conversation seeded on BOTH legs, the way the dual-write leaves it. */
+/**
+ * One page conversation seeded on BOTH tables — the shape the dual-write left
+ * behind before Phase 4 PR 14 froze `chat_messages`. Seeding the legacy rows
+ * directly (rather than through a writer) is the point: they are HISTORY now,
+ * and every case below asserts the mutations no longer reach them.
+ */
 async function seedPageThread(opts: { contents: Array<{ role: string; content: string }> }) {
   const owner = await factories.createUser();
   const drive = await factories.createDrive(owner.id);
@@ -108,13 +113,13 @@ async function seedPageThread(opts: { contents: Array<{ role: string; content: s
   return { ownerId: owner.id, driveId: drive.id, pageId: page.id, conversationId, ids };
 }
 
-/** What the legacy leg holds for a message — the rollback-safety half of every case. */
+/** What the FROZEN legacy table holds for a message — unchanged since the seed. */
 async function legacyRow(messageId: string) {
   const [row] = await db.select().from(chatMessages).where(eq(chatMessages.id, messageId)).limit(1);
   return row ?? null;
 }
 
-describe('chat mutation matrix — unified reads, legacy leg still correct', () => {
+describe('chat mutation matrix — unified reads and writes, legacy leg frozen', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -129,7 +134,7 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
   // -------------------------------------------------------------------------
 
   describe('message edit', () => {
-    it('is visible to the unified reader and mirrored onto the legacy leg', async () => {
+    it('is visible to the unified reader and never reaches the frozen leg', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -160,8 +165,11 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
       );
       expect(history.map((m) => m.content)).toEqual(['edited question', 'an answer']);
 
-      // 3. rollback safety
-      expect((await legacyRow(target))?.content).toBe('edited question');
+      // 3. the freeze, from the database's own point of view: the legacy row
+      // still holds what it held before the edit. Nothing reads it, so this is
+      // not a staleness bug — it is the invariant the reconcile cron alerts on
+      // if it is ever violated in the other direction (a legacy row CHANGING).
+      expect((await legacyRow(target))?.content).toBe('original question');
     });
   });
 
@@ -170,7 +178,7 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
   // -------------------------------------------------------------------------
 
   describe('message delete', () => {
-    it('disappears from the unified reader and is tombstoned on both legs', async () => {
+    it('disappears from the unified reader while the frozen leg keeps its row', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -195,7 +203,9 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
 
       // The routes read soft-deleted rows too and decide for themselves.
       expect((await messageRepository.getMessageById(target))?.isActive).toBe(false);
-      expect((await legacyRow(target))?.isActive).toBe(false);
+      // Frozen: the tombstone lands on `messages` only. The legacy row is
+      // removed by retention's own legacy sweep, not by this write.
+      expect((await legacyRow(target))?.isActive).toBe(true);
     });
   });
 
@@ -204,7 +214,7 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
   // -------------------------------------------------------------------------
 
   describe('undo', () => {
-    it('previews from the unified table and executes against BOTH legs', async () => {
+    it('previews from the unified table and executes against it alone', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -233,13 +243,14 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
       );
       expect(history.map((m) => m.content)).toEqual(['turn one question', 'turn one answer']);
 
-      // Rollback safety: the legacy leg is tombstoned identically, so a revert
-      // of the reader cutover does not resurrect the undone turn.
+      // The frozen leg is untouched by the undo — all four seeded rows are
+      // still active there. This used to assert the mirror; since Phase 4
+      // PR 14 it asserts its absence.
       const legacyActive = await db
         .select({ id: chatMessages.id })
         .from(chatMessages)
         .where(and(eq(chatMessages.conversationId, thread.conversationId), eq(chatMessages.isActive, true)));
-      expect(legacyActive.map((r) => r.id).sort()).toEqual(thread.ids.slice(0, 2).sort());
+      expect(legacyActive.map((r) => r.id).sort()).toEqual([...thread.ids].sort());
     });
 
     it('is idempotent on a second run (the message is already inactive)', async () => {
@@ -313,7 +324,7 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
       ]);
 
       // The CAS is one-way: a second materialize of an already-terminal row
-      // must not fire, on either leg.
+      // must not fire.
       const again = await messageRepository.materializePageInterruptedMessage({
         messageId: assistantId,
         pageId: thread.pageId,
@@ -325,8 +336,10 @@ describe('chat mutation matrix — unified reads, legacy leg still correct', () 
       });
       expect(again).toBe(false);
 
-      expect((await legacyRow(assistantId))?.content).toBe('partial repl');
-      expect((await legacyRow(assistantId))?.status).toBe('interrupted');
+      // Neither the placeholder nor the materializer wrote the frozen table:
+      // this assistant row exists ONLY in `messages`. That is the whole of
+      // Phase 4 PR 14 stated as one row's worth of database state.
+      expect(await legacyRow(assistantId)).toBeNull();
     });
   });
 

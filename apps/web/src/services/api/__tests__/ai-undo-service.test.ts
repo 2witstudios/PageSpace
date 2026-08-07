@@ -361,7 +361,7 @@ describe('ai-undo-service', () => {
       expect(executeRollback).not.toHaveBeenCalled();
     });
 
-    it('tombstones BOTH message legs inside the one transaction', async () => {
+    it('tombstones the unified table ONLY — the legacy leg is frozen', async () => {
       const mockMessage = createMockMessage();
 
       mockDb.query.messages.findFirst.mockResolvedValue(mockMessage);
@@ -399,17 +399,16 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      // Since the message-table merge (epic "Agent-Session Single Source of
-      // Truth", Phase 4 / D6, PR 12) the two UPDATEs are no longer "the page
-      // table and the global table" chosen by `source`: they are the UNIFIED
-      // leg every reader consults plus the LEGACY leg the dual-write still
-      // fills. Both, in one transaction — an undo that tombstoned only the
-      // unified leg would be resurrected the moment anyone reverted the
-      // reader cutover. Asserted on the tables themselves rather than on a
-      // debug log, because the tables are the contract.
+      // ONE table, and this assertion has been all three shapes the epic
+      // passed through: it used to be "the page table OR the global table"
+      // (chosen by `source`), then "both legs" during the dual-write, and now
+      // — since Phase 4 PR 14 froze `chat_messages` — the unified table alone.
+      // A second UPDATE reappearing here means the legacy tombstone came back,
+      // writing rows no reader has consulted since PR 12. Asserted on the
+      // tables themselves rather than on a debug log, because the tables are
+      // the contract.
       const { messages: unifiedTable } = await import('@pagespace/db/schema/conversations');
-      const { chatMessages: legacyTable } = await import('@pagespace/db/schema/core');
-      expect(updatedTables).toEqual([unifiedTable, legacyTable]);
+      expect(updatedTables).toEqual([unifiedTable]);
       expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     });
 
@@ -946,12 +945,16 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      // First update() call is the primary table (source-based); second is the secondary table.
+      // The one and only update() call: the unified table.
       const primaryConds = updateWhereMock.mock.calls[0][0] as unknown[];
       expect(primaryConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
     });
 
-    it("executeAiUndo's secondary-table soft-delete update excludes status='streaming' rows", async () => {
+    it('issues exactly ONE soft-delete update — the frozen legacy leg gets none', async () => {
+      // This used to assert the SECOND update (the legacy mirror) carried the
+      // same streaming exclusion. Phase 4 PR 14 removed that statement, so
+      // what is worth pinning is that it stayed removed: a second update here
+      // is a resurrected legacy writer.
       const mockMessage = createMockMessage();
       mockDb.query.messages.findFirst.mockResolvedValue(mockMessage);
       mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
@@ -976,9 +979,7 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      expect(updateWhereMock).toHaveBeenCalledTimes(2);
-      const secondaryConds = updateWhereMock.mock.calls[1][0] as unknown[];
-      expect(secondaryConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
+      expect(updateWhereMock).toHaveBeenCalledTimes(1);
     });
   });
 });

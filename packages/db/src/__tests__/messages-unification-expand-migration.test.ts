@@ -197,6 +197,14 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
 /** Everything BEFORE this PR's two migrations — the "yesterday" schema. */
 const baseMigrations = allMigrations.slice(0, 248);
+/**
+ * Base + 0248 + 0249, and nothing after. Bounded on purpose: later migrations
+ * are entitled to reject corpora these scenarios deliberately construct (0250
+ * aborts on the unresolvable-orphan scenario below, which is exactly its job),
+ * and this suite is about what 0248/0249 do to a database, not about the head
+ * of the journal.
+ */
+const throughThisPr = allMigrations.slice(0, 250);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -249,7 +257,7 @@ async function openScenario(name: string): Promise<Scenario> {
     notices,
     migrate: async () => {
       try {
-        await runMigrations(drizzle(pool), allMigrations, {
+        await runMigrations(drizzle(pool), throughThisPr, {
           migrationsSchema: 'drizzle',
           migrationsTable: '__drizzle_migrations',
         });
@@ -340,10 +348,11 @@ describeLive('0248/0249 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: 0248 and 0249 are the only pending migrations', () => {
+  it('pins the base: the scenarios below apply exactly 0248 and 0249', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
-    expect(allMigrations.length - baseMigrations.length).toBe(2);
-    expect(journal.entries[journal.entries.length - 1]?.idx).toBe(249);
+    expect(throughThisPr.length - baseMigrations.length).toBe(2);
+    expect(journal.entries[248]?.idx).toBe(248);
+    expect(journal.entries[249]?.idx).toBe(249);
   });
 
   it('resolves ownership by the ladder, quarantines tombstoned threads, and is idempotent', async () => {
