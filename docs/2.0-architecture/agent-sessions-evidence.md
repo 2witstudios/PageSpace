@@ -79,21 +79,35 @@ Worth knowing before trusting a green run:
 ## RED GATE: what turning the gate on immediately revealed
 
 Run these specs against a correctly-built topology and they fail — and the failures are exactly
-the live-delivery assertions the epic exists to make true. Two full runs on the same tree:
+the live-delivery assertions the epic exists to make true.
 
-| Spec | Run 1 | Run 2 |
-|---|---|---|
-| `16` — a server dispatch into an open pane renders live without reload | **FAIL** | **FAIL** |
-| `16` — two windows on one conversation both see both sides live | **FAIL** | **FAIL** |
-| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** | **FAIL** |
-| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** | **FAIL** |
-| `17` — convergence is DURABLE: a window opened afterwards sees the same grid | pass | **FAIL** |
-| **Totals** | 7 passed, 4 failed | 6 passed, 5 failed |
+Runs 1–2 are local, on the tree before this branch merged `pu/broken-sessions`. Runs 3–4 are the
+**CI job itself**, on the merged tree (workflow run `31156153232`, the second a re-run of the
+same job on the same commit). Read them together: the local pair is what turning the gate on
+revealed, the CI pair is what the gate currently reports.
 
-The four live-delivery specs fail deterministically. The durable-convergence spec is **flaky**,
-which is itself diagnostic: it reads the persisted rows rather than a broadcast, so a spec that
-should not depend on delivery timing failing intermittently points at the same instability.
-Everything with no live-socket dependency passed in both runs: both `16` persistence smokes and
+| Spec | Run 1 (local) | Run 2 (local) | Run 3 (CI) | Run 4 (CI) |
+|---|---|---|---|---|
+| `16` — a server dispatch into an open pane renders live without reload | **FAIL** | **FAIL** | **FAIL** | FAIL → pass on retry |
+| `16` — two windows on one conversation both see both sides live | **FAIL** | **FAIL** | **FAIL** | **FAIL** |
+| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** | **FAIL** | pass | pass |
+| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** | **FAIL** | pass | pass |
+| `17` — convergence is DURABLE: a window opened afterwards sees the same grid | pass | **FAIL** | pass | pass |
+| **Totals** | 7 passed, 4 failed | 6 passed, 5 failed | 9 passed, 2 failed | 9 passed, 1 failed |
+
+**The CI picture is materially better than the local one, and the difference is not yet
+explained.** All three `17` pane-grid specs pass in CI, twice, including the two the local runs
+recorded as deterministic failures; and `16`'s dispatch-renders-live spec passed on retry in run
+4, so it is flaky rather than deterministic there. Exactly **one** assertion fails in every run
+of both environments: `16` — two windows on one conversation both see both sides live.
+
+Do not read the CI columns as "mostly fixed". The gap between the two environments is itself
+unexplained and could as easily be a timing difference that masks the bug as a real improvement
+— a spec that passes for reasons nobody has identified is not evidence. What the CI columns do
+establish is that the local table can no longer be cited as the current state of the gate, and
+that the surviving failure is narrower than "four live-delivery specs".
+
+Everything with no live-socket dependency passed in every run: both `16` persistence smokes and
 all three `15` chat smokes.
 
 The server side was verified healthy in the same run — realtime logged **197**
