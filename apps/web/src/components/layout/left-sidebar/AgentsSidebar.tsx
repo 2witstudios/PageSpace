@@ -65,7 +65,7 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  *   grouped under a drive header.
  *
  * **Clicking a row does not navigate.** Selection goes to
- * `useAgentSurfaceStore`, which mirrors it to `?session=&c=&agent=` via
+ * `useAgentSurfaceStore`, which mirrors it to `?workspace=&c=&agent=` via
  * `pushState`. The route never changes, so nothing above or beside this
  * component remounts, so live shells and streaming chats survive every click.
  */
