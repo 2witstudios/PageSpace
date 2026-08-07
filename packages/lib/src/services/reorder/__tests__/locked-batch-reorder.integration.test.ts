@@ -11,7 +11,9 @@
  * (computeReorderPlan + lockedBatchReorder) serializes them instead.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  *
  * The second test below proves genuine row-lock contention deterministically
  * rather than inferring it from timing. Two dangers with a timing-based
@@ -62,6 +64,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { computeReorderPlan } from '../compute-reorder-plan';
 import { lockedBatchReorder } from '../locked-batch-reorder';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -79,7 +82,8 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
     try {
       await db.select().from(driveRoles).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('locked-batch-reorder.integration.test.ts', error);
       dbAvailable = false;
     }
   });

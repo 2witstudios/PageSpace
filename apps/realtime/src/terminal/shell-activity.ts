@@ -56,8 +56,12 @@ export interface ShellActivityPayload {
    * `agent_workspaces.id` — the workspace whose sandbox the agent acted on.
    *
    * The FIELD NAME is frozen at the old spelling on purpose: this is a
-   * cross-service wire contract and realtime deploys BEFORE web, so renaming
-   * it would need its own accept-both release. `apps/web` maps its
+   * cross-service wire contract and realtime deploys BEFORE web (pinned by
+   * `src/__tests__/deploy-order.guard.test.ts` — the workflow shipped the
+   * other way round while this comment already claimed otherwise), so a
+   * rename would spend a whole deploy window with new realtime reading a
+   * field old web does not send. It needs its own accept-both release.
+   * `apps/web` maps its
    * `workspaceId` onto this name at the boundary
    * (`sandbox-tools-runtime.ts`), the same way the sandbox billing and storage
    * paths do for `AIUsageData.sessionId`.

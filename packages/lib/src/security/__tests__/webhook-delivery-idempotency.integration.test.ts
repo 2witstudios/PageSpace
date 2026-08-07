@@ -4,8 +4,9 @@
  * Exercises the REAL SQL semantics of the claim/complete/release lifecycle
  * against Postgres — the atomic upsert's CASE arms (pending count, completed
  * sentinel, expired-lease reclaim) and the count-guarded release, none of
- * which the unit tests' chainable db mocks can execute. Skips gracefully when
- * the DB is unavailable (same pattern as distributed-rate-limit.integration).
+ * which the unit tests' chainable db mocks can execute. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
@@ -17,6 +18,7 @@ import {
   completeWebhookDelivery,
   releaseWebhookDelivery,
 } from '../webhook-delivery-idempotency';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 // Unique webhook-id prefix so cleanup can't touch real rows; the module
@@ -30,7 +32,8 @@ beforeAll(async () => {
   try {
     await db.execute(sql`SELECT 1`);
     dbAvailable = true;
-  } catch {
+  } catch (error) {
+    requireDb('webhook-delivery-idempotency.integration.test.ts', error);
     dbAvailable = false;
   }
 });

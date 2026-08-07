@@ -22,8 +22,10 @@
  *     own workspace, unredacted.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors the other integration tests in this directory.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors the other integration tests in this directory.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -36,6 +38,7 @@ import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact
 import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import { createConversationInSession, spawnSession } from '../agent-sessions-runtime';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -44,7 +47,8 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('session-discovery-symmetry.integration.test.ts', error);
       dbAvailable = false;
     }
   });

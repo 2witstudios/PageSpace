@@ -210,7 +210,7 @@ async function fetchChatMessages(
       eq(messages.isActive, true),
       ne(messages.status, 'streaming')
     ))
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(RECENT_MESSAGE_LIMIT);
 
   return rows

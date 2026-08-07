@@ -30,6 +30,16 @@ on:
       - '.github/workflows/security.yml'
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
+      # Surfaces that only scripts/test-security.sh covers. Without these the
+      # script would be wired in and still dark for the code it uniquely guards:
+      # the OAuth 2.1 provider routes/repository, the MCP WebSocket route, the
+      # AI tools' SSRF boundary, and the CLI/SDK credential + token paths.
+      - 'apps/web/src/app/api/oauth/**'
+      - 'apps/web/src/app/api/mcp-ws/**'
+      - 'apps/web/src/lib/ai/tools/**'
+      - 'apps/web/src/lib/repositories/**'
+      - 'packages/cli/**'
+      - 'packages/sdk/**'
   pull_request:
     branches: [master, pu/flash-sandbox, pu/broken-sessions]
     paths:
@@ -59,6 +69,16 @@ on:
       - '.github/workflows/security.yml'
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
+      # Surfaces that only scripts/test-security.sh covers. Without these the
+      # script would be wired in and still dark for the code it uniquely guards:
+      # the OAuth 2.1 provider routes/repository, the MCP WebSocket route, the
+      # AI tools' SSRF boundary, and the CLI/SDK credential + token paths.
+      - 'apps/web/src/app/api/oauth/**'
+      - 'apps/web/src/app/api/mcp-ws/**'
+      - 'apps/web/src/lib/ai/tools/**'
+      - 'apps/web/src/lib/repositories/**'
+      - 'packages/cli/**'
+      - 'packages/sdk/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -208,6 +228,26 @@ jobs:
       - name: Run security audit route coverage gate
         run: bun run --filter 'web' test -- src/app/api/__tests__/security-audit-coverage.test.ts
         env:
+          NODE_ENV: test
+
+      # scripts/test-security.sh was repaired to 51/51 green at the start of the
+      # agent-session epic and then invoked by no workflow, so nothing it uniquely
+      # covers has ever been gated: the OAuth 2.1 provider routes and repository,
+      # the MCP WebSocket route, the AI tools' SSRF boundary (web_fetch redirect /
+      # DNS-rebind), Google One Tap and open-redirect protection, the magic-link and
+      # passkey route suites, device-fingerprint utils, and the security-test-utils
+      # self-check. It is not a superset of the steps above (those add the sandbox
+      # suites, the broadcast-claim and agent-session-store concurrency tests, and
+      # whole-directory runs of packages/lib/src/auth and the web auth routes) and
+      # the steps above are not a superset of it — so it runs IN ADDITION rather
+      # than replacing them. The overlap costs runtime; the gap cost signal.
+      #
+      # DATABASE_URL is set so the script uses this job's Postgres service instead
+      # of trying to `docker compose up` its own (its local-dev path).
+      - name: Run scripts/test-security.sh (suites no step above covers)
+        run: bun run test:security
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
   dependency-audit:

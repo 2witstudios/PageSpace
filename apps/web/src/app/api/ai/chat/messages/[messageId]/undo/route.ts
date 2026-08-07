@@ -221,38 +221,42 @@ export async function POST(
       );
     }
 
-    // Record the undo through the repository choke point: bumps the
-    // conversation's rev, emits the legacy chat:undo_applied (moved in from
-    // this route) plus the authoritative conversation:undo_applied to the
-    // conv room. Page-event broadcasts below cover the page-domain side.
-    // Failure must never break the request.
-    void (async () => {
-      try {
-        const legacyTriggeredBy = await resolveTriggeredBy(userId, request);
-        const broadcastPageId = preview.source === 'page_chat' && preview.pageId
-          ? preview.pageId
-          : globalChannelId(userId);
-        const messageIdsFromActivities = preview.activitiesAffected
-          .filter((a) => a.resourceType === 'message')
-          .map((a) => a.resourceId);
-        const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
-        await messageRepository.recordUndoApplied({
-          conversationId: preview.conversationId,
-          legacyChannelId: broadcastPageId,
-          scope: preview.source === 'page_chat' && preview.pageId
-            ? { kind: 'page', pageId: preview.pageId }
-            : { kind: 'global', ownerId: userId },
-          mode,
-          affectedMessageIds,
-          legacyTriggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast chat undo-applied', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(preview.conversationId),
-        });
-      }
-    })();
+    // ANNOUNCE the undo. The rev bump already happened, inside the write
+    // transaction, via `messageRepository.softDeleteUndoRange` — this route
+    // only carries that post-write rev out to the rooms: the legacy
+    // chat:undo_applied (moved in from here) plus the authoritative
+    // conversation:undo_applied. Page-event broadcasts below cover the
+    // page-domain side.
+    //
+    // The route MUST NOT bump. It used to: `recordUndoApplied` opened its own
+    // transaction here, after the write had already committed, inside a
+    // swallowing try/catch. A single failure in that block meant a committed
+    // deletion with no rev movement and no event — permanent silent staleness
+    // in every open pane, because `syncWatchedConversationRevs` compares revs
+    // and nothing else, so it could never heal. Emission is still best-effort
+    // (it is delivery, not durability); the rev is what makes losing it
+    // recoverable.
+    if (result.bumpedConversation !== undefined) {
+      const legacyTriggeredBy = await resolveTriggeredBy(userId, request);
+      const broadcastPageId = preview.source === 'page_chat' && preview.pageId
+        ? preview.pageId
+        : globalChannelId(userId);
+      const messageIdsFromActivities = preview.activitiesAffected
+        .filter((a) => a.resourceType === 'message')
+        .map((a) => a.resourceId);
+      const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
+      messageRepository.emitUndoApplied({
+        conversationId: preview.conversationId,
+        bumped: result.bumpedConversation,
+        legacyChannelId: broadcastPageId,
+        scope: preview.source === 'page_chat' && preview.pageId
+          ? { kind: 'page', pageId: preview.pageId }
+          : { kind: 'global', ownerId: userId },
+        mode,
+        affectedMessageIds,
+        legacyTriggeredBy,
+      });
+    }
 
     // Broadcast real-time updates for affected pages and channels
     if (mode === 'messages_and_changes') {
