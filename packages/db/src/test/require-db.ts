@@ -13,7 +13,7 @@
  * When Postgres is absent, every `it` returns before asserting anything and
  * vitest reports the whole file as PASSING. That is not a skip — a skip is
  * visible in the summary and in CI logs. This is a green tick over zero
- * assertions, and it is exactly how migration 0246's data-loss guard stayed
+ * assertions, and it is exactly how migration 0252's data-loss guard stayed
  * "proven" for months by a suite that never opened a database.
  *
  * THE RULE. A DB integration test may not decide for itself that the database

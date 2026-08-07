@@ -144,7 +144,7 @@ export const conversations = pgTable('conversations', {
    * row with a NULL context is a message set with no page, and a global row
    * with a context is a page reference the global reader will never look at.
    *
-   * All THREE are added `NOT VALID` (hand-appended in migration 0249 —
+   * All THREE are added `NOT VALID` (hand-appended in migration 0250 —
    * drizzle has no expression for it): new and updated rows are checked from
    * the moment they land, the legacy corpus is not scanned, and the
    * `VALIDATE CONSTRAINT` decision belongs to a later PR that has looked at
@@ -180,7 +180,7 @@ export const conversations = pgTable('conversations', {
  *
  * `chat_messages` was merged INTO this table across Phase 4 of the epic
  * "Agent-Session Single Source of Truth" (D6) and DROPPED at PR 15, migration
- * 0252. Two of the three columns that merge added are permanent — a nullable
+ * 0253. Two of the three columns that merge added are permanent — a nullable
  * `userId` and `sourceAgentId` — and the third, a transitional `pageId`, went
  * with the legacy table: a row's page is derived from its conversation
  * (`conversations.contextId` for `type='page'`, `conversations.agentPageId`
@@ -208,7 +208,7 @@ export const messages = pgTable('messages', {
   /**
    * The HUMAN author, or NULL for an agent/system-authored row. See the
    * attribution rule in this table's doc comment. Relaxed from NOT NULL in
-   * 0248: purely widening, so every pre-existing row and every old-code
+   * 0249: purely widening, so every pre-existing row and every old-code
    * INSERT during the rolling-deploy window stays valid.
    */
   userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
@@ -239,8 +239,8 @@ export const messages = pgTable('messages', {
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),
   userIdx: index('messages_user_id_idx').on(table.userId),
-  // The page-scoped indexes 0248 created on the transitional `pageId` went
-  // with the column in 0252. A page-scoped read is now a JOIN through
+  // The page-scoped indexes 0249 created on the transitional `pageId` went
+  // with the column in 0253. A page-scoped read is now a JOIN through
   // `conversations`, served by `conversations_context_id_idx` /
   // `conversations_agent_page_id_idx` on the outer side and
   // `messages_conversation_id_created_at_idx` on this one.

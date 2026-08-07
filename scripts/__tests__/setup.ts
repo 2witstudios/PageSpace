@@ -306,7 +306,7 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   `);
 
   // The page conversation the chat messages below belong to. Required since
-  // 0248 gave chat_messages.conversationId a real FK — see FIXTURES.conversations.
+  // 0249 gave chat_messages.conversationId a real FK — see FIXTURES.conversations.
   await db.execute(sql`
     INSERT INTO conversations (id, "userId", title, type, "contextId", "workspaceId", "closedInWorkspaceAt", rev, "isShared", "lastMessageAt", "createdAt", "updatedAt")
     VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.workspaceId}, ${now}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})

@@ -137,15 +137,15 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
  *    `editedAt` is only set on content edits). This matches the existing
  *    `purgeInactiveMessages` semantics.
  *
- * ── CASCADE (migrations 0248/0249) ─────────────────────────────────────────
+ * ── CASCADE (migrations 0249/0250) ─────────────────────────────────────────
  * The `conversations` delete below is not a leaf. Two FKs cascade from it:
  * `messages.conversationId` (always did) and `ai_stream_sessions
- * .conversation_id` (0249). Purging one soft-deleted conversation therefore
+ * .conversation_id` (0250). Purging one soft-deleted conversation therefore
  * also purges its per-generation stream checkpoints — message CONTENT
- * (`parts`) that nothing in this codebase had ever deleted before 0249. That
+ * (`parts`) that nothing in this codebase had ever deleted before 0250. That
  * is strictly MORE deletion than before, and it is the intended direction:
  * retention's whole job is that nothing outlives its window. (A third cascade,
- * `chat_messages.conversationId` from 0248, went with that table when Phase 4
+ * `chat_messages.conversationId` from 0249, went with that table when Phase 4
  * PR 15 dropped it.)
  *
  * The two statements are consequently NOT independent, which is why the

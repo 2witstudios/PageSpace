@@ -430,7 +430,7 @@ describe('exportData', () => {
       expect(result.manifest.tableCounts.users).toBe(3);
     });
 
-    it('exports agent-authored unified messages, whose userId is NULL since 0248', async () => {
+    it('exports agent-authored unified messages, whose userId is NULL since 0249', async () => {
       const { sql: sqlFn } = await import('drizzle-orm');
       await db.execute(sqlFn.raw(
         `INSERT INTO messages (id, "conversationId", "userId", role, content, "createdAt")

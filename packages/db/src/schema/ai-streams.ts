@@ -5,11 +5,11 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   messageId:      text('message_id').primaryKey(),
   channelId:      text('channel_id').notNull(),
   /**
-   * The conversation this generation belongs to — and, since migration 0249
+   * The conversation this generation belongs to — and, since migration 0250
    * (epic "Agent-Session Single Source of Truth", Phase 4 — integrity
    * constraints), a REAL foreign key rather than a naming convention.
    *
-   * It could only become one after 0248 synthesized `conversations` rows for
+   * It could only become one after 0249 synthesized `conversations` rows for
    * the orphan page-chat corpus: page-chat streams carry the same
    * self-minted `conversationId` as `chat_messages`, so before that sweep a
    * large share of these rows referenced nothing.

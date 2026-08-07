@@ -13,7 +13,7 @@ import { agentWorkspaces } from './agent-workspaces';
  * see `@pagespace/lib/agent-workspaces/workspace-layout-verbs.ts` (the pure
  * engine) and `@pagespace/lib/services/agent-workspaces/workspace-layout-store.ts`
  * (the one write primitive). `workspaceState` was kept one release as the
- * rolling-deploy shim and DROPPED at the contract step (migration 0250, with
+ * rolling-deploy shim and DROPPED at the contract step (migration 0252, with
  * a final sweep and a refuses-to-drop guard); these rows are now the only
  * representation of a pane grid that exists.
  *

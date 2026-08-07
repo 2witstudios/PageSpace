@@ -5,7 +5,7 @@
  * `REFERENCES pages(id) ON DELETE CASCADE`, and that FK was the physical net
  * under every page- and drive-deletion path in the codebase: nothing had to
  * remember to clean chat history up, because the database did it. Migration
- * 0252 dropped `chat_messages`, and the net went with it. What replaced it
+ * 0253 dropped `chat_messages`, and the net went with it. What replaced it
  * does NOT cover the same ground:
  *
  *   * `conversations.contextId` — the page id for `type='page'`, the drive id

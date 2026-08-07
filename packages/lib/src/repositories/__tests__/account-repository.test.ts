@@ -33,7 +33,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 // A collaborator, not this unit's job. Every drive delete here must take the
 // drive's chat history with it (the `chat_messages.pageId` cascade that used
-// to do that automatically went with the table in migration 0252), but WHAT
+// to do that automatically went with the table in migration 0253), but WHAT
 // that cleanup selects is pinned against a real database in
 // `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
 // Here we only assert that it is called, and called BEFORE the drive row goes.

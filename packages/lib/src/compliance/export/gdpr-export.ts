@@ -445,7 +445,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
    * subject's shared conversation stay out: they are that person's data, and
    * Art 15(4) says a subject's access right must not adversely affect the
    * rights of others. `conversations.userId` alone would have swept them in
-   * (multi-author legacy conversations exist — 0248's orphan synthesis logs
+   * (multi-author legacy conversations exist — 0249's orphan synthesis logs
    * how many it found, "earliest human author wins").
    *
    * The join is INNER by design: `messages.conversationId` carries a real,

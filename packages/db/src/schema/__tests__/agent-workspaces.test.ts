@@ -259,7 +259,7 @@ describe('agent sessions relations', () => {
 /**
  * 0238 is APPLIED HISTORY and its text is frozen: it still says
  * `agent_sessions`, because that is what the table was called when it ran.
- * 0253 renames the table, the trigger and the function in place — that the
+ * 0254 renames the table, the trigger and the function in place — that the
  * trigger SURVIVES the rename and still fires on `agent_workspaces` is asserted
  * against a live database in
  * `src/__tests__/agent-workspaces-rename-migration.test.ts`, which is the only

@@ -211,7 +211,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Deleting the users cascades to drives, workspaces, shells, conversations
-  // and (via 0249) the stream rows bound to those conversations. The stream
+  // and (via 0250) the stream rows bound to those conversations. The stream
   // rows carrying a service actor id are not reached by any cascade, so they
   // are removed explicitly.
   const ids = [subjectId, otherId].filter(Boolean);

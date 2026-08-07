@@ -330,7 +330,7 @@ export async function exportData(
   nullifyOrphanedPageRefs(conversationsData, pageIdSet, 'planPageId');
 
   // Messages from exported users, plus the agent/system-authored rows.
-  // `messages.userId` was relaxed to NULLABLE in 0248 (the attribution rule:
+  // `messages.userId` was relaxed to NULLABLE in 0249 (the attribution rule:
   // NULL userId = agent- or system-authored), so an `IN (…)` filter alone now
   // silently drops every agent reply from the bundle. NULL rows have no user
   // reference to dangle, so they are always safe to carry.

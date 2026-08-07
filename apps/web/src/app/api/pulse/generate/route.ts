@@ -438,7 +438,7 @@ export async function POST(req: Request) {
     const recentPageChatsRaw = driveIds.length > 0 ? await db
       .select({
         // Non-null by construction: `type = 'page'` conversations always carry
-      // a contextId (`conversations_page_context_present_chk`, migration 0249).
+      // a contextId (`conversations_page_context_present_chk`, migration 0250).
       pageId: sql<string>`${conversations.contextId}`,
         pageTitle: pages.title,
         senderName: users.name,

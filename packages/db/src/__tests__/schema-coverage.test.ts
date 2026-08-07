@@ -41,7 +41,7 @@ describe('schema.ts exports', () => {
 
   it('no longer exposes the dropped legacy chat_messages table', () => {
     // Merged INTO `messages` across Phase 4 of the epic "Agent-Session Single
-    // Source of Truth" and dropped at PR 15 (migration 0252). One message
+    // Source of Truth" and dropped at PR 15 (migration 0253). One message
     // table, so a second name in the schema object would only invite a query
     // against a table that no longer exists.
     expect('chatMessages' in schemaModule.schema).toBe(false);

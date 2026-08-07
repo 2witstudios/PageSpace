@@ -2,16 +2,16 @@
  * Art 17 erasure of the subject's AI STREAM STATE — the half the FK graph
  * cannot reach.
  *
- * Found while auditing the cascade paths that migrations 0248/0249 changed
+ * Found while auditing the cascade paths that migrations 0249/0250 changed
  * (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 13).
  *
  * `ai_stream_sessions` rows carry `parts` — a periodic checkpoint of the
  * generated `UIMessagePart[]` buffer, i.e. message CONTENT — plus the
  * streamer's `user_id`, display name and browser session id. Nothing in this
  * repository has ever deleted a row of that table: no retention sweep, no TTL,
- * no erasure step, and (before 0249) no foreign key of any kind.
+ * no erasure step, and (before 0250) no foreign key of any kind.
  *
- * 0249 gave it `conversation_id → conversations ON DELETE CASCADE`, which
+ * 0250 gave it `conversation_id → conversations ON DELETE CASCADE`, which
  * closed most of the hole: erasing a user deletes their `conversations` rows
  * (`conversations.userId` cascades from `users`), and those now take the
  * stream state with them. What it does NOT close is the CROSS-USER residue:
@@ -23,7 +23,7 @@
  *   - `ai_pending_abort_intents` has no foreign key at all — not to
  *     `conversations`, not to `users` — so every intent row survives erasure
  *     regardless of who owns the conversation;
- *   - 0249's FK is `NOT VALID`, so rows whose conversation was hard-deleted
+ *   - 0250's FK is `NOT VALID`, so rows whose conversation was hard-deleted
  *     before it landed still dangle and are unreachable by any cascade.
  *
  * All three are keyed by `user_id`, which is exactly what this step deletes.
