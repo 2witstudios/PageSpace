@@ -58,8 +58,14 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/conversations/[conversation
     const response = await del();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+    // The CALLER's id travels with the request: `checkSessionAccess` above
+    // authorizes the SESSION (drive-membership-wide, so any member reaches
+    // another member's session), which is not ownership of the CONVERSATION.
+    // The primitive runs that second gate, and can only do so if the route
+    // passes the caller through.
     expect(mockCloseConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
+      userId: AUTH_USER.userId,
       workspaceId: SESSION_ID,
     });
     expect(mockAuditRequest).toHaveBeenCalledWith(

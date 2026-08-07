@@ -841,7 +841,25 @@ export function createSessionTools(deps: SessionToolsDeps): {
     };
   };
 
-  /** A shell verb's shared open: the shell must exist IN the caller's own session. */
+  /**
+   * A shell verb's shared open: the shell must exist IN the caller's own
+   * session, AND the caller must still be allowed to use that session.
+   *
+   * The second half is not redundant with the first. Containment is resolved
+   * through `findOwnWorkspace`, and a conversation→workspace binding is
+   * PERMANENT while drive membership is not — the same asymmetry `openOwnGrid`
+   * documents. Without the access re-check, a member who spawned a worker into
+   * a shared workspace and then lost the drive keeps resolving to it forever,
+   * and every shell in it stays addressable.
+   *
+   * That matters more here than anywhere else in this file, because nothing
+   * downstream re-checks: `shell-io.ts` states outright that it authorizes
+   * nothing and relies on this function to have confined the shellId, and the
+   * realtime side writes to the PTY before its own re-auth tick runs (that
+   * tick only refreshes the eviction identity — it does not gate the write).
+   * `filterToolsForSandboxTier` is a UX gate by its own admission, not a
+   * boundary. So this IS the boundary for send/read/kill_shell.
+   */
   const openOwnShell = async (
     context: ToolExecutionContext | undefined,
     shellId: string,
@@ -863,6 +881,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // every real shell, ever).
     const workspace = await deps.findOwnWorkspace(conversationId);
     if (!workspace) return { ok: false, error: notYourShell(shellId) };
+    // Revocation check, before the shell row is read: a caller who may no
+    // longer use this workspace learns nothing about which shells are in it.
+    const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
+    if (!access.allowed) return { ok: false, error: notYourShell(shellId) };
     const shell = await deps.findShell(shellId);
     // Shells target ONLY the caller's own workspace's sandbox — a shell of
     // any other workspace is unaddressable from here, and reads the same as
@@ -884,7 +906,23 @@ export function createSessionTools(deps: SessionToolsDeps): {
         if (!actor) return NEEDS_AUTH;
         const conversationId = context?.conversationId;
 
-        const workspace = conversationId ? await deps.findOwnWorkspace(conversationId) : null;
+        const boundWorkspace = conversationId ? await deps.findOwnWorkspace(conversationId) : null;
+        // Same revocation re-check `openOwnGrid` runs, for the same reason: the
+        // conversation→workspace binding is permanent, drive membership is not.
+        // A member who spawned a worker into a shared workspace and then lost
+        // the drive still resolves to it here, and the detail view below is the
+        // richest thing in this file — every worker's sessionId and agent
+        // binding, every shell's id and name, and the sandbox's live status.
+        // Nothing else covers it: `list_sessions` is deliberately kept out of
+        // `SANDBOX_COMPUTE_TOOL_NAMES` as free session surface, so no tier
+        // filter applies. Losing access degrades this to the no-workspace
+        // answer below rather than erroring — the caller's OTHER workspaces are
+        // still listable, and a refusal here would strand them.
+        const workspace =
+          boundWorkspace &&
+          (await deps.checkWorkspaceAccess(actor.userId, boundWorkspace.workspaceId)).allowed
+            ? boundWorkspace
+            : null;
         // Own and member-visible sets in parallel — the SAME exclusion for
         // both: the caller's current workspace is the top-level detail view
         // whoever owns it (a caller spawned into a shared workspace has a
@@ -1240,12 +1278,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         // Same one-namespace comparison as openOwnShell (review H2) — a shell
         // outside the caller's workspace reads as already-gone, which is the
-        // fail-closed answer this verb already gives.
+        // fail-closed answer this verb already gives. And the same revocation
+        // re-check, for the same reason openOwnShell carries one: containment
+        // resolves through a PERMANENT binding, so a caller who lost the drive
+        // still resolves to the workspace and could otherwise kill live shells
+        // in it. A revoked caller reads the workspace as gone, which collapses
+        // into the already-gone answer below without telling them which it was.
         const workspace = await deps.findOwnWorkspace(conversationId);
+        const stillAllowed = workspace
+          ? (await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId)).allowed
+          : false;
         const shell = await deps.findShell(shellId);
         // Already gone is SUCCESS (planKillTarget's rule): teardown callers
         // retry, and a 404-shaped error would make every one special-case it.
-        if (!workspace || !shell || shell.workspaceId !== workspace.workspaceId) {
+        if (!workspace || !stillAllowed || !shell || shell.workspaceId !== workspace.workspaceId) {
           return { success: true, shellId, killed: false, note: 'That shell was already gone.' };
         }
 

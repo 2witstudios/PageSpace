@@ -59,8 +59,12 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     const response = await post();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, alreadyOpen: false });
+    // The CALLER's id travels with the request — see the close route's twin
+    // assertion. Session access is not conversation ownership, and only the
+    // primitive can enforce the second, so the route has to pass the caller.
     expect(mockReopenConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
+      userId: AUTH_USER.userId,
       workspaceId: SESSION_ID,
     });
     expect(mockAuditRequest).toHaveBeenCalledWith(

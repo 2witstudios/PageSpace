@@ -18,12 +18,14 @@ let deps: {
   reopenConversation: ReturnType<typeof vi.fn>;
 };
 
-const input = { conversationId: 'conv-1', workspaceId: 'ses-1' };
+const OWNER = 'user-1';
+const input = { conversationId: 'conv-1', userId: OWNER, workspaceId: 'ses-1' };
 const run = () => reopenConversationInSessionWith(deps as ReopenConversationInSessionDeps, input);
 
 beforeEach(() => {
   deps = {
     findConversation: vi.fn(async () => ({
+      userId: OWNER,
       workspaceId: 'ses-1',
       closedInWorkspaceAt: new Date('2026-01-01'),
       isActive: true,
@@ -48,6 +50,7 @@ describe('reopenConversationInSessionWith', () => {
 
   it("given the row belongs to a DIFFERENT session, should answer not_in_session — same shape as no such row", async () => {
     deps.findConversation.mockResolvedValue({
+      userId: OWNER,
       workspaceId: 'ses-other',
       closedInWorkspaceAt: new Date('2026-01-01'),
       isActive: true,
@@ -57,12 +60,41 @@ describe('reopenConversationInSessionWith', () => {
   });
 
   it('given a row bound to no session at all (workspaceId null), should answer not_in_session', async () => {
-    deps.findConversation.mockResolvedValue({ workspaceId: null, closedInWorkspaceAt: new Date('2026-01-01'), isActive: true });
+    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: null, closedInWorkspaceAt: new Date('2026-01-01'), isActive: true });
     await expect(run()).resolves.toBe('not_in_session');
   });
 
+  // The mirror of the close side's gate: the session check on the route admits
+  // every drive member, so only this keeps a listing its owner deliberately
+  // dismissed from being pushed back into their sidebar by someone else.
+  describe('the ownership gate', () => {
+    it("refuses a conversation the caller does not own — same shape as no such row", async () => {
+      deps.findConversation.mockResolvedValue({
+        userId: 'mallory',
+        workspaceId: 'ses-1',
+        closedInWorkspaceAt: new Date('2026-01-01'),
+        isActive: true,
+      });
+      await expect(run()).resolves.toBe('not_in_session');
+      expect(deps.reopenConversation).not.toHaveBeenCalled();
+    });
+
+    it('is checked BEFORE the history-deleted and idempotency branches, so a foreign row leaks no state', async () => {
+      // `history_deleted` or `already_open` on a foreign id would each reveal
+      // that the row exists and what state it is in.
+      deps.findConversation.mockResolvedValue({
+        userId: 'mallory',
+        workspaceId: 'ses-1',
+        closedInWorkspaceAt: null,
+        isActive: false,
+      });
+      await expect(run()).resolves.toBe('not_in_session');
+      expect(deps.countOpenConversations).not.toHaveBeenCalled();
+    });
+  });
+
   it('given a history-deleted target (isActive false), should answer history_deleted WITHOUT weighing the cap', async () => {
-    deps.findConversation.mockResolvedValue({ workspaceId: 'ses-1', closedInWorkspaceAt: new Date('2026-01-01'), isActive: false });
+    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: new Date('2026-01-01'), isActive: false });
     await expect(run()).resolves.toBe('history_deleted');
     expect(deps.countOpenConversations).not.toHaveBeenCalled();
     expect(deps.reopenConversation).not.toHaveBeenCalled();
@@ -83,7 +115,7 @@ describe('reopenConversationInSessionWith', () => {
 
   describe('idempotency', () => {
     it('reopening an already-open conversation is a no-op success, not an error', async () => {
-      deps.findConversation.mockResolvedValue({ workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: true });
+      deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: true });
       await expect(run()).resolves.toBe('already_open');
       // Already open — no need to weigh the cap or write anything.
       expect(deps.countOpenConversations).not.toHaveBeenCalled();

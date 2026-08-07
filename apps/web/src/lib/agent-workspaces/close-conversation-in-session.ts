@@ -35,6 +35,12 @@ export interface CloseConversationInSessionDeps {
    * #2261/5's uniform-404 policy, applied here too).
    */
   findConversation: (conversationId: string) => Promise<{
+    /**
+     * The conversation's OWNER. Session access and conversation ownership are
+     * different questions and neither substitutes for the other — see the
+     * ownership gate in `closeConversationInSessionWith`.
+     */
+    userId: string;
     workspaceId: string | null;
     closedInWorkspaceAt: Date | null;
     /**
@@ -63,10 +69,24 @@ export interface CloseConversationInSessionDeps {
 
 export async function closeConversationInSessionWith(
   deps: CloseConversationInSessionDeps,
-  { conversationId, workspaceId }: { conversationId: string; workspaceId: string },
+  { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<CloseConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null || row.workspaceId !== workspaceId) return 'not_in_session';
+  // OWNERSHIP, checked before any branch can answer for a foreign row — the
+  // same gate `claimConversationInSessionWith` calls its H1 line, and for the
+  // same reason. The route above authorizes the SESSION (`checkSessionAccess`
+  // is drive-membership-wide, so any accepted member — VIEWER role included —
+  // reaches another member's session); that is NOT ownership of the
+  // CONVERSATION. Without this, any drive member could close another member's
+  // private thread out of their sidebar, and the ids are handed to them by
+  // design (`list_sessions` returns other members' sessionIds with only the
+  // title redacted, and the label-free `workspace:updated` broadcast ships
+  // every pane's targetId to the whole session room).
+  //
+  // Refuses as `not_in_session` — the same shape a nonexistent id gets, so an
+  // id-guessing caller cannot tell "not yours" from "not there".
+  if (row.userId !== userId) return 'not_in_session';
   if (row.closedInWorkspaceAt !== null) return 'already_closed';
   // A history-deleted target was never counted in `countOpenConversations`
   // (it's excluded there by `isActive`), so it isn't occupying a slot the

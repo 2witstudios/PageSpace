@@ -31,8 +31,9 @@ export type ReopenConversationOutcome =
   | 'session_full';
 
 export interface ReopenConversationInSessionDeps {
-  /** Row facts for the foreign-session and idempotency checks. Same shape `closeConversationInSessionWith` reads. */
+  /** Row facts for the ownership, foreign-session and idempotency checks. Same shape `closeConversationInSessionWith` reads. */
   findConversation: (conversationId: string) => Promise<{
+    userId: string;
     workspaceId: string | null;
     closedInWorkspaceAt: Date | null;
     isActive: boolean;
@@ -54,10 +55,16 @@ export interface ReopenConversationInSessionDeps {
 
 export async function reopenConversationInSessionWith(
   deps: ReopenConversationInSessionDeps,
-  { conversationId, workspaceId }: { conversationId: string; workspaceId: string },
+  { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<ReopenConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null || row.workspaceId !== workspaceId) return 'not_in_session';
+  // OWNERSHIP, before any other branch — see the close side's gate for the
+  // full reasoning. Reopening someone else's deliberately-closed thread is the
+  // mirror of closing their open one: the session check above admits every
+  // drive member, so only this line keeps a listing the owner dismissed from
+  // being pushed back into their sidebar by anyone who can reach the session.
+  if (row.userId !== userId) return 'not_in_session';
   // A history-deleted target is gone regardless of `closedInWorkspaceAt` —
   // there is no listing left to restore (mirrors the close side's own
   // isActive check, which excludes these from `countOpenConversations` too).

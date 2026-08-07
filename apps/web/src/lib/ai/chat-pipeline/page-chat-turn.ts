@@ -28,6 +28,7 @@ import {
 } from 'ai';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
+import { authorizePageConversation } from '@/lib/ai/core/authorize-page-conversation';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -649,6 +650,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       } else {
+        // The ONE page-conversation decision (`authorize-page-conversation.ts`)
+        // — ownership-or-shared AND belongs-to-this-page, plus the
+        // history-deleted refusal. It used to be written out here and nowhere
+        // else, which is how the consult route came to read other users'
+        // transcripts on a shared agent page; extracting it is what lets both
+        // surfaces run the same rule. See that module for why the page test is
+        // a function of `type` and never of `contextId` alone.
+        //
         // A history-deleted row (`conversations.isActive: false`) must never
         // accept a new message — the send would appear to succeed while the
         // canonical row stays excluded from both open and closed session
@@ -657,67 +666,19 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         // deactivates the CANONICAL row (not just its messages) while a
         // conversation can still be open in another pane or browser tab
         // (review finding — chatgpt-codex-connector on PR #2296).
-        if (existingConversation.isActive === false) {
-          loggers.ai.warn('AI Chat API: rejected send to a history-deleted conversation', {
-            userId,
-            requestConversationId,
-          });
-          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-        }
-        const ownsIt = existingConversation.userId === userId;
-        const isSharedConversation = existingConversation.isShared === true;
-        // WHICH PAGE A CONVERSATION BELONGS TO IS A FUNCTION OF ITS `type`,
-        // never of `contextId` alone — that column means a different thing per
-        // type, and reading it type-blind is what made this check unsound.
-        //
-        // It used to be `!contextId || contextId === chatId`. A `type='global'`
-        // conversation ALWAYS has `contextId IS NULL` — the database enforces
-        // it (`conversations_global_context_null_chk`, migration 0250) — so
-        // that first disjunct said every global conversation belongs to every
-        // page, and this route would happily append a page-agent turn to the
-        // global-assistant transcript (CodeQL `js/user-controlled-bypass`;
-        // adversarial security review finding 10). `type='client'` had the
-        // same hole from the other side: its `contextId` is a DRIVE, so the
-        // match was meaningless, and an unstamped client thread with both
-        // columns null matched every page too.
-        //
-        // The answer is the predicate every page-scoped READER already uses,
-        // `unifiedPageScope()` (lib/repositories/unified-message-scope.ts):
-        // `type='page'` names its page in `contextId`, `type='client'` in
-        // `agentPageId`, and NOTHING else names a page at all. Gating writes on
-        // the same rule that scopes reads is the point — a thread you may write
-        // into here is now exactly a thread whose messages this page reads back
-        // (the history load below is `getPageConversationMessages`, i.e. the
-        // very same scope).
-        //
-        // The single deliberate widening is the legacy tolerance the old
-        // disjunct was actually there for: `conversations_page_context_present_chk`
-        // shipped NOT VALID, so `type='page'` rows with a null `contextId` were
-        // grandfathered and their owners must not be locked out of their own
-        // history. Kept — but scoped to `type='page'` AND to the OWNER, which is
-        // exactly what the original comment claimed it was for. Owner-scoping
-        // also closes the review's named residual: a legacy null-context row
-        // with `isShared=true` was otherwise writable by any co-member from any
-        // page they could edit.
-        const belongsToThisPage =
-          existingConversation.type === 'page'
-            ? existingConversation.contextId === chatId ||
-              (existingConversation.contextId === null && ownsIt)
-            : existingConversation.type === 'client'
-              ? existingConversation.agentPageId === chatId
-              : false;
-        if ((!ownsIt && !isSharedConversation) || !belongsToThisPage) {
+        const access = authorizePageConversation(existingConversation, { userId, pageId: chatId });
+        if (!access.allowed) {
+          if (access.reason === 'history_deleted') {
+            loggers.ai.warn('AI Chat API: rejected send to a history-deleted conversation', {
+              userId,
+              requestConversationId,
+            });
+            return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+          }
           loggers.ai.warn('AI Chat API: rejected conversationId the caller may not write to', {
             userId,
             requestConversationId,
-            ownsIt,
-            isSharedConversation,
-            belongsToThisPage,
-            // The `type` is what decides `belongsToThisPage`, so a refusal is
-            // undiagnosable without it: 'global' here means someone addressed a
-            // global thread at a page, which is a categorically different event
-            // from a 'page' thread pointed at the wrong page.
-            conversationType: existingConversation.type,
+            ...access.detail,
           });
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
@@ -1645,7 +1606,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Truth", Phase 4 / D6 — reader cutover). Same rows, same order, same page
     // scope: the repository's page predicate is the join through
     // `conversations.contextId`, which is what `chat_messages.pageId` became.
-    // `chat_messages` is still dual-written, so reverting this PR alone is safe.
+    // `chat_messages` was DROPPED by migration 0253 — there is no dual write
+    // and no revert path.
     //
     // Exclude 'streaming' placeholders — this load is the model-context source AND the
     // compaction source (prepareHistoryForModel below), so a placeholder here would both

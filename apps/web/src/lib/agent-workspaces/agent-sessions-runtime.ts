@@ -446,6 +446,10 @@ function sessionListingReadDeps() {
     findConversation: async (conversationId: string) => {
       const [row] = await db
         .select({
+          // Selected so the pure decisions can run their ownership gate: the
+          // session check their routes run is drive-membership-wide and does
+          // NOT answer "is this conversation the caller's".
+          userId: conversations.userId,
           workspaceId: conversations.workspaceId,
           closedInWorkspaceAt: conversations.closedInWorkspaceAt,
           isActive: conversations.isActive,
@@ -469,6 +473,8 @@ function sessionListingReadDeps() {
  */
 export async function closeConversationInSession(input: {
   conversationId: string;
+  /** The CALLER. The pure decision refuses a conversation this user does not own. */
+  userId: string;
   workspaceId: string;
 }): Promise<CloseConversationOutcome> {
   return withSessionListingLock(input.workspaceId, () =>
@@ -494,6 +500,8 @@ export async function closeConversationInSession(input: {
  */
 export async function reopenConversationInSession(input: {
   conversationId: string;
+  /** The CALLER. The pure decision refuses a conversation this user does not own. */
+  userId: string;
   workspaceId: string;
 }): Promise<ReopenConversationOutcome> {
   return withSessionListingLock(input.workspaceId, () =>

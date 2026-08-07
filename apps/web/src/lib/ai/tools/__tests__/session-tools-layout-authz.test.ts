@@ -152,3 +152,111 @@ describe('the gate is checked before anything else can answer', () => {
     expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The layout tools were only ONE of the entry points resolving the permanent
+ * binding. `list_sessions` and the shell family resolved it the same way and
+ * checked nothing, so the HIGH-2 fix closed a quarter of its own hole.
+ *
+ * `list_sessions` is the widest read in the file — every worker's sessionId
+ * and agent binding, every SHELL's id and name, and the sandbox's live status
+ * — and it is deliberately excluded from `SANDBOX_COMPUTE_TOOL_NAMES` as free
+ * session surface, so no tier filter covers it either.
+ *
+ * The shell family is the widest WRITE: `shell-io.ts` says outright that it
+ * authorizes nothing and relies on `openOwnShell` to have confined the
+ * shellId, and the realtime side writes to the PTY before its own re-auth tick
+ * runs. So this gate is the only thing between a revoked member and keystroke
+ * injection into another tenant's live shell.
+ */
+describe('a revoked member reaching the session and shell verbs', () => {
+  const ALICE_SHELL = { shellId: 'sh-alice', workspaceId: ALICE_WORKSPACE, name: 'deploy-prod' };
+
+  beforeEach(() => {
+    deps = makeDeps({ findShell: vi.fn(async () => ALICE_SHELL) });
+  });
+
+  it('list_sessions: no detail view, and no worker or shell ids leak', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_sessions as Tool, {});
+
+    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(MALLORY, ALICE_WORKSPACE);
+    // The expensive detail read never happens...
+    expect(deps.listWorkspaceWorkers).not.toHaveBeenCalled();
+    // ...and the answer collapses to the same shape as a conversation that
+    // never had a workspace, so revoked and never-bound are indistinguishable.
+    expect(result.workspaceId).toBeNull();
+    expect(result.workers).toEqual([]);
+    expect(result.shells).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(ALICE_WORKSPACE);
+    expect(JSON.stringify(result)).not.toContain('deploy-prod');
+  });
+
+  it('send_shell: refuses, and nothing is written to the PTY', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.send_shell as Tool, { shellId: 'sh-alice', input: 'rm -rf /\n' });
+
+    expect(result.success).toBe(false);
+    expect(deps.shellIo.send).not.toHaveBeenCalled();
+  });
+
+  it('read_shell: refuses, and no scrollback is read', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.read_shell as Tool, { shellId: 'sh-alice' });
+
+    expect(result.success).toBe(false);
+    expect(deps.shellIo.read).not.toHaveBeenCalled();
+  });
+
+  it('kill_shell: reports already-gone and never kills the victim\'s shell', async () => {
+    const tools = createSessionTools(deps);
+    const result = await run(tools.kill_shell as Tool, { shellId: 'sh-alice' });
+
+    // Already-gone is this verb's fail-closed success shape (planKillTarget's
+    // rule) — the refusal must not become a distinguishable error here.
+    expect(result).toEqual(expect.objectContaining({ killed: false }));
+    expect(deps.killShell).not.toHaveBeenCalled();
+  });
+
+  it('the shell verbs refuse a revoked caller the SAME way they refuse a foreign shell', async () => {
+    const revoked = createSessionTools(deps);
+    const revokedAnswer = await run(revoked.read_shell as Tool, { shellId: 'sh-alice' });
+
+    // A caller who still has access, asking about a shell in someone else's
+    // workspace, must get a byte-identical refusal — otherwise the difference
+    // is an oracle for "does this shell exist in the workspace I lost".
+    const foreign = createSessionTools(
+      makeDeps({
+        checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+        findShell: vi.fn(async () => ({ ...ALICE_SHELL, workspaceId: 'ws-somewhere-else' })),
+      }),
+    );
+    const foreignAnswer = await run(foreign.read_shell as Tool, { shellId: 'sh-alice' });
+
+    expect(revokedAnswer).toEqual(foreignAnswer);
+  });
+});
+
+describe('a caller who still has session access reaches the session and shell verbs', () => {
+  it('list_sessions returns the detail view', async () => {
+    const deps = makeDeps({ checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_sessions as Tool, {});
+
+    expect(result.success).toBe(true);
+    expect(result.workspaceId).toBe(ALICE_WORKSPACE);
+    expect(deps.listWorkspaceWorkers).toHaveBeenCalled();
+  });
+
+  it('read_shell reaches the shell io', async () => {
+    const deps = makeDeps({
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+      findShell: vi.fn(async () => ({ shellId: 'sh-1', workspaceId: ALICE_WORKSPACE, name: 'sh' })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.read_shell as Tool, { shellId: 'sh-1' });
+
+    expect(result.success).toBe(true);
+    expect(deps.shellIo.read).toHaveBeenCalled();
+  });
+});

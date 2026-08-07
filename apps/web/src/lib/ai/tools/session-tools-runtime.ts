@@ -677,7 +677,21 @@ export async function resolveCallerSessionForWorker(
   ownerId: string,
 ): Promise<CallerSessionResolution> {
   const existing = await findSessionForConversation(callerConversationId);
-  if (existing) return { ok: true, session: existing };
+  if (existing) {
+    // A bound session is used AS IS — but "bound" is not "still allowed". The
+    // binding is PERMANENT and drive membership is not, so without this the
+    // early return hands a revoked member a worker (and therefore code
+    // execution) inside another tenant's live sandbox and filesystem — the
+    // richest thing this file can grant, on the one path that used to check
+    // nothing. This is the SAME permission decision the explicit-workspaceId
+    // branch of `resolveWorkerPlacement` runs, and it is permission-only:
+    // `decideAgentSessionAccess` reads owner + drive membership and never
+    // lifecycle state, so an ENDED session still resolves here exactly as
+    // #2335 requires. Only revocation refuses.
+    const access = await checkSessionAccess(ownerId, existing.id);
+    if (!access.allowed) return { ok: false, reason: 'not_permitted' };
+    return { ok: true, session: existing };
+  }
 
   const conversation = await conversationRepository.getConversation(callerConversationId);
   if (!conversation || conversation.userId !== ownerId || !conversation.isActive) {

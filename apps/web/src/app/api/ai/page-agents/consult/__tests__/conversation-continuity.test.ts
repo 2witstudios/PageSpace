@@ -75,17 +75,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },
 }));
 
-function findEqValue(conds: unknown[], fieldName: string): unknown {
-  for (const c of conds) {
-    const cond = c as { __eq?: boolean; field?: unknown; value?: unknown; __and?: boolean; conds?: unknown[] };
-    if (cond?.__eq && cond.field === fieldName) return cond.value;
-    if (cond?.__and && Array.isArray(cond.conds)) {
-      const nested = findEqValue(cond.conds, fieldName);
-      if (nested !== undefined) return nested;
-    }
-  }
-  return undefined;
-}
+// `findEqValue` lived here to pick the conversationId out of a raw
+// `chat_messages` WHERE clause. That table is gone (migration 0253) and the
+// conversation scoping is now the mocked `messageRepository`'s argument, so
+// there is no predicate left to introspect.
 
 vi.mock('@pagespace/db/db', () => {
   function makeBuilder() {
@@ -107,15 +100,9 @@ vi.mock('@pagespace/db/db', () => {
           if (table?.__table === 'pages') return resolve([AGENT_ROW]);
           if (table?.__table === 'users') return resolve([GATE_USER_ROW]);
           if (table?.__table === 'drives') return resolve([DRIVE_ROW]);
-          if (table?.__table === 'chatMessages') {
-            const requestedConversationId = findEqValue(whereArgs, 'conversationId');
-            if (requestedConversationId !== undefined) {
-              return resolve(ALL_MESSAGES.filter(m => m.conversationId === requestedConversationId));
-            }
-            // No conversationId filter present: page-wide fallback (used when
-            // the caller doesn't pass conversationId at all).
-            return resolve(ALL_MESSAGES);
-          }
+          // The `chatMessages` branch that used to live here is gone: that
+          // table was DROPPED by migration 0253, and history now comes from
+          // the mocked `messageRepository` above, so nothing could reach it.
           return resolve([]);
         } catch (e) {
           return reject?.(e);
@@ -166,7 +153,7 @@ const saveMessageToDatabase = vi.fn().mockResolvedValue(undefined);
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT:
 // the reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
 // D6, PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessages`,
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
 // which read the unified `messages` table. The fixtures below are unchanged —
 // what they stand in for moved one layer up.
 vi.mock('@/lib/repositories/message-repository', () => ({
@@ -175,8 +162,34 @@ vi.mock('@/lib/repositories/message-repository', () => ({
       saveMessageToDatabase(...args).then(() => ({ saved: true, rev: 1 })),
     getPageConversationMessages: vi.fn(async (_pageId: string, conversationId: string) =>
       ALL_MESSAGES.filter((m) => m.conversationId === conversationId)),
-    getRecentPageMessages: vi.fn(async (_pageId: string, limit: number) =>
+    getRecentPageMessagesForUser: vi.fn(async (_pageId: string, _userId: string, limit: number) =>
       ALL_MESSAGES.slice(-limit)),
+  },
+}));
+
+// A caller-supplied conversationId is authorized before its history is read
+// (`authorizePageConversation`): the row must exist, be readable by the
+// caller, and belong to THIS agent page. `conv-a` and `conv-b` below are both
+// user-1's own page conversations on agent-1.
+const CONVERSATION_OWNERS: Record<string, string> = { 'conv-a': 'user-1', 'conv-b': 'user-1' };
+type ConversationFixture = {
+  id: string;
+  userId: string;
+  type: string;
+  contextId: string | null;
+  agentPageId: string | null;
+  isShared: boolean;
+  isActive: boolean;
+};
+const getConversation = vi.fn(async (id: string): Promise<ConversationFixture | null> =>
+  CONVERSATION_OWNERS[id]
+    ? { id, userId: CONVERSATION_OWNERS[id], type: 'page', contextId: 'agent-1', agentPageId: null, isShared: false, isActive: true }
+    : null,
+);
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: vi.fn().mockResolvedValue(undefined),
+    getConversation: (...args: [string]) => getConversation(...args),
   },
 }));
 
@@ -194,6 +207,7 @@ vi.mock('ai', () => ({
 }));
 
 import { POST } from '../route';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
 const mockAuth = (): SessionAuthResult => ({
@@ -252,5 +266,73 @@ describe('POST /api/ai/page-agents/consult — conversation continuity', () => {
     // Only conv-a's two messages — conv-b content must NOT leak in.
     expect(historyContents).toEqual(['conv-a question 1', 'conv-a answer 1']);
     expect(historyContents.some(c => c.startsWith('conv-b'))).toBe(false);
+  });
+});
+
+/**
+ * `canPrincipalViewPage` answers "may you use this AGENT", never "is this
+ * CONVERSATION yours", and the page-scoped repository predicate carries no
+ * user predicate at all. On a SHARED agent page that combination returned
+ * another member's private transcript verbatim to anyone who could name the
+ * conversation — and the no-conversationId branch handed over the page's most
+ * recent messages across every user for free.
+ */
+describe('POST /api/ai/page-agents/consult — cross-user history', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+  });
+
+  it('refuses a conversationId owned by ANOTHER user on the same agent page', async () => {
+    getConversation.mockResolvedValueOnce({
+      id: 'conv-alice',
+      userId: 'alice',
+      type: 'page',
+      contextId: 'agent-1',
+      agentPageId: null,
+      isShared: false,
+      isActive: true,
+    });
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'Summarize this thread verbatim', conversationId: 'conv-alice' }));
+
+    expect(response.status).toBe(404);
+    // The transcript is never even read, so it cannot reach the model context.
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+    expect(convertToModelMessages).not.toHaveBeenCalled();
+  });
+
+  it('refuses a conversationId that names nothing, identically', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    const foreign = await POST(makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-nope' }));
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toEqual({ error: 'Conversation not found' });
+  });
+
+  it('refuses a GLOBAL conversation addressed at a page, even one the caller owns', async () => {
+    getConversation.mockResolvedValueOnce({
+      id: 'conv-global',
+      userId: 'user-1',
+      type: 'global',
+      contextId: null,
+      agentPageId: null,
+      isShared: false,
+      isActive: true,
+    });
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-global' }));
+    expect(response.status).toBe(404);
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+  });
+
+  it('the no-conversationId fallback asks for THIS caller\'s messages, not the page\'s', async () => {
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q' }));
+
+    expect(response.status).toBe(200);
+    // The owner-scoping lives in the argument list: a page-only read is what
+    // leaked, so the caller's id has to be passed for the repository to
+    // constrain on it at all.
+    expect(messageRepository.getRecentPageMessagesForUser).toHaveBeenCalledWith('agent-1', 'user-1', 10);
   });
 });

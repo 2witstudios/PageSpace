@@ -109,7 +109,7 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
         agentPageId: agentPage.id,
         workspaceId: session.id,
       }),
-      reopenConversationInSession({ conversationId: closedConversationId, workspaceId: session.id }),
+      reopenConversationInSession({ conversationId: closedConversationId, userId: owner.id, workspaceId: session.id }),
     ]);
 
     // Exactly one of the two must have been refused — never both succeeding

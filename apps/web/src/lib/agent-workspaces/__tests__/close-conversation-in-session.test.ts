@@ -16,12 +16,13 @@ let deps: {
   closeConversation: ReturnType<typeof vi.fn>;
 };
 
-const input = { conversationId: 'conv-1', workspaceId: 'ses-1' };
+const OWNER = 'user-1';
+const input = { conversationId: 'conv-1', userId: OWNER, workspaceId: 'ses-1' };
 const run = () => closeConversationInSessionWith(deps as CloseConversationInSessionDeps, input);
 
 beforeEach(() => {
   deps = {
-    findConversation: vi.fn(async () => ({ workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: true })),
+    findConversation: vi.fn(async () => ({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: true })),
     countOpenConversations: vi.fn(async () => 2),
     closeConversation: vi.fn(async () => 'closed' as const),
   };
@@ -41,13 +42,56 @@ describe('closeConversationInSessionWith', () => {
   });
 
   it("given the row belongs to a DIFFERENT session, should answer not_in_session — same shape as no such row", async () => {
-    deps.findConversation.mockResolvedValue({ workspaceId: 'ses-other', closedInWorkspaceAt: null, isActive: true });
+    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-other', closedInWorkspaceAt: null, isActive: true });
     await expect(run()).resolves.toBe('not_in_session');
     expect(deps.closeConversation).not.toHaveBeenCalled();
   });
 
+  // The route above authorizes the SESSION, which is drive-membership-wide:
+  // every accepted member (VIEWER role included) reaches another member's
+  // session. That is not ownership of the CONVERSATION, and the conversation
+  // ids are handed out by design — `list_sessions` returns other members'
+  // sessionIds with only the title redacted. Without this gate any drive
+  // member could close another member's private thread out of their sidebar.
+  describe('the ownership gate', () => {
+    it("refuses a conversation the caller does not own — same shape as no such row", async () => {
+      deps.findConversation.mockResolvedValue({
+        userId: 'mallory',
+        workspaceId: 'ses-1',
+        closedInWorkspaceAt: null,
+        isActive: true,
+      });
+      await expect(run()).resolves.toBe('not_in_session');
+      expect(deps.closeConversation).not.toHaveBeenCalled();
+    });
+
+    it('is checked BEFORE idempotency, so a foreign row never reports already_closed', async () => {
+      // `already_closed` on a foreign id would be an existence oracle: it
+      // distinguishes "someone else's, and closed" from "no such row".
+      deps.findConversation.mockResolvedValue({
+        userId: 'mallory',
+        workspaceId: 'ses-1',
+        closedInWorkspaceAt: new Date('2026-01-01'),
+        isActive: true,
+      });
+      await expect(run()).resolves.toBe('not_in_session');
+    });
+
+    it('is checked BEFORE the never-empty guard, so a foreign row never reports last_conversation', async () => {
+      deps.findConversation.mockResolvedValue({
+        userId: 'mallory',
+        workspaceId: 'ses-1',
+        closedInWorkspaceAt: null,
+        isActive: true,
+      });
+      deps.countOpenConversations.mockResolvedValue(1);
+      await expect(run()).resolves.toBe('not_in_session');
+      expect(deps.countOpenConversations).not.toHaveBeenCalled();
+    });
+  });
+
   it('given a row bound to no session at all (workspaceId null), should answer not_in_session', async () => {
-    deps.findConversation.mockResolvedValue({ workspaceId: null, closedInWorkspaceAt: null, isActive: true });
+    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: null, closedInWorkspaceAt: null, isActive: true });
     await expect(run()).resolves.toBe('not_in_session');
   });
 
@@ -57,7 +101,7 @@ describe('closeConversationInSessionWith', () => {
     // never-empty guard needs to protect. A stale tab still showing it
     // must not get a spurious `last_conversation` (409) just because ONE
     // unrelated listing happens to remain (caught in review).
-    deps.findConversation.mockResolvedValue({ workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: false });
+    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: false });
     deps.countOpenConversations.mockResolvedValue(1);
     await expect(run()).resolves.toBe('already_closed');
     expect(deps.countOpenConversations).not.toHaveBeenCalled();
@@ -85,6 +129,7 @@ describe('closeConversationInSessionWith', () => {
   describe('idempotency', () => {
     it('closing an already-closed conversation is a no-op success, not an error', async () => {
       deps.findConversation.mockResolvedValue({
+        userId: OWNER,
         workspaceId: 'ses-1',
         closedInWorkspaceAt: new Date('2026-01-01'),
         isActive: true,

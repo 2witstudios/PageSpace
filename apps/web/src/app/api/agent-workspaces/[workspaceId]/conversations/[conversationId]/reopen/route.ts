@@ -43,7 +43,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   let outcome: Awaited<ReturnType<typeof reopenConversationInSession>>;
   try {
-    outcome = await reopenConversationInSession({ conversationId, workspaceId });
+    outcome = await reopenConversationInSession({ conversationId, userId: auth.userId, workspaceId });
   } catch (error) {
     loggers.api.error(
       'Session conversation reopen failed',

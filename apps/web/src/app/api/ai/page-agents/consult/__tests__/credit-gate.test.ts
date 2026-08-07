@@ -63,7 +63,7 @@ vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), desc: vi.f
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
 // reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
 // PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessages`,
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
 // which read the unified `messages` table.
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
@@ -71,7 +71,7 @@ vi.mock('@/lib/repositories/message-repository', () => ({
     // These suites assert other things, so an empty history is the honest
     // stand-in for the two readers the cutover introduced.
     getPageConversationMessages: vi.fn().mockResolvedValue([]),
-    getRecentPageMessages: vi.fn().mockResolvedValue([]),
+    getRecentPageMessagesForUser: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' } }));

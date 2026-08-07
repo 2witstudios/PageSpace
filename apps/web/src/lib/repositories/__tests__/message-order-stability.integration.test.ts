@@ -127,15 +127,31 @@ describe('message read ordering is total and stable', () => {
     expect(rows.map((r) => r.id)).toEqual(expectedAsc(thread.ids));
   });
 
-  it('getRecentPageMessages selects a deterministic WINDOW, not just a deterministic order', async () => {
+  it('getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order', async () => {
     if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
     const thread = await seedSameTickThread();
 
     // DESC + LIMIT under a tie: without a DESC tiebreaker, WHICH rows survive
     // the limit is itself arbitrary. The newest 3 by (createdAt, id) are the
     // last 3 of the ascending order, returned oldest-first.
-    const rows = await messageRepository.getRecentPageMessages(thread.pageId, 3);
+    const rows = await messageRepository.getRecentPageMessagesForUser(thread.pageId, thread.ownerId, 3);
     expect(rows.map((r) => r.id)).toEqual(expectedAsc(thread.ids).slice(-3));
+  });
+
+  // The owner predicate is the whole reason this reader exists in scoped form:
+  // page scope answers "which page", never "whose". Without it, the consult
+  // route's fallback branch handed every caller who could VIEW a shared agent
+  // page the 10 most recent messages on it across all users.
+  it('getRecentPageMessagesForUser returns nothing for a co-member who owns none of the messages', async () => {
+    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    const thread = await seedSameTickThread();
+    const otherMember = await factories.createUser();
+
+    const own = await messageRepository.getRecentPageMessagesForUser(thread.pageId, thread.ownerId, 10);
+    expect(own.length).toBeGreaterThan(0);
+
+    const theirs = await messageRepository.getRecentPageMessagesForUser(thread.pageId, otherMember.id, 10);
+    expect(theirs).toEqual([]);
   });
 
   it('repeated reads of the same tied rows agree with each other', async () => {

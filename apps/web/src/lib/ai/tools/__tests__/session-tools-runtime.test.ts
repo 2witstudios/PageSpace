@@ -102,6 +102,11 @@ const pageConversation = { id: 'conv-p', type: 'page', userId: 'user-1', isActiv
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default to "still allowed". Every placement path runs the session-access
+  // decision, so without a default `clearAllMocks` would leave it resolving
+  // `undefined` and every unrelated test would fail on the access read rather
+  // than on what it is actually asserting. Tests about revocation override it.
+  mockCheckSessionAccess.mockResolvedValue({ allowed: true });
 });
 
 describe('resolveCallerSessionForWorker', () => {
@@ -123,6 +128,36 @@ describe('resolveCallerSessionForWorker', () => {
 
     expect(resolved).toEqual({ ok: true, session: ended });
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  // The binding is permanent; drive membership is not. A member who spawned a
+  // worker into a shared workspace and then lost the drive still resolves to
+  // that workspace here, so the early return has to re-run the permission
+  // decision — otherwise this path hands a revoked member a worker, and with
+  // it code execution, inside another tenant's live sandbox and filesystem.
+  test('a bound session belonging to a drive the caller LOST refuses — revocation gates placement even though lifecycle state does not', async () => {
+    mockFindSessionForConversation.mockResolvedValue(sessionRow);
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+
+    const resolved = await resolveCallerSessionForWorker('conv-1', 'user-1');
+
+    expect(resolved).toEqual({ ok: false, reason: 'not_permitted' });
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-1');
+    // Refused on permission, not by falling through to the minting path — a
+    // fallthrough would quietly start a SECOND workspace for a revoked caller.
+    expect(mockGetConversation).not.toHaveBeenCalled();
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  test('an ENDED session the caller still has access to resolves — the check reads permission only, never lifecycle', async () => {
+    const ended = { ...sessionRow, endedAt: new Date() };
+    mockFindSessionForConversation.mockResolvedValue(ended);
+    mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+
+    await expect(resolveCallerSessionForWorker('conv-1', 'user-1')).resolves.toEqual({
+      ok: true,
+      session: ended,
+    });
   });
 
   test('an unbound GLOBAL conversation mints and binds a session via the shared spawn+claim primitive', async () => {
@@ -250,7 +285,23 @@ describe('createWorkerSession — placement', () => {
       expect.objectContaining({ workspaceId: 'ses-caller', conversationId: 'worker-conv-new' }),
     );
     expect(mockSpawnSession).not.toHaveBeenCalled();
-    expect(mockCheckSessionAccess).not.toHaveBeenCalled();
+    // Placement into the caller's OWN bound workspace is gated by the same
+    // session-access decision as an explicit workspaceId target. This used to
+    // assert the opposite (`not.toHaveBeenCalled`), pinning the gap where a
+    // permanent binding outlived the drive membership that justified it.
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-caller');
+  });
+
+  test('workspace omitted, but the caller LOST the drive: refused, and no worker is created', async () => {
+    mockFindSessionForConversation.mockResolvedValue({ id: 'ses-caller', ownerId: 'user-1', endedAt: null });
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+
+    const deps = buildSessionToolsDeps();
+    const result = await deps.createWorkerSession(baseInput);
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'not_permitted' }));
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
   describe('workspace: "new"', () => {

@@ -45,7 +45,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   let outcome: Awaited<ReturnType<typeof closeConversationInSession>>;
   try {
-    outcome = await closeConversationInSession({ conversationId, workspaceId });
+    outcome = await closeConversationInSession({ conversationId, userId: auth.userId, workspaceId });
   } catch (error) {
     loggers.api.error(
       'Session conversation close failed',
