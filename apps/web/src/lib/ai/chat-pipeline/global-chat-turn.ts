@@ -304,19 +304,6 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       hasLocationContext: !!requestBody.locationContext
     });
 
-    // Resolve existing conversation or auto-create on first message (lazy creation).
-    // Clients generate the ID locally; this is the point where the DB row is guaranteed.
-    let conversation: typeof conversations.$inferSelect;
-    let conversationIsNew = false;
-    try {
-      ({ conversation, isNew: conversationIsNew } = await resolveOrCreateConversation(userId, conversationId));
-    } catch (e) {
-      if (e instanceof ConversationOwnershipError || e instanceof ConversationHistoryDeletedError) {
-        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-      }
-      throw e;
-    }
-
     const {
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
@@ -396,11 +383,23 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const webSearchMode = webSearchEnabled === true;
 
     // Prepaid credit gate: block out-of-credits users BEFORE persisting their message
-    // or invoking any model. Running it after the save would append the prompt to the
-    // conversation and then 402, leaving an orphaned message that reappears (duplicated)
-    // when the user tops up and retries — so this MUST precede the save below (mirrors
-    // the page-chat route). Safe in billing-disabled deployments (returns unlimited) and
+    // OR creating the conversation row. Running it after the save would append the
+    // prompt to the conversation and then 402, leaving an orphaned message that
+    // reappears (duplicated) when the user tops up and retries — so this MUST precede
+    // both writes below. Safe in billing-disabled deployments (returns unlimited) and
     // lazy-inits balances.
+    //
+    // The "or create the conversation row" half is why `resolveOrCreateConversation`
+    // now runs BELOW this block rather than ~130 lines above it. It INSERTs on a first
+    // message and emits `conversation:created`, so gating afterwards left an
+    // out-of-credits first message with a durable empty conversation and a broadcast
+    // announcing it — the same orphan class the paragraph above describes, one table
+    // over. `page-chat-turn.ts` states this ordering rule and honours it; this surface
+    // claimed to mirror it and mirrored only the message half.
+    //
+    // Consequence worth naming: a request that is BOTH out of credits and carrying an
+    // unusable conversation id (foreign, or history-deleted) now answers 402/429 where
+    // it used to answer 404. The gate is the cheaper and more actionable refusal.
     let userSubscriptionTier: string | undefined;
     let userImageGenerationModel: string | null = null;
     {
@@ -440,6 +439,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         }
         holdId = creditGate.holdId;
       }
+    }
+
+    // Resolve existing conversation or auto-create on first message (lazy creation).
+    // Clients generate the ID locally; this is the point where the DB row is guaranteed.
+    // Deliberately AFTER the credit gate — see that block's comment for why the insert
+    // must not happen for a request the gate is about to refuse.
+    let conversation: typeof conversations.$inferSelect;
+    let conversationIsNew = false;
+    try {
+      ({ conversation, isNew: conversationIsNew } = await resolveOrCreateConversation(userId, conversationId));
+    } catch (e) {
+      if (e instanceof ConversationOwnershipError || e instanceof ConversationHistoryDeletedError) {
+        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      }
+      throw e;
     }
 
     // Process @mentions in the user's message
@@ -511,9 +525,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
         
         // Atomic re-check immediately adjacent to the write: `resolveOrCreateConversation`
-        // resolved this conversation as active well above, but the credit-gate check,
-        // @mention processing, and command resolution in between all do their own
-        // unrelated I/O — plenty of room for a concurrent History-delete to commit in
+        // resolved this conversation as active above, but the @mention processing and
+        // command resolution in between do their own unrelated I/O — plenty of room for
+        // a concurrent History-delete to commit in
         // that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short transaction (not
         // wrapping any of the intervening work, which must never run inside an open
         // transaction) closes that window rather than trusting the stale earlier read

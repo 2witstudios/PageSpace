@@ -443,6 +443,20 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
   });
 
+  it('does NOT create the conversation row when the gate denies (gate runs before create)', async () => {
+    // The other half of R3, and the reason `resolveOrCreateConversation` moved
+    // below the gate. It INSERTs on a first message and emits
+    // `conversation:created`, so gating afterwards left an out-of-credits first
+    // message with a durable empty conversation and a broadcast announcing it —
+    // the same orphan the message-save case above describes, one table over.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', () => {
