@@ -36,13 +36,21 @@ vi.mock('@pagespace/db/db', () => {
     db: mockDb,
   };
 });
+// `asc`/`sql` are pulled in transitively: the undo's soft-delete now runs
+// through `messageRepository.softDeleteUndoRange`, so this module's graph
+// includes the message repository and its scope helpers.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args) => args),
   gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
   lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
   ne: vi.fn((a, b) => ({ field: a, op: 'ne', value: b })),
+  asc: vi.fn((a) => ({ field: a, direction: 'asc' })),
   desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
+  sql: Object.assign(
+    vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
+    { raw: vi.fn((s: string) => ({ raw: s })) },
+  ),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
 }));
@@ -102,6 +110,48 @@ interface MockDb {
 const mockDb = vi.mocked(db) as unknown as MockDb;
 const mockPreviewRollback = vi.mocked(previewRollback);
 const mockExecuteRollback = vi.mocked(executeRollback);
+
+/** The row `bumpConversationRev`'s RETURNING hands back. */
+const BUMPED_ROW = {
+  id: 'conv_123',
+  rev: 7,
+  userId: 'user_123',
+  isShared: false,
+  workspaceId: null,
+  type: 'page',
+  contextId: 'page_123',
+  title: null,
+  lastMessageAt: null,
+  createdAt: new Date(),
+  closedInWorkspaceAt: null,
+  isActive: true,
+};
+/**
+ * The transaction handle `executeAiUndo` gets. Both statements it now issues
+ * run on it: the `messages` soft-delete AND the `conversations` rev bump —
+ * `messageRepository.softDeleteUndoRange` performs them as one pair on the
+ * CALLER's tx, which is the invariant this suite's table assertions pin.
+ *
+ * `.where()` returns a plain object carrying `.returning()`: awaiting it in
+ * the soft-delete path yields the object (harmless), while the bump chains
+ * off it for its RETURNING.
+ *
+ * @param updatedTables optional sink recording each table passed to `update`.
+ */
+function makeUndoTx(updatedTables?: unknown[]) {
+  return {
+    update: vi.fn((table: unknown) => {
+      updatedTables?.push(table);
+      return {
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([BUMPED_ROW]),
+          }),
+        }),
+      };
+    }),
+  };
+}
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -342,25 +392,20 @@ describe('ai-undo-service', () => {
 
       // Mock transaction
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
       const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
+      expect(result.errors).toEqual([]);
       expect(result.success).toBe(true);
       expect(result.messagesDeleted).toBe(2);
       expect(result.activitiesRolledBack).toBe(0);
       expect(executeRollback).not.toHaveBeenCalled();
     });
 
-    it('tombstones the unified table ONLY — the legacy leg is frozen', async () => {
+    it('tombstones the unified table and bumps the rev — one table, one transaction', async () => {
       const mockMessage = createMockMessage();
 
       mockDb.query.messages.findFirst.mockResolvedValue(mockMessage);
@@ -383,31 +428,34 @@ describe('ai-undo-service', () => {
 
       const updatedTables: unknown[] = [];
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn((table: unknown) => {
-            updatedTables.push(table);
-            return {
-              set: vi.fn().mockReturnValue({
-                where: vi.fn().mockResolvedValue(undefined),
-              }),
-            };
-          }),
-        };
+        const tx = makeUndoTx(updatedTables);
         await callback(tx);
       });
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      // ONE table, and this assertion has been all three shapes the epic
-      // passed through: it used to be "the page table OR the global table"
-      // (chosen by `source`), then "both legs" during the dual-write, and now
-      // — since Phase 4 PR 14 froze `chat_messages` — the unified table alone.
-      // A second UPDATE reappearing here means the legacy tombstone came back,
-      // writing rows no reader has consulted since PR 12. Asserted on the
-      // tables themselves rather than on a debug log, because the tables are
-      // the contract.
-      const { messages: unifiedTable } = await import('@pagespace/db/schema/conversations');
-      expect(updatedTables).toEqual([unifiedTable]);
+      // ONE message table, and this assertion has been all four shapes the
+      // epic passed through: "the page table OR the global table" (chosen by
+      // `source`), then "both legs" during the dual-write, then — once Phase 4
+      // PR 14 froze `chat_messages` — the unified table alone, and now the
+      // unified table PLUS its conversation's rev bump.
+      //
+      // Both halves matter, in order:
+      //   - A THIRD table reappearing means the legacy tombstone came back,
+      //     writing rows no reader has consulted since PR 12.
+      //   - `conversations` missing means the rev bump has drifted back out of
+      //     the write transaction, which is the defect this pins: the undo
+      //     used to commit its deletion here and bump afterwards, in a
+      //     separate transaction, from a swallowing catch in the route — so a
+      //     failure there left every open pane permanently stale with no way
+      //     to detect it.
+      //
+      // Asserted on the tables themselves rather than on a debug log, because
+      // the tables are the contract — and on ONE transaction, because "same
+      // transaction" is the whole claim.
+      const { messages: unifiedTable, conversations: conversationsTable } =
+        await import('@pagespace/db/schema/conversations');
+      expect(updatedTables).toEqual([unifiedTable, conversationsTable]);
       expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     });
 
@@ -440,13 +488,7 @@ describe('ai-undo-service', () => {
       }));
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
@@ -498,13 +540,7 @@ describe('ai-undo-service', () => {
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
@@ -547,13 +583,7 @@ describe('ai-undo-service', () => {
 
       // Transaction should abort on failure
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         try {
           await callback(tx);
         } catch (e) {
@@ -643,13 +673,7 @@ describe('ai-undo-service', () => {
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
@@ -727,13 +751,7 @@ describe('ai-undo-service', () => {
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
@@ -831,13 +849,7 @@ describe('ai-undo-service', () => {
       }));
 
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
+        const tx = makeUndoTx();
         await callback(tx);
       });
 
@@ -952,8 +964,14 @@ describe('ai-undo-service', () => {
     it('issues exactly ONE soft-delete update — the frozen legacy leg gets none', async () => {
       // This used to assert the SECOND update (the legacy mirror) carried the
       // same streaming exclusion. Phase 4 PR 14 removed that statement, so
-      // what is worth pinning is that it stayed removed: a second update here
-      // is a resurrected legacy writer.
+      // what is worth pinning is that it stayed removed: a second update to
+      // `messages` here is a resurrected legacy writer.
+      //
+      // Counted PER TABLE rather than in total, because the transaction now
+      // legitimately issues a second statement against a DIFFERENT table — the
+      // in-transaction `conversations` rev bump. A bare call count would have
+      // to be relaxed to 2 and would then stop noticing the legacy leg coming
+      // back at all.
       const mockMessage = createMockMessage();
       mockDb.query.messages.findFirst.mockResolvedValue(mockMessage);
       mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
@@ -969,16 +987,18 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      const updateWhereMock = vi.fn().mockResolvedValue(undefined);
-      const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
-      const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
+      const updatedTables: unknown[] = [];
       mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
-        await callback({ update: updateMock });
+        await callback(makeUndoTx(updatedTables));
       });
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      expect(updateWhereMock).toHaveBeenCalledTimes(1);
+      const { messages: unifiedTable, conversations: conversationsTable } =
+        await import('@pagespace/db/schema/conversations');
+      expect(updatedTables.filter((t) => t === unifiedTable)).toHaveLength(1);
+      // And the bump is in there with it, on the same transaction handle.
+      expect(updatedTables.filter((t) => t === conversationsTable)).toHaveLength(1);
     });
   });
 });
