@@ -18,23 +18,27 @@ import { WORKSPACE_TOOL_NAMES } from '@/lib/ai/core/ai-tools';
  * Backticked lowercase_snake identifiers in a body. Tool names are always
  * written in backticks in these bodies (house style), so this is where a stale
  * name would hide.
+ *
+ * Deliberately lowercase-only: every PageSpace tool is snake_case, so this
+ * matches the whole tool namespace while ignoring the camelCase parameter and
+ * response-field names bodies also backtick (`pageId`, `lineStart`,
+ * `contentClipped`). Those need no allowlist because the pattern never sees
+ * them — a camelCase tool name would slip through, but none exists and adding
+ * one would break the repo's own naming convention first.
  */
 function backtickedIdentifiers(body: string): string[] {
   return [...new Set(body.match(/`[a-z][a-z0-9_]*`/g) ?? [])].map((m) => m.slice(1, -1));
 }
 
 /**
- * Identifiers that look like tool names but deliberately are not tools.
- * `search` is referenced ONLY to tell the agent it does not exist — the body
- * says so explicitly, because models reach for it by habit.
+ * Lowercase identifiers that look like tool names but deliberately are not.
+ *
+ * `search` is the load-bearing entry: the body references it ONLY to tell the
+ * agent it does not exist, because models reach for a generic search tool by
+ * habit. The rest are snake_case parameter names a body may legitimately
+ * backtick.
  */
-const NOT_TOOLS = new Set([
-  'search',
-  // Tool PARAMETERS and response fields, not tools.
-  'content', 'recursive', 'pageid', 'pageId', 'linestart', 'lineStart',
-  'contentclipped', 'contentClipped', 'contentclippedafterline', 'contentClippedAfterLine',
-  'driveid', 'driveId', 'tool_name',
-]);
+const NOT_TOOLS = new Set(['search', 'content', 'recursive', 'tool_name']);
 
 const KNOWN_TOOLS = new Set([...WORKSPACE_TOOL_NAMES, 'load_skill']);
 
