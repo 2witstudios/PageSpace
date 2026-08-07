@@ -24,14 +24,18 @@ const canUserViewPageMock = vi.fn();
 const setConversationPlan = vi.fn();
 
 /**
- * One queue of rows per `db.select()` call, in the order the route makes them:
- * GET does conversation → page; DELETE does conversation only.
+ * One queue of rows per `db.select()` call, in the order the route makes them.
+ *
+ * GET does ownership → `resolveBoundPlan`'s joined lookup; DELETE does
+ * ownership only. The join is why the chain carries `innerJoin`: the page half
+ * of the read is the shared function now, not a second query written here.
  */
 let selectResults: unknown[][] = [];
 
 const makeChain = () => {
   const chain = {
     from: () => chain,
+    innerJoin: () => chain,
     where: () => chain,
     limit: () => Promise.resolve(selectResults.shift() ?? []),
   };
@@ -76,8 +80,10 @@ const authAs = (userId: string) => {
   isAuthErrorMock.mockReturnValue(false);
 };
 
-const ownedConversation = (planPageId: string | null) => ({ ownerId: OWNER, planPageId });
-const livePage = { id: 'pg_plan', title: 'Migrate billing', driveId: 'drv_1', isTrashed: false };
+/** The ownership probe's row — `planPageId` now lives in the joined read below. */
+const ownedConversation = () => ({ ownerId: OWNER });
+/** What `resolveBoundPlan`'s conversation-to-page join returns. */
+const livePlanRow = { pageId: 'pg_plan', title: 'Migrate billing', driveId: 'drv_1', isTrashed: false };
 
 describe('GET /api/ai/conversations/[conversationId]/plan', () => {
   beforeEach(() => {
@@ -99,7 +105,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
 
   it('returns the bound plan for its owner', async () => {
     authAs(OWNER);
-    selectResults = [[ownedConversation('pg_plan')], [livePage]];
+    selectResults = [[ownedConversation()], [livePlanRow]];
 
     const body = await (await GET(request(), context)).json();
     expect(body.plan).toEqual({ pageId: 'pg_plan', title: 'Migrate billing', driveId: 'drv_1' });
@@ -107,7 +113,8 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
 
   it('returns a null plan for an unbound conversation', async () => {
     authAs(OWNER);
-    selectResults = [[ownedConversation(null)]];
+    // The join finds nothing when `planPageId` is null — an inner join on it.
+    selectResults = [[ownedConversation()], []];
 
     const response = await GET(request(), context);
     expect(response.status).toBe(200);
@@ -118,7 +125,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
     // A 403 would confirm the conversation exists. Ownership isolation here has
     // to be indistinguishable from absence.
     authAs('someone-else');
-    selectResults = [[ownedConversation('pg_plan')]];
+    selectResults = [[ownedConversation()]];
 
     const response = await GET(request(), context);
     expect(response.status).toBe(404);
@@ -133,7 +140,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
 
   it('suppresses a trashed plan page', async () => {
     authAs(OWNER);
-    selectResults = [[ownedConversation('pg_plan')], [{ ...livePage, isTrashed: true }]];
+    selectResults = [[ownedConversation()], [{ ...livePlanRow, isTrashed: true }]];
 
     expect((await (await GET(request(), context)).json()).plan).toBeNull();
   });
@@ -143,7 +150,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
     // set_plan ran, and a chip pointing at something unopenable is worse than
     // no chip.
     authAs(OWNER);
-    selectResults = [[ownedConversation('pg_plan')], [livePage]];
+    selectResults = [[ownedConversation()], [livePlanRow]];
     canUserViewPageMock.mockResolvedValue(false);
 
     expect((await (await GET(request(), context)).json()).plan).toBeNull();
@@ -152,7 +159,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
   it('500s without leaking internals when the lookup throws', async () => {
     authAs(OWNER);
     canUserViewPageMock.mockRejectedValue(new Error('boom'));
-    selectResults = [[ownedConversation('pg_plan')], [livePage]];
+    selectResults = [[ownedConversation()], [livePlanRow]];
 
     const response = await GET(request(), context);
     expect(response.status).toBe(500);
@@ -187,7 +194,7 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
 
   it('unbinds the plan for its owner', async () => {
     authAs(OWNER);
-    selectResults = [[ownedConversation('pg_plan')]];
+    selectResults = [[ownedConversation()]];
 
     const response = await DELETE(request(), context);
     expect(response.status).toBe(200);
@@ -201,7 +208,7 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
 
   it('404s another user\'s conversation and writes nothing', async () => {
     authAs('someone-else');
-    selectResults = [[ownedConversation('pg_plan')]];
+    selectResults = [[ownedConversation()]];
 
     expect((await DELETE(request(), context)).status).toBe(404);
     expect(setConversationPlan).not.toHaveBeenCalled();
@@ -209,7 +216,7 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
 
   it('500s without leaking internals when the update throws', async () => {
     authAs(OWNER);
-    selectResults = [[ownedConversation('pg_plan')]];
+    selectResults = [[ownedConversation()]];
     setConversationPlan.mockRejectedValue(new Error('boom'));
 
     const response = await DELETE(request(), context);
