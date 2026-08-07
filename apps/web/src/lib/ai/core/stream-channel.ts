@@ -18,7 +18,7 @@ import type { UIMessageChunk } from 'ai';
  *   const sdkStream = createUIMessageStream({ ... });
  *   void pumpSdkStreamToChannel(sdkStream, channel);          // sole reader
  *   return createUIMessageStreamResponse({
- *     stream: channel.subscribeReadable({ fromSeq: 0, signal: request.signal }),
+ *     stream: channel.subscribeReadable({ fromSeq: 0 }),      // NO request.signal — see below
  *   });
  *
  * Two alternatives were considered and are wrong here, both for the same reason —
@@ -82,6 +82,28 @@ export interface SubscribeOptions {
 
 export interface SubscribeReadableOptions {
   fromSeq: number;
+  /**
+   * Optional early detach. **The generation routes must NOT pass `request.signal` here.**
+   *
+   * Two reasons, and the first is the one that matters. `disconnect-immunity.test.ts` is a
+   * source-level tripwire that forbids any read of `request.signal` in
+   * `app/api/ai/chat/route.ts` and `app/api/ai/global/[id]/messages/route.ts`, because
+   * that is a one-line change that silently reverts the system to client-owned streams and
+   * breaks no test. It is a blunt line-level check and it cannot tell "wired into
+   * streamText" (catastrophic) from "wired into a subscriber's detach" (harmless), so the
+   * routes simply must not name it. Do not amend the allowlist — the tripwire's own
+   * docblock asks you not to.
+   *
+   * Second: it is redundant there anyway. When an HTTP client hangs up, the response
+   * `ReadableStream` is cancelled, which runs `cancel()` below and detaches the
+   * subscriber. That is already the disconnect path, and it is covered by the
+   * "response reader cancelling mid-stream does not stop capture" test.
+   *
+   * A pure SUBSCRIBER route (`stream-join`) is the mirror image and should pass it — an
+   * SSE reader going away has to detach or the channel leaks a subscriber per dead tab.
+   * `disconnect-immunity.test.ts` asserts that route DOES read the signal, so nobody
+   * applies the rule above to the wrong side.
+   */
   signal?: AbortSignal;
   /** Pending-buffer caps. Exceeding either closes the stream. See the constants below. */
   maxPendingFrames?: number;
