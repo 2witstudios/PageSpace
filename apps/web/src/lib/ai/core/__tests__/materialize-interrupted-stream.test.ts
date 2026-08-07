@@ -206,14 +206,17 @@ beforeEach(() => {
 });
 
 describe('materializeInterruptedStream — table routing', () => {
-  it('given a page-chat channelId, writes to chat_messages with pageId = channelId', async () => {
+  it('given a page-chat channelId, writes to messages with pageId = channelId', async () => {
     await materializeInterruptedStream(pageRow({ channelId: 'page-abc123' }));
 
+    // Both kinds of channel land in `messages` since Phase 4 PR 14 froze
+    // `chat_messages`. The routing that survives is in the VALUES, not the
+    // table: a page row carries `pageId`, a global one does not.
     assert({
       given: 'a provably-dead page-chat stream row',
-      should: 'insert into chat_messages, not messages',
+      should: 'insert into messages — the one message table',
       actual: mockInsert.mock.calls[0][0],
-      expected: { id: 'chat_messages.id', status: 'chat_messages.status' },
+      expected: { id: 'messages.id', status: 'messages.status' },
     });
 
     const values = mockInsertValues.mock.calls[0][0];
@@ -265,62 +268,56 @@ describe('materializeInterruptedStream — table routing', () => {
   // SAME transaction, or the unified table silently misses every reply that
   // was recovered rather than finished — a class of row no backfill re-derives,
   // because materialization IS the terminal write.
-  it('dual-writes the materialized page reply to both the legacy and the unified leg', async () => {
+  it('writes the materialized page reply ONCE, to the unified table', async () => {
     await materializeInterruptedStream(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
 
+    // Was a dual-write through Phase 4 PR 10; PR 14 froze `chat_messages`, so
+    // a SECOND insert appearing here is a resurrected legacy writer.
     assert({
       given: 'a materialized page-chat reply',
-      should: 'insert into chat_messages (legacy leg) and messages (unified leg), in that order',
+      should: 'insert into messages exactly once',
       actual: mockInsert.mock.calls.map((call) => call[0]),
-      expected: [
-        { id: 'chat_messages.id', status: 'chat_messages.status' },
-        { id: 'messages.id', status: 'messages.status' },
-      ],
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
     });
 
-    const legacy = mockInsertValues.mock.calls[0][0];
-    const unified = mockInsertValues.mock.calls[1][0];
+    const written = mockInsertValues.mock.calls[0][0];
     assert({
-      given: 'the unified leg of a materialized page reply',
-      should: 'carry the same id/content/status as the legacy leg, plus the page attribution',
+      given: 'the materialized page reply',
+      should: 'carry its id, content, status, conversation and page attribution',
       actual: {
-        id: unified.id,
-        content: unified.content,
-        status: unified.status,
-        conversationId: unified.conversationId,
-        pageId: unified.pageId,
-        sameContentAsLegacy: unified.content === legacy.content,
+        id: written.id,
+        status: written.status,
+        conversationId: written.conversationId,
+        pageId: written.pageId,
       },
       expected: {
         id: 'msg-1',
-        content: legacy.content,
         status: 'interrupted',
         conversationId: 'conv-1',
         pageId: 'page-abc123',
-        sameContentAsLegacy: true,
       },
     });
   });
 
-  // The legacy CAS is the gate for BOTH legs: it is what proves the row was
-  // still 'streaming'. Mirroring a declined write onto the unified leg would
-  // clobber a terminal row the route's own onFinish already wrote correctly.
-  it('given the legacy CAS wrote nothing, does not write the unified leg either', async () => {
+  // The CAS is the gate: it is what proves the row was still 'streaming'. A
+  // declined write must not be retried against anything, or it would clobber a
+  // terminal row the route's own onFinish already wrote correctly.
+  it('given the CAS wrote nothing, writes nothing else either', async () => {
     mockReturning.mockResolvedValue([]);
 
     await materializeInterruptedStream(pageRow());
 
     assert({
       given: 'a materialization whose compare-and-swap matched no streaming row',
-      should: 'leave the unified leg untouched — one insert attempted, not two',
+      should: 'attempt exactly one insert and mirror it nowhere',
       actual: mockInsert.mock.calls.map((call) => call[0]),
-      expected: [{ id: 'chat_messages.id', status: 'chat_messages.status' }],
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
     });
   });
 
-  // The global assistant's ONE leg has always been `messages`; there is no
-  // second table to mirror into, and a duplicate insert would be a real bug.
-  it('given a global-assistant row, writes messages exactly once (no dual-write — global has one leg)', async () => {
+  // Unchanged by the merge: the global assistant's table has always been
+  // `messages`, and a duplicate insert would be a real bug.
+  it('given a global-assistant row, writes messages exactly once', async () => {
     await materializeInterruptedStream(globalRow());
 
     assert({
@@ -394,7 +391,7 @@ describe('materializeInterruptedStream — the #2022 invariant (compare-and-swap
       given: 'any materialization attempt',
       should: 'guard the conflict update with status == streaming',
       actual: mockOnConflictDoUpdate.mock.calls[0][0].setWhere,
-      expected: { field: 'chat_messages.status', value: 'streaming' },
+      expected: { field: 'messages.status', value: 'streaming' },
     });
   });
 

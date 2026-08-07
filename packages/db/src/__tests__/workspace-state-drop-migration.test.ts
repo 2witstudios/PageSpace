@@ -1,5 +1,5 @@
 /**
- * Static invariants of the `workspaceState` DROP migration (0250, epic
+ * Static invariants of the `workspaceState` DROP migration (0251, epic
  * Phase 3 — the CONTRACT step of the relational pane-grid promotion started
  * in 0246).
  *
@@ -24,7 +24,7 @@ import path from 'path';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0250_.*\.sql$/.test(f));
+const migrationFile = readdirSync(MIGRATIONS_DIR).find((f) => /^0251_.*\.sql$/.test(f));
 const sql = readFileSync(path.join(MIGRATIONS_DIR, migrationFile ?? ''), 'utf8');
 /** SQL with line comments stripped, so assertions never match prose. */
 const code = sql
@@ -32,12 +32,12 @@ const code = sql
   .filter((line) => !line.trimStart().startsWith('--'))
   .join('\n');
 
-describe('drizzle/0250 workspaceState drop', () => {
-  it('should exist in the journal as migration 0250', () => {
+describe('drizzle/0251 workspaceState drop', () => {
+  it('should exist in the journal as migration 0251', () => {
     const journal = JSON.parse(
       readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 250)?.tag).toBe(
+    expect(journal.entries.find((e) => e.idx === 251)?.tag).toBe(
       path.basename(migrationFile ?? '', '.sql'),
     );
   });

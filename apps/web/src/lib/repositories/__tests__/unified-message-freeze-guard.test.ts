@@ -1,29 +1,41 @@
 /**
- * DRIFT GUARD for the chat_messages → messages dual-write (epic
- * "Agent-Session Single Source of Truth", Phase 4 / D6; epic #2161's rule
- * that a forced copy gets a drift-guard test AND a reconciler).
+ * FREEZE GUARD for the `chat_messages` → `messages` merge (epic
+ * "Agent-Session Single Source of Truth", Phase 4 / D6; epic #2161's rule that
+ * a forced copy gets a drift-guard test AND a reconciler).
  *
- * The brief for this suite is blunt: A WRITE THAT UPDATES ONLY ONE LEG MUST
- * FAIL THIS SUITE. It gets there two ways, because one way cannot cover both
- * failure modes:
+ * This suite used to assert the opposite of what it asserts now, and the
+ * inversion IS the point of Phase 4 PR 14. Through PRs 10–13 every page write
+ * had to touch BOTH `chat_messages` and `messages`; the copy was forced, so the
+ * guard policed the copying. PR 14 stopped the legacy leg, so the brief is now
+ * equally blunt in the other direction:
  *
- *   PART 1 — BEHAVIOURAL. Every page write path on `messageRepository` is
- *   driven against a recording fake `db` and asserted to touch BOTH
- *   `chat_messages` and `messages`, IN THE SAME TRANSACTION. Deleting the
- *   unified leg from any of them turns the suite red. The enumeration is
- *   closed: an unclassified new method on the repository also fails, so a
- *   future write path cannot be added without deciding which leg(s) it needs.
+ *   NOTHING MAY INSERT OR UPDATE `chat_messages`. A write that does must fail
+ *   this suite.
+ *
+ * DELETEs are a different statement and stay legal: retention's legacy sweep,
+ * GDPR erasure, page teardown and the 0248 FK cascade all still remove rows
+ * from that table, and must keep doing so until PR 15 drops it. So the
+ * structural scan below splits the two — content writes are forbidden
+ * outright, removals are allowlisted with their reasons.
+ *
+ * Two parts, because one cannot cover both failure modes:
+ *
+ *   PART 1 — BEHAVIOURAL. Every write path on `messageRepository` is driven
+ *   against a recording fake `db` and asserted to touch `messages` and NOT
+ *   `chat_messages`, in one transaction. The enumeration is closed: an
+ *   unclassified new method also fails, so a future write path cannot be added
+ *   without deciding which table it writes.
  *
  *   PART 2 — STRUCTURAL. Part 1 only knows about writers it enumerates, and
- *   the failure mode that actually loses data is a writer nobody remembered
- *   to enumerate. So the source tree is scanned for every statement that
- *   writes `chatMessages` and the owning files are held to an allowlist —
- *   each entry either routes through the shared unified-leg writer, or is
- *   recorded here with the reason it does not.
+ *   the failure mode that matters is a writer nobody remembered to enumerate.
+ *   So the source tree is scanned for every statement aimed at `chatMessages`:
+ *   the INSERT/UPDATE list must be EMPTY, and the DELETE list must match an
+ *   allowlist that carries a reason per entry.
  *
- * The runtime counterpart (do the ROWS agree?) is the
+ * The runtime counterpart (did any ROW appear in the frozen table?) is the
  * `reconcile-message-unification` cron; see
- * `@/lib/repositories/message-unification-reconcile`.
+ * `@/lib/repositories/message-unification-reconcile` and
+ * `./message-unification-freeze-reconcile.test.ts`.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -209,9 +221,15 @@ const allWritesWereTransactional = () => {
 // PART 1 — behavioural: every page write path touches both legs.
 // ---------------------------------------------------------------------------
 
-const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
+/**
+ * Every write path on the repository, page and global alike. Both kinds now
+ * write ONE table — `messages` — which is the whole content of PR 14: the page
+ * paths lost their `chat_messages` statement, the global paths never had one.
+ */
+const writePaths: Array<{ name: string; scope: 'page' | 'global'; run: () => Promise<unknown> }> = [
   {
     name: 'savePageMessage',
+    scope: 'page',
     run: () =>
       messageRepository.savePageMessage({
         messageId: 'msg-1',
@@ -224,6 +242,7 @@ const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'insertPageStreamingPlaceholder',
+    scope: 'page',
     run: () =>
       messageRepository.insertPageStreamingPlaceholder({
         messageId: 'msg-1',
@@ -233,6 +252,7 @@ const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'materializePageInterruptedMessage',
+    scope: 'page',
     run: () =>
       messageRepository.materializePageInterruptedMessage({
         messageId: 'msg-1',
@@ -246,6 +266,7 @@ const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'editPageMessage',
+    scope: 'page',
     run: () =>
       messageRepository.editPageMessage({
         messageId: 'msg-1',
@@ -257,6 +278,7 @@ const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'softDeletePageMessage',
+    scope: 'page',
     run: () =>
       messageRepository.softDeletePageMessage({
         messageId: 'msg-1',
@@ -265,16 +287,9 @@ const pageWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
         legacyTriggeredBy: { userId: 'user-1', browserSessionId: 'b1', displayName: 'Tester' },
       }),
   },
-];
-
-/**
- * Global paths are SINGLE-leg by design and must stay that way: `messages` has
- * always been the global assistant's own table, so a global write that also
- * touched `chat_messages` would be inventing page rows.
- */
-const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   {
     name: 'saveGlobalMessage',
+    scope: 'global',
     run: () =>
       messageRepository.saveGlobalMessage({
         messageId: 'msg-1',
@@ -286,6 +301,7 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'insertGlobalStreamingPlaceholder',
+    scope: 'global',
     run: () =>
       messageRepository.insertGlobalStreamingPlaceholder({
         messageId: 'msg-1',
@@ -295,6 +311,7 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'materializeGlobalInterruptedMessage',
+    scope: 'global',
     run: () =>
       messageRepository.materializeGlobalInterruptedMessage({
         messageId: 'msg-1',
@@ -308,6 +325,7 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'editGlobalMessage',
+    scope: 'global',
     run: () =>
       messageRepository.editGlobalMessage({
         messageId: 'msg-1',
@@ -319,6 +337,7 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
   },
   {
     name: 'softDeleteGlobalMessage',
+    scope: 'global',
     run: () =>
       messageRepository.softDeleteGlobalMessage({
         messageId: 'msg-1',
@@ -332,17 +351,15 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
 /** Writes no message row at all — only the conversation rev + emissions. */
 const nonMessageWritePaths = [
   'recordUndoApplied',
-  // Absorbed from `chat-message-repository` by the reader cutover (Phase 4
-  // PR 12). It IS a message write, but a single-column one that predates the
-  // save methods; it dual-writes through `mutateUnifiedMessageById` and is
-  // pinned by message-repository-update-tool-results.test.ts, which asserts
-  // both legs and one transaction directly.
+  // A message write, but a single-column one that predates the save methods
+  // and is pinned directly by message-repository-update-tool-results.test.ts.
   'updateMessageToolResults',
   // Message-table housekeeping absorbed from `global-conversation-repository`
-  // (Phase 4 PR 12). These DELETE/derive rather than persist a message, and
-  // each has its own leg by construction: `purgeInactiveMessages` sweeps the
-  // unified table, `purgeInactiveLegacyChatMessages` the legacy one, and
-  // `recomputeLastMessageAt` writes `conversations`, not a message table.
+  // (Phase 4 PR 12). These DELETE/derive rather than persist a message:
+  // `purgeInactiveMessages` sweeps the unified table, `recomputeLastMessageAt`
+  // writes `conversations`, and `purgeInactiveLegacyChatMessages` is the ONE
+  // method here that still names `chat_messages` — a DELETE, on the frozen
+  // table, which retention still owes the user until PR 15 drops it.
   // Pinned by message-repository-last-message-recompute.test.ts.
   'purgeInactiveMessages',
   'purgeInactiveLegacyChatMessages',
@@ -350,21 +367,14 @@ const nonMessageWritePaths = [
 ];
 
 /**
- * READ seams on the repository — no leg to drift, by construction. They are
+ * READ seams on the repository — nothing to freeze, by construction. They are
  * enumerated anyway so the closed classification below stays closed: a new
  * method has to be declared a writer or a reader, never left unclassified.
- *
- * `getMessagesByConversationId` is the unified read seam added by the reader
- * cutover (Phase 4 PR 11). Its parity with the legacy `chat_messages` query it
- * replaces is pinned by
- * `src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`.
+ * Each is pinned against its frozen legacy query in
+ * `unified-reader-parity.integration.test.ts`.
  */
 const readPaths = [
   'getMessagesByConversationId',
-  // The rest arrived with the reader cutover of the chat ROUTES and mutation
-  // surfaces (Phase 4 PR 12), which absorbed `chat-message-repository`
-  // wholesale. Every one is pinned against its frozen legacy query in
-  // unified-reader-parity.integration.test.ts.
   'getMessagesForPage',
   'getPageConversationMessages',
   'getRecentPageMessages',
@@ -372,85 +382,59 @@ const readPaths = [
   'getMessageInConversation',
 ];
 
-describe('unified message dual-write — behavioural drift guard', () => {
+describe('message writes — behavioural freeze guard', () => {
   beforeEach(() => {
     touches.length = 0;
-    vi.stubEnv('UNIFIED_MESSAGES_DUAL_WRITE', '');
   });
 
-  for (const path of pageWritePaths) {
-    it(`${path.name} writes BOTH legs in one transaction`, async () => {
-      await path.run();
-      const tables = writtenTables();
-      expect(tables.has(LEGACY_LEG)).toBe(true);
-      expect(tables.has(UNIFIED_LEG)).toBe(true);
-      expect(allWritesWereTransactional()).toBe(true);
-    });
-  }
-
-  for (const path of globalWritePaths) {
-    it(`${path.name} writes the unified table only (it has no legacy leg)`, async () => {
+  for (const path of writePaths) {
+    it(`${path.name} writes the unified table and never touches chat_messages`, async () => {
       await path.run();
       const tables = writtenTables();
       expect(tables.has(UNIFIED_LEG)).toBe(true);
       expect(tables.has(LEGACY_LEG)).toBe(false);
+      expect(allWritesWereTransactional()).toBe(true);
     });
   }
 
-  it('the kill switch disables the unified leg and nothing else', async () => {
-    vi.stubEnv('UNIFIED_MESSAGES_DUAL_WRITE', 'off');
-    await messageRepository.savePageMessage({
-      messageId: 'msg-1',
-      pageId: 'page-1',
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      role: 'user',
-      content: 'hello',
-    });
-    const tables = writtenTables();
-    expect(tables.has(LEGACY_LEG)).toBe(true);
-    expect(tables.has(UNIFIED_LEG)).toBe(false);
-  });
-
   it('classifies every method on the repository — a new write path must be added here', () => {
     const classified = new Set([
-      ...pageWritePaths.map((p) => p.name),
-      ...globalWritePaths.map((p) => p.name),
+      ...writePaths.map((p) => p.name),
       ...nonMessageWritePaths,
       ...readPaths,
     ]);
     const actual = Object.keys(messageRepository).sort();
     expect(actual).toEqual([...classified].sort());
   });
+
+  it('still covers both scopes — a deleted page path must not pass as "all green"', () => {
+    expect(writePaths.filter((p) => p.scope === 'page')).toHaveLength(5);
+    expect(writePaths.filter((p) => p.scope === 'global')).toHaveLength(5);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// PART 2 — structural: nothing writes the legacy leg outside the allowlist.
+// PART 2 — structural: nothing writes the legacy table; removals are listed.
 // ---------------------------------------------------------------------------
 
 /**
- * Files permitted to issue a `chat_messages` write statement. Everything with
- * `dualWrites: true` must also import the shared unified-leg writer — that
- * pairing is the assertion. The `false` entries carry their exemption reason
- * in `why`, so removing a leg can never be argued for silently.
+ * Files permitted to DELETE from `chat_messages`. There is no equivalent list
+ * for INSERT/UPDATE — that list must be empty, and the assertion below says so
+ * with no allowlist to add yourself to.
+ *
+ * A removal is not a write in the sense this guard polices: it cannot create a
+ * row a reader will never see, and every entry here is an obligation that
+ * outlives the freeze (retention, erasure, teardown) and dies with the table
+ * at PR 15.
  */
-const LEGACY_WRITE_ALLOWLIST: Array<{ file: string; dualWrites: boolean; why?: string }> = [
-  { file: 'src/lib/repositories/message-repository.ts', dualWrites: true },
-  { file: 'src/lib/repositories/conversation-repository.ts', dualWrites: true },
+const LEGACY_DELETE_ALLOWLIST: Array<{ file: string; why: string }> = [
+  {
+    file: 'src/lib/repositories/message-repository.ts',
+    why: '`purgeInactiveLegacyChatMessages` — retention still owes the user the removal of soft-deleted legacy rows while they physically exist. Compliance-critical; PR 15 deletes it with the table.',
+  },
   {
     file: 'src/app/api/trash/[pageId]/route.ts',
-    dualWrites: false,
-    why: 'Hard delete of a purged page. Writes BOTH legs (the reader cutover, Phase 4 PR 12, added the unified DELETE — nothing else would remove those rows, since `messages.pageId` deliberately has no FK to `pages`), but with plain statements rather than the shared unified-leg writer: that module mirrors row-level content writes, not a page-teardown sweep.',
-  },
-  {
-    file: 'src/services/api/ai-undo-service.ts',
-    dualWrites: false,
-    why: 'Undo tombstones a RANGE of a conversation on both legs (unified first, legacy mirrored) inside one transaction. Not through the shared unified-leg writer for the same reason: that module writes one row at a time.',
-  },
-  {
-    file: 'src/app/api/debug/chat-messages/route.ts',
-    dualWrites: false,
-    why: 'Non-production debug seeding route; it fabricates fixture rows and is not a user-reachable write path.',
+    why: "Permanent page delete. The frozen rows a page still holds must go with it (belt and braces alongside `chat_messages.pageId`'s ON DELETE CASCADE to `pages`).",
   },
 ];
 
@@ -461,8 +445,9 @@ const LEGACY_WRITE_ALLOWLIST: Array<{ file: string; dualWrites: boolean; why?: s
  * root fails loudly instead of silently scanning zero files and passing.
  */
 const WEB_ROOT = process.cwd();
-const LEGACY_WRITE_PATTERN = /\.(insert|update|delete)\(\s*chatMessages\s*\)/;
-const UNIFIED_LEG_IMPORT = 'unified-message-leg';
+const LEGACY_CONTENT_WRITE = /\.(insert|update)\(\s*chatMessages\s*\)/;
+const LEGACY_DELETE = /\.delete\(\s*chatMessages\s*\)/;
+const UNIFIED_WRITE = /\.(insert|update|delete)\(\s*messages\s*\)/;
 
 function walkTsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -474,56 +459,66 @@ function walkTsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-describe('unified message dual-write — structural drift guard', () => {
+describe('message writes — structural freeze guard', () => {
   const sources = walkTsFiles(join(WEB_ROOT, 'src')).map((file) => ({
     // POSIX-normalised so the allowlist reads the same on any platform.
     rel: relative(WEB_ROOT, file).split(sep).join('/'),
     text: readFileSync(file, 'utf8'),
   }));
 
-  const legacyWriters = sources
-    .filter((source) => LEGACY_WRITE_PATTERN.test(source.text))
-    .map((source) => source.rel)
-    .sort();
+  const matching = (pattern: RegExp) =>
+    sources.filter((source) => pattern.test(source.text)).map((source) => source.rel).sort();
 
   it('actually scanned the app source (a mis-resolved root would pass everything)', () => {
     expect(sources.length).toBeGreaterThan(500);
     expect(sources.some((s) => s.rel === 'src/lib/repositories/message-repository.ts')).toBe(true);
+    // The scan must also be able to SEE a write — a regex or path regression
+    // that matches nothing anywhere would make every assertion below vacuous.
+    expect(matching(UNIFIED_WRITE).length).toBeGreaterThan(0);
+    expect(matching(LEGACY_DELETE).length).toBeGreaterThan(0);
   });
 
-  it('no file writes chat_messages without being classified here', () => {
-    expect(legacyWriters).toEqual(LEGACY_WRITE_ALLOWLIST.map((e) => e.file).sort());
+  it('NOTHING inserts or updates chat_messages — the legacy leg is frozen', () => {
+    // No allowlist, deliberately. If this fails, the fix is to delete the
+    // write, not to add the file here: a row written to `chat_messages` is
+    // invisible to every reader (they have all read `messages` since PR 12)
+    // and blocks PR 15 from dropping the table.
+    expect(matching(LEGACY_CONTENT_WRITE)).toEqual([]);
   });
 
-  for (const entry of LEGACY_WRITE_ALLOWLIST.filter((e) => e.dualWrites)) {
-    it(`${entry.file} routes its writes through the shared unified-leg writer`, () => {
-      const source = sources.find((s) => s.rel === entry.file);
-      expect(source, `${entry.file} is allowlisted but no longer exists`).toBeDefined();
-      expect(source!.text).toContain(UNIFIED_LEG_IMPORT);
-    });
-  }
+  it('only the listed removal sweeps delete from chat_messages', () => {
+    expect(matching(LEGACY_DELETE)).toEqual(LEGACY_DELETE_ALLOWLIST.map((e) => e.file).sort());
+  });
 
-  it('the unified leg has exactly one writer module', () => {
-    const unifiedWriters = sources
-      .filter((source) => /\.(insert|update|delete)\(\s*messages\s*\)/.test(source.text))
-      .map((source) => source.rel)
-      .sort();
-    expect(unifiedWriters).toEqual(
+  it('the unified table has a known, small set of writer modules', () => {
+    expect(matching(UNIFIED_WRITE)).toEqual(
       [
-        // The one shared unified-leg writer used by every dual-writing path.
+        // The shared page-message writer used by the repository and by the
+        // History-delete cascade.
         'src/lib/repositories/unified-message-leg.ts',
-        // The message repository itself: the global assistant's own leg
-        // (`messages` IS its legacy table), plus the purge and the
-        // lastMessageAt recompute the repository merge moved in from
-        // global-conversation-repository.ts (Phase 4 PR 12).
+        // The message repository: the global assistant's own writes, plus the
+        // purge and the lastMessageAt recompute (Phase 4 PR 12).
         'src/lib/repositories/message-repository.ts',
-        // Page teardown and undo — both range/sweep writers rather than
-        // row-level content writes; see LEGACY_WRITE_ALLOWLIST for why they
-        // are not routed through the shared unified-leg writer, and note that
-        // each writes the LEGACY leg in the same transaction.
+        // Page teardown and undo — range/sweep writers rather than row-level
+        // content writes, which is why they are not routed through the shared
+        // writer (it writes one row at a time).
         'src/app/api/trash/[pageId]/route.ts',
         'src/services/api/ai-undo-service.ts',
       ].sort(),
     );
+  });
+
+  it('the shared page writer is what the cascade uses, not a hand-rolled statement', () => {
+    const cascade = sources.find((s) => s.rel === 'src/lib/repositories/conversation-repository.ts');
+    expect(cascade, 'conversation-repository.ts no longer exists').toBeDefined();
+    expect(cascade!.text).toContain('unified-message-leg');
+    expect(UNIFIED_WRITE.test(cascade!.text)).toBe(false);
+  });
+
+  it('the dual-write kill switch is gone with the leg it switched off', () => {
+    // A kill switch for a leg that no longer exists is a lie: it would read as
+    // "the legacy leg can be restored by an env var", and nothing would happen.
+    expect(matching(/UNIFIED_MESSAGES_DUAL_WRITE/)).toEqual([]);
+    expect(matching(/isUnifiedMessageDualWriteEnabled/)).toEqual([]);
   });
 });

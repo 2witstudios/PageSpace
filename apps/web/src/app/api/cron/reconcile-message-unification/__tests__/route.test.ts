@@ -5,8 +5,8 @@
  * logging, result surfacing. The one addition specific to this route is the
  * assertion that a DIVERGENT run still returns 200 — the HTTP status reports
  * whether the CHECK ran, not what it found. Alerting keys off the error-level
- * log the reconciler emits, and a 500 here would make a real drift look like
- * a broken cron and get muted.
+ * log the reconciler emits, and a 500 here would make a live legacy writer
+ * look like a broken cron and get muted.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -49,7 +49,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 const cleanRun = {
   checked: 12,
   diverged: 0,
-  missingRows: 0,
+  unmirroredRows: 0,
   samples: [],
   windowHours: 24,
   capped: false,
@@ -71,7 +71,7 @@ describe('/api/cron/reconcile-message-unification', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({ success: true, checked: 12, diverged: 0, missingRows: 0 });
+    expect(body).toMatchObject({ success: true, checked: 12, diverged: 0, unmirroredRows: 0 });
     expect(body.timestamp).toBeDefined();
   });
 
@@ -85,14 +85,15 @@ describe('/api/cron/reconcile-message-unification', () => {
     expect(mockReconcile).not.toHaveBeenCalled();
   });
 
-  it('given drift, should still return 200 with the divergent samples', async () => {
+  it('given a thawed legacy leg, should still return 200 with the divergent samples', async () => {
     mockReconcile.mockResolvedValue({
       checked: 40,
       diverged: 2,
-      missingRows: 7,
+      unmirroredRows: 7,
       samples: [
         {
           conversationId: 'conv-a',
+          unmirroredLegacy: 6,
           legacyCount: 10,
           unifiedCount: 4,
           legacyMaxCreatedAt: '2026-08-06 10:00:00.000000',
@@ -107,7 +108,7 @@ describe('/api/cron/reconcile-message-unification', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({ success: true, diverged: 2, missingRows: 7 });
+    expect(body).toMatchObject({ success: true, diverged: 2, unmirroredRows: 7 });
     expect(body.samples).toHaveLength(1);
     expect(body.samples[0].conversationId).toBe('conv-a');
   });
@@ -120,7 +121,7 @@ describe('/api/cron/reconcile-message-unification', () => {
         eventType: 'data.read',
         resourceType: 'cron_job',
         resourceId: 'reconcile_message_unification',
-        details: { checked: 12, diverged: 0, missingRows: 0, windowHours: 24, capped: false },
+        details: { checked: 12, diverged: 0, unmirroredRows: 0, windowHours: 24, capped: false },
       }),
     );
   });

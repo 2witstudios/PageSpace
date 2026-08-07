@@ -25,13 +25,13 @@ blob to relational rows (`agent_workspace_pane_columns` /
 | step | migration | what it does |
 |------|-----------|--------------|
 | expand | `0246_vengeful_veda` | creates the row tables, promotes every blob into them, KEEPS the blob and dual-writes it |
-| contract | `0250_slimy_goblin_queen` | final promotion sweep, refuses-to-drop guard, then `DROP COLUMN "workspaceState"` |
+| contract | `0251_mighty_shaman` | final promotion sweep, refuses-to-drop guard, then `DROP COLUMN "workspaceState"` |
 
-**The rule: never apply `0250` in the same `migrate` run as `0246` while the
+**The rule: never apply `0251` in the same `migrate` run as `0246` while the
 old application image is still what restarts afterwards.** The two migrations
-are safe to run back-to-back (0250 re-sweeps anything 0246 promoted, and the
+are safe to run back-to-back (0251 re-sweeps anything 0246 promoted, and the
 guard proves nothing is lost) — what is NOT safe is leaving an application
-image older than this release pointed at the contracted schema. A pre-0250
+image older than this release pointed at the contracted schema. A pre-0251
 image still `SELECT`s and `UPDATE`s `workspaceState`, so the sessions list and
 the pane-layout `GET`/`PUT` fail with `column "workspaceState" does not exist`
 until the new image is up.
@@ -41,12 +41,12 @@ So, for a version-skipping upgrade:
 1. Pull the new images FIRST (`docker compose pull`), so the post-migrate
    restart brings up code that never mentions the column.
 2. Run `migrate` once — it applies every pending migration including 0246 and
-   0250 in order.
+   0251 in order.
 3. Start the stack.
 
 Degradation if you do it out of order is bounded to the window between the
 migrate one-shot and the restart, and it is loud (500s on the agents sidebar
-and the workspace route), not silent. Rolling back to a pre-0250 image after
+and the workspace route), not silent. Rolling back to a pre-0251 image after
 the fact requires restoring the column, so take the usual pre-upgrade database
 snapshot.
 
