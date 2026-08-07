@@ -28,111 +28,23 @@ import type {
 } from './lib/migration-types';
 import {
   buildInsert,
+  buildDeferredUpdate,
   computeFileChecksum,
   writeManifest,
   toSqlInList,
   validateIds,
 } from './lib/migration-utils';
+import {
+  exportColumns as cols,
+  deferredColumns,
+} from './lib/tenant-export-columns';
 
 // ─── Column definitions per table ──────────────────────────────
-// WARNING: These column lists must stay in sync with the Drizzle schema
-// in packages/db/src/schema/. If a column is added or renamed in the
-// schema, update the corresponding array here. A mismatch will cause
-// data loss (missing column) or an import error (extra column).
-
-const USER_COLUMNS = [
-  'id', 'name', 'email', 'emailVerified', 'image',
-  'googleId', 'appleId', 'provider', 'tokenVersion', 'role',
-  'adminRoleVersion', 'currentAiProvider', 'currentAiModel',
-  'storageUsedBytes', 'lastStorageCalculated',
-  'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
-  'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
-  'timezone', 'createdAt', 'updatedAt',
-];
-
-const USER_PROFILE_COLUMNS = [
-  'userId', 'username', 'displayName', 'bio', 'avatarUrl', 'isPublic',
-  'createdAt', 'updatedAt',
-];
-
-const DRIVE_COLUMNS = [
-  'id', 'name', 'slug', 'ownerId', 'kind', 'isTrashed', 'trashedAt',
-  'createdAt', 'updatedAt', 'drivePrompt',
-];
-
-const DRIVE_ROLE_COLUMNS = [
-  'id', 'driveId', 'name', 'description', 'color', 'isDefault',
-  'permissions', 'drive_wide_permissions', 'position', 'createdAt', 'updatedAt',
-];
-
-const DRIVE_MEMBER_COLUMNS = [
-  'id', 'driveId', 'userId', 'role', 'customRoleId', 'invitedBy',
-  'invitedAt', 'acceptedAt', 'lastAccessedAt',
-];
-
-const PAGE_COLUMNS = [
-  'id', 'title', 'type', 'content', 'contentMode', 'isPaginated',
-  'position', 'isTrashed', 'aiProvider', 'aiModel', 'systemPrompt',
-  'enabledTools', 'includeDrivePrompt', 'agentDefinition',
-  'visibleToGlobalAssistant', 'includePageTree', 'pageTreeScope',
-  'fileSize', 'mimeType', 'originalFileName', 'filePath', 'fileMetadata',
-  'processingStatus', 'processingError', 'processedAt', 'extractionMethod',
-  'extractionMetadata', 'contentHash', 'excludeFromSearch',
-  'createdAt', 'updatedAt', 'trashedAt', 'revision', 'stateHash',
-  'driveId', 'parentId', 'originalParentId',
-];
-
-const CHAT_MESSAGE_COLUMNS = [
-  'id', 'pageId', 'conversationId', 'role', 'content', 'toolCalls',
-  'toolResults', 'createdAt', 'isActive', 'editedAt', 'userId',
-  'sourceAgentId', 'messageType', 'status',
-];
-
-const CHANNEL_MESSAGE_COLUMNS = [
-  'id', 'content', 'createdAt', 'pageId', 'userId', 'fileId',
-  'attachmentMeta', 'isActive', 'aiMeta',
-];
-
-const CHANNEL_REACTION_COLUMNS = [
-  'id', 'messageId', 'userId', 'emoji', 'createdAt',
-];
-
-const CHANNEL_READ_STATUS_COLUMNS = ['userId', 'channelId', 'lastReadAt'];
-
-const CONVERSATION_COLUMNS = [
-  'id', 'userId', 'title', 'type', 'contextId', 'lastMessageAt',
-  'createdAt', 'updatedAt', 'isActive',
-];
-
-const MESSAGE_COLUMNS = [
-  'id', 'conversationId', 'userId', 'role', 'messageType', 'content',
-  'toolCalls', 'toolResults', 'createdAt', 'isActive', 'editedAt', 'status',
-];
-
-const FILE_COLUMNS = [
-  'id', 'driveId', 'sizeBytes', 'mimeType', 'storagePath',
-  'checksumVersion', 'createdAt', 'updatedAt', 'createdBy',
-  'lastAccessedAt',
-];
-
-const FILE_PAGE_COLUMNS = ['fileId', 'pageId', 'linkedBy', 'linkedAt', 'linkSource'];
-
-const PAGE_PERMISSION_COLUMNS = [
-  'id', 'pageId', 'userId', 'canView', 'canEdit', 'canShare',
-  'canDelete', 'grantedBy', 'grantedAt', 'expiresAt', 'note',
-];
-
-const TAG_COLUMNS = ['id', 'name', 'color'];
-const PAGE_TAG_COLUMNS = ['pageId', 'tagId'];
-
-const MENTION_COLUMNS = ['id', 'createdAt', 'sourcePageId', 'targetPageId'];
-const USER_MENTION_COLUMNS = [
-  'id', 'createdAt', 'sourcePageId', 'targetUserId', 'mentionedByUserId',
-];
-
-const FAVORITE_COLUMNS = [
-  'id', 'userId', 'itemType', 'pageId', 'driveId', 'position', 'createdAt',
-];
+// The per-table column lists live in ./lib/tenant-export-columns.ts, and are
+// checked against the live Drizzle schema by the drift guard in
+// scripts/__tests__/tenant-export-columns.test.ts. Add a column to the schema
+// without deciding there — carried or explicitly excluded — and that test goes
+// red. Do NOT re-introduce hand-maintained lists in this file.
 
 // ─── Query helpers ──────────────────────────────
 
@@ -159,38 +71,30 @@ export async function discoverDrives(
 }
 
 /**
- * Null out FK references to users not in the export set.
+ * Null out nullable FK references that point outside the export set.
+ * A ref that survives into the bundle but names a row the bundle does not
+ * carry aborts the whole import on its FK, so every carried FK column has to
+ * be either filtered, nulled here, or provably in-set.
  */
-function nullifyOrphanedUserRefs(
+function nullifyOrphanedRefs(
   rows: Record<string, unknown>[],
-  userIdSet: Set<string>,
+  idSet: Set<string>,
   ...columns: string[]
 ): void {
   for (const row of rows) {
     for (const col of columns) {
-      if (row[col] && !userIdSet.has(row[col] as string)) {
+      if (row[col] && !idSet.has(row[col] as string)) {
         row[col] = null;
       }
     }
   }
 }
 
-/**
- * Null out FK references to pages not in the export set.
- */
-function nullifyOrphanedPageRefs(
-  rows: Record<string, unknown>[],
-  pageIdSet: Set<string>,
-  ...columns: string[]
-): void {
-  for (const row of rows) {
-    for (const col of columns) {
-      if (row[col] && !pageIdSet.has(row[col] as string)) {
-        row[col] = null;
-      }
-    }
-  }
-}
+/** Null out FK references to users not in the export set. */
+const nullifyOrphanedUserRefs = nullifyOrphanedRefs;
+
+/** Null out FK references to pages not in the export set. */
+const nullifyOrphanedPageRefs = nullifyOrphanedRefs;
 
 export interface ExportResult {
   manifest: ExportManifest;
@@ -258,6 +162,12 @@ export async function exportData(
 
   // Null out parentId / originalParentId if they point outside exported pages
   nullifyOrphanedPageRefs(pagesData, pageIdSet, 'parentId', 'originalParentId');
+
+  // `drives.homePageId` / `drives.not_found_page_id` point FORWARD at pages,
+  // which is why they ride a trailing UPDATE rather than the drives INSERT
+  // (see `deferredColumns` in ./lib/tenant-export-columns.ts). Same orphan
+  // rule as any other page ref.
+  nullifyOrphanedPageRefs(drivesData, pageIdSet, 'homePageId', 'not_found_page_id');
 
   const chatMessagesData = await queryRows(db, sql.raw(
     `SELECT * FROM chat_messages WHERE "pageId" IN (${pageIn})`,
@@ -329,7 +239,27 @@ export async function exportData(
   const allExportedUserIdSet = new Set(usersData.map((u) => u.id as string));
   const allUserIn = toSqlInList(allExportedUserIdSet);
 
+  // `pages.createdBy` (ON DELETE SET NULL) — the author may be a drive member
+  // who is not part of this migration.
+  nullifyOrphanedUserRefs(pagesData, allExportedUserIdSet, 'createdBy');
+
   const channelMessageIds = channelMessagesData.map((r) => r.id as string);
+  const channelMessageIdSet = new Set(channelMessageIds);
+  /**
+   * The three channel-message self-references. `parentId` and `mirroredFromId`
+   * stay inside one channel by construction, but a QUOTE can name a message in
+   * a channel this migration does not carry, so all three are checked. Refs
+   * that DO resolve need no ordering care: Postgres queues RI checks as
+   * AFTER-ROW triggers fired once the statement finishes, so a self-reference
+   * inside a single multi-row INSERT resolves regardless of row order.
+   */
+  nullifyOrphanedRefs(
+    channelMessagesData,
+    channelMessageIdSet,
+    'parentId',
+    'mirroredFromId',
+    'quotedMessageId',
+  );
   // Filter reactions to only include those from exported users (userId is NOT NULL)
   const channelReactionsDataRaw = channelMessageIds.length > 0
     ? await queryRows(db, sql.raw(
@@ -344,6 +274,41 @@ export async function exportData(
     `SELECT * FROM channel_read_status WHERE "userId" IN (${userIn}) AND "channelId" IN (${pageIn})`,
   ));
 
+  /**
+   * Agent sessions — the working contexts the exported conversations are bound
+   * to (`conversations.sessionId`).
+   *
+   * Carried because the binding is otherwise unrecoverable: a session owns a
+   * thread's filesystem and its pane layout, and `sessionId` is write-once by
+   * design (moving a thread is a fork, never a rebind), so a migration that
+   * drops it cannot be repaired afterwards. Only the sessions an exported
+   * conversation actually names are pulled — a session is never empty, so
+   * this is the whole set that matters — and only those whose `ownerId`
+   * (NOT NULL, FK'd) is already in the export. The Sprite-identity columns do
+   * NOT travel; see the exclusion allowlist in ./lib/tenant-export-columns.ts.
+   */
+  const referencedSessionIds = new Set(
+    conversationsData
+      .map((r) => r.sessionId as string | null)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const agentSessionsDataRaw = referencedSessionIds.size > 0
+    ? await queryRows(db, sql.raw(
+        `SELECT * FROM agent_sessions WHERE id IN (${toSqlInList(referencedSessionIds)})`,
+      ))
+    : [];
+  const agentSessionsData = agentSessionsDataRaw.filter(
+    (s) => allExportedUserIdSet.has(s.ownerId as string),
+  );
+  // A global-assistant session has no drive; a drive-scoped one whose drive is
+  // outside this migration degrades to the same shape rather than dangling.
+  nullifyOrphanedRefs(agentSessionsData, new Set(driveIds), 'driveId');
+
+  // Threads bound to a session that did not make the cut become plain history
+  // — exactly what `ON DELETE SET NULL` on this column already means.
+  const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
+  nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'sessionId');
+
   // Messages from exported users, plus the agent/system-authored rows.
   // `messages.userId` was relaxed to NULLABLE in 0248 (the attribution rule:
   // NULL userId = agent- or system-authored), so an `IN (…)` filter alone now
@@ -354,6 +319,12 @@ export async function exportData(
         `SELECT * FROM messages WHERE "conversationId" IN (${toSqlInList(conversationIds)}) AND ("userId" IS NULL OR "userId" IN (${allUserIn}))`,
       ))
     : [];
+  // `messages.sourceAgentId` FKs `pages` (ON DELETE SET NULL). `messages.pageId`
+  // deliberately has NO FK — it is transitional, dropped at the unification's
+  // contract PR — but a value naming a page the bundle does not carry would be
+  // a phantom reference in the tenant, and the authoritative page link is
+  // `conversations.contextId` anyway, so it gets the same treatment.
+  nullifyOrphanedPageRefs(messagesData, pageIdSet, 'sourceAgentId', 'pageId');
 
   const filesData = await queryRows(db, sql.raw(
     `SELECT * FROM files WHERE "driveId" IN (${driveIn})`,
@@ -408,31 +379,38 @@ export async function exportData(
     '',
     'BEGIN;',
     '',
-    buildInsert('users', USER_COLUMNS, usersData),
-    buildInsert('user_profiles', USER_PROFILE_COLUMNS, userProfilesData),
-    buildInsert('drives', DRIVE_COLUMNS, drivesData),
-    buildInsert('drive_roles', DRIVE_ROLE_COLUMNS, driveRolesData),
-    buildInsert('drive_members', DRIVE_MEMBER_COLUMNS, driveMembersData),
-    buildInsert('pages', PAGE_COLUMNS, pagesData),
-    buildInsert('tags', TAG_COLUMNS, tagsData),
-    buildInsert('page_tags', PAGE_TAG_COLUMNS, pageTagsData),
+    buildInsert('users', cols('users'), usersData),
+    buildInsert('user_profiles', cols('user_profiles'), userProfilesData),
+    buildInsert('drives', cols('drives'), drivesData),
+    buildInsert('drive_roles', cols('drive_roles'), driveRolesData),
+    buildInsert('drive_members', cols('drive_members'), driveMembersData),
+    buildInsert('pages', cols('pages'), pagesData),
+    // `drives` and `pages` reference each other, so neither insert can carry
+    // its forward FK. The drive's page pointers (`homePageId`,
+    // `not_found_page_id`) are set here, once the pages exist.
+    buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
+    buildInsert('tags', cols('tags'), tagsData),
+    buildInsert('page_tags', cols('page_tags'), pageTagsData),
+    // `agent_sessions` precedes `conversations`: `conversations.sessionId`
+    // FKs it, and a session row also needs its drive and owner, both above.
+    buildInsert('agent_sessions', cols('agent_sessions'), agentSessionsData),
     // `conversations` MUST precede `chat_messages`: since migration 0248 the
     // latter has a real (non-deferrable) FK onto the former, and the whole
     // bundle replays inside one BEGIN/COMMIT, so an out-of-order INSERT aborts
     // the entire import. It also precedes `messages`, which has always had
     // that FK. Insert order in this list is FK order, not table-name order.
-    buildInsert('conversations', CONVERSATION_COLUMNS, conversationsData),
-    buildInsert('chat_messages', CHAT_MESSAGE_COLUMNS, chatMessagesData),
-    buildInsert('messages', MESSAGE_COLUMNS, messagesData),
-    buildInsert('channel_messages', CHANNEL_MESSAGE_COLUMNS, channelMessagesData),
-    buildInsert('channel_message_reactions', CHANNEL_REACTION_COLUMNS, channelReactionsData),
-    buildInsert('channel_read_status', CHANNEL_READ_STATUS_COLUMNS, channelReadStatusData),
-    buildInsert('files', FILE_COLUMNS, filesData),
-    buildInsert('file_pages', FILE_PAGE_COLUMNS, filePagesData),
-    buildInsert('page_permissions', PAGE_PERMISSION_COLUMNS, pagePermissionsData),
-    buildInsert('mentions', MENTION_COLUMNS, mentionsData),
-    buildInsert('user_mentions', USER_MENTION_COLUMNS, userMentionsData),
-    buildInsert('favorites', FAVORITE_COLUMNS, favoritesData),
+    buildInsert('conversations', cols('conversations'), conversationsData),
+    buildInsert('chat_messages', cols('chat_messages'), chatMessagesData),
+    buildInsert('messages', cols('messages'), messagesData),
+    buildInsert('channel_messages', cols('channel_messages'), channelMessagesData),
+    buildInsert('channel_message_reactions', cols('channel_message_reactions'), channelReactionsData),
+    buildInsert('channel_read_status', cols('channel_read_status'), channelReadStatusData),
+    buildInsert('files', cols('files'), filesData),
+    buildInsert('file_pages', cols('file_pages'), filePagesData),
+    buildInsert('page_permissions', cols('page_permissions'), pagePermissionsData),
+    buildInsert('mentions', cols('mentions'), mentionsData),
+    buildInsert('user_mentions', cols('user_mentions'), userMentionsData),
+    buildInsert('favorites', cols('favorites'), favoritesData),
     '',
     'COMMIT;',
     '',
@@ -452,6 +430,7 @@ export async function exportData(
     channelMessages: channelMessagesData.length,
     channelMessageReactions: channelReactionsData.length,
     channelReadStatus: channelReadStatusData.length,
+    agentSessions: agentSessionsData.length,
     conversations: conversationsData.length,
     messages: messagesData.length,
     files: filesData.length,
