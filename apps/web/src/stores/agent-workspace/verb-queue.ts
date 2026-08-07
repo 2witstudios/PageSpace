@@ -131,9 +131,18 @@ export function adoptServerGrid(
   grid: readonly PersistedColumnState[] | null | undefined,
 ): WorkspaceState | null {
   if (!grid || grid.length === 0) return null;
+  // Fractions ride along as first-class structure (issue #2208) — they are
+  // rows, not view state, so unlike focus they come straight off the wire. An
+  // unsized container carries no key at all, which is what keeps a hydrated
+  // grid byte-identical to one the reducer built.
   const columns = grid.map((column) => ({
     id: column.id,
-    panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
+    ...(typeof column.widthFraction === 'number' ? { widthFraction: column.widthFraction } : {}),
+    panes: column.panes.map((pane) => ({
+      id: pane.id,
+      scope: pane.scope,
+      ...(typeof pane.heightFraction === 'number' ? { heightFraction: pane.heightFraction } : {}),
+    })),
   }));
   const first = columns.find((column) => column.panes.length > 0);
   if (!first) return null;

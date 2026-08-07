@@ -14,7 +14,8 @@
  * xterm.
  */
 
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, type ReactNode } from 'react';
+import { usePanelRef } from 'react-resizable-panels';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
@@ -102,22 +103,88 @@ export default function SessionPanes({ workspace, onSelectPane, renderPane }: Se
         {columns.map((column, columnIndex) => (
           <Fragment key={column.id}>
             {columnIndex > 0 && <ResizableHandle variant="chrome-free" />}
-            <ResizablePanel defaultSize={100 / columns.length} minSize={15}>
+            <SizedPanel fraction={column.widthFraction} evenShare={100 / columns.length}>
               <ResizablePanelGroup orientation="vertical" className="h-full">
                 {column.panes.map((pane, paneIndex) => (
                   <Fragment key={pane.id}>
                     {paneIndex > 0 && <ResizableHandle variant="chrome-free" />}
-                    <ResizablePanel defaultSize={100 / column.panes.length} minSize={15}>
+                    <SizedPanel fraction={pane.heightFraction} evenShare={100 / column.panes.length}>
                       {renderPane({ pane, isActive: pane.id === activeId, canSplit: true })}
-                    </ResizablePanel>
+                    </SizedPanel>
                   </Fragment>
                 ))}
               </ResizablePanelGroup>
-            </ResizablePanel>
+            </SizedPanel>
           </Fragment>
         ))}
       </ResizablePanelGroup>
     </div>
+  );
+}
+
+/**
+ * A panel laid out at its PERSISTED share when the grid has one (issue #2208),
+ * and at the even split when it does not.
+ *
+ * Two mechanisms, because react-resizable-panels v4 has no controlled `size`
+ * prop — `defaultSize` is read once at mount and never again:
+ *
+ *  - `defaultSize` seats the share on the first render, so a grid opened on
+ *    another device (or an hour later) comes back laid out the way it was
+ *    left, straight from the pane rows.
+ *  - the imperative `resize()` applies a share that CHANGES while the grid is
+ *    already mounted — an agent's `resize_pane`, or another device's, arriving
+ *    over `workspace:updated`. Re-keying the group would achieve the same
+ *    thing by remounting, which is exactly what must not happen here: a
+ *    remounted terminal pane drops its PTY viewer and cold-starts a new shell.
+ *
+ * Deliberately ONE-WAY: dragging a separator is still local to the panel
+ * group and posts no verb. Writing drags back needs a debounce plus a story
+ * for the two panels one drag resizes (two verbs whose renormalizations do
+ * not compose to what the user sees), and getting that wrong shows up as
+ * visible jitter — so it is left out rather than half-built. Nothing
+ * regresses: a drag behaves exactly as it did before this change.
+ */
+function SizedPanel({
+  fraction,
+  evenShare,
+  children,
+}: {
+  fraction: number | null | undefined;
+  evenShare: number;
+  children: ReactNode;
+}) {
+  const panelRef = usePanelRef();
+  const sized = typeof fraction === 'number';
+  const percentage = sized ? fraction * 100 : evenShare;
+  // What we last pushed imperatively. Seeded with the mount value so the
+  // first effect run is a no-op — `defaultSize` already did that job, and
+  // re-applying it would fight the group's own initial layout pass.
+  const applied = useRef(percentage);
+
+  useEffect(() => {
+    // ONLY an explicitly persisted share is ever pushed. On an unsized grid
+    // the even split is the panel group's OWN default, and re-asserting it
+    // imperatively is both redundant and harmful: `evenShare` changes on every
+    // split and close, so the effect would fire mid-reconciliation against a
+    // group whose panel set React has not finished updating — which is exactly
+    // the "Panel constraints not found for index -1" throw.
+    if (!sized || applied.current === percentage) return;
+    try {
+      panelRef.current?.resize(`${percentage}%`);
+      applied.current = percentage;
+    } catch {
+      // Best-effort visual sync. A share that could not be applied right now
+      // (a panel being removed in the same commit) is not worth failing a
+      // render over — `applied` deliberately stays behind so a later commit
+      // retries, and a remount reads the same share from `defaultSize` anyway.
+    }
+  }, [sized, percentage, panelRef]);
+
+  return (
+    <ResizablePanel panelRef={panelRef} defaultSize={`${percentage}%`} minSize={15}>
+      {children}
+    </ResizablePanel>
   );
 }
 

@@ -420,3 +420,189 @@ describe('kill_shell description: "The session\'s sandbox (and every other shell
     expect(deps.ensureOwnSessionSandbox).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The LAYOUT family (issue #2208) — every claim its descriptions make
+// ---------------------------------------------------------------------------
+
+const GRID = {
+  columns: [
+    {
+      columnId: 'col-1',
+      widthFraction: 0.6,
+      panes: [
+        { paneId: 'pane-1', kind: 'chat' as const, targetId: 'conv-1', name: 'Planning', heightFraction: 0.7 },
+        { paneId: 'pane-1b', kind: null, targetId: null, name: '', heightFraction: 0.3 },
+      ],
+    },
+    {
+      columnId: 'col-2',
+      widthFraction: 0.4,
+      panes: [{ paneId: 'pane-2', kind: 'terminal' as const, targetId: 'shell-1', name: 'shell-1', heightFraction: null }],
+    },
+  ],
+};
+
+/** Layout deps on top of the shared fakes — both are OPTIONAL on the interface. */
+function layoutDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
+  return makeDeps({
+    readPaneGrid: vi.fn(async () => GRID),
+    applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: true })),
+    ...over,
+  });
+}
+
+/** The tool-call options a layout tool needs: context PLUS the id its opId derives from. */
+function layoutOptions(overrides: Partial<ToolExecutionContext> = {}) {
+  return { ...contextOptions(overrides), toolCallId: 'call-abc' };
+}
+
+describe('list_panes description: "Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address"', () => {
+  it('returns the grid keyed by exactly the ids the three rearrange verbs take', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_panes, {}, layoutOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: WORKSPACE_ID, columns: GRID.columns }));
+    expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID);
+    // The addressability claim, checked rather than assumed: every id the
+    // listing hands out is one the rearrange tools accept.
+    const columnIds = GRID.columns.map((column) => column.columnId);
+    const paneIds = GRID.columns.flatMap((column) => column.panes.map((pane) => pane.paneId));
+    expect(columnIds).toEqual(['col-1', 'col-2']);
+    expect(paneIds).toEqual(['pane-1', 'pane-1b', 'pane-2']);
+  });
+
+  it('a workspace with no grid yet is a reportable state, not an error', async () => {
+    const tools = createSessionTools(layoutDeps({ readPaneGrid: vi.fn(async () => null) }));
+    const result = await run(tools.list_panes, {}, layoutOptions());
+    expect(result).toEqual(expect.objectContaining({ success: true, columns: [] }));
+  });
+});
+
+describe('the layout family description: "Only meaningful inside an agent session with an open pane grid"', () => {
+  it.each(['list_panes', 'resize_pane', 'move_pane', 'arrange_panes'] as const)(
+    '%s refuses a conversation with no workspace, and writes nothing',
+    async (name) => {
+      const deps = layoutDeps({ findOwnWorkspace: vi.fn(async () => null) });
+      const tools = createSessionTools(deps);
+      const input =
+        name === 'list_panes'
+          ? {}
+          : name === 'resize_pane'
+            ? { columnId: 'col-1', size: 0.5 }
+            : name === 'move_pane'
+              ? { paneId: 'pane-1', toColumnId: 'col-2' }
+              : { columnIds: ['col-2'] };
+
+      const result = await run(tools[name], input, layoutOptions());
+      expect(result.success).toBe(false);
+      expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses an unauthenticated caller before resolving any workspace', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions({ userId: undefined }));
+    expect(result.success).toBe(false);
+    expect(deps.findOwnWorkspace).not.toHaveBeenCalled();
+    expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+  });
+
+  it('addresses ONLY the caller own workspace — a model cannot name someone else grid', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    // There is no workspaceId input on any of these tools; the grid is
+    // resolved from the caller's own conversation, which is what makes the
+    // verbs route's access check already satisfied by construction.
+    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
+    expect(deps.findOwnWorkspace).toHaveBeenCalledWith(CALLER_CONVERSATION);
+    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WORKSPACE_ID }));
+  });
+});
+
+describe('resize_pane description: "pass a columnId to set that column\'s width, or a paneId to set that pane\'s height"', () => {
+  it('a columnId becomes resize_column; a paneId becomes resize_pane', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+
+    await run(tools.resize_pane, { columnId: 'col-1', size: 0.35 }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: { type: 'resize_column', columnId: 'col-1', widthFraction: 0.35 } }),
+    );
+
+    await run(tools.resize_pane, { paneId: 'pane-1', size: 0.9 }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: { type: 'resize_pane', paneId: 'pane-1', heightFraction: 0.9 } }),
+    );
+  });
+
+  it('refuses BOTH targets and NEITHER — an ambiguous call must not silently pick an axis', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+
+    expect((await run(tools.resize_pane, { paneId: 'p', columnId: 'c', size: 0.5 }, layoutOptions())).success).toBe(false);
+    expect((await run(tools.resize_pane, { size: 0.5 }, layoutOptions())).success).toBe(false);
+    expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+  });
+});
+
+describe('move_pane / arrange_panes descriptions: what they promise the verb does', () => {
+  it('move_pane omits toIndex when the caller did — the reducer reads that as "append"', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+
+    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2' } }),
+    );
+
+    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2', toIndex: 0 }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2', toIndex: 0 } }),
+    );
+  });
+
+  it('arrange_panes sends the partial list through verbatim — the reducer owns the prefix rule', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: { type: 'reorder_columns', columnIds: ['col-2'] } }),
+    );
+  });
+});
+
+describe('the layout family is idempotent per tool call, and never overstates what happened', () => {
+  it('derives the opId from the tool call id, so an SDK retry replays instead of rearranging twice', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'move_pane:call-abc' }));
+
+    await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'arrange_panes:call-abc' }));
+
+    await run(tools.resize_pane, { columnId: 'col-1', size: 0.5 }, layoutOptions());
+    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'resize_pane:call-abc' }));
+  });
+
+  it('a total no-op answers success with changed: false and says the grid may have moved on', async () => {
+    const tools = createSessionTools(
+      layoutDeps({ applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: false })) }),
+    );
+    const result = await run(tools.move_pane, { paneId: 'stale', toColumnId: 'col-2' }, layoutOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: false }));
+    expect(String((result as { note?: string }).note)).toContain('list_panes');
+  });
+
+  it('a contended write reports failure rather than claiming a rearrange that never landed', async () => {
+    const tools = createSessionTools(
+      layoutDeps({ applyLayoutVerb: vi.fn(async () => ({ ok: false as const, reason: 'contended' })) }),
+    );
+    const result = await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'contended' }));
+  });
+});
