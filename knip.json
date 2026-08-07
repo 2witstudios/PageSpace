@@ -556,7 +556,8 @@
     },
     "apps/e2e": {
       "ignore": [
-        "support/mock-server-main.ts"
+        "support/mock-server-main.ts",
+        "support/e2e-proxy.ts"
       ]
     }
   },

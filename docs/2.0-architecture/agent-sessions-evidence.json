@@ -1,0 +1,320 @@
+{
+  "$comment": "Machine-checked evidence for the Agent-Session Single Source of Truth epic. Format and rules: docs/2.0-architecture/agent-sessions-evidence.md. Checked by scripts/check-evidence-manifest.ts in CI — do not hand-edit a citation without running it.",
+  "suites": {
+    "e2e-playwright": {
+      "runner": "playwright (apps/e2e), production web build + realtime behind a same-origin proxy",
+      "pathPrefixes": ["apps/e2e/tests/"],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "playwright test"
+      },
+      "requiresFileListedInCi": true
+    },
+    "web-unit": {
+      "runner": "vitest project 'web' via turbo run test:coverage",
+      "pathPrefixes": ["apps/web/src/"],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "lib-unit": {
+      "runner": "vitest project '@pagespace/lib' via turbo run test:coverage",
+      "pathPrefixes": ["packages/lib/src/"],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "realtime-unit": {
+      "runner": "vitest project 'realtime' via turbo run test:coverage",
+      "pathPrefixes": ["apps/realtime/src/"],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "scripts-hand-listed": {
+      "runner": "vitest in scripts/ — the workflow names every file explicitly; an unlisted file never runs",
+      "pathPrefixes": ["scripts/__tests__/"],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "cd scripts && bunx vitest run"
+      },
+      "requiresFileListedInCi": true
+    }
+  },
+  "guarantees": [
+    {
+      "id": "dispatch-renders-live-in-open-pane",
+      "guarantee": "A server-side dispatch renders live in an already-open pane, with no reload.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "a server dispatch into an open pane renders live without reload",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "a page-chat dispatch persists both sides of the turn (visible after reload)",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The epic's canonical bug written as an executable spec. The second citation is the harness pin: it proves the dispatch really wrote through the pipeline, so a green live-delivery assertion cannot be an artefact of a dispatch that did nothing. This spec only means what it says when realtime is same-origin — see the CSP note in the .md. STATUS WARNING: 'proven' here means cited, executing and gated by CI — NOT currently green. As of the PR that introduced this manifest, the live-delivery citation FAILS against a correct topology (see RED-GATE note in the .md); the harness-pin citation passes."
+    },
+    {
+      "id": "two-windows-see-both-sides-live",
+      "guarantee": "Two windows open on one conversation both see both sides of a turn live.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "two windows on one conversation both see both sides of a dispatched turn live",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "STATUS WARNING: cited, executing and gated — but FAILING as of the PR that introduced this manifest. See the RED-GATE note in the .md."
+    },
+    {
+      "id": "server-created-conversation-reaches-sidebar",
+      "guarantee": "A server-created conversation appears in the sidebar without waiting for a poll tick.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
+          "name": "should write the new conversation straight into its session listing, with no request",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
+          "name": "given the row is already there (the originating surface wrote it optimistically), should MERGE not duplicate",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/agent-sessions/__tests__/create-conversation-in-session.test.ts",
+          "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "RESIDUAL SEAM, deliberately recorded rather than glossed: the listener test proves the cache write happens with `revalidate: false` (no round-trip), and the create test proves the payload carries the label the sidebar renders. Nothing asserts that the listener's mutate key equals the key AgentsSidebar subscribes to — that link holds by construction only. AgentsSidebar.test.tsx mocks SWR data directly and contains nothing socket-driven, and the sidebar still carries a 120s refreshInterval documented in-file as a backstop slated for deletion. A component-level or e2e test closing that seam is tracked as the gap `sidebar-renders-server-created-conversation-end-to-end`."
+    },
+    {
+      "id": "sidebar-renders-server-created-conversation-end-to-end",
+      "guarantee": "The sidebar component itself re-renders with a server-created conversation off the socket event (not merely the cache layer beneath it).",
+      "status": "gap",
+      "gap": "TODO(agent-sessions-epic): no executing evidence. The listener→SWR-key→AgentsSidebar seam is untested; add either an AgentsSidebar test driven by a real socket event or an e2e spec asserting the sidebar row appears with polling disabled. Until then `server-created-conversation-reaches-sidebar` is proven one layer below the user-visible claim."
+    },
+    {
+      "id": "pane-grid-converges-across-devices",
+      "guarantee": "Pane layout survives a reload and converges across two devices, in both directions.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "a split in one window appears in the other LIVE, with no reload",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "convergence is DURABLE: a window opened afterwards sees the same grid",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "converges in BOTH directions: a close in the second window reaches the first",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The durability citation is what separates 'the grid is server-authoritative' from 'both tabs happened to receive one message' — a fresh window reads the rows, not a broadcast. STATUS WARNING: the durability citation passes; the two LIVE citations FAIL as of the PR that introduced this manifest — see the RED-GATE note in the .md."
+    },
+    {
+      "id": "adversarial-delivery-converges-to-db-truth",
+      "guarantee": "An event delivered out of order, duplicated, or dropped converges to DB truth after the watermark check.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-convergence.property.test.ts",
+          "name": "given any adversarial delivery schedule, should equal DB truth after the watermark check",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-convergence.property.test.ts",
+          "name": "given a duplicated delivery of every event, should be indistinguishable from delivering each once",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-apply.test.ts",
+          "name": "drops a stale event (rev below the watermark)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-apply.test.ts",
+          "name": "refetches on a large gap (a reconnect that missed a whole burst)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/stores/conversationMessages/__tests__/outOfOrderReplayConvergence.test.ts",
+          "name": "given update@3 delivered before update@2, with the rev-2 event landing while the gap-heal GET is in flight, should converge on rev 3 with the rev-3 content",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The property test is the load-bearing one — it drives seeded adversarial schedules (drops, reorders, duplicates, truncation, stale snapshots) rather than a handful of chosen cases. The rest pin the individual clauses it depends on."
+    },
+    {
+      "id": "no-wider-audience-than-pre-epic",
+      "guarantee": "No event reaches a wider audience than pre-epic behaviour, except the owner's own devices.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "messageCreated: PRIVATE conversation → rooms ⊆ {conv room, owner sessions room}; never the page room",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "enumerates EVERY method the emitter module exposes (completeness guard)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "no file outside conversation-events.ts emits a conversation:* socket event",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/realtime/src/__tests__/index.test.ts",
+          "name": "given a non-owner on a PRIVATE conversation (predicate denies), does not join and does not disconnect",
+          "suite": "realtime-unit"
+        },
+        {
+          "file": "apps/realtime/src/__tests__/rooms.test.ts",
+          "name": "given two users, user A should NOT be in user B global room",
+          "suite": "realtime-unit"
+        }
+      ],
+      "notes": "Two halves, both required: what the emitter targets (web), and who is allowed into the room it targets (realtime). The completeness guard and the emit-site scan are what stop the audience assertions being true of only the emitters someone remembered to list."
+    },
+    {
+      "id": "no-existence-oracle",
+      "guarantee": "A caller cannot distinguish 'exists but is not yours' from 'does not exist'.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-contract.test.ts",
+          "name": "no-row and foreign-owner refusals are byte-identical — anti-enumeration preserved",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/agent-sessions/[sessionId]/__tests__/route.test.ts",
+          "name": "given a denial, should answer { session: null } — SAME as not-found, but still audit it (review #2261/5)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/agent-sessions/[sessionId]/shells/[shellId]/__tests__/route.test.ts",
+          "name": "given a shell under a DIFFERENT session than the URL claims, should 404 without leaking the pairing",
+          "suite": "web-unit"
+        },
+        {
+          "file": "packages/lib/src/agent-sessions/__tests__/decide-session-access.test.ts",
+          "name": "denies an UNRESOLVED membership — unknown is never a grant",
+          "suite": "lib-unit"
+        }
+      ],
+      "notes": "The tool-contract citation is the strongest form of the claim: the two refusal strings are asserted byte-identical, so the model-facing surface carries no oracle either. Route-level citations are a representative sample — every agent-session route has a paired denial-answers-like-not-found test."
+    },
+    {
+      "id": "gdpr-export-agent-authored-messages",
+      "guarantee": "GDPR export is complete for agent-authored message rows, and exports no one else's.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "is COMPLETE for the subject: their own page question, the AGENT reply in their thread, and both global rows",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "does NOT export another human's message from the subject's shared conversation (Art 15(4) — the subject's access must not affect others' rights)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "exports every message EXACTLY ONCE — reading both legs would duplicate each page-chat row under its shared primary key",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "CAVEAT the checker cannot see: this file gates every test body on a `dbAvailable` probe set in beforeAll, so without a reachable Postgres it passes green with zero assertions rather than reporting a skip. CI does supply DATABASE_URL, but nothing asserts the suite actually ran. That silent-green shape is the same class of failure that once hid a real CI break; see the .md."
+    },
+    {
+      "id": "gdpr-export-covers-agent-session-tables",
+      "guarantee": "GDPR export includes the agent-session tables a user's work now lives in (agent_sessions, agent_session_shells, ai_stream_sessions).",
+      "status": "gap",
+      "gap": "TODO(agent-sessions-epic): NOT IMPLEMENTED, therefore no evidence. packages/lib/src/compliance/export/gdpr-export.ts has no collector for agent_sessions, agent_session_shells or ai_stream_sessions, so GET /api/account/export cannot return them; the epic moved user-visible work into tables the subject access request does not read. The existing route test ('appends all data categories to archive') asserts the current category list and therefore locks the omission in rather than catching it. There is also no 'every table is accounted for' drift guard for the GDPR export — the only such guard in the repo covers the separate tenant export.",
+      "notes": "Related and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_sessions but not agent_session_shells or ai_stream_sessions, so the tenant export has an adjacent (different) hole."
+    },
+    {
+      "id": "erasure-reaches-stream-session-content",
+      "guarantee": "Erasure reaches ai_stream_sessions content, including rows inside conversations the subject does not own.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "packages/lib/src/compliance/erasure/__tests__/erasure-plan.test.ts",
+          "name": "is FATAL — it is the ONLY eraser ai_stream_sessions has (no TTL, no retention sweep, and no cascade for a shared conversation the subject does not own), so a swallowed failure would complete an erasure with the subject's checkpointed message content still on disk",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/erasure/__tests__/erasure-plan.test.ts",
+          "name": "runs BEFORE delete-user, so the evidence lands on the DSR row while the subject still exists",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "purge-stream-state removes the subject's stream rows inside SOMEONE ELSE'S conversation — no cascade reaches those, and nothing else in the codebase ever deletes them",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "deleting the user takes the stream checkpoints in their own conversation with it (0249 cascade)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The plan-level citations are pure and always execute; the behavioural ones share the dbAvailable silent-green caveat noted on gdpr-export-agent-authored-messages."
+    },
+    {
+      "id": "tool-contract-byte-identical",
+      "guarantee": "The model-facing tool contract (names, descriptions, JSON input schemas) is byte-identical to the pinned contract.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
+          "name": "every tool description and JSON input schema is byte-identical to the pinned contract",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
+          "name": "exposes exactly the thirteen tool names",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "Pinned as explicit inline literals rather than a vitest .snap file, on purpose: a stray `--update` cannot silently re-pin a wire contract. The repo has no `toMatchSnapshot` calls and no `__snapshots__` directories at all, so 'schema snapshot' means literal pinning here."
+    },
+    {
+      "id": "tenant-export-column-drift-guarded",
+      "guarantee": "The tenant export carries every schema column or explicitly excuses it, so a new column cannot silently stop being exported.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "covers exactly the tables in TABLE_IMPORT_ORDER",
+          "suite": "scripts-hand-listed"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "states a reason for every deliberately excluded column",
+          "suite": "scripts-hand-listed"
+        }
+      ],
+      "notes": "Found by writing this manifest: these 64 tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI. Adding the citation forced the file into the list — which is exactly the UNRUN_SUITE check doing its job."
+    }
+  ]
+}
