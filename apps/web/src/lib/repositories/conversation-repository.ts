@@ -628,7 +628,28 @@ export const conversationRepository = {
       .where(eq(conversations.id, conversationId))
       .returning();
     if (!updated) return;
-    emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, triggeredBy, { isShared });
+    // AUDIENCE IS THE UNION OF BEFORE AND AFTER — which, for a share toggle,
+    // is always "shared".
+    //
+    // `directoryRoomsFor` adds the page room only when the context says the
+    // conversation IS shared, and `updated` is the POST-update row. On an
+    // UN-share that reads `false`, so the event would reach the owner's own
+    // directory room and nobody else — and the people who need to hear "this
+    // is no longer shared" are exactly the collaborators in the page room the
+    // post-update flag just excluded. Sharing needs the page room too, so both
+    // directions want the same audience and the value is simply `true`.
+    //
+    // Safe because `isShared` is audience-only: `baseFromContext` never copies
+    // it into the payload, and the fact clients act on rides in `changes`
+    // below, which still says what actually happened. On an already-unshared
+    // conversation the wider audience is a no-op — nobody in the page room
+    // lists that row.
+    emitConversationLifecycle(
+      'updated',
+      { ...updated, rev: Number(updated.rev), isShared: true },
+      triggeredBy,
+      { isShared },
+    );
     if (!isShared) {
       // Evict everyone but the owner from the content room. Best-effort by
       // design (kick-client never throws); join-time authz remains the gate.

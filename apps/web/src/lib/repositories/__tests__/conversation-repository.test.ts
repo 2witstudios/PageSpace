@@ -89,6 +89,7 @@ vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
 
 import { conversationRepository } from '../conversation-repository';
 import { db } from '@pagespace/db/db';
+import { pageRoom, userSessionsRoom } from '@pagespace/lib/realtime/rooms';
 
 const mockDb = vi.mocked(db);
 
@@ -431,6 +432,82 @@ describe('conversationRepository.setConversationShared', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ isShared: false })
     );
+  });
+
+  /**
+   * UN-SHARE MUST REACH THE PAGE ROOM (review finding MINOR 4).
+   *
+   * `directoryRoomsFor` adds the page room only when the emit context says the
+   * conversation is shared, and the row this method emits from is the
+   * POST-update one — so an un-share advertised `isShared: false`, the page
+   * room was dropped from the audience, and the only people told were the
+   * owner's own tabs. The collaborators who needed to drop the row from their
+   * sidebar were precisely the ones excluded; their list stayed stale until the
+   * 120s backstop poll or a reconnect.
+   *
+   * The two tests above assert only the SQL, which is why they never saw it.
+   * This one stubs nothing above the transport: the shipped
+   * `emitConversationLifecycle` → `conversationEvents.updated` →
+   * `directoryRoomsFor` → `postBroadcast` path runs for real and the outbound
+   * broadcast is captured, so the assertion is about the room that actually
+   * goes on the wire.
+   */
+  it('emits the UN-share to the page room, not just the owner — otherwise the collaborators who lose access are the only ones not told', async () => {
+    const OWNER = 'owner-1';
+    const PAGE = 'agent_1';
+    const returningMock = vi.fn().mockResolvedValue([
+      // The post-update row: isShared is already false here, which is exactly
+      // what used to shrink the audience.
+      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: PAGE, title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 7 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    const REALTIME_URL = 'http://realtime.unshare.invalid';
+    process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
+    process.env.REALTIME_BROADCAST_SECRET =
+      process.env.REALTIME_BROADCAST_SECRET ?? 'unshare-audience-test-secret-0123456789';
+
+    const sent: { channelId: string; event: string; payload: { changes?: { isShared?: boolean } } }[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      let isRealtime = false;
+      try {
+        isRealtime = new URL(url).origin === new URL(REALTIME_URL).origin;
+      } catch {
+        isRealtime = false;
+      }
+      if (isRealtime) {
+        sent.push(JSON.parse(typeof init?.body === 'string' ? init.body : '{}'));
+        return { ok: true, status: 200 } as unknown as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+
+    try {
+      await conversationRepository.setConversationShared('conv_abc', false, {
+        userId: OWNER,
+        browserSessionId: 'tab-1',
+      });
+
+      // Emission is fire-and-forget, so poll rather than assume it has landed.
+      const deadline = Date.now() + 5000;
+      while (sent.filter((b) => b.event === 'conversation:updated').length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const rooms = sent.filter((b) => b.event === 'conversation:updated').map((b) => b.channelId).sort();
+      expect(rooms).toEqual([pageRoom(PAGE), userSessionsRoom(OWNER)].sort());
+
+      // The audience widened; the FACT on the wire must still be the un-share.
+      for (const b of sent.filter((x) => x.event === 'conversation:updated')) {
+        expect(b.payload.changes?.isShared).toBe(false);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

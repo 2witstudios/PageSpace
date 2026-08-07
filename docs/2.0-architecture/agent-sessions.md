@@ -453,13 +453,35 @@ so touching either re-derives every live VM's name; the `resourceType: 'agent_se
 security-audit value, which is recorded history; and the web→realtime shell-activity wire
 field, which would need its own accept-both window.
 
-**Compat shims, valid for ONE release** (the contract PR deletes all four): updatable
-Postgres views named `agent_sessions` / `agent_session_shells` exposing the old column
-names; `afterFiles` rewrites aliasing `/api/agent-sessions/**`; `?session=` still parsed
-alongside `?workspace=`; and `sessionId` still emitted next to `workspaceId` in the session
-and shell DTOs. The one pair with NO shim is `conversations.sessionId` /
-`closedInSessionAt` — a table that keeps its own name leaves no name to hang a view on; see
-`infrastructure/UPGRADE.md`.
+**Compat shims, valid for ONE release — the PR 17 checklist.** This list is the
+contract PR's scope, not an illustration of it. Everything here exists only to survive the
+deploy window, and PR 17 is the epic's one remaining open task:
+
+*Vocabulary rename (Phase 5)*
+
+1. Updatable Postgres views `agent_sessions` / `agent_session_shells` exposing the old
+   column names (`0254_agent_workspaces_rename`).
+2. `afterFiles` rewrites aliasing `/api/agent-sessions/**` → `/api/agent-workspaces/**`
+   (`apps/web/next.config.ts`).
+3. `?session=` still parsed alongside `?workspace=`.
+4. `sessionId` still emitted next to `workspaceId` in the session and shell DTOs, and
+   still ACCEPTED as a request-body key
+   (`api/ai/page-agents/[agentId]/conversations/route.ts`).
+
+*Demoted polls and legacy events (Phases 2–3)*
+
+5. The two 120s backstop polls left behind when the rev-carrying feed became
+   authoritative — `AgentsSidebar.tsx` and `AgentPanes.tsx` (`refreshInterval: 120_000`).
+6. The legacy `chat:*` emissions and `usePageSocketRoom`, still carried alongside the
+   per-conversation rooms (`useAgentChannelMultiplayer.ts`).
+
+The authoritative sweep is `grep -rn 'contract PR'`. It over-matches — some markers belong
+to other epics' contract steps — so it is a starting set to triage, not a checklist in
+itself. Anything it finds that belongs to THIS epic and is not listed above is a bug in
+this list.
+
+The one pair with NO shim is `conversations.sessionId` / `closedInSessionAt` — a table that
+keeps its own name leaves no name to hang a view on; see `infrastructure/UPGRADE.md`.
 
 ## 5. Keeping this honest
 
