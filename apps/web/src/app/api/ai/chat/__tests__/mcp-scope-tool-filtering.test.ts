@@ -31,25 +31,32 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    ai: {
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  // Declared INSIDE the factory: `vi.mock` is hoisted above every top-level
+  // binding, so a shared helper declared outside is still uninitialized here.
+  const stub = () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    child: vi.fn(() => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
-      child: vi.fn(() => ({
-        info: vi.fn(),
-        error: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-        trace: vi.fn(),
-      })),
-    },
-  },
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-}));
+    })),
+  });
+  // `api` as well as `ai`: the conversation repository and the lifecycle
+  // emitter log there, and both are now reached — `createConversation` used to
+  // bail before either. A missing channel surfaces as an unhandled rejection
+  // inside a fire-and-forget block, which passes the suite and fails the run.
+  return {
+    loggers: { ai: stub(), api: stub(), db: stub() },
+    logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
@@ -88,6 +95,20 @@ vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       ...dbLike,
+      // `createConversation` reaches this now. It used to short-circuit before
+      // the insert because the owner-conflict probe read THIS page fixture as a
+      // conflicting message row (it selected `userId`, the page row has none,
+      // and `undefined !== null` passed the JS filter). That probe is a scoped
+      // existence check in SQL now, so it correctly finds nothing and the
+      // creation proceeds — which is the path that needs an insert.
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: 'conv_new', rev: 1 }]),
+          })),
+          returning: vi.fn().mockResolvedValue([{ id: 'conv_new', rev: 1 }]),
+        })),
+      })),
       // A transaction runs its callback against the same db-like shape.
       transaction: vi.fn(async (callback: (tx: typeof dbLike) => Promise<unknown>) => callback(dbLike)),
     },
@@ -101,6 +122,14 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   exists: vi.fn(),
   sql: vi.fn(),
+  // The rest of the operator surface the repositories reach for. A partial
+  // mock here does not fail loudly: the missing export is `undefined`, so the
+  // first call throws mid-turn and the assertion below just sees zero calls.
+  ne: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+  isDistinctFrom: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },

@@ -1,6 +1,10 @@
+import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
+
+/** Structured, like the rest of this layer — `console` bypasses log levels and redaction. */
+const log = browserLoggers.realtime.child({ module: 'conversation-rev-sync' });
 
 /**
  * The reconnect half of the delivery protocol (Agent-Session Single Source of
@@ -132,7 +136,7 @@ const doSyncWatchedConversationRevs = async (): Promise<void> => {
       body: JSON.stringify({ ids: entries.map(([id]) => id) }),
     });
     if (!res.ok) {
-      console.warn('[conversation-rev-sync] revs check failed', res.status);
+      log.warn('revs check failed', { status: res.status });
       return;
     }
     const { revs } = (await res.json()) as RevsResponse;
@@ -147,6 +151,6 @@ const doSyncWatchedConversationRevs = async (): Promise<void> => {
       }),
     );
   } catch (error) {
-    console.warn('[conversation-rev-sync] revs check failed', error);
+    log.warn('revs check failed', { error: error instanceof Error ? error.message : 'unknown' });
   }
 };

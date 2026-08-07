@@ -324,10 +324,44 @@ export function __resetWorkspaceQueuesForTests(): void {
   registeredEditing.clear();
   for (const timeout of retryTimers.values()) clearTimeout(timeout);
   retryTimers.clear();
+  for (const timeout of labelRefreshTimers.values()) clearTimeout(timeout);
+  labelRefreshTimers.clear();
   useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
 }
 
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Trailing debounce for the label-resolving refetch.
+ *
+ * A broadcast that introduces a target this client has never labelled is the
+ * one case it cannot dress itself, so it goes and reads the access-checked GET.
+ * Un-debounced, an agent placing three panes meant three broadcasts and three
+ * GETs — and the last one's answer is the only one that could have been
+ * complete anyway.
+ */
+const LABEL_REFRESH_DEBOUNCE_MS = 150;
+const labelRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleLabelRefresh(sessionId: string): void {
+  const existing = labelRefreshTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  labelRefreshTimers.set(
+    sessionId,
+    setTimeout(() => {
+      labelRefreshTimers.delete(sessionId);
+      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+    }, LABEL_REFRESH_DEBOUNCE_MS),
+  );
+}
+
+function cancelLabelRefresh(sessionId: string): void {
+  const timer = labelRefreshTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    labelRefreshTimers.delete(sessionId);
+  }
+}
 
 /**
  * Sessions currently registered with `useEditingStore` — the repo's
@@ -421,6 +455,7 @@ function drop(sessionId: string): void {
     clearTimeout(timer);
     retryTimers.delete(sessionId);
   }
+  cancelLabelRefresh(sessionId);
   syncEditingRegistration(sessionId, false);
   useAgentWorkspaceStore.setState((state) => {
     const { [sessionId]: _grid, ...workspaces } = state.workspaces;
@@ -849,9 +884,16 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         bumpGeneration(sessionId);
         commit(
           sessionId,
-          { base: workspace, rev: previous?.rev ?? 0, pending: [], inFlight: null, attempts: 0 },
-          // The snapshot carries its own focus (the blob still round-trips
-          // it) — honor it, falling back to the first pane if it dangles.
+          // `rev: 0`, NOT the previous rev. This seats an UNVERSIONED listing
+          // snapshot as the base, so carrying the old rev forward would claim
+          // to have read this grid at a rev it was never read at — the method's
+          // own doc says it does not know the rev. Both callers happen to be
+          // safe (one guards on absence, the other restores after a failed
+          // end-session), but `0` closes the class instead of relying on that;
+          // the cost is one extra 409 on the rollback path.
+          { base: workspace, rev: 0, pending: [], inFlight: null, attempts: 0 },
+          // The snapshot carries its own focus — honor it, falling back to the
+          // first pane if it dangles.
           { activePaneId: workspace.activePaneId, pendingPickerPaneId: workspace.pendingPickerPaneId },
         );
       },
@@ -898,7 +940,7 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         // A target we have never labelled is the ONE case a broadcast cannot
         // dress itself: go read it under this viewer's own authority.
         if (adopted !== null && hasUnknownBoundTarget(known, adopted)) {
-          void get().refreshWorkspaceSnapshot(sessionId);
+          scheduleLabelRefresh(sessionId);
         }
       },
 

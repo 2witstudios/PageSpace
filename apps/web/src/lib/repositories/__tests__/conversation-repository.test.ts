@@ -47,6 +47,8 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conds) => ({ kind: 'and', conds })),
   inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
+  isDistinctFrom: vi.fn((field, value) => ({ kind: 'isDistinctFrom', field, value })),
   sql: Object.assign(
     vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
       kind: 'sql',
@@ -72,6 +74,8 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'messages.id',
     conversationId: 'messages.conversationId',
     isActive: 'messages.isActive',
+    // The owner-conflict probe tests this in SQL now, so it has to be nameable.
+    userId: 'messages.userId',
   },
 }));
 
@@ -180,8 +184,14 @@ describe('conversationRepository.createConversation', () => {
     const limitMock = vi.fn().mockResolvedValue(existing);
     return { where: vi.fn().mockReturnValue({ limit: limitMock }) };
   }
-  function mockChatMessagesLookup(rows: Array<{ userId: string | null }>) {
-    return { where: vi.fn().mockResolvedValue(rows) };
+  /**
+   * The owner-conflict probe. It is an existence check now — the predicate
+   * (`userId IS NOT NULL AND userId <> caller`) moved into SQL and the query
+   * takes `LIMIT 1` — so the fixture is "did anything match", not a row set to
+   * filter in JS.
+   */
+  function mockChatMessagesLookup(rows: Array<{ id: string }>) {
+    return { where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(rows) }) };
   }
   // The INSERT chain is values → onConflictDoNothing → returning. `rows` is
   // what RETURNING yields: [{id}] = this call won the insert, [] = a
@@ -266,10 +276,9 @@ describe('conversationRepository.createConversation', () => {
   it("reports 'message_owner_conflict' (no insert) when an existing message belongs to a different user (Codex P2)", async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([
-        { userId: 'victim-user' },
-        { userId: null },
-      ]));
+      // The victim's row matches `userId IS NOT NULL AND userId <> caller`;
+      // the agent-authored null row does not. The query returns the match.
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ id: 'msg-victim' }]));
 
     const outcome = await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'agent-1');
 
@@ -291,7 +300,7 @@ describe('conversationRepository.createConversation', () => {
   // page at all — asserted here on the WHERE clause itself, because mocking the row lookup (as
   // the tests above do) cannot see the scoping bug that let the wrong rows through.
   it('asks who owns the conversation ACROSS ALL PAGES — a page-scoped guard let an attacker squat it from outside', async () => {
-    const messagesWhere = vi.fn().mockResolvedValue([]);
+    const messagesWhere = vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) });
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => ({ where: messagesWhere }));
@@ -307,6 +316,9 @@ describe('conversationRepository.createConversation', () => {
     const fields = predicate.conds.map((c) => c.field);
     expect(fields).toContain('messages.conversationId');
     expect(fields).toContain('messages.isActive');
+    // The owner test itself is in SQL now rather than a JS `.some()`, so it is
+    // part of this predicate and belongs under the same guard.
+    expect(fields).toContain('messages.userId');
     // The page must NOT narrow it — that narrowing IS the vulnerability.
     expect(fields).not.toContain('messages.pageId');
     expect(fields).not.toContain('chatMessages.pageId');
@@ -315,10 +327,9 @@ describe('conversationRepository.createConversation', () => {
   it('creates the row when prior messages exist but all belong to the caller', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([
-        { userId: 'user-1' },
-        { userId: null },
-      ]));
+      // Caller's own rows and agent-authored nulls both fail the predicate,
+      // so the query finds nothing.
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
     const { valuesMock } = mockInsert([{ id: 'conv-mine' }]);
 
     const outcome = await conversationRepository.createConversation('conv-mine', 'user-1', 'agent-1');
@@ -359,7 +370,7 @@ describe('conversationRepository.createConversation', () => {
   it('given { isShared: true }, still refuses a conversationId owned by a different user (squat-guard applies regardless of isShared)', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([{ userId: 'victim-user' }]));
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ id: 'msg-victim' }]));
 
     await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'machine-1', { isShared: true });
 

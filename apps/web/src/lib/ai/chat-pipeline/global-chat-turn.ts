@@ -458,7 +458,6 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
-    let mentionedPageIds: string[] = [];
     // Universal Commands: resolved execution plans for every command token
     // present (zero or more). Each resolves independently and degrades,
     // never fails.
@@ -486,13 +485,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
-        mentionedPageIds = processedMessage.pageIds;
         
         if (processedMessage.mentions.length > 0) {
           mentionSystemPrompt = buildMentionSystemPrompt(processedMessage.mentions);
           loggers.api.info('Global Assistant Chat API: Found @mentions in user message', {
             mentionCount: processedMessage.mentions.length,
-            pageIds: mentionedPageIds
+            pageIds: processedMessage.pageIds
           });
         }
 

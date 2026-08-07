@@ -701,7 +701,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
-    let mentionedPageIds: string[] = [];
     // Universal Commands: resolved execution plans for every command token
     // in the user message (zero or more). Each resolves independently and
     // degrades, never fails — a missing/forbidden command leaves the rest
@@ -817,13 +816,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
-        mentionedPageIds = processedMessage.pageIds;
 
         if (processedMessage.mentions.length > 0) {
           mentionSystemPrompt = buildMentionSystemPrompt(processedMessage.mentions);
           loggers.ai.info('AI Chat API: Found @mentions in user message', {
             mentionCount: processedMessage.mentions.length,
-            pageIds: mentionedPageIds
+            pageIds: processedMessage.pageIds
           });
         }
 

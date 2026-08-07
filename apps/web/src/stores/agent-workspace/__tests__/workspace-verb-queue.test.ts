@@ -630,3 +630,40 @@ describe('verb response shapes', () => {
     expect(sync().pending).toHaveLength(0);
   });
 });
+
+/**
+ * A broadcast that introduces a target this client cannot name triggers the
+ * access-checked GET — the one case the label-free broadcast cannot dress
+ * itself. Un-debounced, an agent placing several panes meant one GET per
+ * broadcast, and only the last answer could have been complete anyway.
+ */
+describe('the label refetch is coalesced', () => {
+  it('collapses a burst of broadcasts into one GET', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetchWithAuth.mockResolvedValue(
+        reply(200, { rev: 30, grid: wireGrid('pane-x', scope('Named', 'conv-x')) }),
+      );
+      store().hydrateFromServer('ses-1', { rev: 1, grid: wireGrid('pane-a', scope()) });
+      mockFetchWithAuth.mockClear();
+
+      // Three broadcasts, each naming a target this client has never labelled.
+      for (const [i, rev] of [2, 3, 4].entries()) {
+        store().applyRemoteUpdate({
+          workspaceId: 'ses-1',
+          rev,
+          grid: wireGrid(`pane-new-${i}`, { ...scope(), name: '', targetId: `conv-unknown-${i}` }),
+        });
+      }
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      const gets = mockFetchWithAuth.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method !== 'POST',
+      );
+      expect(gets).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

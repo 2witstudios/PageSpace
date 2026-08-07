@@ -18,6 +18,23 @@ import { type ConversationEventTriggeredBy } from '@/lib/websocket/conversation-
 import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 import { deactivateUnifiedMessagesForConversation } from '@/lib/repositories/unified-message-leg';
 import { unifiedPageScope, unifiedPageScopeSql } from '@/lib/repositories/unified-message-scope';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+
+/**
+ * The rev bump, as a statement fragment — for the LIFECYCLE writes here that
+ * cannot use `bumpConversationRev`.
+ *
+ * Those writes carry guarded WHEREs (`isDistinctFrom`, `isNull(title)`,
+ * `isNull(closedInWorkspaceAt)`) and `.returning()` the full row, where
+ * `bumpConversationRev` matches on id alone; one of them is an upsert. So they
+ * stay hand-written, and this at least makes the bump ONE spelling rather than
+ * nine copies of `sql`...``.
+ *
+ * A FUNCTION, not a module constant: building the `sql` template eagerly at
+ * import time breaks the ~20 unit suites that mock `@pagespace/db/operators`,
+ * for the same reason `unified-message-scope.ts` gives.
+ */
+const revBump = () => sql`${conversations.rev} + 1`;
 
 // Types for repository operations
 export interface AiAgent {
@@ -136,14 +153,27 @@ async function hasConflictingMessageOwner(
   // Unified `messages` (Phase 4 / D6). Scoped by conversationId alone, exactly
   // as before — the point of the check is "does this id already hold someone
   // else's messages", which is a question about the id, not about a page.
-  const priorMessages = await db
-    .select({ userId: messages.userId })
+  //
+  // Asked as an existence check rather than by fetching every row and calling
+  // `.some()` in JS: the answer is one bit, and a long-lived conversation can
+  // hold thousands of rows.
+  //
+  // `userId IS NOT NULL` is stated EXPLICITLY rather than relied on. Agent-
+  // authored rows carry a null `userId`, and SQL's `<>` against NULL yields
+  // NULL (not true), so they are excluded either way — but the exclusion is
+  // deliberate, and a reader should not have to reconstruct it from three-
+  // valued logic.
+  const [conflicting] = await db
+    .select({ id: messages.id })
     .from(messages)
     .where(and(
       eq(messages.conversationId, conversationId),
       eq(messages.isActive, true),
-    ));
-  return priorMessages.some((m) => m.userId !== null && m.userId !== userId);
+      isNotNull(messages.userId),
+      ne(messages.userId, userId),
+    ))
+    .limit(1);
+  return conflicting !== undefined;
 }
 
 export const conversationRepository = {
@@ -328,7 +358,7 @@ export const conversationRepository = {
         planPageId,
         updatedAt: new Date(),
         // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
-        rev: sql`${conversations.rev} + 1`,
+        rev: revBump(),
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -371,7 +401,7 @@ export const conversationRepository = {
         closedInWorkspaceAt: null,
         updatedAt: new Date(),
         // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
-        rev: sql`${conversations.rev} + 1`,
+        rev: revBump(),
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -606,7 +636,7 @@ export const conversationRepository = {
     const deletedRow = await db.transaction(async (tx) => {
       const [row] = await tx
         .update(conversations)
-        .set({ isActive: false, rev: sql`${conversations.rev} + 1` })
+        .set({ isActive: false, rev: revBump() })
         .where(eq(conversations.id, conversationId))
         .returning();
       // Mirrors `globalConversationRepository.softDeleteConversation`'s
@@ -630,7 +660,20 @@ export const conversationRepository = {
     }
     // Whole conversation cleared — any summary is stale; the tombstone also
     // guards against a first compaction that may still be in flight.
-    await invalidateCompaction(conversationId, { source: 'page', pageId: agentId });
+    //
+    // Guarded, and deliberately NOT allowed to fail the call: the delete has
+    // already COMMITTED by this point, so an exception here would surface as a
+    // 500 for an operation that succeeded — the caller would retry a deletion
+    // that already happened. A stale summary is a far smaller problem, and it
+    // is self-correcting on the next compaction.
+    try {
+      await invalidateCompaction(conversationId, { source: 'page', pageId: agentId });
+    } catch (error) {
+      loggers.api.warn('conversationRepository: compaction invalidation failed after delete', {
+        conversationId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
   },
 
   /**
@@ -644,7 +687,7 @@ export const conversationRepository = {
     const deletedRow = await db.transaction(async (tx) => {
       const [row] = await tx
         .update(conversations)
-        .set({ isActive: false, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+        .set({ isActive: false, updatedAt: new Date(), rev: revBump() })
         .where(eq(conversations.id, conversationId))
         .returning();
       // Still gated on `type='page'`, and deliberately so even now that the
@@ -673,7 +716,7 @@ export const conversationRepository = {
   async closeConversationListing(conversationId: string): Promise<'closed' | 'noop'> {
     const [updated] = await db
       .update(conversations)
-      .set({ closedInWorkspaceAt: new Date(), updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .set({ closedInWorkspaceAt: new Date(), updatedAt: new Date(), rev: revBump() })
       .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInWorkspaceAt)))
       .returning();
     if (!updated) return 'noop';
@@ -685,7 +728,7 @@ export const conversationRepository = {
   async reopenConversationListing(conversationId: string): Promise<'reopened' | 'noop'> {
     const [updated] = await db
       .update(conversations)
-      .set({ closedInWorkspaceAt: null, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .set({ closedInWorkspaceAt: null, updatedAt: new Date(), rev: revBump() })
       .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInWorkspaceAt)))
       .returning();
     if (!updated) return 'noop';
@@ -727,7 +770,7 @@ export const conversationRepository = {
     // for the staleness bug.
     const [updated] = await db
       .update(conversations)
-      .set({ isShared, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .set({ isShared, updatedAt: new Date(), rev: revBump() })
       .where(and(eq(conversations.id, conversationId), ne(conversations.isShared, isShared)))
       .returning();
     // Already in the requested state (or no such row): nothing changed, so no
@@ -796,7 +839,7 @@ export const conversationRepository = {
           updatedAt: new Date(),
           // Rename is a lifecycle mutation → rev bump (fresh inserts start at
           // the column default 0; only the conflict/update leg bumps).
-          rev: sql`${conversations.rev} + 1`,
+          rev: revBump(),
         },
       })
       .returning();
@@ -819,7 +862,7 @@ export const conversationRepository = {
   async autoTitleConversation(conversationId: string, title: string): Promise<void> {
     const [updated] = await db
       .update(conversations)
-      .set({ title, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .set({ title, updatedAt: new Date(), rev: revBump() })
       .where(and(eq(conversations.id, conversationId), isNull(conversations.title)))
       .returning();
     if (updated) {

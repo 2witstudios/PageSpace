@@ -49,7 +49,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, ne, lt, gte, asc, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
@@ -1219,10 +1219,14 @@ export const messageRepository = {
       ))
       .orderBy(asc(messages.createdAt), asc(messages.id));
 
-    // Decrypt PII at the edge (GDPR #965) so the message author name is plaintext.
-    return Promise.all(
-      rows.map(async (m) => ({ ...m, userName: await decryptField(m.userName) })),
-    ) as Promise<UnifiedPageMessageWithAuthor[]>;
+    // Decrypt PII at the edge (GDPR #965) so the message author name is
+    // plaintext. Batched: a page chat is mostly two or three authors repeating
+    // across every row, so decrypting per row did N decryptions for a handful
+    // of distinct ciphertexts. `decryptFieldValuesOnce` does each once and
+    // returns a lookup — fail-closed to null for anything it was not given,
+    // matching `decryptField(null)`'s own answer.
+    const authorName = await decryptFieldValuesOnce(rows.map((m) => m.userName));
+    return rows.map((m) => ({ ...m, userName: authorName(m.userName) })) as UnifiedPageMessageWithAuthor[];
   },
 
   /**
