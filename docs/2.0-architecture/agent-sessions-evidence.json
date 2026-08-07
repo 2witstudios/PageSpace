@@ -247,9 +247,45 @@
     {
       "id": "gdpr-export-covers-agent-session-tables",
       "guarantee": "GDPR export includes the agent-session tables a user's work now lives in (agent_workspaces, agent_workspace_shells, ai_stream_sessions).",
-      "status": "gap",
-      "gap": "TODO(agent-sessions-epic): NOT IMPLEMENTED, therefore no evidence. packages/lib/src/compliance/export/gdpr-export.ts has no collector for agent_workspaces, agent_workspace_shells or ai_stream_sessions, so GET /api/account/export cannot return them; the epic moved user-visible work into tables the subject access request does not read. The existing route test ('appends all data categories to archive') asserts the current category list and therefore locks the omission in rather than catching it. There is also no 'every table is accounted for' drift guard for the GDPR export — the only such guard in the repo covers the separate tenant export.",
-      "notes": "Related and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_workspaces but not agent_workspace_shells or ai_stream_sessions, so the tenant export has an adjacent (different) hole."
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "carries the subject's workspace and their own shell inside it",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "withholds ANOTHER member's shell from the subject's own workspace (Art 15(4))",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "carries the AGENT side of the subject's own thread — the leg that has no human author",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "carries the agent-session tables whose loss motivated this guard",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "has a recorded decision for every table in the schema",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "reaches on Art 15 everything the Art 17 stream-state purge deletes",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/account/export/__tests__/route.test.ts",
+          "name": "carries the agent-session categories the epic left out of the export",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 128 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. Still open and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_workspaces but not agent_workspace_shells or ai_stream_sessions, so the separate TENANT export has an adjacent hole this does not touch."
     },
     {
       "id": "erasure-reaches-stream-session-content",
