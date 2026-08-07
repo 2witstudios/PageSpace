@@ -175,7 +175,26 @@ same trade Agent Memory makes.
 
 `set_plan`/`clear_plan` are deliberately **not** in `WRITE_TOOLS` — they mutate
 conversation metadata, not user content, and binding an existing plan doc is a
-legitimate read-only-mode action.
+legitimate read-only-mode action. Writability follows the chat route's own gate
+(owner **or** `isShared`), so a collaborator the route lets post to a shared
+conversation can bind a plan there.
+
+Known limits, recorded so they aren't rediscovered as bugs:
+
+- **Surface coverage.** The `ACTIVE PLAN:` section renders on the page-chat and
+  Global Assistant routes only. `set_plan` ships in the shared `pageSpaceTools`
+  set, so on `/api/v1/chat/completions`, the page-agents messages route and
+  workflow runs the binding persists (and reaches the UI and later chat turns)
+  but is not echoed into that surface's own prompt — the same
+  callable-but-unadvertised position `load_skill` already occupies.
+- **Actor vs principal.** `set_plan` authorizes with `canActorViewPage`
+  (agent-aware); the render-time re-check uses `canPrincipalViewPage`, which does
+  not consider the acting page-agent. An agent removed from a drive after binding
+  keeps seeing the title. Closing this needs one actor abstraction shared by the
+  prompt and tool layers.
+- **Invalidation budget.** The section changes on `set_plan`/`clear_plan`, on a
+  rename of the bound page, and on a visibility change — never on navigation,
+  which is the property the cache-stable placement actually rests on.
 
 ## Surfaces
 
