@@ -69,6 +69,12 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     { name: 'sessions.json', description: 'Authentication sessions', recordCount: data.sessions.length, data: data.sessions },
     { name: 'notifications.json', description: 'Notifications', recordCount: data.notifications.length, data: data.notifications },
     { name: 'display-preferences.json', description: 'Display preferences', recordCount: data.displayPreferences.length, data: data.displayPreferences },
+    // The epic "Agent-Session Single Source of Truth" moved a large amount of
+    // the subject's work into these two tables. They are first-class
+    // categories, not an appendix: the shells' scrollback and the streams'
+    // checkpointed `parts` are content nothing else in this bundle carries.
+    { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
+    { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -104,7 +110,7 @@ function toIso(value: Date | null | undefined): string | null {
  * `CreativeWork`, messages as `Message`, and files as `MediaObject`. The
  * remaining operational categories (activity, system logs, API metrics, error
  * logs, AI usage, tasks, sessions, notifications, display preferences,
- * personalization) are carried verbatim as
+ * personalization, agent workspaces, stream state) are carried verbatim as
  * `PropertyValue` entries so the portable bundle is **complete** — no data
  * category is dropped (GDPR Art 20). Dates are ISO-8601 strings (mapped fields
  * explicitly; values inside `additionalProperty` serialize to ISO-8601 via
@@ -177,6 +183,8 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'notifications', value: data.notifications },
       { '@type': 'PropertyValue', name: 'displayPreferences', value: data.displayPreferences },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
+      { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
+      { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
     ],
   };
 }
