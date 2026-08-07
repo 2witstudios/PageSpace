@@ -150,8 +150,26 @@ run_db_test_suite() {
 run_full_package_suite() {
     local name="$1"
     local pkg_dir="$2"
+    shift 2
+    local dep_pkg
 
     TOTAL=$((TOTAL + 1))
+
+    # Workspace deps whose *emitted types* this package compiles against. bun
+    # install does not build them, so on a clean checkout `packages/cli`'s tsc
+    # died with 40 errors — "Cannot find module '@pagespace/sdk'" and the
+    # implicit-any cascade behind it — purely because the SDK suite (whose
+    # pretest builds the SDK) happened to be listed AFTER the CLI's. This
+    # script was invoked by no workflow, so nobody ever saw it. Building the
+    # named deps here makes the result independent of suite order.
+    for dep_pkg in "$@"; do
+        if ! bun run --filter "$dep_pkg" build >/dev/null 2>&1; then
+            echo -e "${RED}✗ ${name} failed (could not build workspace dependency ${dep_pkg})${NC}"
+            echo ""
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    done
     echo -e "${YELLOW}▶ Running: ${name}${NC}"
 
     if (cd "$pkg_dir" && bun run build && bunx vitest run src --reporter=dot) 2>&1; then
@@ -328,7 +346,7 @@ run_test_suite "OAuth Scope Enforcement (mcp-scope-enforcement, drive-scope 403 
 echo "🔑 pagespace CLI (packages/cli — login/device-login, credential store, auth precedence, tokens, mcp adapter)"
 echo "----------------------------------------------------------------------------------------------------------"
 
-run_full_package_suite "pagespace CLI (full package — every command authenticates through the same precedence resolver)" "packages/cli"
+run_full_package_suite "pagespace CLI (full package — every command authenticates through the same precedence resolver)" "packages/cli" "@pagespace/sdk"
 
 echo "🔑 pagespace SDK (packages/sdk — auth providers, error classification, operation registry)"
 echo "--------------------------------------------------------------------------------------------"

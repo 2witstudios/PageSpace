@@ -5,7 +5,8 @@ import { sql } from '@pagespace/db/operators';
  * Returns the set of page IDs the given user can view, computed via the
  * canonical `accessible_page_ids_for_user` Postgres function.
  *
- * The function collapses the (owner | drive-admin | explicit-page-permission)
+ * The function collapses the (owner | drive-admin | explicit-page-permission |
+ * accepted drive member on a non-private page — `drizzle/0133_default_member_read.sql`)
  * authorization graph into one DB-side primitive. Trashed pages and pages in
  * trashed drives are excluded; expired explicit grants are excluded.
  */

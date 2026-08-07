@@ -25,8 +25,10 @@
  *     ensure path.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors the other integration tests in this directory.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors the other integration tests in this directory.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -45,6 +47,7 @@ import {
   createConversationInSession,
   ensureGlobalSandboxSession,
 } from '../agent-sessions-runtime';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -53,7 +56,8 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('spawn-worker-global-session.integration.test.ts', error);
       dbAvailable = false;
     }
   });

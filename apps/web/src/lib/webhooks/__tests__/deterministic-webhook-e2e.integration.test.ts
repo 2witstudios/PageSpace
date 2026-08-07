@@ -19,8 +19,10 @@
  * prove. Task creation and channel posting write straight to Postgres.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors reorder-task-list.integration.test.ts.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors reorder-task-list.integration.test.ts.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
@@ -38,6 +40,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 import { firePageWebhookTriggers } from '../fire-page-webhook-triggers';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -61,7 +64,8 @@ describe('Deterministic workflow steps — real pipeline E2E', () => {
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('deterministic-webhook-e2e.integration.test.ts', error);
       dbAvailable = false;
     }
   });

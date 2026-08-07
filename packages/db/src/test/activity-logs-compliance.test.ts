@@ -29,7 +29,14 @@ describe('activity_logs schema compliance', () => {
 
   beforeEach(async () => {
     testUser = await factories.createUser({
-      email: 'john@example.com',
+      // Unique per test. `users.email` is UNIQUE, so a fixed address makes this
+      // suite collide with ITSELF the moment one cleanup does not land — the
+      // other half of the CI failure described in afterEach below. Once the
+      // TRUNCATE lost the lock race and left its row behind, the next beforeEach
+      // died on 23505 `users_email_unique` (Key (email)=(john@example.com)
+      // already exists), turning one lock error into four red tests. A unique
+      // address also cannot collide with another suite on the shared database.
+      email: `activity-logs-compliance-${createId()}@example.test`,
       name: 'John Doe',
     })
     testDrive = await factories.createDrive(testUser.id)
@@ -86,7 +93,7 @@ describe('activity_logs schema compliance', () => {
       })
 
       expect(log).toBeDefined()
-      expect(log?.actorEmail).toBe('john@example.com')
+      expect(log?.actorEmail).toBe(testUser.email)
     })
 
     it('should have actorDisplayName field for denormalized actor info', async () => {
@@ -198,7 +205,7 @@ describe('activity_logs schema compliance', () => {
       expect(logAfter).toBeDefined()
       expect(logAfter?.userId).toBeNull()
       // Actor info preserved!
-      expect(logAfter?.actorEmail).toBe('john@example.com')
+      expect(logAfter?.actorEmail).toBe(testUser.email)
       expect(logAfter?.actorDisplayName).toBe('John Doe')
       // Audit data preserved!
       expect(logAfter?.operation).toBe('create')
@@ -258,13 +265,13 @@ describe('activity_logs schema compliance', () => {
 
       // All logs should be preserved
       const logs = await db.query.activityLogs.findMany({
-        where: eq(activityLogs.actorEmail, 'john@example.com'),
+        where: eq(activityLogs.actorEmail, testUser.email),
       })
 
       expect(logs).toHaveLength(3)
       logs.forEach((log) => {
         expect(log.userId).toBeNull()
-        expect(log.actorEmail).toBe('john@example.com')
+        expect(log.actorEmail).toBe(testUser.email)
         expect(log.actorDisplayName).toBe('John Doe')
       })
     })
@@ -301,7 +308,7 @@ describe('activity_logs schema compliance', () => {
 
       // All compliance-critical fields preserved
       expect(log?.timestamp).toBeDefined()
-      expect(log?.actorEmail).toBe('john@example.com')
+      expect(log?.actorEmail).toBe(testUser.email)
       expect(log?.operation).toBe('update')
       expect(log?.resourceType).toBe('page')
       expect(log?.resourceId).toBe(resourceId)

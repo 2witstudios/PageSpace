@@ -2,6 +2,8 @@
   "name": "@pagespace/e2e",
   "private": true,
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run",
     "test:e2e": "playwright test",
@@ -15,7 +17,9 @@
     "@playwright/test": "^1.52.0",
     "@types/node": "^24.0.0",
     "dotenv": "^16.0.0",
+    "eslint": "^9.36.0",
     "typescript": "^5.0.0",
+    "typescript-eslint": "^8.59.0",
     "vitest": "^2.1.9"
   }
 }

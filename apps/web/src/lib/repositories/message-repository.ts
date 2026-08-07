@@ -46,7 +46,7 @@
 
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
-import { eq, and, ne, lt, desc } from '@pagespace/db/operators';
+import { eq, and, ne, lt, gte, asc, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { messages } from '@pagespace/db/schema/conversations';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -970,36 +970,88 @@ export const messageRepository = {
   },
 
   /**
-   * Record an executed undo: bump rev, emit the legacy `chat:undo_applied`
-   * (moved in from the undo route) plus the authoritative
-   * `conversation:undo_applied`. The undo's own message deletions happen in
-   * `executeAiUndo` (services layer); this is the one post-commit record +
-   * emission point for them.
+   * UNDO'S MESSAGE WRITE — soft-delete the undone range AND bump the rev, on
+   * the CALLER's transaction, in one statement pair. The choke point for undo,
+   * exactly as `editGlobalMessage` / `softDeleteGlobalMessage` are for theirs.
+   *
+   * Runs on `tx` rather than opening its own, because `executeAiUndo` wraps
+   * the activity rollbacks and this deletion in one all-or-nothing transaction
+   * — the rev must move with THAT transaction, so a failed rollback takes the
+   * bump with it and no event ever describes an uncommitted write.
+   *
+   * This used to be a bare `tx.update(messages)` in the services layer with
+   * the bump arriving later, post-commit, in a separate transaction, from a
+   * fire-and-forget block in the route. Any failure in that block committed
+   * the write with no rev bump — and since `syncWatchedConversationRevs`
+   * compares revs and nothing else, an unbumped rev is indistinguishable from
+   * "nothing changed", so every open pane stayed stale until a manual reload
+   * with no path to heal.
+   *
+   * Excludes `status: 'streaming'` rows, mirroring `previewAiUndo`'s
+   * affected-message query — the mutation and its preview must agree on scope.
+   *
+   * Returns the bumped conversation row (the rev the post-commit emission
+   * carries), or null for a conversation that no longer exists.
    */
-  async recordUndoApplied(args: {
+  async softDeleteUndoRange(
+    tx: DbExecutor,
+    args: { conversationId: string; fromCreatedAt: Date },
+  ): Promise<BumpedConversationRow | null> {
+    await tx
+      .update(messages)
+      .set({ isActive: false })
+      .where(and(
+        eq(messages.conversationId, args.conversationId),
+        gte(messages.createdAt, args.fromCreatedAt),
+        eq(messages.isActive, true),
+        ne(messages.status, 'streaming'),
+      ));
+
+    return bumpConversationRev(tx, args.conversationId);
+  },
+
+  /**
+   * POST-COMMIT emission for an executed undo: the legacy `chat:undo_applied`
+   * (moved in from the undo route) plus the authoritative
+   * `conversation:undo_applied`, both carrying the rev that
+   * `softDeleteUndoRange` already bumped inside the write transaction.
+   *
+   * Takes that bumped row rather than bumping again — the counter is the
+   * write's business, this is only delivery. Fire-and-forget and logged on
+   * failure, like every other emission in this module: a committed write must
+   * not un-succeed because a broadcast failed, and the rev watermark is what
+   * makes a dropped event survivable.
+   */
+  emitUndoApplied(args: {
     conversationId: string;
+    /** The row bumped in the write transaction; null when the conversation is gone. */
+    bumped: BumpedConversationRow | null;
     /** The legacy broadcast channel: the pageId for page chat, `user:<id>:global` otherwise. */
     legacyChannelId: string;
     scope: ConversationEmitContext['scope'];
     mode: 'messages_only' | 'messages_and_changes';
     affectedMessageIds: string[];
     legacyTriggeredBy: TriggeredBy;
-  }): Promise<void> {
-    const row = await bumpConversationRev(db, args.conversationId);
-
-    await broadcastAiUndoApplied({
-      conversationId: args.conversationId,
-      pageId: args.legacyChannelId,
-      mode: args.mode,
-      affectedMessageIds: args.affectedMessageIds,
-      triggeredBy: args.legacyTriggeredBy,
+  }): void {
+    void (async () => {
+      await broadcastAiUndoApplied({
+        conversationId: args.conversationId,
+        pageId: args.legacyChannelId,
+        mode: args.mode,
+        affectedMessageIds: args.affectedMessageIds,
+        triggeredBy: args.legacyTriggeredBy,
+      });
+      const ctx = contextForMutation(args.bumped, args.conversationId, args.scope, args.legacyTriggeredBy);
+      await conversationEvents.undoApplied(
+        ctx,
+        { mode: args.mode, affectedMessageIds: args.affectedMessageIds },
+        { skipDirectory: args.bumped === null },
+      );
+    })().catch((error) => {
+      loggers.api.error('messageRepository: undo-applied broadcast failed', error as Error, {
+        conversationId: args.conversationId,
+      });
     });
-    const ctx = contextForMutation(row, args.conversationId, args.scope, args.legacyTriggeredBy);
-    await conversationEvents.undoApplied(
-      ctx,
-      { mode: args.mode, affectedMessageIds: args.affectedMessageIds },
-      { skipDirectory: row === null },
-    );
   },
 
   /**
@@ -1031,7 +1083,7 @@ export const messageRepository = {
         eq(messages.isActive, true),
         ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
       ))
-      .orderBy(messages.createdAt);
+      .orderBy(asc(messages.createdAt), asc(messages.id));
   },
 
   /**
@@ -1067,7 +1119,7 @@ export const messageRepository = {
         ...(conversationId ? [eq(messages.conversationId, conversationId)] : []),
         ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
       ))
-      .orderBy(messages.createdAt);
+      .orderBy(asc(messages.createdAt), asc(messages.id));
 
     // Decrypt PII at the edge (GDPR #965) so the message author name is plaintext.
     return Promise.all(
@@ -1102,7 +1154,7 @@ export const messageRepository = {
         eq(messages.isActive, true),
         ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
       ))
-      .orderBy(messages.createdAt);
+      .orderBy(asc(messages.createdAt), asc(messages.id));
   },
 
   /**
@@ -1121,7 +1173,7 @@ export const messageRepository = {
         eq(messages.isActive, true),
         ne(messages.status, 'streaming'),
       ))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(limit);
     return rows.reverse();
   },

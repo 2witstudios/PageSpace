@@ -1,7 +1,9 @@
 /**
  * Distributed Rate Limit Integration Tests
  *
- * Tests against a real Postgres database. Skips gracefully when DB is unavailable.
+ * Tests against a real Postgres database. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  * Exercises the Postgres-backed (key, window_start) bucket implementation.
  */
 
@@ -15,6 +17,7 @@ import {
   shutdownRateLimiting,
   type RateLimitConfig,
 } from '../distributed-rate-limit';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 const TEST_KEY_PREFIX = 'itest:rl:';
@@ -23,7 +26,8 @@ beforeAll(async () => {
   try {
     await db.execute(sql`SELECT 1`);
     dbAvailable = true;
-  } catch {
+  } catch (error) {
+    requireDb('distributed-rate-limit.integration.test.ts', error);
     dbAvailable = false;
   }
 });

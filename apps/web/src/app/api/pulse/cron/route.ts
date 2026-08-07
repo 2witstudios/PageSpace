@@ -590,7 +590,7 @@ async function buildAndPersistPulse(
         ne(messages.userId, userId)
       )
     )
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(15) : [];
   // Decrypt PII at the edge so page-chat sender names in the prompt are
   // plaintext — batched once per unique stored value, not once per row.
