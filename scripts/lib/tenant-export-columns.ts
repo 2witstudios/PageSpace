@@ -34,9 +34,14 @@
  * migration must be a decision someone wrote down, never an omission nobody
  * noticed.
  *
- * SCOPE NOTE: this registry guards the columns of the tables the export
- * carries. It says nothing about which TABLES are carried — that set is
- * `TABLE_IMPORT_ORDER`, and widening it is a separate, deliberate act.
+ * SCOPE NOTE: `TENANT_EXPORT_COLUMNS` guards the COLUMNS of the tables the
+ * export carries. Which TABLES are carried is `TABLE_IMPORT_ORDER`, and
+ * widening that is a separate, deliberate act — but "deliberate" used to mean
+ * "nobody wrote anything down", which is how `agent_workspace_shells` came to
+ * be dropped from tenant bundles while the GDPR export carried it. So the
+ * second registry below, `TENANT_EXPORT_EXCLUDED_TABLES`, does for tables what
+ * `excluded` does for columns, over the one region where an omission is a data
+ * loss rather than a non-decision: the agent-session FK closure.
  */
 import type { ExportTableName } from './migration-types';
 
@@ -169,22 +174,45 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   channel_read_status: { columns: ['userId', 'channelId', 'lastReadAt'] },
 
-  // KNOWN GAP (stated, not silent): the pane grid used to ride along in this
-  // table's `workspaceState` jsonb. That column was dropped at the
-  // agent-session SSoT epic's Phase 3 contract step and the grid now lives in
-  // `agent_workspace_pane_columns` / `agent_workspace_panes`, which are NOT
-  // in `TABLE_IMPORT_ORDER` — so a tenant bundle no longer carries pane
-  // LAYOUT. Nothing is orphaned by that: every conversation and shell in the
-  // session is carried and still bound (`conversations.workspaceId`), so the
-  // migrated user gets their threads with a fresh default grid instead of
-  // their arrangement. Closing it means WIDENING the carried table set, which
-  // this registry deliberately does not do on its own (see SCOPE NOTE above).
+  // The pane grid used to ride along in this table's `workspaceState` jsonb.
+  // That column was dropped at the agent-session SSoT epic's Phase 3 contract
+  // step and the grid now lives in `agent_workspace_pane_columns` /
+  // `agent_workspace_panes` — which are deliberately not carried, with the
+  // reasoning recorded in `TENANT_EXPORT_EXCLUDED_TABLES` below rather than
+  // in this comment. Nothing is orphaned by that: every conversation and
+  // every shell in the session is carried and still bound, so the migrated
+  // user gets their threads and their terminals with a fresh default grid
+  // instead of their arrangement.
   agent_workspaces: {
     columns: [
       'id', 'driveId', 'ownerId', 'name',
       'lastActiveAt', 'endedAt', 'createdAt', 'updatedAt',
     ],
     excluded: AGENT_WORKSPACE_SPRITE_EXCLUSIONS,
+  },
+
+  /**
+   * A session's TERMINALS. Everything here is either the user's own naming of
+   * their workspace (`name`, `command`, `agentType`) or their own output:
+   * `coldTail` is the scrollback tail of the shell's last dead incarnation,
+   * with `coldTailHasOutput` carried alongside it because an empty tail is
+   * ambiguous on its own (a burst larger than the ring buffer also leaves it
+   * empty, and "the shell was screaming" must not migrate as "the shell was
+   * silent").
+   *
+   * No Sprite/storage accounting lives on this table — unlike its parent it
+   * has exactly one source-fleet reference, `spriteExecId`, excluded below on
+   * the same grounds as `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`.
+   */
+  agent_workspace_shells: {
+    columns: [
+      'id', 'workspaceId', 'ownerId', 'name', 'agentType', 'command',
+      'coldTail', 'coldTailAt', 'coldTailHasOutput', 'createdAt', 'updatedAt',
+    ],
+    excluded: {
+      spriteExecId:
+        'Names an exec session on a SOURCE-fleet Sprite. The parent session migrates with `sandboxId` NULL (never provisioned), so a carried exec id would address a PTY inside a VM the tenant does not own; NULL correctly means "not attached", which is what the reattach path already expects of a cold shell.',
+    },
   },
 
   conversations: {
@@ -233,6 +261,49 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   favorites: {
     columns: ['id', 'userId', 'itemType', 'pageId', 'driveId', 'position', 'createdAt'],
   },
+};
+
+/**
+ * TABLES in the agent-session FK closure that the bundle deliberately does NOT
+ * carry — the table-level twin of a column `excluded` entry.
+ *
+ * The paired guard (`scripts/__tests__/tenant-export-columns.test.ts`) derives
+ * the closure from the Drizzle schema at runtime: every table reachable by
+ * foreign key from `agent_workspaces` or `conversations` must be either in
+ * `TABLE_IMPORT_ORDER` or keyed here with a reason. A new child table of a
+ * session or a thread therefore cannot reach `master` without someone deciding
+ * whether a migrating user takes it with them.
+ *
+ * WHY THIS CLOSURE AND NOT THE WHOLE SCHEMA. A table-level decision is only
+ * meaningful where the bundle already carries the parent: those are the rows
+ * whose absence is silent DATA LOSS for a user who did migrate, rather than a
+ * feature the bundle was never scoped to. That is exactly the region this
+ * epic's own tables live in, and it is the region where the loss had already
+ * happened — `agent_workspace_shells` was carried by the GDPR export and
+ * dropped by the tenant one. (`packages/lib/src/compliance/export/gdpr-export-coverage.ts`
+ * is the whole-schema analogue for Art 15; the two answer different questions
+ * and are allowed to differ — see `ai_stream_sessions` below.)
+ */
+export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
+  /**
+   * The Art 15 export DOES carry this table (`stream-state.json`), and that is
+   * not an inconsistency: "every byte about you that exists" and "the state a
+   * working instance should be reconstituted from" are different questions.
+   */
+  ai_stream_sessions:
+    'A per-instance STREAMING CHECKPOINT, not a durable record: `parts` is the debounced replay buffer a reconnecting client resumes from, and a completed turn is committed to `messages`, which the bundle carries. Every other column names SOURCE-instance runtime — `stream_id` (the in-process abort-registry key, UNIQUE-indexed, so a carried duplicate also collides), `browser_session_id`, `last_heartbeat_at`, `abort_requested_at`, `raw_parts_count` (a replay cursor with no live multicast to count against). Carrying a `status = streaming` row would manufacture a phantom live stream in the tenant that no worker will ever finish and no abort can reach.',
+
+  agent_workspace_pane_columns:
+    'Pane LAYOUT — which columns the grid has and how wide. Deliberately not carried: the arrangement is per-device ergonomics, not content, and every artefact it arranges (conversations, shells) travels on its own and stays bound to the session. The migrated user opens their session on a fresh default grid holding all of their work rather than none of it.',
+
+  agent_workspace_panes:
+    'The other half of the pane layout, and the reason carrying half would be worse than carrying neither: `targetId` is polymorphic with NO foreign key (conversationId | shellId | pageId by `kind`), so a pane naming a page or conversation outside the bundle would import cleanly and then render an unresolvable pane. See `agent_workspace_pane_columns`.',
+
+  agent_workspace_layout_revs:
+    'The per-workspace monotonic rev counter for the pane grid. With no grid carried there is nothing for a rev to describe, and a carried non-zero rev would make the tenant reject its own first layout verb as stale until the client rebased through a 409.',
+
+  agent_workspace_layout_ops:
+    'The layout verb route\'s idempotency memory — one row per recently-processed (workspaceId, opId), pruned on a 24h window. It exists to short-circuit a retry that is seconds old; a migrated copy could only ever suppress a genuinely new op in the tenant that happened to reuse a client-minted id.',
 };
 
 /** The columns emitted inline in `table`'s INSERT. */

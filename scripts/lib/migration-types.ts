@@ -15,6 +15,7 @@ export interface ManifestTableCounts {
   channelMessageReactions: number;
   channelReadStatus: number;
   agentWorkspaces: number;
+  agentWorkspaceShells: number;
   conversations: number;
   messages: number;
   files: number;
@@ -113,6 +114,12 @@ export const TABLE_IMPORT_ORDER = [
   // Before `conversations`: `conversations.workspaceId` FKs here, so the
   // session rows have to exist before a bound thread can be inserted.
   'agent_workspaces',
+  // Immediately after its parent: `agent_workspace_shells.workspaceId` FKs
+  // `agent_workspaces` and `ownerId` FKs `users`, both already inserted. The
+  // shells carry a session's TERMINAL work — the tab names, the per-shell
+  // command, and `coldTail`, the scrollback of the last dead incarnation —
+  // which is user content with no other home in the bundle.
+  'agent_workspace_shells',
   'conversations',
   'messages',
   'files',

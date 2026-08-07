@@ -912,7 +912,11 @@ function SessionRow({
   );
 
   return (
-    <div>
+    // Per-session test handle, wrapping BOTH the session's own row and its
+    // expanded children — so an end-to-end spec can scope "this session's
+    // conversation rows" without depending on which other sessions happen to
+    // be expanded. Used by `18-sidebar-directory-live.spec.ts`.
+    <div data-testid={`sidebar-session-${session.sessionId}`}>
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
@@ -983,6 +987,7 @@ function SessionRow({
                     },
                   ]}
                   menuLabel="Conversation actions"
+                  testId="sidebar-conversation-row"
                   className={cn(
                     'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
                     selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',

@@ -49,6 +49,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       files,
       messages,
       conversations,
+      agent_workspace_shells,
       agent_workspaces,
       channel_read_status,
       channel_message_reactions,
@@ -170,6 +171,25 @@ export const FIXTURES = {
       spriteInstanceId: 'sprite-instance-source-001',
     },
   },
+  /**
+   * A terminal inside that session. `coldTail` is the scrollback of its last
+   * dead incarnation — user output with no other home in the bundle, and the
+   * reason this table is carried at all. `spriteExecId` is seeded non-NULL for
+   * the same reason the workspace's Sprite columns are: so the round-trip can
+   * assert it DOES NOT travel.
+   */
+  agentWorkspaceShells: {
+    shell: {
+      id: 'test_agent_shell_001',
+      workspaceId: 'test_agent_session_001',
+      name: 'build',
+      agentType: 'shell',
+      command: 'bun run dev',
+      coldTail: '$ bun run dev\nerror: port 3000 already in use\n',
+      coldTailHasOutput: true,
+      spriteExecId: 'sprite-exec-source-001',
+    },
+  },
   messages: {
     msg1: {
       id: 'test_chatmsg_001',
@@ -215,7 +235,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, conversations, agentWorkspaces, messages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, agentWorkspaces, agentWorkspaceShells, messages, files, pagePermissions, tags } = FIXTURES;
   const now = new Date();
 
   // Users. `emailBidx` is seeded because it is the LOOKUP KEY for an encrypted
@@ -276,6 +296,13 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   await db.execute(sql`
     INSERT INTO agent_workspaces (id, "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "createdAt", "updatedAt")
     VALUES (${agentWorkspaces.workspace.id}, ${drives.shared.id}, ${users.owner.id}, ${agentWorkspaces.workspace.name}, ${agentWorkspaces.workspace.sandboxId}, ${agentWorkspaces.workspace.spriteInstanceId}, ${now}, ${now})
+  `);
+
+  // That session's terminal. `spriteExecId` is deliberately non-NULL: the
+  // export must NOT carry it, exactly as with the workspace's Sprite columns.
+  await db.execute(sql`
+    INSERT INTO agent_workspace_shells (id, "workspaceId", "ownerId", name, "agentType", command, "coldTail", "coldTailAt", "coldTailHasOutput", "spriteExecId", "createdAt", "updatedAt")
+    VALUES (${agentWorkspaceShells.shell.id}, ${agentWorkspaceShells.shell.workspaceId}, ${users.owner.id}, ${agentWorkspaceShells.shell.name}, ${agentWorkspaceShells.shell.agentType}, ${agentWorkspaceShells.shell.command}, ${agentWorkspaceShells.shell.coldTail}, ${now}, ${agentWorkspaceShells.shell.coldTailHasOutput}, ${agentWorkspaceShells.shell.spriteExecId}, ${now}, ${now})
   `);
 
   // The page conversation the chat messages below belong to. Required since

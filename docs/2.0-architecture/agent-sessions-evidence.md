@@ -130,6 +130,35 @@ have quietly dropped these five the moment they broke — the precise failure it
 prevent, and the reason the citations survived the whole red period above to be vindicated by
 run 5 rather than being deleted somewhere around run 2.
 
+### Spec `18`, added after the gate went green
+
+`18-sidebar-directory-live.spec.ts` joined the same job to close the last recorded gap — the
+listener→SWR-key→`AgentsSidebar` seam, which every other test in the epic proved only either
+side of. It runs on the identical topology (production build, realtime same-origin behind the
+proxy, `NEXT_PUBLIC_REALTIME_URL` unset). All three of its assertions were confirmed to fail —
+on the assertion, not on setup — with the listener's key predicates diverged from the sidebar's
+key, which is the drift they exist to catch.
+
+It is also the clearest example so far of the section above this one: **a spec that cannot fail
+is worse than no spec.** The first draft blocked the session-listing GET and asserted the row
+appeared anyway. It passed. It also passed with the `conversation:created` subscription deleted
+— because two separate harness faults meant the "block" blocked nothing (the app registers
+`/sw.js`, and Playwright cannot intercept a fetch that goes through a Service Worker; and a
+`'**/api/agent-workspaces**'` URL glob matched nothing where an exact-pathname predicate
+matches), so the refetch it claimed to have ruled out was quietly delivering the row the whole
+time. Only running it against a deliberately broken build surfaced that. The rule this earns:
+**a spec whose assertion depends on suppressing something must prove the suppression happened,
+and the only reliable proof is a run that fails.**
+
+Fixing the harness then exposed a product fact worth recording rather than working around:
+creation and session-binding are decoupled (`create-conversation-in-session.ts`), so on the
+spawn path `conversation:created` carries `workspaceId: null` and the sidebar is updated by the
+claim's `conversation:updated` — one **event-driven refetch**, not a request-free cache write.
+The guarantee holds (event-driven, not a poll); the stronger "with no request" reading does not,
+and the spec now says so by shape: the spawn test rules the poll out with a quiet-window control
+instead of a network block, and a second test takes the seam to full strength on
+`conversation:closed`, which really is request-free.
+
 ## Adding a guarantee
 
 1. Add an entry to the JSON with an `id`, the user-facing `guarantee` (phrase it as something a
