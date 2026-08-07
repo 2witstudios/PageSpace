@@ -24,7 +24,7 @@ import { useEffect } from 'react';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAgentWorkspaceStore, type WorkspaceUpdatedEvent } from './useAgentWorkspaceStore';
 
-export function useWorkspaceLayoutSync(sessionId: string, options?: { enabled?: boolean }): void {
+export function useWorkspaceLayoutSync(workspaceId: string, options?: { enabled?: boolean }): void {
   const enabled = options?.enabled ?? true;
   // Subscribed, not driven: `useSocket()` also owns connection LIFECYCLE
   // (connect on auth, disconnect on logout), and a passive room listener has
@@ -42,25 +42,25 @@ export function useWorkspaceLayoutSync(sessionId: string, options?: { enabled?: 
   // is re-applied to the server's grid rather than lost to it).
   useEffect(() => {
     if (!enabled) return;
-    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
-  }, [enabled, sessionId]);
+    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
+  }, [enabled, workspaceId]);
 
   useEffect(() => {
     if (!enabled || !socket) return;
 
-    const join = () => socket.emit('join_session', sessionId);
+    const join = () => socket.emit('join_session', workspaceId);
     join();
 
     const handleUpdate = (payload: WorkspaceUpdatedEvent) => {
       // The room is per-workspace, but a socket can hold several; never let
       // one session's event land on another's cache.
-      if (payload?.workspaceId !== sessionId) return;
+      if (payload?.workspaceId !== workspaceId) return;
       useAgentWorkspaceStore.getState().applyRemoteUpdate(payload);
     };
 
     const handleReconnect = () => {
       join();
-      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
     };
 
     socket.on('workspace:updated', handleUpdate);
@@ -69,7 +69,7 @@ export function useWorkspaceLayoutSync(sessionId: string, options?: { enabled?: 
     return () => {
       socket.off('workspace:updated', handleUpdate);
       socket.off('connect', handleReconnect);
-      socket.emit('leave_session', sessionId);
+      socket.emit('leave_session', workspaceId);
     };
-  }, [enabled, socket, sessionId]);
+  }, [enabled, socket, workspaceId]);
 }

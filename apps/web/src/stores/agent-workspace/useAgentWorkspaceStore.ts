@@ -137,17 +137,17 @@ export interface WorkspaceQueueError {
 }
 
 interface AgentWorkspaceState {
-  /** sessionId → what to render. Derived: `replayPending(base, pending)` plus the focus overlay. */
+  /** workspaceId → what to render. Derived: `replayPending(base, pending)` plus the focus overlay. */
   workspaces: Record<string, WorkspaceState>;
-  /** sessionId → the server snapshot + unacked queue behind it. */
+  /** workspaceId → the server snapshot + unacked queue behind it. */
   sync: Record<string, WorkspaceSync>;
-  /** sessionId → client-local focus. The ONLY thing this store persists. */
+  /** workspaceId → client-local focus. The ONLY thing this store persists. */
   focus: Record<string, WorkspaceFocus>;
-  /** sessionId → why its queue was dropped, or null once anything settles cleanly. */
+  /** workspaceId → why its queue was dropped, or null once anything settles cleanly. */
   queueErrors: Record<string, WorkspaceQueueError | null>;
 
   /** Give a session its opening grid, once. Idempotent. */
-  ensureWorkspace(sessionId: string, scope: PaneScope): void;
+  ensureWorkspace(workspaceId: string, scope: PaneScope): void;
   /**
    * Make a conversation VISIBLE in the session's grid — what a sidebar or
    * history selection means. Focus the pane already showing it; otherwise
@@ -167,7 +167,7 @@ interface AgentWorkspaceState {
    * additive.
    */
   openConversation(
-    sessionId: string,
+    workspaceId: string,
     scope: PaneScope,
     options?: { liveConversationIds?: ReadonlySet<string> },
   ): void;
@@ -183,51 +183,51 @@ interface AgentWorkspaceState {
    * and by `useOpenPagePane`'s resolution.
    */
   openPage(
-    sessionId: string,
+    workspaceId: string,
     scope: PaneScope,
     options?: { excludeTargetId?: string; preferSplit?: boolean },
   ): void;
-  splitRight(sessionId: string, fromPaneId: string): void;
-  splitDown(sessionId: string, fromPaneId: string): void;
+  splitRight(workspaceId: string, fromPaneId: string): void;
+  splitDown(workspaceId: string, fromPaneId: string): void;
   /**
    * Close a pane. Closing the LAST pane removes the whole grid and returns
    * `'session-ended'` — the caller owns the IO that ends the session; the
    * store owns only the layout fact.
    */
-  closePane(sessionId: string, paneId: string): 'closed' | 'session-ended' | 'noop';
+  closePane(workspaceId: string, paneId: string): 'closed' | 'session-ended' | 'noop';
   /** Focus a pane. CLIENT-LOCAL — focus is not a row, so no verb crosses the wire. */
-  selectPane(sessionId: string, paneId: string): void;
-  assignPane(sessionId: string, paneId: string, scope: PaneScope): void;
+  selectPane(workspaceId: string, paneId: string): void;
+  assignPane(workspaceId: string, paneId: string, scope: PaneScope): void;
   /** Unbind a pane back to the picker — a failed mint, first-class rather than a sentinel scope. */
-  resetPane(sessionId: string, paneId: string): void;
+  resetPane(workspaceId: string, paneId: string): void;
   /** Retire a pane's picker focus. CLIENT-LOCAL, like `selectPane`. */
-  dismissPicker(sessionId: string, paneId: string): void;
+  dismissPicker(workspaceId: string, paneId: string): void;
   /**
    * Give a column `widthFraction` of the grid's width (issue #2208). Unlike
    * focus, sizing IS a row — it restores cross-device and an agent can set it
    * — so this posts a verb like every other structural mutation, and the
    * shared reducer owns the clamping and the sibling renormalization.
    */
-  resizeColumn(sessionId: string, columnId: string, widthFraction: number): void;
+  resizeColumn(workspaceId: string, columnId: string, widthFraction: number): void;
   /** Give a pane `heightFraction` of ITS COLUMN's height. Column-local; see {@link resizeColumn}. */
-  resizePane(sessionId: string, paneId: string, heightFraction: number): void;
+  resizePane(workspaceId: string, paneId: string, heightFraction: number): void;
   /** Relocate a pane to another column and/or index. `toIndex` omitted = append. */
-  movePane(sessionId: string, paneId: string, toColumnId: string, toIndex?: number): void;
+  movePane(workspaceId: string, paneId: string, toColumnId: string, toIndex?: number): void;
   /** Reorder the grid's columns. The list is read as a PREFIX — see the reducer's `reorderColumns`. */
-  reorderColumns(sessionId: string, columnIds: string[]): void;
+  reorderColumns(workspaceId: string, columnIds: string[]): void;
   /**
    * Point whichever pane is showing `oldConversationId` at its replacement.
    * Used when the current conversation is deleted and re-minted into the
    * SAME session (`AgentPageView`'s delete flow) — a no-op if the deleted
    * conversation was not showing in any pane.
    */
-  replaceConversation(sessionId: string, oldConversationId: string, newScope: PaneScope): void;
+  replaceConversation(workspaceId: string, oldConversationId: string, newScope: PaneScope): void;
   /**
    * Drop a session's grid entirely (the session was ended elsewhere). Also
    * abandons anything still queued for it — the rows are gone server-side, so
    * there is nothing left for those verbs to land on.
    */
-  forgetWorkspace(sessionId: string): void;
+  forgetWorkspace(workspaceId: string): void;
   /**
    * Seat a grid LOCALLY, without claiming to know its rev — the sidebar's
    * server-listing snapshot for a session `AgentPanes` isn't rendering, and
@@ -240,14 +240,14 @@ interface AgentWorkspaceState {
    * precisely the arbitration `adoptServerWorkspaceAsHydrated` used to do by
    * hand.
    */
-  hydrateWorkspace(sessionId: string, workspace: WorkspaceState): void;
+  hydrateWorkspace(workspaceId: string, workspace: WorkspaceState): void;
   /** Adopt a `{rev, grid}` snapshot straight from the server (the mount GET / a resync). */
-  hydrateFromServer(sessionId: string, snapshot: WorkspaceLayoutSnapshot): void;
+  hydrateFromServer(workspaceId: string, snapshot: WorkspaceLayoutSnapshot): void;
   /** Apply a `workspace:updated` broadcast. See the module doc for the three-way rule. */
   applyRemoteUpdate(payload: WorkspaceUpdatedEvent): void;
   /** Re-read the server's snapshot for a session (mount, socket reconnect, or a give-up). */
   /** Re-read the access-checked snapshot. Resolves false when it could not be read. */
-  refreshWorkspaceSnapshot(sessionId: string): Promise<boolean>;
+  refreshWorkspaceSnapshot(workspaceId: string): Promise<boolean>;
 }
 
 /** The `workspace:updated` payload, as it arrives on the `session:<id>` room. */
@@ -304,12 +304,12 @@ function emptySync(): WorkspaceSync {
  */
 const queueGeneration = new Map<string, number>();
 
-function generationOf(sessionId: string): number {
-  return queueGeneration.get(sessionId) ?? 0;
+function generationOf(workspaceId: string): number {
+  return queueGeneration.get(workspaceId) ?? 0;
 }
 
-function bumpGeneration(sessionId: string): void {
-  queueGeneration.set(sessionId, generationOf(sessionId) + 1);
+function bumpGeneration(workspaceId: string): void {
+  queueGeneration.set(workspaceId, generationOf(workspaceId) + 1);
 }
 
 /**
@@ -342,23 +342,23 @@ const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const LABEL_REFRESH_DEBOUNCE_MS = 150;
 const labelRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function scheduleLabelRefresh(sessionId: string): void {
-  const existing = labelRefreshTimers.get(sessionId);
+function scheduleLabelRefresh(workspaceId: string): void {
+  const existing = labelRefreshTimers.get(workspaceId);
   if (existing) clearTimeout(existing);
   labelRefreshTimers.set(
-    sessionId,
+    workspaceId,
     setTimeout(() => {
-      labelRefreshTimers.delete(sessionId);
-      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+      labelRefreshTimers.delete(workspaceId);
+      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
     }, LABEL_REFRESH_DEBOUNCE_MS),
   );
 }
 
-function cancelLabelRefresh(sessionId: string): void {
-  const timer = labelRefreshTimers.get(sessionId);
+function cancelLabelRefresh(workspaceId: string): void {
+  const timer = labelRefreshTimers.get(workspaceId);
   if (timer) {
     clearTimeout(timer);
-    labelRefreshTimers.delete(sessionId);
+    labelRefreshTimers.delete(workspaceId);
   }
 }
 
@@ -373,15 +373,15 @@ function cancelLabelRefresh(sessionId: string): void {
  */
 const registeredEditing = new Set<string>();
 
-function syncEditingRegistration(sessionId: string, queued: boolean): void {
-  const editingId = `workspace-verbs:${sessionId}`;
-  if (queued && !registeredEditing.has(sessionId)) {
-    registeredEditing.add(sessionId);
-    useEditingStore.getState().startEditing(editingId, 'other', { componentName: `workspace-verbs:${sessionId}` });
+function syncEditingRegistration(workspaceId: string, queued: boolean): void {
+  const editingId = `workspace-verbs:${workspaceId}`;
+  if (queued && !registeredEditing.has(workspaceId)) {
+    registeredEditing.add(workspaceId);
+    useEditingStore.getState().startEditing(editingId, 'other', { componentName: `workspace-verbs:${workspaceId}` });
     return;
   }
-  if (!queued && registeredEditing.has(sessionId)) {
-    registeredEditing.delete(sessionId);
+  if (!queued && registeredEditing.has(workspaceId)) {
+    registeredEditing.delete(workspaceId);
     useEditingStore.getState().endEditing(editingId);
   }
 }
@@ -404,23 +404,23 @@ type FocusIntent = 'follow-reducer' | 'preserve' | WorkspaceFocus;
  * per `intent`, stores all three maps, keeps the editing registration honest,
  * and kicks the send pump.
  */
-function commit(sessionId: string, sync: WorkspaceSync, intent: FocusIntent): void {
-  const structural = replayPending(sync.base, sessionId, sync.pending);
+function commit(workspaceId: string, sync: WorkspaceSync, intent: FocusIntent): void {
+  const structural = replayPending(sync.base, workspaceId, sync.pending);
 
   useAgentWorkspaceStore.setState((state) => {
     const workspaces = { ...state.workspaces };
     const focus = { ...state.focus };
 
     if (structural === null) {
-      delete workspaces[sessionId];
-      delete focus[sessionId];
+      delete workspaces[workspaceId];
+      delete focus[workspaceId];
     } else {
       const paneIds = new Set(panesOf(structural).map((pane) => pane.id));
       const desired =
         intent === 'follow-reducer'
           ? { activePaneId: structural.activePaneId, pendingPickerPaneId: structural.pendingPickerPaneId }
           : intent === 'preserve'
-            ? (focus[sessionId] ?? null)
+            ? (focus[workspaceId] ?? null)
             : intent;
       // Neither the wire nor a saved blob cross-validates that `activePaneId`
       // names a pane inside `columns` — normalize HERE, at the one place any
@@ -435,32 +435,32 @@ function commit(sessionId: string, sync: WorkspaceSync, intent: FocusIntent): vo
         desired && desired.pendingPickerPaneId !== null && paneIds.has(desired.pendingPickerPaneId)
           ? desired.pendingPickerPaneId
           : null;
-      workspaces[sessionId] = { ...structural, activePaneId, pendingPickerPaneId };
-      focus[sessionId] = { activePaneId, pendingPickerPaneId };
+      workspaces[workspaceId] = { ...structural, activePaneId, pendingPickerPaneId };
+      focus[workspaceId] = { activePaneId, pendingPickerPaneId };
     }
 
-    return { workspaces, focus, sync: { ...state.sync, [sessionId]: sync } };
+    return { workspaces, focus, sync: { ...state.sync, [workspaceId]: sync } };
   });
 
-  syncEditingRegistration(sessionId, sync.pending.length > 0);
-  void pump(sessionId);
+  syncEditingRegistration(workspaceId, sync.pending.length > 0);
+  void pump(workspaceId);
 }
 
 /** Drop every trace of a session — grid, focus, queue — and orphan anything in flight. */
-function drop(sessionId: string): void {
-  bumpGeneration(sessionId);
-  const timer = retryTimers.get(sessionId);
+function drop(workspaceId: string): void {
+  bumpGeneration(workspaceId);
+  const timer = retryTimers.get(workspaceId);
   if (timer) {
     clearTimeout(timer);
-    retryTimers.delete(sessionId);
+    retryTimers.delete(workspaceId);
   }
-  cancelLabelRefresh(sessionId);
-  syncEditingRegistration(sessionId, false);
+  cancelLabelRefresh(workspaceId);
+  syncEditingRegistration(workspaceId, false);
   useAgentWorkspaceStore.setState((state) => {
-    const { [sessionId]: _grid, ...workspaces } = state.workspaces;
-    const { [sessionId]: _focus, ...focus } = state.focus;
-    const { [sessionId]: _sync, ...sync } = state.sync;
-    const { [sessionId]: _err, ...queueErrors } = state.queueErrors;
+    const { [workspaceId]: _grid, ...workspaces } = state.workspaces;
+    const { [workspaceId]: _focus, ...focus } = state.focus;
+    const { [workspaceId]: _sync, ...sync } = state.sync;
+    const { [workspaceId]: _err, ...queueErrors } = state.queueErrors;
     return { workspaces, focus, sync, queueErrors };
   });
 }
@@ -471,17 +471,17 @@ function drop(sessionId: string): void {
  * `ensure` on a grid that already exists) never reaches the queue: there is
  * nothing to converge on.
  */
-function enqueueVerb(sessionId: string, verb: WorkspaceLayoutVerb): void {
+function enqueueVerb(workspaceId: string, verb: WorkspaceLayoutVerb): void {
   const state = useAgentWorkspaceStore.getState();
-  const sync = state.sync[sessionId] ?? emptySync();
-  const current = state.workspaces[sessionId] ?? null;
-  if (!applyVerbLocal(current, sessionId, verb).applied) return;
+  const sync = state.sync[workspaceId] ?? emptySync();
+  const current = state.workspaces[workspaceId] ?? null;
+  if (!applyVerbLocal(current, workspaceId, verb).applied) return;
   const op: PendingVerbOp = { opId: mintId('op'), baseRev: sync.rev, verb };
-  commit(sessionId, { ...sync, pending: [...sync.pending, op] }, 'follow-reducer');
+  commit(workspaceId, { ...sync, pending: [...sync.pending, op] }, 'follow-reducer');
 }
 
-function workspaceUrl(sessionId: string): string {
-  return `/api/agent-workspaces/${encodeURIComponent(sessionId)}/workspace`;
+function workspaceUrl(workspaceId: string): string {
+  return `/api/agent-workspaces/${encodeURIComponent(workspaceId)}/workspace`;
 }
 
 /**
@@ -490,23 +490,23 @@ function workspaceUrl(sessionId: string): string {
  * also why `baseRev` is re-stamped from the CURRENT snapshot here rather than
  * taken from the op's own record.
  */
-async function pump(sessionId: string): Promise<void> {
-  const sync = useAgentWorkspaceStore.getState().sync[sessionId];
+async function pump(workspaceId: string): Promise<void> {
+  const sync = useAgentWorkspaceStore.getState().sync[workspaceId];
   if (!sync || sync.inFlight !== null || sync.pending.length === 0) return;
-  if (retryTimers.has(sessionId)) return;
+  if (retryTimers.has(workspaceId)) return;
 
   const op = sync.pending[0];
-  const generation = generationOf(sessionId);
-  commit(sessionId, { ...sync, inFlight: op.opId }, 'preserve');
+  const generation = generationOf(workspaceId);
+  commit(workspaceId, { ...sync, inFlight: op.opId }, 'preserve');
 
   let response: Response | undefined;
   try {
-    response = await fetchWithAuth(`${workspaceUrl(sessionId)}/verbs`, {
+    response = await fetchWithAuth(`${workspaceUrl(workspaceId)}/verbs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         opId: op.opId,
-        baseRev: useAgentWorkspaceStore.getState().sync[sessionId]?.rev ?? op.baseRev,
+        baseRev: useAgentWorkspaceStore.getState().sync[workspaceId]?.rev ?? op.baseRev,
         verb: op.verb,
       }),
     });
@@ -514,12 +514,12 @@ async function pump(sessionId: string): Promise<void> {
     // Transport failure — the op is unchanged and still ours to retry.
   }
 
-  await settle(sessionId, op, generation, response);
+  await settle(workspaceId, op, generation, response);
 }
 
 /** Decide what one verb POST's answer means for the queue, then commit it. */
 async function settle(
-  sessionId: string,
+  workspaceId: string,
   op: PendingVerbOp,
   generation: number,
   response: Response | undefined,
@@ -531,14 +531,14 @@ async function settle(
   // being parsed), and the queue would silently lose the write.
   const body = response ? await response.json().catch(() => null) : null;
 
-  if (generationOf(sessionId) !== generation) return;
-  const sync = useAgentWorkspaceStore.getState().sync[sessionId];
+  if (generationOf(workspaceId) !== generation) return;
+  const sync = useAgentWorkspaceStore.getState().sync[workspaceId];
   if (!sync || sync.inFlight !== op.opId) return;
   const rest = sync.pending.filter((queued) => queued.opId !== op.opId);
 
   // Transport failure, or a server that could not answer: retry the SAME op.
   if (!response || response.status >= 500) {
-    scheduleRetry(sessionId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
+    scheduleRetry(workspaceId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
     return;
   }
 
@@ -548,7 +548,7 @@ async function settle(
     // on the missing field and turn every rebase into a backoff-and-retry.
     const parsed = staleResponseSchema.safeParse(body);
     if (!parsed.success) {
-      scheduleRetry(sessionId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
+      scheduleRetry(workspaceId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
       return;
     }
     // The 409 body IS the truth. Rebase on it and re-post from the head
@@ -556,8 +556,8 @@ async function settle(
     // is nothing to wait for: the server just told us everything we were
     // missing. The attempt still counts, so a permanently contended
     // workspace cannot spin forever.
-    retry(sessionId, {
-      base: adoptServerGrid(sessionId, parsed.data.grid),
+    retry(workspaceId, {
+      base: adoptServerGrid(workspaceId, parsed.data.grid),
       rev: parsed.data.rev,
       pending: sync.pending,
       inFlight: null,
@@ -571,9 +571,9 @@ async function settle(
     // no longer ours) will never succeed on retry. Abandon the queue and go
     // read what is actually durable — and SAY SO: the user's split or resize is
     // being discarded, and silently reverting it reads as the app ignoring them.
-    commit(sessionId, { ...sync, pending: [], inFlight: null, attempts: 0 }, 'preserve');
-    setQueueError(sessionId, 'refused');
-    void resyncAfterAbandon(sessionId);
+    commit(workspaceId, { ...sync, pending: [], inFlight: null, attempts: 0 }, 'preserve');
+    setQueueError(workspaceId, 'refused');
+    void resyncAfterAbandon(workspaceId);
     return;
   }
 
@@ -582,10 +582,10 @@ async function settle(
     // Acked, but we learned no truth. Fold the op into the snapshot so the
     // rendered state is unchanged and the equation stays true.
     commit(
-      sessionId,
+      workspaceId,
       {
         ...sync,
-        base: applyVerbLocal(sync.base, sessionId, op.verb).state,
+        base: applyVerbLocal(sync.base, workspaceId, op.verb).state,
         pending: rest,
         inFlight: null,
         attempts: 0,
@@ -598,9 +598,9 @@ async function settle(
   // 200 — adopt the returned truth even when `applied: false`: a no-op still
   // reports the current rev, and ignoring it would strand us behind forever.
   commit(
-    sessionId,
+    workspaceId,
     {
-      base: adoptServerGrid(sessionId, parsed.data.grid),
+      base: adoptServerGrid(workspaceId, parsed.data.grid),
       rev: parsed.data.rev,
       pending: rest,
       inFlight: null,
@@ -609,14 +609,14 @@ async function settle(
     'preserve',
   );
   // The queue is moving again, so whatever went wrong before is over.
-  clearQueueError(sessionId);
+  clearQueueError(workspaceId);
 }
 
 /** Forget a session's queue error — anything settling cleanly supersedes it. */
-function clearQueueError(sessionId: string): void {
-  if (!useAgentWorkspaceStore.getState().queueErrors[sessionId]) return;
+function clearQueueError(workspaceId: string): void {
+  if (!useAgentWorkspaceStore.getState().queueErrors[workspaceId]) return;
   useAgentWorkspaceStore.setState((state) => ({
-    queueErrors: { ...state.queueErrors, [sessionId]: null },
+    queueErrors: { ...state.queueErrors, [workspaceId]: null },
   }));
 }
 
@@ -625,9 +625,9 @@ function clearQueueError(sessionId: string): void {
  * everything we were missing), or give up and resync once the attempt budget
  * is spent. `commit` kicks the pump, and nothing blocks it.
  */
-function retry(sessionId: string, sync: WorkspaceSync): void {
-  if (giveUp(sessionId, sync)) return;
-  commit(sessionId, sync, 'preserve');
+function retry(workspaceId: string, sync: WorkspaceSync): void {
+  if (giveUp(workspaceId, sync)) return;
+  commit(workspaceId, sync, 'preserve');
 }
 
 /**
@@ -636,30 +636,30 @@ function retry(sessionId: string, sync: WorkspaceSync): void {
  * commit: `commit` kicks the pump, and the pump's `retryTimers` guard is the
  * only thing standing between a failed op and a backoff-free re-send loop.
  */
-function scheduleRetry(sessionId: string, sync: WorkspaceSync): void {
-  if (giveUp(sessionId, sync)) return;
+function scheduleRetry(workspaceId: string, sync: WorkspaceSync): void {
+  if (giveUp(workspaceId, sync)) return;
   const delay = RETRY_BACKOFF_MS[Math.min(sync.attempts - 1, RETRY_BACKOFF_MS.length - 1)] ?? 0;
   const timer = setTimeout(() => {
-    retryTimers.delete(sessionId);
-    void pump(sessionId);
+    retryTimers.delete(workspaceId);
+    void pump(workspaceId);
   }, delay);
-  retryTimers.set(sessionId, timer);
-  commit(sessionId, sync, 'preserve');
+  retryTimers.set(workspaceId, timer);
+  commit(workspaceId, sync, 'preserve');
 }
 
 /** Spent the attempt budget: abandon the queue and go read what is durable. */
-function giveUp(sessionId: string, sync: WorkspaceSync): boolean {
+function giveUp(workspaceId: string, sync: WorkspaceSync): boolean {
   if (sync.attempts < MAX_TRANSPORT_ATTEMPTS) return false;
-  commit(sessionId, { ...sync, pending: [], attempts: 0 }, 'preserve');
-  setQueueError(sessionId, 'abandoned');
-  void resyncAfterAbandon(sessionId);
+  commit(workspaceId, { ...sync, pending: [], attempts: 0 }, 'preserve');
+  setQueueError(workspaceId, 'abandoned');
+  void resyncAfterAbandon(workspaceId);
   return true;
 }
 
 /** Record why a session's queue was dropped. `at` makes each transition distinct. */
-function setQueueError(sessionId: string, reason: WorkspaceQueueError['reason']): void {
+function setQueueError(workspaceId: string, reason: WorkspaceQueueError['reason']): void {
   useAgentWorkspaceStore.setState((state) => ({
-    queueErrors: { ...state.queueErrors, [sessionId]: { reason, at: Date.now() } },
+    queueErrors: { ...state.queueErrors, [workspaceId]: { reason, at: Date.now() } },
   }));
 }
 
@@ -672,9 +672,9 @@ function setQueueError(sessionId: string, reason: WorkspaceQueueError['reason'])
  * saying so. That case used to disappear into `refreshWorkspaceSnapshot`'s
  * best-effort `catch {}`.
  */
-async function resyncAfterAbandon(sessionId: string): Promise<void> {
-  const ok = await useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
-  if (!ok) setQueueError(sessionId, 'stale-display');
+async function resyncAfterAbandon(workspaceId: string): Promise<void> {
+  const ok = await useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
+  if (!ok) setQueueError(workspaceId, 'stale-display');
 }
 
 /**
@@ -706,7 +706,7 @@ function isPaneDirty(pane: PaneState): boolean {
  * and emitting only the primitive verb it resolved to.
  */
 function focusOrAssignScope(
-  sessionId: string,
+  workspaceId: string,
   scope: PaneScope,
   options?: {
     excludeTargetId?: string;
@@ -715,9 +715,9 @@ function focusOrAssignScope(
   },
 ): void {
   const store = useAgentWorkspaceStore.getState();
-  const workspace = store.workspaces[sessionId];
+  const workspace = store.workspaces[workspaceId];
   if (!workspace) {
-    store.ensureWorkspace(sessionId, scope);
+    store.ensureWorkspace(workspaceId, scope);
     return;
   }
 
@@ -752,21 +752,21 @@ function focusOrAssignScope(
   switch (placement.kind) {
     case 'focus':
       // Already visible — focus is client-local, so nothing crosses the wire.
-      store.selectPane(sessionId, placement.paneId);
+      store.selectPane(workspaceId, placement.paneId);
       return;
     case 'assign':
-      enqueueVerb(sessionId, { type: 'assign_pane', paneId: placement.paneId, scope });
+      enqueueVerb(workspaceId, { type: 'assign_pane', paneId: placement.paneId, scope });
       return;
     case 'split': {
       // Two verbs, in order: the split, then the binding.
       const newPaneId = mintId('pane');
-      enqueueVerb(sessionId, {
+      enqueueVerb(workspaceId, {
         type: 'split_right',
         fromPaneId: placement.fromPaneId,
         newColumnId: mintId('col'),
         newPaneId,
       });
-      enqueueVerb(sessionId, { type: 'assign_pane', paneId: newPaneId, scope });
+      enqueueVerb(workspaceId, { type: 'assign_pane', paneId: newPaneId, scope });
       return;
     }
     case 'create':
@@ -783,26 +783,26 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       focus: {},
       queueErrors: {},
 
-      ensureWorkspace: (sessionId, scope) =>
-        enqueueVerb(sessionId, { type: 'ensure', columnId: mintId('col'), paneId: mintId('pane'), scope }),
+      ensureWorkspace: (workspaceId, scope) =>
+        enqueueVerb(workspaceId, { type: 'ensure', columnId: mintId('col'), paneId: mintId('pane'), scope }),
 
-      openConversation: (sessionId, scope, options) => focusOrAssignScope(sessionId, scope, options),
+      openConversation: (workspaceId, scope, options) => focusOrAssignScope(workspaceId, scope, options),
 
-      openPage: (sessionId, scope, options) => focusOrAssignScope(sessionId, scope, options),
+      openPage: (workspaceId, scope, options) => focusOrAssignScope(workspaceId, scope, options),
 
-      splitRight: (sessionId, fromPaneId) =>
-        enqueueVerb(sessionId, {
+      splitRight: (workspaceId, fromPaneId) =>
+        enqueueVerb(workspaceId, {
           type: 'split_right',
           fromPaneId,
           newColumnId: mintId('col'),
           newPaneId: mintId('pane'),
         }),
 
-      splitDown: (sessionId, fromPaneId) =>
-        enqueueVerb(sessionId, { type: 'split_down', fromPaneId, newPaneId: mintId('pane') }),
+      splitDown: (workspaceId, fromPaneId) =>
+        enqueueVerb(workspaceId, { type: 'split_down', fromPaneId, newPaneId: mintId('pane') }),
 
-      closePane: (sessionId, paneId) => {
-        const current = get().workspaces[sessionId];
+      closePane: (workspaceId, paneId) => {
+        const current = get().workspaces[workspaceId];
         if (!current) return 'noop';
         if (!panesOf(current).some((pane) => pane.id === paneId)) return 'noop';
         if (isLastPane(current, paneId)) {
@@ -810,34 +810,34 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           // act (the end route), never a layout verb — the shared reducer
           // no-ops on it by design, so no verb is posted here either. The
           // caller reads this verdict and ends the session.
-          drop(sessionId);
+          drop(workspaceId);
           return 'session-ended';
         }
-        enqueueVerb(sessionId, { type: 'close_pane', paneId });
+        enqueueVerb(workspaceId, { type: 'close_pane', paneId });
         return 'closed';
       },
 
-      selectPane: (sessionId, paneId) => {
+      selectPane: (workspaceId, paneId) => {
         const state = get();
-        const workspace = state.workspaces[sessionId];
+        const workspace = state.workspaces[workspaceId];
         if (!workspace) return;
         if (workspace.activePaneId === paneId) return;
         if (!panesOf(workspace).some((pane) => pane.id === paneId)) return;
-        commit(sessionId, state.sync[sessionId] ?? emptySync(), {
+        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
           activePaneId: paneId,
           pendingPickerPaneId: workspace.pendingPickerPaneId,
         });
       },
 
-      assignPane: (sessionId, paneId, scope) => enqueueVerb(sessionId, { type: 'assign_pane', paneId, scope }),
+      assignPane: (workspaceId, paneId, scope) => enqueueVerb(workspaceId, { type: 'assign_pane', paneId, scope }),
 
-      resetPane: (sessionId, paneId) => enqueueVerb(sessionId, { type: 'reset_pane', paneId }),
+      resetPane: (workspaceId, paneId) => enqueueVerb(workspaceId, { type: 'reset_pane', paneId }),
 
-      dismissPicker: (sessionId, paneId) => {
+      dismissPicker: (workspaceId, paneId) => {
         const state = get();
-        const workspace = state.workspaces[sessionId];
+        const workspace = state.workspaces[workspaceId];
         if (!workspace || workspace.pendingPickerPaneId !== paneId) return;
-        commit(sessionId, state.sync[sessionId] ?? emptySync(), {
+        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
           activePaneId: workspace.activePaneId,
           pendingPickerPaneId: null,
         });
@@ -847,41 +847,41 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       // shared reducer applies it optimistically, decides whether it changed
       // anything at all (a clamped-to-identical resize never reaches the
       // queue), and the same 409-rebase path covers them as every other verb.
-      resizeColumn: (sessionId, columnId, widthFraction) =>
-        enqueueVerb(sessionId, { type: 'resize_column', columnId, widthFraction }),
+      resizeColumn: (workspaceId, columnId, widthFraction) =>
+        enqueueVerb(workspaceId, { type: 'resize_column', columnId, widthFraction }),
 
-      resizePane: (sessionId, paneId, heightFraction) =>
-        enqueueVerb(sessionId, { type: 'resize_pane', paneId, heightFraction }),
+      resizePane: (workspaceId, paneId, heightFraction) =>
+        enqueueVerb(workspaceId, { type: 'resize_pane', paneId, heightFraction }),
 
-      movePane: (sessionId, paneId, toColumnId, toIndex) =>
-        enqueueVerb(sessionId, { type: 'move_pane', paneId, toColumnId, ...(toIndex === undefined ? {} : { toIndex }) }),
+      movePane: (workspaceId, paneId, toColumnId, toIndex) =>
+        enqueueVerb(workspaceId, { type: 'move_pane', paneId, toColumnId, ...(toIndex === undefined ? {} : { toIndex }) }),
 
-      reorderColumns: (sessionId, columnIds) =>
-        enqueueVerb(sessionId, { type: 'reorder_columns', columnIds }),
+      reorderColumns: (workspaceId, columnIds) =>
+        enqueueVerb(workspaceId, { type: 'reorder_columns', columnIds }),
 
-      replaceConversation: (sessionId, oldConversationId, newScope) =>
-        enqueueVerb(sessionId, {
+      replaceConversation: (workspaceId, oldConversationId, newScope) =>
+        enqueueVerb(workspaceId, {
           type: 'replace_conversation',
           oldTargetId: oldConversationId,
           scope: newScope,
         }),
 
-      forgetWorkspace: (sessionId) => {
-        if (!get().sync[sessionId] && !get().workspaces[sessionId]) return;
-        drop(sessionId);
+      forgetWorkspace: (workspaceId) => {
+        if (!get().sync[workspaceId] && !get().workspaces[workspaceId]) return;
+        drop(workspaceId);
       },
 
-      hydrateWorkspace: (sessionId, workspace) => {
+      hydrateWorkspace: (workspaceId, workspace) => {
         // `workspace.id` is documented as "the SESSION id whose grid this
         // is" — a mismatch means the caller fetched the wrong session's
         // saved grid (or the payload was tampered with); seating it under a
         // DIFFERENT session's key would poison every consumer that trusts
         // `workspace.id` to match.
-        if (workspace.id !== sessionId) return;
+        if (workspace.id !== workspaceId) return;
         // A verb still on the wire belongs to the state being replaced.
-        bumpGeneration(sessionId);
+        bumpGeneration(workspaceId);
         commit(
-          sessionId,
+          workspaceId,
           // `rev: 0`, NOT the previous rev. This seats an UNVERSIONED listing
           // snapshot as the base, so carrying the old rev forward would claim
           // to have read this grid at a rev it was never read at — the method's
@@ -896,21 +896,21 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         );
       },
 
-      hydrateFromServer: (sessionId, snapshot) => {
-        const sync = get().sync[sessionId] ?? emptySync();
+      hydrateFromServer: (workspaceId, snapshot) => {
+        const sync = get().sync[workspaceId] ?? emptySync();
         // An older snapshot than what we already hold tells us nothing (a
         // slow GET landing behind a fast verb ack, say).
         if (snapshot.rev < sync.rev) return;
         commit(
-          sessionId,
-          { ...sync, base: adoptServerGrid(sessionId, snapshot.grid), rev: snapshot.rev },
+          workspaceId,
+          { ...sync, base: adoptServerGrid(workspaceId, snapshot.grid), rev: snapshot.rev },
           'preserve',
         );
       },
 
       applyRemoteUpdate: (payload) => {
-        const sessionId = payload.workspaceId;
-        const sync = get().sync[sessionId];
+        const { workspaceId } = payload;
+        const sync = get().sync[workspaceId];
         // Not tracking this session: nothing to update, and inventing an
         // entry here would resurrect a grid the user has closed. Whenever it
         // opens next, the mount GET reads the truth anyway.
@@ -931,24 +931,24 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         // already knows before it reaches the renderer — otherwise a pure
         // resize would blank every pane header it touched.
         const known = paneLabelIndex(sync.base);
-        const server = adoptServerGrid(sessionId, payload.grid);
+        const server = adoptServerGrid(workspaceId, payload.grid);
         // An emptied grid has no labels to carry and nothing to go read.
         const adopted = server === null ? null : carryPaneLabelsForward(known, server);
-        commit(sessionId, { ...sync, base: adopted, rev: payload.rev }, 'preserve');
+        commit(workspaceId, { ...sync, base: adopted, rev: payload.rev }, 'preserve');
         // A target we have never labelled is the ONE case a broadcast cannot
         // dress itself: go read it under this viewer's own authority.
         if (adopted !== null && hasUnknownBoundTarget(known, adopted)) {
-          scheduleLabelRefresh(sessionId);
+          scheduleLabelRefresh(workspaceId);
         }
       },
 
-      refreshWorkspaceSnapshot: async (sessionId) => {
+      refreshWorkspaceSnapshot: async (workspaceId) => {
         try {
-          const response = await fetchWithAuth(workspaceUrl(sessionId));
+          const response = await fetchWithAuth(workspaceUrl(workspaceId));
           if (!response.ok) return false;
           const parsed = snapshotSchema.safeParse(await response.json());
           if (!parsed.success) return false;
-          get().hydrateFromServer(sessionId, parsed.data);
+          get().hydrateFromServer(workspaceId, parsed.data);
           return true;
         } catch {
           // Still best-effort for its own sake — the socket's own reconnect, or
