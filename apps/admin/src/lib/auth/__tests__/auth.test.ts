@@ -72,4 +72,36 @@ describe('admin verifyAdminAuth', () => {
       expect(result.status).toBe(403);
     }
   });
+
+  // The three ways validateAdminAccess can refuse. These live here, without a
+  // database, on purpose: the broadcasts route suites used to cover the happy
+  // path incidentally by inserting a real admin row into the SHARED test
+  // database, which packages/db's activity-logs-compliance suite truncates from
+  // a concurrent turbo task. Refusal is route-layer behaviour and is asserted
+  // here against the reason codes rather than against a live row.
+  it.each([
+    ['user_not_found', { isValid: false, reason: 'user_not_found' as const }],
+    ['not_admin', { isValid: false, reason: 'not_admin' as const, currentRole: 'user', actualAdminRoleVersion: 0 }],
+    ['version_mismatch', { isValid: false, reason: 'version_mismatch' as const, actualAdminRoleVersion: 3 }],
+  ])('refuses with 403 when validateAdminAccess reports %s', async (_reason, validation) => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      sessionId: 'sess-1',
+      userId: 'user-1',
+      userRole: 'admin',
+      tokenVersion: 1,
+      adminRoleVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 60000),
+    });
+    vi.mocked(validateAdminAccess).mockResolvedValue(validation);
+
+    const result = await verifyAdminAuth(makeRequest());
+
+    expect(isAdminAuthError(result)).toBe(true);
+    if (isAdminAuthError(result)) {
+      expect(result.status).toBe(403);
+      await expect(result.json()).resolves.toEqual({ error: 'Forbidden: Admin access required' });
+    }
+  });
 });
