@@ -473,6 +473,38 @@ is still a worker you talk to and a "workspace" is still the environment; that s
 product decision, not an accident of history, and the internal renames stop at the zod
 boundary.
 
+**NOT renamed, and NOT frozen either — the honest third category** (review finding). The
+rename reached the tables, columns, module directories, routes and the store internals. It
+did **not** reach the exported type vocabulary or the client component layer, and until now
+this section listed only "renamed" and "frozen", which left a reader to conclude that
+anything not called out as frozen had been done. It had not:
+
+- ~30 exported names still spelled `AgentSession*` — `AgentSessionRecord` (38 references),
+  `AgentSessionRowStamps` (17), `AgentSessionListFilter` (17), `AgentSessionStore` (15),
+  `AgentSessionDTO` (9), plus `spawnAgentSession` / `endAgentSession` / `listAgentSessions`
+  and the DTO schema.
+- The wire still says `session`: `GET /api/agent-workspaces/[workspaceId]` returns
+  `{ session: … }`, and `useSessionRecord(sessionId)` fetches a workspace URL for a
+  workspace id held in a variable named `sessionId`.
+- `agent-workspaces-runtime.ts` re-exports `MAX_ACTIVE_WORKSPACES_PER_OWNER` under the old
+  name, for callers not yet moved.
+- The component layer is untouched: `SessionPanes.tsx`, `useSessionRecord.ts`,
+  `useSpawnSession.tsx`, `EndSessionDialog.tsx`, and locals/props that name a WORKSPACE id
+  `sessionId` — producing lines like `session.workspaceId === sessionId`, where the next
+  reader has to prove to themselves that this `sessionId` is not the deprecated column.
+- This document's own filename.
+
+None of that is a bug and none of it is a compat shim, so it belongs on neither list above.
+It is unfinished work, and the reason to write it down rather than sweep it now is that
+this epic's diff is already ~570 files: a mechanical rename through the client layer at
+this point buys naming and costs review attention on the surfaces that carry behaviour
+changes. §5's rule cuts both ways — the danger is a claim the code does not honour, and
+"Phase 5 renamed the vocabulary" was becoming one.
+
+The standard to meet is `session-tools.ts`'s: it freezes `sessionId` on the wire *and says
+so, at the point of use*, twice. Everything above should either reach that bar or finish
+the rename. Tracked as Phase 5's remainder on the epic board.
+
 Also unchanged, on purpose: the `pgs-ses-` Sprite-name prefix and the
 `agent-session-sprite:v2` HMAC namespace (`workspace-sprite-key.ts`) — both are fold inputs,
 so touching either re-derives every live VM's name; the `resourceType: 'agent_session'`

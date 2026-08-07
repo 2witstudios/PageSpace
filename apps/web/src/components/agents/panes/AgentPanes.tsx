@@ -83,7 +83,19 @@ import PagePaneView from './PagePaneView';
 import Shell from '../shell/Shell';
 
 export interface AgentPanesProps {
-  /** The session this grid belongs to (`agent_workspaces.id`). */
+  /**
+   * The workspace this grid belongs to — `agent_workspaces.id`, the value the
+   * DTO calls `workspaceId`.
+   *
+   * IT IS NOT `conversations.sessionId`, the column Phase 5 deprecated. The
+   * name here is the pre-rename spelling and has not been swept yet (see
+   * `docs/2.0-architecture/agent-sessions.md` §4, "NOT renamed, and NOT frozen
+   * either"), which is why lines below read `session.workspaceId === sessionId`
+   * — a workspace id compared against a workspace id, however that scans. Said
+   * once here so the next reader does not have to re-derive it from five call
+   * sites, on the standard `session-tools.ts` sets for its own frozen wire
+   * vocabulary.
+   */
   sessionId: string;
   /** The session's drive — where the picker's agent list comes from. Null for a global-assistant session. */
   driveId: string | null;

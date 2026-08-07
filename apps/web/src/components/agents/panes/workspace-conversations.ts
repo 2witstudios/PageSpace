@@ -27,6 +27,14 @@ export interface SessionListEntry {
    * compat twin beside it in `agentSessionDtoSchema` — that one is marked
    * "@deprecated ROLLING-DEPLOY COMPAT, one release only ... nothing new may
    * read it", and every reader here was reading it.
+   *
+   * Worth stating once for the whole module, since the functions below take a
+   * parameter spelled `sessionId` and compare it against THIS field: that
+   * parameter is a workspace id too. It carries the pre-rename spelling
+   * because the sweep has not reached this layer (see
+   * `docs/2.0-architecture/agent-sessions.md` §4, "NOT renamed, and NOT frozen
+   * either"); it is never the deprecated twin above, and never
+   * `conversations.sessionId`.
    */
   workspaceId: string;
   conversations: SessionConversationSummary[];
