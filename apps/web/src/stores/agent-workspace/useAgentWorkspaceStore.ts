@@ -18,7 +18,7 @@ import {
   type PaneState,
   type WorkspaceLayoutVerb,
   type WorkspaceState,
-} from './pane-reducer';
+} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { resolveOpenPlacement } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { adoptServerGrid, replayPending, type PendingVerbOp } from './verb-queue';
 import { carryPaneLabelsForward, hasUnknownBoundTarget, paneLabelIndex } from './pane-labels';

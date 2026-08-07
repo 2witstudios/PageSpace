@@ -49,7 +49,7 @@ import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
-import { panesOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, isLastPane, paneShowing, type PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';

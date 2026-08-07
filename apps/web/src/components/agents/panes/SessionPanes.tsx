@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
-import { panesOf, type PaneState, type WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, type PaneState, type WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 export interface SessionPanesProps {
   workspace: WorkspaceState;

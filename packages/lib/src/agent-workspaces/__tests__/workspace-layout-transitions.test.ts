@@ -1,10 +1,17 @@
 /**
- * The pane grid's layout transitions. Pure in, pure out — the discipline the
- * old machine reducer had and the reason its behaviour survived a rewrite that
- * deleted everything around it.
+ * The pane grid's PRIMITIVE transitions — `newWorkspace`, `splitRight`,
+ * `splitDown`, `assignPane`, `closePane`, `selectPane`, `dismissPicker`,
+ * `resetPane` and the small queries over them. Pure in, pure out.
+ *
+ * Moved here from `apps/web/src/stores/agent-workspace/__tests__/` with the
+ * deletion of the `pane-reducer` re-export shim it used to run against. It is
+ * NOT a duplicate of `workspace-layout-verbs.test.ts` next door: that one
+ * covers `applyVerbLocal`'s dispatch and the grid projections, this one covers
+ * the transitions those dispatch INTO. They were disjoint when they lived in
+ * different packages and they still are.
  */
 import { describe, it, expect } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
+import type { PaneScope } from '../contract';
 import {
   newWorkspace,
   assignPane,
@@ -19,7 +26,7 @@ import {
   panesOf,
   paneShowing,
   type WorkspaceState,
-} from '../pane-reducer';
+} from '../workspace-layout-verbs';
 
 function chatScope(targetId: string, agentPageId: string | null = 'agent-1'): PaneScope {
   return { kind: 'chat', name: 'Conversation', targetId, agentPageId };

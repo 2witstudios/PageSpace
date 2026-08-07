@@ -113,7 +113,7 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import type { WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
+import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 

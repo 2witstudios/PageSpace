@@ -24,7 +24,7 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, isLastPane, type PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-workspaces/contract';
 import {

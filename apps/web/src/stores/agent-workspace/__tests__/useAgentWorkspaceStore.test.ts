@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
-import { panesOf } from '../pane-reducer';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const mockFetchWithAuth = vi.fn();

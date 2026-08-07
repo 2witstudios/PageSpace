@@ -28,7 +28,7 @@
  * Everything here is pure.
  */
 
-import type { WorkspaceState } from './pane-reducer';
+import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 /** A pane's label facts, keyed by what the pane is bound to. */
 export interface PaneLabelIndex {

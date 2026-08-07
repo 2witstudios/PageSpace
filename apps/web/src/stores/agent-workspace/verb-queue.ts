@@ -33,8 +33,13 @@
  */
 
 import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
-import { readFraction } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from './pane-reducer';
+import {
+  applyVerbLocal,
+  panesOf,
+  readFraction,
+  type WorkspaceLayoutVerb,
+  type WorkspaceState,
+} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 /**
  * One verb applied locally and not yet acknowledged by the server.

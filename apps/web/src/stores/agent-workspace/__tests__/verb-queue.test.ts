@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { workspaceLayoutVerbSchema } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { adoptServerGrid, replayPending, verbAlreadyLanded, type PendingVerbOp } from '../verb-queue';
-import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from '../pane-reducer';
+import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const scope = (targetId = 'conv-1', name = 'Planning'): PaneScope => ({
   kind: 'chat',

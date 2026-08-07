@@ -13,7 +13,7 @@ import {
   paneLabelIndex,
   paneLabelKey,
 } from '../pane-labels';
-import type { WorkspaceState } from '../pane-reducer';
+import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const scope = (kind: 'chat' | 'terminal' | 'page', targetId: string | null, name = '', agentPageId: string | null = null) => ({
   kind,

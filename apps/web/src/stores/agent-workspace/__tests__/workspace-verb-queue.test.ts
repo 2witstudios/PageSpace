@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PaneScope, PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
-import { panesOf } from '../pane-reducer';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const mockFetchWithAuth = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({

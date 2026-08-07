@@ -6,7 +6,7 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const store = () => useAgentWorkspaceStore.getState();
 const grid = (id = 'ses-1') => store().workspaces[id];

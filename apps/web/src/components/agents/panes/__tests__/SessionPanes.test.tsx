@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
-import { newWorkspace, splitRight, splitDown, type WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
+import { newWorkspace, splitRight, splitDown, type WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const mobileState = vi.hoisted(() => ({ current: false }));
 vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mobileState.current }));
