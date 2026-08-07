@@ -13,11 +13,13 @@ const {
   mockAuditRequest,
   mockCheckSessionAccess,
   mockApplyWorkspaceLayoutVerb,
+  mockAuthorizeVerbScopes,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
   mockApplyWorkspaceLayoutVerb: vi.fn(),
+  mockAuthorizeVerbScopes: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -35,6 +37,9 @@ vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
 }));
 vi.mock('@/lib/agent-workspaces/workspace-layout-runtime', () => ({
   applyWorkspaceLayoutVerb: (...args: unknown[]) => mockApplyWorkspaceLayoutVerb(...args),
+}));
+vi.mock('@/lib/agent-workspaces/authorize-pane-scope', () => ({
+  authorizeVerbScopes: (...args: unknown[]) => mockAuthorizeVerbScopes(...args),
 }));
 
 import { POST } from '../route';
@@ -62,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+  mockAuthorizeVerbScopes.mockResolvedValue(true);
   mockApplyWorkspaceLayoutVerb.mockResolvedValue({ status: 'ok', rev: 1, grid, applied: true });
 });
 
@@ -75,6 +81,8 @@ describe('POST /api/agent-workspaces/[workspaceId]/workspace/verbs', () => {
       opId: 'op-1',
       baseRev: 0,
       verb,
+      // The response grid's labels are resolved for THIS caller and nobody else.
+      viewerId: AUTH_USER.userId,
     });
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -178,6 +186,7 @@ describe('POST .../workspace/verbs — the rearrange verbs', () => {
       opId: 'op-r',
       baseRev: 3,
       verb: rearrange,
+      viewerId: AUTH_USER.userId,
     });
   });
 
@@ -248,5 +257,40 @@ describe('POST .../workspace/verbs — the rearrange verbs', () => {
 
     expect(response.status).toBe(404);
     expect(mockApplyWorkspaceLayoutVerb).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Security review HIGH 1, attack B: session access is not target access. The
+ * route used to hand the engine whatever `scope.targetId` the body carried,
+ * so a caller with a workspace of their own could bind any conversation,
+ * shell, or page id and read the joined title back out of the 200 body.
+ */
+describe('pane-scope authorization (attack B)', () => {
+  it('REFUSES a verb whose scope target the caller has no authority over — and never reaches the engine', async () => {
+    mockAuthorizeVerbScopes.mockResolvedValue(false);
+    const response = await post({ opId: 'op-1', baseRev: 0, verb });
+    expect(response.status).toBe(403);
+    expect(mockApplyWorkspaceLayoutVerb).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+    // Nothing about the target leaks back — forbidden and non-existent read alike.
+    expect(await response.json()).toEqual({
+      error: 'You cannot show that in this workspace.',
+    });
+  });
+
+  it('asks about the scope only AFTER session access is settled', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    await post({ opId: 'op-1', baseRev: 0, verb });
+    expect(mockAuthorizeVerbScopes).not.toHaveBeenCalled();
+  });
+
+  it('passes the caller and the addressed workspace to the gate', async () => {
+    await post({ opId: 'op-1', baseRev: 0, verb });
+    expect(mockAuthorizeVerbScopes).toHaveBeenCalledWith({
+      viewerId: AUTH_USER.userId,
+      workspaceId: SESSION_ID,
+      verb,
+    });
   });
 });
