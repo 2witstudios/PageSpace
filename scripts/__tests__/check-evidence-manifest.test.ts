@@ -127,6 +127,31 @@ describe('blankOutLiteralsAndComments', () => {
     expect(stripped).not.toContain('{');
     expect(stripped).not.toContain('}');
   });
+
+  // A regex is the one construct that can smuggle an unbalanced quote past a naive scanner.
+  // conversation-events-audience.test.ts really contains `/event:\s*(['"`])...;/g`, and
+  // without regex handling the lone `'` inside that class opened a string that swallowed the
+  // rest of the file — every test declared after it went invisible.
+  it('should not treat a quote inside a regex literal as opening a string', () => {
+    const source = [
+      `const EVENT_LITERAL = /event:\\s*(['"\`])((?:\\\\.|(?!\\1)[\\s\\S])*?)\\1/g;`,
+      `it('survives the regex above', () => {});`,
+    ].join('\n');
+
+    expect(parseDeclarations(source).map((d) => d.name)).toEqual(['survives the regex above']);
+  });
+
+  it('should still treat a slash between values as division, not a regex', () => {
+    // `(a) / b` then `c / d`: if either were read as a regex, everything up to the next
+    // slash would be blanked and the declaration after it would disappear.
+    const source = [
+      `const ratio = (total) / count;`,
+      `const other = size / 2;`,
+      `it('survives the divisions above', () => {});`,
+    ].join('\n');
+
+    expect(parseDeclarations(source).map((d) => d.name)).toEqual(['survives the divisions above']);
+  });
 });
 
 describe('checkManifest failure modes', () => {
