@@ -113,6 +113,7 @@ export async function handleChatTurn(
   request: Request,
   opts: HandleChatTurnOptions,
 ): Promise<Response> {
+  const startTime = Date.now();
   const isPageSurface = opts.surface === 'page-chat';
   const log = isPageSurface ? loggers.ai : loggers.api;
 
@@ -179,7 +180,7 @@ export async function handleChatTurn(
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch (error) {
-    return unparseableBody(error, auth, isPageSurface);
+    return unparseableBody(error, auth, isPageSurface, Date.now() - startTime);
   }
 
   if (!isPageSurface) {
@@ -272,6 +273,7 @@ async function unparseableBody(
   error: unknown,
   auth: AuthResult,
   isPageSurface: boolean,
+  duration: number,
 ): Promise<Response> {
   if (isPageSurface) {
     loggers.ai.error('AI Chat API Error', error as Error, {
@@ -285,6 +287,7 @@ async function unparseableBody(
       provider: 'unknown',
       model: 'unknown',
       source: 'chat',
+      duration,
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: { errorType: error instanceof Error ? error.name : 'UnknownError' },

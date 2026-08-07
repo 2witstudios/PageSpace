@@ -22,18 +22,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 //     strategy's own "chatId is required" 400.
 // ============================================================================
 
-const runPageChatTurn = vi.fn(async () => new Response('page', { status: 200 }));
-const runGlobalChatTurn = vi.fn(async () => new Response('global', { status: 200 }));
-const getConversation = vi.fn();
-const authenticateRequestWithOptions = vi.fn();
+const runPageChatTurn = vi.fn(async (_ctx: unknown) => new Response('page', { status: 200 }));
+const runGlobalChatTurn = vi.fn(async (_ctx: unknown) => new Response('global', { status: 200 }));
+const getConversation = vi.fn(async (_id: string): Promise<unknown> => null);
+const authenticateRequestWithOptions = vi.fn(async (_req: Request, _opts: unknown): Promise<unknown> => null);
 
-vi.mock('../page-chat-turn', () => ({ runPageChatTurn: (...a: unknown[]) => runPageChatTurn(...(a as [])) }));
-vi.mock('../global-chat-turn', () => ({ runGlobalChatTurn: (...a: unknown[]) => runGlobalChatTurn(...(a as [])) }));
+vi.mock('../page-chat-turn', () => ({ runPageChatTurn: (ctx: unknown) => runPageChatTurn(ctx) }));
+vi.mock('../global-chat-turn', () => ({ runGlobalChatTurn: (ctx: unknown) => runGlobalChatTurn(ctx) }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
-  conversationRepository: { getConversation: (...a: unknown[]) => getConversation(...(a as [])) },
+  conversationRepository: { getConversation: (id: string) => getConversation(id) },
 }));
 vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: (...a: unknown[]) => authenticateRequestWithOptions(...(a as [])),
+  authenticateRequestWithOptions: (req: Request, opts: unknown) => authenticateRequestWithOptions(req, opts),
   isAuthError: (r: unknown) => !!r && typeof r === 'object' && 'error' in (r as object),
   isMCPAuthResult: (r: unknown) =>
     !!r && typeof r === 'object' && !('error' in (r as object)) &&
