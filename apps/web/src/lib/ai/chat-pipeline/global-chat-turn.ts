@@ -31,7 +31,7 @@ import {
 } from '@/lib/ai/core/ask-user-resume';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
-import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -101,6 +101,8 @@ import {
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -402,6 +404,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // it used to answer 404. The gate is the cheaper and more actionable refusal.
     let userSubscriptionTier: string | undefined;
     let userImageGenerationModel: string | null = null;
+    /** What the gate reserved against, for the mid-stream ceiling below. */
+    let availableBalanceCents: number | null = null;
     {
       const [gateUser] = await db
         .select({
@@ -438,8 +442,18 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           return creditGateErrorResponse(creditGate.reason);
         }
         holdId = creditGate.holdId;
+        availableBalanceCents = creditGate.balanceSnapshot?.netSpendableCents ?? null;
       }
     }
+
+    // Mid-stream credit abort, matching the page surface. Without it a single
+    // long agent loop could run past the balance the hold reserved: the gate
+    // only checks ONCE, before the first token, and an agentic turn can spend
+    // many multiples of its estimate across steps. `runAgentWithRetry` tests
+    // `abortSignal.aborted` before deciding to retry, so an abort raised here
+    // terminates the run rather than being read as a transient failure.
+    const creditAbortController = holdId ? new AbortController() : null;
+
 
     // Resolve existing conversation or auto-create on first message (lazy creation).
     // Clients generate the ID locally; this is the point where the DB row is guaranteed.
@@ -671,16 +685,35 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 
+    // Built here rather than beside the controller above: the per-step cost math
+    // needs the RESOLVED model name, which only exists once the provider has
+    // been chosen.
+    const onStepFinishForCredits =
+      creditAbortController && availableBalanceCents !== null
+        ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, currentModel ?? 'unknown')
+        : null;
+
     // Free users are limited to the free-model allowlist; defends against a model id
     // submitted directly in the request bypassing the settings-time gate.
-    if (ADMIN_ONLY_PROVIDERS.has(currentProvider) && auth.role !== 'admin') {
-      return createAdminRestrictedResponse();
-    }
-    if (requiresProSubscription(currentProvider, currentModel, userSubscriptionTier, auth.role === 'admin')) {
+    // Through the shared entitlement decision, not a hand-rolled pair of
+    // checks. `generation-admission.ts` exists to be the ONE answer to "may
+    // this caller run this provider/model"; the page surface used it while this
+    // one re-derived it, which is how two surfaces of the same product come to
+    // disagree about who may use which model.
+    const admission = resolveGenerationAdmission({
+      provider: currentProvider,
+      model: currentModel,
+      subscriptionTier: userSubscriptionTier,
+      isAdmin: auth.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      if (admission.reason === 'provider_admin_only') return createAdminRestrictedResponse();
       loggers.api.warn('Global Assistant Chat API: paid plan required for model', {
         userId: maskIdentifier(userId),
         provider: currentProvider,
         model: currentModel,
+        subscriptionTier: userSubscriptionTier,
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1207,6 +1240,10 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     cleanupContext = { conversationId, serverAssistantMessageId, userId };
 
     const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    /** The user's Stop, composed with the mid-stream credit ceiling. */
+    const generationAbortSignal = creditAbortController
+      ? AbortSignal.any([abortSignal, creditAbortController.signal])
+      : abortSignal;
     activeStreamId = streamId;
 
     const channelId = globalChannelId(userId);
@@ -1295,7 +1332,10 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // The loop lives inside execute(), so onFinish still fires exactly once below.
         const runResult = await runAgentWithRetry({
           writer,
-          abortSignal,
+          // The COMPOSED signal: this loop checks `abortSignal.aborted` before
+          // deciding to retry, so a credit abort has to be visible here or the
+          // shell would re-drive a run the ceiling just stopped.
+          abortSignal: generationAbortSignal,
           baseMessages: modelMessages,
           finishToolName: FINISH_TOOL_NAME,
           pauseToolNames: [ASK_USER_TOOL_NAME],
@@ -1327,8 +1367,12 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
             // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
             // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), hasToolCall(ASK_USER_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
-            // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
-            abortSignal,
+            // The user's Stop composed with the mid-stream credit ceiling —
+            // the registry signal alone only fires on an explicit user stop.
+            abortSignal: generationAbortSignal,
+            onStepFinish: onStepFinishForCredits
+              ? async ({ usage }) => { onStepFinishForCredits(usage); }
+              : undefined,
             experimental_context: {
               userId,
               timezone: userTimezone,
@@ -1527,7 +1571,11 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
             }
           });
         } catch (trackingError) {
-          loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
+          // ERROR, not debug. This call settles the credit HOLD — a failure here
+          // leaves a reservation outstanding and the turn unbilled, which is a
+          // money problem, not a diagnostic. The page surface has always logged
+          // its twin at error; this one was invisible.
+          loggers.api.error('Global Assistant: Could not track AI usage (stream aborted or failed)', trackingError as Error, {
             conversationId: maskIdentifier(conversationId),
             messageId: maskIdentifier(messageId),
             error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
