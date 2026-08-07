@@ -124,6 +124,25 @@ export const FIXTURES = {
       content: '',
     },
   },
+  /**
+   * The page conversation the fixture's `chat_messages` hang off.
+   *
+   * Since migration 0248 (`chat_messages_conversationId_conversations_id_fk`,
+   * NOT VALID) a page-chat message MUST name a real `conversations` row —
+   * that migration's orphan-synthesis step exists precisely to retire the old
+   * self-minting, parentless `conversationId`. A fixture without a parent row
+   * is therefore no longer a state the application can produce, so it is
+   * seeded the way production writes one: `type='page'` with
+   * `contextId = pageId` (the shape `conversations_page_context_present_chk`
+   * requires and the reader cutover derives the page from).
+   */
+  conversations: {
+    pageChat: {
+      id: 'test_convo_inline_001',
+      type: 'page' as const,
+      title: 'Grandchild page chat',
+    },
+  },
   chatMessages: {
     msg1: {
       id: 'test_chatmsg_001',
@@ -169,7 +188,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, chatMessages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, chatMessages, files, pagePermissions, tags } = FIXTURES;
   const now = new Date();
 
   // Users
@@ -210,6 +229,13 @@ export async function seedFixtures(db: TestDb): Promise<void> {
       (${pages.root.id}, ${pages.root.title}, ${pages.root.type}, ${pages.root.content}, ${pages.root.position}, ${drives.shared.id}, NULL, ${now}, ${now}),
       (${pages.child.id}, ${pages.child.title}, ${pages.child.type}, ${pages.child.content}, ${pages.child.position}, ${drives.shared.id}, ${pages.root.id}, ${now}, ${now}),
       (${pages.grandchild.id}, ${pages.grandchild.title}, ${pages.grandchild.type}, ${pages.grandchild.content}, ${pages.grandchild.position}, ${drives.shared.id}, ${pages.child.id}, ${now}, ${now})
+  `);
+
+  // The page conversation the chat messages below belong to. Required since
+  // 0248 gave chat_messages.conversationId a real FK — see FIXTURES.conversations.
+  await db.execute(sql`
+    INSERT INTO conversations (id, "userId", title, type, "contextId", "lastMessageAt", "createdAt", "updatedAt")
+    VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${now}, ${now}, ${now})
   `);
 
   // Chat messages (on the grandchild AI_CHAT page)

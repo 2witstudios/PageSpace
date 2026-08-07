@@ -729,10 +729,47 @@ export async function POST(request: Request) {
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
     // via onConflictDoNothing, so safe for every message in a conversation.
-    // Awaited so the row is visible to the broadcast gate below; errors are
-    // swallowed (non-fatal) and the gate falls back to no-broadcast on failure.
     // Runs AFTER the credit gate so a denied first prompt leaves no orphaned row.
-    await conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
+    //
+    // FAIL-CLOSED (was `.catch(() => {})` — carry-forward fix from PR #2344's
+    // review). This used to be best-effort because nothing downstream strictly
+    // needed the row: the message write creates it itself if missing, and a
+    // failed broadcast gate just meant no broadcast. Migration 0249 changed
+    // that — `ai_stream_sessions.conversationId` now has a real FK to
+    // `conversations`, so a swallowed failure here no longer degrades
+    // gracefully: it resurfaces ~900 lines later as a FK violation inside
+    // `createStreamLifecycle`, INSIDE the advisory-lock closure, where it is
+    // misread as lock-machinery failure and costs the user a confusing
+    // mid-request 500 after the model may already have been billed. Surfacing
+    // it here instead is both earlier and cheaper — the `finally` below
+    // releases the credit hold on this early return, so nothing leaks.
+    //
+    // Only a THROW is fatal. `message_owner_conflict` is a returned status,
+    // not an error: it means this conversation id already carries messages
+    // owned by someone else, and the pre-existing behavior (proceed; the
+    // message write's own in-transaction create/lock decides) is deliberately
+    // preserved here rather than changed under cover of a fail-closed fix.
+    try {
+      const created = await conversationRepository.createConversation(conversationId, userId!, chatId);
+      if (created === 'message_owner_conflict') {
+        loggers.ai.warn('AI Chat API: conversation id already owned by another user\'s messages', {
+          conversationId,
+          userId,
+        });
+      }
+    } catch (error) {
+      loggers.ai.error('AI Chat API: Failed to ensure conversation row', error as Error, {
+        conversationId,
+        pageId: chatId,
+      });
+      return NextResponse.json(
+        {
+          error: 'Failed to start conversation. Please try again.',
+          details: error instanceof Error ? error.message : 'Unknown database error',
+        },
+        { status: 500 },
+      );
+    }
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message

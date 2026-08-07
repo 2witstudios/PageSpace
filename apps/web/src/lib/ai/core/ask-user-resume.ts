@@ -281,7 +281,9 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
   const toUIMessage = (row: {
     id: string;
     conversationId: string;
-    userId: string;
+    // Nullable since migration 0248 (agent-authored rows); the converter never
+    // reads it.
+    userId: string | null;
     role: string;
     content: string;
     toolCalls: unknown;
@@ -332,7 +334,10 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
           )
         )
         .limit(1);
-      if (!row || row.role !== 'assistant') return null;
+      // `userId === null` (possible on `messages` since 0248) means the row has
+      // no author to re-persist AS, so it is not resumable. No writer produces
+      // that shape yet — the guard is what keeps this path honest once one does.
+      if (!row || row.role !== 'assistant' || row.userId === null) return null;
       // See pageAdapter's fetchById: preserve the fetched row's terminal status rather than
       // letting persist silently default to 'complete'.
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
@@ -351,7 +356,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
         )
         .orderBy(desc(globalMessages.createdAt))
         .limit(1);
-      if (!row) return null;
+      if (!row || row.userId === null) return null;
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
   };

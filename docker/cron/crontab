@@ -98,6 +98,19 @@
 # doing redundant work.
 */30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
 
+# Message-unification drift guard - Every 30 minutes
+# Compares the two legs of the chat_messages -> messages dual-write (epic
+# "Agent-Session Single Source of Truth", Phase 4) for page conversations
+# active in the last 24h: row counts and MAX(createdAt) per conversation. Both
+# legs are written by one transaction, so any disagreement inside that window
+# means a writer bypassed the shared writer or the unified leg was refused —
+# the route logs it at ERROR level (that is the alert; the HTTP status only
+# says whether the check ran). READ-ONLY: the repair is
+# scripts/backfill-unify-messages.ts, deliberately not automatic, so the
+# evidence of the offending writer survives. Retired with the legacy table at
+# Phase 4 PR 15.
+*/30 * * * * flock -n /run/reconcile-message-unification.lock cron-curl GET __WEB_URL__/api/cron/reconcile-message-unification >> /var/log/cron/reconcile-message-unification.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-message-unification.log
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default
