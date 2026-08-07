@@ -71,6 +71,46 @@
  * that pays for itself is the one below: ONE entry, ONE decision, and the
  * concurrency-critical generation start shared outright
  * (`start-chat-generation.ts`) rather than maintained twice.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THE DIRECTORY NAME OVERSELLS
+ * ---------------------------------------------------------------------------
+ *
+ * "chat-pipeline" and "one pipeline behind two routes" describe the ENTRY, not
+ * the turn. The table above argues correctly against merging the two
+ * strategies; it does not establish that what remains is DRY, and it is not.
+ * Recorded here because two reviews independently measured it, and because the
+ * risk is precisely that a reader stops at the sentence above and assumes a fix
+ * lands on both surfaces:
+ *
+ *   - `runPageChatTurn` is ~2,080 lines in ONE function; `runGlobalChatTurn`
+ *     ~1,460. Both interleave decision and effect throughout, so neither has an
+ *     extractable core that can be unit-tested without a DB and a provider.
+ *   - 165 substantive lines of 40+ characters are byte-identical between them
+ *     (of 994 and 785 respectively). Measured, not estimated — strip comments
+ *     and blanks, compare the sets.
+ *   - The longest identical runs are NOT scattered. They cluster at
+ *     `page 1758-1915` ≡ `global 1312-1429`: the epilogue — stream
+ *     construction, `onFinish`, terminal persist, hold settle, telemetry. That
+ *     is the same region that holds the billing settle, `releaseHold`, and the
+ *     exactly-once mention latch. Two copies of the money path.
+ *
+ * That these can drift is not hypothetical: `5c1bc5410` on this very branch is
+ * titled "bring the global assistant to parity with the page chat".
+ *
+ * The extraction that would pay first is the epilogue, as a shared function
+ * over a typed turn context — not a merge of the strategies, which the table
+ * above still argues against. After it, the decisions worth lifting out as
+ * pure functions over injected deps are the ones that are decisions rather
+ * than effects: the credit gate, model/provider resolution, plan binding, and
+ * tool-set assembly. Each is currently reachable only through a DB and a live
+ * provider. Four sibling modules in this same epic
+ * (`claim-`/`close-`/`create-`/`reopen-conversation-in-workspace.ts`) carry the
+ * repo rule that branching logic belongs in a pure decision; it was applied to
+ * those ~40-line helpers and not to the ~3,500 lines here, where it would pay.
+ * Deliberately not attempted in the epic that RELOCATED this code from
+ * `route.ts` without rewriting it — but the gap should be legible from here
+ * rather than rediscovered by measurement.
  */
 
 import { NextResponse } from 'next/server';

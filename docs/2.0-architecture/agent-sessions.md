@@ -326,11 +326,17 @@ resolves its conversation. That branch was the last visible trace of the two-tab
 the send path.
 
 `/api/ai/chat` therefore accepts one shape it used to refuse: a request with no `chatId`
-whose `conversationId` resolves to an existing global-assistant conversation. That is the
-whole widening, it is fail-closed (the global strategy independently re-checks owner +
-`type='global'` + `isActive`), and an MCP token still cannot reach the global assistant
-through it — MCP has never been able to drive the global assistant and the entry refuses
-with the same answer the session-only route always gave.
+whose `conversationId` resolves to **the caller's own** existing global-assistant
+conversation. That is the whole widening, it is fail-closed (the global strategy
+independently re-checks owner + `type='global'` + `isActive`), and an MCP token still
+cannot reach the global assistant through it — MCP has never been able to drive the global
+assistant and the entry refuses with the same answer the session-only route always gave.
+
+The ownership clause is load-bearing for a reason unrelated to access, and was added by
+review: without it, someone else's global conversation routed to the global strategy and
+came back `404`, while every other id fell through to `400 "chatId is required"` — an
+existence oracle over conversation ids, in a codebase that refuses uniformly across
+"forbidden" and "does not exist" everywhere else it decides anything.
 
 **Two strategies, not one merged function, and deliberately so.** Beyond the shared
 prologue the two turns genuinely differ — the authorization subject (agent page vs
@@ -340,10 +346,30 @@ credit path (page chat aborts mid-stream on exhaustion), provider admission orde
 history seam, @mention notification, the realtime gates, and usage telemetry. Collapsing
 those into one function would mean twenty conditionals in the app's highest-risk path,
 several of them security decisions. The table of divergences is maintained in the entry's
-own docblock; the one stretch that WAS duplicated rather than merely similar — takeover,
-stream lifecycle and the `'streaming'` placeholder under a per-conversation advisory lock
-— is shared outright in `start-chat-generation.ts`, because a lock protocol maintained
-twice is a lock protocol that drifts into double generation and double billing.
+own docblock; the stretch with the worst failure mode — takeover, stream lifecycle and the
+`'streaming'` placeholder under a per-conversation advisory lock — is shared outright in
+`start-chat-generation.ts`, because a lock protocol maintained twice is a lock protocol
+that drifts into double generation and double billing.
+
+**What "one pipeline" does NOT mean, and this section used to imply.** It names the ENTRY.
+It says nothing about the two strategy functions, and they are neither small nor DRY:
+`runPageChatTurn` is ~2,080 lines in one function and `runGlobalChatTurn` ~1,460, with
+**165 substantive lines of 40+ characters byte-identical between them** — measured, and
+clustered rather than scattered, in the epilogue (stream construction, `onFinish`,
+terminal persist, hold settle, telemetry), which is also where the billing settle,
+`releaseHold` and the exactly-once mention latch live. Two copies of the money path. That
+they drift is on this branch's own record: `5c1bc5410`, "bring the global assistant to
+parity with the page chat".
+
+This section previously said the one duplicated stretch had been shared outright, which
+read as a claim that the rest was merely similar. It is not. The epic relocated this code
+out of `route.ts` and thinned the route to ~30 lines without rewriting the function it
+moved, and §5's rule — a description the code no longer enforces is worse than no
+description — applies to this document as much as to a tool docblock. The extraction that
+would pay first is the epilogue behind a typed turn context; it is a follow-up, not a
+claim already banked. Full measurement and line ranges are in `handle-chat-turn.ts`'s
+docblock, next to the divergence table that argues (still correctly) against merging the
+strategies themselves.
 
 ### 3c. The choke point has a guard again
 
