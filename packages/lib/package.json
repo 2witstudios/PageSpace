@@ -1607,6 +1607,11 @@
       "import": "./dist/realtime/rooms.js",
       "require": "./dist/realtime/rooms.js"
     },
+    "./realtime/conversation-event-names": {
+      "types": "./dist/realtime/conversation-event-names.d.ts",
+      "import": "./dist/realtime/conversation-event-names.js",
+      "require": "./dist/realtime/conversation-event-names.js"
+    },
     "./realtime/kick-client": {
       "types": "./dist/realtime/kick-client.d.ts",
       "import": "./dist/realtime/kick-client.js",

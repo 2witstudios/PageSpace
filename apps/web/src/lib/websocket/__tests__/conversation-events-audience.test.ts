@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/utils/environment', () => ({
 }));
 
 import fs from 'fs';
+import { CONVERSATION_EVENTS } from '@pagespace/lib/realtime/conversation-event-names';
 import path from 'path';
 import type { UIMessage } from 'ai';
 import {
@@ -433,5 +434,53 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
       .filter(([, events]) => events.some((event) => event.startsWith('conversation:')))
       .map(([file]) => file);
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * EVERY EMITTED NAME HAS A LISTENER.
+ *
+ * The audience suite above proves emissions go to the right ROOMS. This proves
+ * they go by the right NAMES — the other half of "the event arrived".
+ *
+ * The names now come from one shared const (`CONVERSATION_EVENTS` in
+ * packages/lib), so emitter and listener cannot spell them differently. But a
+ * shared const does not stop someone adding an event nobody subscribes to, or
+ * deleting the last listener for one still being emitted; both are silent, and
+ * invisible to any test that mocks the transport. So this scans the real client
+ * sources for `socket.on(...)` and requires a subscriber per name.
+ */
+describe('every conversation event a client can receive is subscribed', () => {
+  const WEB_SRC = path.resolve(__dirname, '../../..');
+  const LISTENER_FILES = [
+    'hooks/useConversationSubscription.ts',
+    'lib/realtime/session-directory-listener.ts',
+  ];
+
+  const subscribedNames = (): Set<string> => {
+    const found = new Set<string>();
+    for (const rel of LISTENER_FILES) {
+      const source = fs.readFileSync(path.join(WEB_SRC, rel), 'utf8');
+      for (const match of source.matchAll(/socket\.on\(\s*CONVERSATION_EVENTS\.(\w+)/g)) {
+        found.add(match[1]);
+      }
+    }
+    return found;
+  };
+
+  it('has a client subscriber for every name in CONVERSATION_EVENTS', () => {
+    const subscribed = subscribedNames();
+    const unsubscribed = Object.keys(CONVERSATION_EVENTS).filter((key) => !subscribed.has(key));
+    expect(
+      unsubscribed,
+      `emitted with no client listener: ${unsubscribed.join(', ')}. Either wire one up, ` +
+        'or delete the event — an emission nobody hears is a silent no-op.',
+    ).toEqual([]);
+  });
+
+  it('subscribes to nothing that is not an emitted name', () => {
+    const known = new Set(Object.keys(CONVERSATION_EVENTS));
+    const unknown = [...subscribedNames()].filter((key) => !known.has(key));
+    expect(unknown, `listening for names nothing emits: ${unknown.join(', ')}`).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { CONVERSATION_EVENTS } from '@pagespace/lib/realtime/conversation-event-names';
 import type { UIMessage } from 'ai';
 import { useSocket } from './useSocket';
 import { useSocketStore } from '@/stores/useSocketStore';
@@ -227,16 +228,16 @@ export function useConversationSubscription(
       heal(payload.rev);
     };
 
-    socket.on('conversation:message_created', applyMessage);
-    socket.on('conversation:message_updated', applyMessage);
-    socket.on('conversation:message_deleted', handleMessageDeleted);
-    socket.on('conversation:undo_applied', handleUndoApplied);
+    socket.on(CONVERSATION_EVENTS.messageCreated, applyMessage);
+    socket.on(CONVERSATION_EVENTS.messageUpdated, applyMessage);
+    socket.on(CONVERSATION_EVENTS.messageDeleted, handleMessageDeleted);
+    socket.on(CONVERSATION_EVENTS.undoApplied, handleUndoApplied);
 
     return () => {
-      socket.off('conversation:message_created', applyMessage);
-      socket.off('conversation:message_updated', applyMessage);
-      socket.off('conversation:message_deleted', handleMessageDeleted);
-      socket.off('conversation:undo_applied', handleUndoApplied);
+      socket.off(CONVERSATION_EVENTS.messageCreated, applyMessage);
+      socket.off(CONVERSATION_EVENTS.messageUpdated, applyMessage);
+      socket.off(CONVERSATION_EVENTS.messageDeleted, handleMessageDeleted);
+      socket.off(CONVERSATION_EVENTS.undoApplied, handleUndoApplied);
     };
   }, [socket, conversationId]);
 

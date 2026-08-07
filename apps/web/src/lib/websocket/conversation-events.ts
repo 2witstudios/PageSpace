@@ -44,6 +44,7 @@ import type { UIMessage } from 'ai';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
+import { CONVERSATION_EVENTS } from '@pagespace/lib/realtime/conversation-event-names';
 import { conversationRoom, userSessionsRoom, pageRoom } from '@pagespace/lib/realtime/rooms';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -264,7 +265,9 @@ export const shapeMessageForEvent = (
   };
 };
 
-type MessageEventName = 'conversation:message_created' | 'conversation:message_updated';
+type MessageEventName =
+  | typeof CONVERSATION_EVENTS.messageCreated
+  | typeof CONVERSATION_EVENTS.messageUpdated;
 
 async function emitMessageEvent(
   event: MessageEventName,
@@ -288,7 +291,7 @@ async function emitDirectoryBump(ctx: ConversationEmitContext, lastMessageAt: Da
     changes: { lastMessageAt: lastMessageAt ? lastMessageAt.toISOString() : null },
   };
   await Promise.all(
-    directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:updated', payload)),
+    directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.updated, payload)),
   );
 }
 
@@ -309,7 +312,7 @@ export const conversationEvents = {
     lastMessageAt: Date | null,
     options: ContentEmitOptions = {},
   ): Promise<void> {
-    await emitMessageEvent('conversation:message_created', ctx, message);
+    await emitMessageEvent(CONVERSATION_EVENTS.messageCreated, ctx, message);
     if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
   },
 
@@ -320,7 +323,7 @@ export const conversationEvents = {
     lastMessageAt: Date | null,
     options: ContentEmitOptions = {},
   ): Promise<void> {
-    await emitMessageEvent('conversation:message_updated', ctx, message);
+    await emitMessageEvent(CONVERSATION_EVENTS.messageUpdated, ctx, message);
     if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
   },
 
@@ -343,7 +346,7 @@ export const conversationEvents = {
     const payload: ConversationMessageDeletedPayload = { ...baseFromContext(ctx), messageId };
     await Promise.all(
       contentRoomsFor(ctx.conversationId).map((room) =>
-        postBroadcast(room, 'conversation:message_deleted', payload),
+        postBroadcast(room, CONVERSATION_EVENTS.messageDeleted, payload),
       ),
     );
     if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
@@ -359,7 +362,7 @@ export const conversationEvents = {
     const payload: ConversationUndoAppliedPayload = { ...baseFromContext(ctx), ...details };
     await Promise.all(
       contentRoomsFor(ctx.conversationId).map((room) =>
-        postBroadcast(room, 'conversation:undo_applied', payload),
+        postBroadcast(room, CONVERSATION_EVENTS.undoApplied, payload),
       ),
     );
     if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
@@ -372,7 +375,7 @@ export const conversationEvents = {
   ): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx), conversation };
     await Promise.all(
-      directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:created', payload)),
+      directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.created, payload)),
     );
   },
 
@@ -380,28 +383,28 @@ export const conversationEvents = {
   async updated(ctx: ConversationEmitContext, changes: ConversationChangedFields): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx), changes };
     await Promise.all(
-      directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:updated', payload)),
+      directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.updated, payload)),
     );
   },
 
   async closed(ctx: ConversationEmitContext): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx) };
     await Promise.all(
-      directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:closed', payload)),
+      directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.closed, payload)),
     );
   },
 
   async reopened(ctx: ConversationEmitContext): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx) };
     await Promise.all(
-      directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:reopened', payload)),
+      directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.reopened, payload)),
     );
   },
 
   async deleted(ctx: ConversationEmitContext): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx) };
     await Promise.all(
-      directoryRoomsFor(ctx).map((room) => postBroadcast(room, 'conversation:deleted', payload)),
+      directoryRoomsFor(ctx).map((room) => postBroadcast(room, CONVERSATION_EVENTS.deleted, payload)),
     );
   },
 

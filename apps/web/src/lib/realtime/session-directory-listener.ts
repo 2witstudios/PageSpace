@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { CONVERSATION_EVENTS } from '@pagespace/lib/realtime/conversation-event-names';
 import { useSWRConfig } from 'swr';
 import { useSocket } from '@/hooks/useSocket';
 import {
@@ -127,11 +128,11 @@ export function useSessionDirectoryListener(): void {
     const handleReopened = () => revalidateSessionListings(mutate);
     const handleSessionLifecycle = () => revalidateSessionListings(mutate);
 
-    socket.on('conversation:created', handleCreated);
-    socket.on('conversation:updated', handleUpdated);
-    socket.on('conversation:closed', handleRemoved);
-    socket.on('conversation:deleted', handleRemoved);
-    socket.on('conversation:reopened', handleReopened);
+    socket.on(CONVERSATION_EVENTS.created, handleCreated);
+    socket.on(CONVERSATION_EVENTS.updated, handleUpdated);
+    socket.on(CONVERSATION_EVENTS.closed, handleRemoved);
+    socket.on(CONVERSATION_EVENTS.deleted, handleRemoved);
+    socket.on(CONVERSATION_EVENTS.reopened, handleReopened);
     for (const event of SESSION_LIFECYCLE_EVENTS) socket.on(event, handleSessionLifecycle);
 
     // A reconnect missed whatever was emitted while we were away, and the
@@ -141,11 +142,11 @@ export function useSessionDirectoryListener(): void {
     socket.on('connect', handleSessionLifecycle);
 
     return () => {
-      socket.off('conversation:created', handleCreated);
-      socket.off('conversation:updated', handleUpdated);
-      socket.off('conversation:closed', handleRemoved);
-      socket.off('conversation:deleted', handleRemoved);
-      socket.off('conversation:reopened', handleReopened);
+      socket.off(CONVERSATION_EVENTS.created, handleCreated);
+      socket.off(CONVERSATION_EVENTS.updated, handleUpdated);
+      socket.off(CONVERSATION_EVENTS.closed, handleRemoved);
+      socket.off(CONVERSATION_EVENTS.deleted, handleRemoved);
+      socket.off(CONVERSATION_EVENTS.reopened, handleReopened);
       for (const event of SESSION_LIFECYCLE_EVENTS) socket.off(event, handleSessionLifecycle);
       socket.off('connect', handleSessionLifecycle);
     };
