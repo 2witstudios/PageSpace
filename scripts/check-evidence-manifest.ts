@@ -103,6 +103,33 @@ const SKIP_MODIFIERS = new Set(['skip', 'fixme', 'todo']);
  * counting for describe nesting never trips over a `{` inside a test name or a comment. Keeping
  * the length identical means offsets computed on the stripped copy still address the original.
  */
+/**
+ * Keywords after which a `/` opens a REGEX rather than dividing. Everything else that can
+ * precede a regex is punctuation (`=`, `(`, `[`, `,`, `:`, `&&`, …), which the check below
+ * accepts by default; the only ambiguity is a bare word, and a word is a regex prefix only
+ * when it is one of these.
+ */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+  'case', 'do', 'else', 'yield', 'await', 'throw',
+]);
+
+/** Is the `/` at `index` the start of a regex literal, rather than a division operator? */
+function regexAllowedAt(source: string, index: number): boolean {
+  let k = index - 1;
+  while (k >= 0 && /\s/.test(source[k])) k--;
+  if (k < 0) return true; // start of file
+  const prev = source[k];
+  // A closing bracket ends a VALUE, so what follows is an operator: `f(x) / 2`, `a[i] / 2`.
+  if (prev === ')' || prev === ']' || prev === '}') return false;
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    let start = k;
+    while (start >= 0 && /[A-Za-z0-9_$]/.test(source[start])) start--;
+    return REGEX_PRECEDING_KEYWORDS.has(source.slice(start + 1, k + 1));
+  }
+  return true;
+}
+
 export function blankOutLiteralsAndComments(source: string): string {
   const out = source.split('');
   let i = 0;
@@ -122,6 +149,32 @@ export function blankOutLiteralsAndComments(source: string): string {
       const stop = end === -1 ? source.length : end + 2;
       blankTo(stop);
       i = stop;
+    } else if (ch === '/' && regexAllowedAt(source, i)) {
+      // A REGEX LITERAL. Without this branch a pattern containing a quote —
+      // `/event:\s*(['"`]).../g` in conversation-events-audience.test.ts — puts the scanner
+      // into string mode at that quote and desynchronises it for the rest of the file, so
+      // every test declared after it becomes invisible (a false MISSING_TEST, or worse, a
+      // `.skip` nobody notices). `/` inside a `[...]` class does not close the literal, and a
+      // regex cannot span a newline — hitting one means this was division after all.
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < source.length) {
+        const c = source[j];
+        if (c === '\\') { j += 2; continue; }
+        if (c === '\n') break;
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) { closed = true; break; }
+        j++;
+      }
+      if (!closed) {
+        i++; // not a regex; leave the character alone
+      } else {
+        const stop = Math.min(j + 1, source.length);
+        blankTo(stop);
+        i = stop;
+      }
     } else if (ch === "'" || ch === '"' || ch === '`') {
       const quote = ch;
       let j = i + 1;
