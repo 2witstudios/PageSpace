@@ -78,8 +78,11 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+// The `[id]` GET reads the UNIFIED `messages` table since the message-table
+// merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6 — reader
+// cutover). Mocked at the repository seam so this suite stays a route test.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesByConversationId: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -91,7 +94,7 @@ import { GET as getById, DELETE } from '../[id]/route';
 import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -322,7 +325,7 @@ describe('GET /api/v1/conversations/[id]', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
     vi.mocked(getAllowedDriveIds).mockReturnValue([]);
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(null);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([]);
   });
 
   test('returns 401 when auth fails', async () => {
@@ -365,10 +368,11 @@ describe('GET /api/v1/conversations/[id]', () => {
 
   test('returns 200 with conversation and messages array', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([
       {
         id: 'msg-1',
-        pageId: 'page-1',
+        // No `pageId`: the unified read seam deliberately drops the
+        // transitional column (Phase 4 / D6 — it is deleted at PR 15).
         conversationId: 'conv-1',
         userId: 'user-1',
         role: 'user',
@@ -398,7 +402,7 @@ describe('GET /api/v1/conversations/[id]', () => {
 
   test('returns 200 with empty messages array when no messages exist', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([]);
     const response = await getById(makeGetRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
     const body = await response.json() as Record<string, unknown>;
     assert({
