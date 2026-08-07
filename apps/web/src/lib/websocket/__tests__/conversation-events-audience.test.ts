@@ -120,9 +120,13 @@ afterEach(() => {
 const EMITTERS: Record<string, (ctx: ConversationEmitContext) => Promise<void>> = {
   messageCreated: (ctx) => conversationEvents.messageCreated(ctx, message, new Date()),
   messageUpdated: (ctx) => conversationEvents.messageUpdated(ctx, message, new Date()),
-  messageDeleted: (ctx) => conversationEvents.messageDeleted(ctx, 'msgabc123'),
+  messageDeleted: (ctx) => conversationEvents.messageDeleted(ctx, 'msgabc123', new Date()),
   undoApplied: (ctx) =>
-    conversationEvents.undoApplied(ctx, { mode: 'messages_only', affectedMessageIds: ['msgabc123'] }),
+    conversationEvents.undoApplied(
+      ctx,
+      { mode: 'messages_only', affectedMessageIds: ['msgabc123'] },
+      new Date(),
+    ),
   created: (ctx) =>
     conversationEvents.created(ctx, {
       id: CONVERSATION,
@@ -256,6 +260,48 @@ describe('content never rides a directory event', () => {
     for (const t of directory) {
       expect(carriesContent(t.payload), `${t.event} leaked content to ${t.channelId}`).toBe(false);
     }
+  });
+});
+
+/**
+ * The directory bump is what the sidebar sorts on, so a delete that reports
+ * `lastMessageAt: null` does not mean "unchanged" — it means "oldest possible".
+ * `touchConversationInCache` sorts null as -Infinity, so these two events used
+ * to drop a busy conversation to the bottom of the list on a single message
+ * delete. They now carry the conversation's RECOMPUTED sort key, like every
+ * other content event does.
+ */
+describe('a delete reports the surviving sort key, not null', () => {
+  const surviving = new Date('2024-06-01T12:00:00.000Z');
+
+  const directoryChanges = () =>
+    capturedTargets
+      .filter((t) => t.event === 'conversation:updated')
+      .map((t) => (t.payload as { changes?: { lastMessageAt?: string | null } }).changes);
+
+  it('messageDeleted carries the newest surviving message', async () => {
+    await conversationEvents.messageDeleted(ctxFor(true), 'msgabc123', surviving);
+    const changes = directoryChanges();
+    expect(changes.length).toBeGreaterThan(0);
+    for (const c of changes) expect(c?.lastMessageAt).toBe(surviving.toISOString());
+  });
+
+  it('undoApplied carries the newest surviving message', async () => {
+    await conversationEvents.undoApplied(
+      ctxFor(true),
+      { mode: 'messages_only', affectedMessageIds: ['msgabc123'] },
+      surviving,
+    );
+    const changes = directoryChanges();
+    expect(changes.length).toBeGreaterThan(0);
+    for (const c of changes) expect(c?.lastMessageAt).toBe(surviving.toISOString());
+  });
+
+  it('still reports null when the delete left no messages at all', async () => {
+    await conversationEvents.messageDeleted(ctxFor(true), 'msgabc123', null);
+    const changes = directoryChanges();
+    expect(changes.length).toBeGreaterThan(0);
+    for (const c of changes) expect(c?.lastMessageAt).toBeNull();
   });
 });
 

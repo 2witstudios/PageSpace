@@ -914,7 +914,7 @@ export const messageRepository = {
         triggeredBy: args.legacyTriggeredBy,
       });
       const ctx = contextForMutation(row, args.conversationId, { kind: 'page', pageId: args.pageId }, args.legacyTriggeredBy);
-      await conversationEvents.messageDeleted(ctx, args.messageId, { skipDirectory: row === null });
+      await conversationEvents.messageDeleted(ctx, args.messageId, row?.lastMessageAt ?? null, { skipDirectory: row === null });
     })().catch((error) => {
       loggers.api.error('messageRepository: delete broadcast failed', error as Error, {
         messageId: args.messageId,
@@ -1008,7 +1008,7 @@ export const messageRepository = {
         { kind: 'global', ownerId: args.ownerUserId },
         args.legacyTriggeredBy,
       );
-      await conversationEvents.messageDeleted(ctx, args.messageId, { skipDirectory: row === null });
+      await conversationEvents.messageDeleted(ctx, args.messageId, row?.lastMessageAt ?? null, { skipDirectory: row === null });
     })().catch((error) => {
       loggers.api.error('messageRepository: global delete broadcast failed', error as Error, {
         messageId: args.messageId,
@@ -1092,6 +1092,7 @@ export const messageRepository = {
       await conversationEvents.undoApplied(
         ctx,
         { mode: args.mode, affectedMessageIds: args.affectedMessageIds },
+        args.bumped?.lastMessageAt ?? null,
         { skipDirectory: args.bumped === null },
       );
     })().catch((error) => {

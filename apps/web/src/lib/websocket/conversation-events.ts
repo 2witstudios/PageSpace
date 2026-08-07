@@ -324,9 +324,20 @@ export const conversationEvents = {
     if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
   },
 
+  /**
+   * A row was tombstoned. `lastMessageAt` is the conversation's RECOMPUTED sort
+   * key — the newest message that survived the delete, or null if none did.
+   *
+   * It used to be hard-coded `null` here, which the directory listener passes
+   * straight to `touchConversationInCache`, where null sorts as -Infinity. So
+   * deleting a single message dropped a busy conversation to the bottom of the
+   * sidebar until something else revalidated it. `messageUpdated` above always
+   * carried the real value; these two were the outliers.
+   */
   async messageDeleted(
     ctx: ConversationEmitContext,
     messageId: string,
+    lastMessageAt: Date | null,
     options: ContentEmitOptions = {},
   ): Promise<void> {
     const payload: ConversationMessageDeletedPayload = { ...baseFromContext(ctx), messageId };
@@ -335,12 +346,14 @@ export const conversationEvents = {
         postBroadcast(room, 'conversation:message_deleted', payload),
       ),
     );
-    if (!options.skipDirectory) await emitDirectoryBump(ctx, null);
+    if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
   },
 
+  /** As `messageDeleted`, for a whole undone range. Same recomputed sort key. */
   async undoApplied(
     ctx: ConversationEmitContext,
     details: { mode: 'messages_only' | 'messages_and_changes'; affectedMessageIds: string[] },
+    lastMessageAt: Date | null,
     options: ContentEmitOptions = {},
   ): Promise<void> {
     const payload: ConversationUndoAppliedPayload = { ...baseFromContext(ctx), ...details };
@@ -349,7 +362,7 @@ export const conversationEvents = {
         postBroadcast(room, 'conversation:undo_applied', payload),
       ),
     );
-    if (!options.skipDirectory) await emitDirectoryBump(ctx, null);
+    if (!options.skipDirectory) await emitDirectoryBump(ctx, lastMessageAt);
   },
 
   /** Directory: a conversation row was created (includes server-spawned workers). */
