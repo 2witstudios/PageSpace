@@ -83,6 +83,25 @@ let originalFetch: typeof globalThis.fetch;
 const urlOf = (input: RequestInfo | URL): string =>
   typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
+const REALTIME_ORIGIN = new URL(REALTIME_URL).origin;
+
+/**
+ * Whether a captured request is aimed at the fake realtime host.
+ *
+ * Compares the PARSED origin rather than `url.startsWith(REALTIME_URL)`: a
+ * prefix test also matches `http://realtime.test.invalid.example.com`, so the
+ * interceptor could swallow a request bound for an entirely different host and
+ * push it into `broadcasts` — a false pass. CodeQL flags the prefix form as
+ * `js/incomplete-url-substring-sanitization` for exactly that reason.
+ */
+function isRealtimeRequest(url: string): boolean {
+  try {
+    return new URL(url).origin === REALTIME_ORIGIN;
+  } catch {
+    return false; // a relative or malformed URL is never the realtime host
+  }
+}
+
 /**
  * Emission is fire-and-forget (`void (async () => ...)`), so the awaited write
  * returns before the POST lands. Poll rather than sleep a fixed amount.
@@ -132,7 +151,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     originalFetch = globalThis.fetch;
     const captureFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = urlOf(input);
-      if (url.startsWith(REALTIME_URL)) {
+      if (isRealtimeRequest(url)) {
         const body = typeof init?.body === 'string' ? init.body : '';
         broadcasts.push(JSON.parse(body) as CapturedBroadcast);
         return { ok: true, status: 200 } as unknown as Response;
