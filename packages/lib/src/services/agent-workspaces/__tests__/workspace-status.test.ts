@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveSandboxStatus } from '../session-status';
+import { deriveSandboxStatus } from '../workspace-status';
 
 const NOW = new Date('2026-07-28T12:00:00.000Z');
 const UNPROVISIONED = { sandboxId: null, spriteTornDownAt: null, endedAt: null };

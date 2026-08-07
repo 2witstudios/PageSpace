@@ -21,7 +21,7 @@
  * a close (or another reopen) of the same session's listings.
  */
 
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 
 export type ReopenConversationOutcome =
   | 'reopened'

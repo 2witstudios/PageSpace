@@ -33,7 +33,7 @@
  *
  * **No lifecycle branches live here.** Whether a session creates, resumes,
  * adopts or is denied is decided by `planAgentSessionLifecycle`
- * (`agent-workspaces/plan-session-lifecycle.ts`); this module observes, asks, and
+ * (`agent-workspaces/plan-workspace-lifecycle.ts`); this module observes, asks, and
  * executes the verdict — including which columns the verdict says to stamp.
  */
 
@@ -42,14 +42,14 @@ import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
 import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
-import { deriveAgentSessionSpriteKey } from '../../agent-workspaces/session-sprite-key';
+import { deriveAgentSessionSpriteKey } from '../../agent-workspaces/workspace-sprite-key';
 import {
   planAgentSessionLifecycle,
   type AgentSessionDenyReason,
   type AgentSessionLifecycleRow,
   type LiveSpriteInstance,
-} from '../../agent-workspaces/plan-session-lifecycle';
-import type { AgentSessionRecord, AgentSessionStore } from './agent-sessions-store';
+} from '../../agent-workspaces/plan-workspace-lifecycle';
+import type { AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
 import { loggers } from '../../logging/logger-config';
 
 /** The actor a provision runs as. Only what the Sprite key and the authorization gate need — a session has no clone to audit and no git token to resolve. */
@@ -58,7 +58,7 @@ export interface AgentSessionActorContext {
   tenantId: string;
 }
 
-/** The intents that can hand back a sandbox. `'end'` is not one of them — teardown lives in `agent-sessions.ts`, and its verdict is unconditional on authorization. */
+/** The intents that can hand back a sandbox. `'end'` is not one of them — teardown lives in `agent-workspaces.ts`, and its verdict is unconditional on authorization. */
 export type AgentSessionProvisionIntent = 'ensure' | 'attach' | 'reprovision';
 
 export interface AgentSessionSpriteDeps {

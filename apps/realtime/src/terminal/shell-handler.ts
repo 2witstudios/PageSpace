@@ -7,7 +7,7 @@ import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-ru
 import { parseShellConnectPayload } from './validation';
 import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-workspaces/session-scrollback';
+import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-workspaces/shell-scrollback';
 
 /**
  * Realtime PTY bridge for a named shell inside its agent session's ONE shared
@@ -190,7 +190,7 @@ export type SessionEndDeps = {
  * never carried a `shellId`). Keeping this decision — and the byte-cap
  * composition — OUT of the effectful funnel is what makes it unit-testable
  * without a fake store: same shared core `shell-io.ts`'s live answer uses
- * (`session-scrollback.ts`), applied to the WHOLE ring rather than a
+ * (`shell-scrollback.ts`), applied to the WHOLE ring rather than a
  * reader-chosen line count, since a cold read has no `limit` to honor yet.
  */
 export function planColdTailPersist(

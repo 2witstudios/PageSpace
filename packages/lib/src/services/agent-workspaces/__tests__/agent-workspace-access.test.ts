@@ -5,7 +5,7 @@
  * even ask about the capability.
  */
 import { describe, it, expect } from 'vitest';
-import { checkAgentSessionAccess, checkAgentSessionEndAccess, type AgentSessionAccessDeps } from '../agent-session-access';
+import { checkAgentSessionAccess, checkAgentSessionEndAccess, type AgentSessionAccessDeps } from '../agent-workspace-access';
 import { DRIVE_ID, OWNER_ID, SESSION_ID } from './fakes';
 
 const subject = { ownerId: OWNER_ID, driveId: DRIVE_ID };

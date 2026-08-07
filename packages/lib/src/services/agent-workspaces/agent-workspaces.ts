@@ -2,7 +2,7 @@
  * Agent sessions: spawn / end / list (IO, dependency-injected).
  *
  * The lifecycle orchestration around `agent_workspaces`, split from the Sprite
- * provisioning (`agent-session-sprite.ts`) because they answer different
+ * provisioning (`agent-workspace-sprite.ts`) because they answer different
  * questions: this module is about the ROW — does this session exist, is it
  * ended, what does a client see — while that one is about the VM.
  *
@@ -20,17 +20,17 @@
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
-import { planAgentSessionLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-session-lifecycle';
+import { planAgentSessionLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionDTO } from '../../agent-workspaces/contract';
-import { deriveSandboxStatus } from './session-status';
-import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-sessions-store';
+import { deriveSandboxStatus } from './workspace-status';
+import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
 
 export interface SpawnAgentSessionDeps {
   store: Pick<AgentSessionStore, 'createIfUnderLimit'>;
   now: () => Date;
   /**
    * The most NOT-ENDED sessions this owner may hold. REQUIRED, mirroring
-   * `checkConcurrency` in `agent-session-sprite.ts`: the ceiling used to be a
+   * `checkConcurrency` in `agent-workspace-sprite.ts`: the ceiling used to be a
    * pre-check at ONE call site (the web route), which a future caller could
    * simply forget to run. Folding it into this function's dependencies makes
    * it a property of spawning a session at all, not a habit each call site
@@ -268,7 +268,7 @@ export interface ListAgentSessionsDeps {
  * "everything" query to accidentally issue. Access is NOT checked here — the
  * caller has already established which scope the requester may enumerate (that
  * is what choosing the filter IS); per-row access is
- * `agent-session-access.ts`'s question.
+ * `agent-workspace-access.ts`'s question.
  */
 export async function listAgentSessions({
   filter,

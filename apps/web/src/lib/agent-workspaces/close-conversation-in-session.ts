@@ -19,7 +19,7 @@
  * which decides lifecycle/access lives in a testable module —
  * `agent-sessions-runtime.ts` only wires the production deps, wrapping the
  * whole decision in a per-session transaction + advisory lock (mirroring
- * `agent-sessions-store.ts`'s `createIfUnderLimit`) so two racing closes of a
+ * `agent-workspaces-store.ts`'s `createIfUnderLimit`) so two racing closes of a
  * session's last two listings serialize rather than both reading "more than
  * one open" and both succeeding.
  */

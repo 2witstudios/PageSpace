@@ -60,7 +60,7 @@ import {
 } from '../sandbox-tools-runtime';
 import type { ToolExecutionContext } from '../../core/types';
 import type { AcquireSandboxRequest } from '@pagespace/lib/services/sandbox/tool-runners';
-import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-sessions-store';
+import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {

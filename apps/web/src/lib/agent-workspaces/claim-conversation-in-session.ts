@@ -28,7 +28,7 @@
  * session's last cap slot.
  */
 
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 
 export type ClaimConversationOutcome =
   | 'claimed'

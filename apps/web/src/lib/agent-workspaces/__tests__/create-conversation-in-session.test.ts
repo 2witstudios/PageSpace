@@ -16,7 +16,7 @@ import {
   SessionFullError,
   type CreateConversationInSessionDeps,
 } from '../create-conversation-in-session';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 
 // What claim's own `findConversation` reads immediately after the creator
 // step ran, for a genuinely fresh (or freshly-idempotent) page conversation.

@@ -48,7 +48,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   There is no `session_ended` refusal anywhere. A reopened row is re-endable.
 - **Global assistant = null `driveId`.** A global-assistant session lives outside any
   drive; access and billing fall back to `ownerId` — owner-only **by construction**
-  (`packages/lib/src/agent-workspaces/decide-session-access.ts`: a null-drive session has
+  (`packages/lib/src/agent-workspaces/decide-workspace-access.ts`: a null-drive session has
   no drive to share through). Drive sessions authorize by drive access
   (owner/accepted member); unknown denies.
 - **No `agentPageId` on the session.** A session hosts conversations with many agents,
@@ -61,7 +61,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   listing (`closedInWorkspaceAt`) never touches history soft-delete (`isActive`).
   Reopening clears the stamp. Closed listings are refused by worker verbs (§2).
 - **Sandbox status is derived, never stored** (`deriveSandboxStatus`,
-  `packages/lib/src/services/agent-workspaces/session-status.ts`): the four lifecycle
+  `packages/lib/src/services/agent-workspaces/workspace-status.ts`): the four lifecycle
   stamps are each single-writer facts; a status column would be a second copy. This
   stays true under the epic — it is the pattern, not an exception to it.
 - **Pane grid: COMPLETE** (epic Phase 3, the #2202 machine-panes pattern).
@@ -448,7 +448,7 @@ product decision, not an accident of history, and the internal renames stop at t
 boundary.
 
 Also unchanged, on purpose: the `pgs-ses-` Sprite-name prefix and the
-`agent-session-sprite:v2` HMAC namespace (`session-sprite-key.ts`) — both are fold inputs,
+`agent-session-sprite:v2` HMAC namespace (`workspace-sprite-key.ts`) — both are fold inputs,
 so touching either re-derives every live VM's name; the `resourceType: 'agent_session'`
 security-audit value, which is recorded history; and the web→realtime shell-activity wire
 field, which would need its own accept-both window.
@@ -502,7 +502,7 @@ The normative sources for session semantics are, in order:
    `session-tools-runtime.test.ts`). A description that drifts from behavior
    fails CI instead of shipping.
 2. **This document** for the model and the axioms.
-3. Schema doc comments (`agent-sessions.ts`, `conversations.ts`) for per-column
+3. Schema doc comments (`agent-workspaces.ts`, `conversations.ts`) for per-column
    rationale.
 
 A PR that changes session semantics — a verb's gates, the binding rules, lifecycle

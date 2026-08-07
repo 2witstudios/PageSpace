@@ -23,7 +23,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
 }));
-vi.mock('@pagespace/lib/services/agent-workspaces/agent-session-tenant', () => ({
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   resolveDriveMembership: (...args: unknown[]) => mockResolveDriveMembership(...args),
 }));
 vi.mock('@/lib/agent-workspaces/agent-sessions-conversations-runtime', () => ({

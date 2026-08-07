@@ -9,7 +9,7 @@
  * last-N-lines → byte-cap dropping WHOLE leading lines (never mid-line) →
  * UTF-8-safe mid-line cut with a `…` marker when even one line outgrows the cap.
  *
- * Carried VERBATIM from `services/machines/session-scrollback.ts` (it has no
+ * Carried VERBATIM from `services/machines/shell-scrollback.ts` (it has no
  * imports to re-point): a shell's scrollback is the same problem whether the PTY
  * hangs off a machine terminal or an agent session, and the cold-tail columns it
  * feeds are identical on both tables. Its tests come across verbatim too.

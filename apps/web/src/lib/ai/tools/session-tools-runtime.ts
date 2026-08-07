@@ -25,13 +25,13 @@ import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-session-access';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/session-status';
+import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/workspace-status';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
   checkAccessForSubject,
@@ -54,7 +54,7 @@ import {
   AgentNotInSessionDriveError,
   SessionFullError,
 } from '@/lib/agent-workspaces/create-conversation-in-session';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,

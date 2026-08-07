@@ -4,7 +4,7 @@
  *
  * A launch spec is just `{ command, args }`: the binary + args a PTY is opened
  * with. It stays pure data (no IO) so both the spawn orchestration
- * (`session-shells.ts`) and the realtime PTY bridge resolve the SAME spec
+ * (`workspace-shells.ts`) and the realtime PTY bridge resolve the SAME spec
  * without either owning the registry. Adding a PTY agent CLI is one new entry
  * here; nothing that resolves a spec branches on which one it got.
  *

@@ -36,7 +36,7 @@
  * surface moved here).
  *
  * Naming/validation and the depth + concurrency caps are PURE
- * (`plan-spawn-session.ts`); this module resolves context, enforces the plan,
+ * (`plan-spawn-worker.ts`); this module resolves context, enforces the plan,
  * and delegates to injected IO. It is the provider-agnostic FACTORY only —
  * no DB, no SDK, unit-tested with fakes; production wiring lives in
  * `session-tools-runtime.ts`.
@@ -62,7 +62,7 @@ import {
   MAX_AGENT_DEPTH,
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
-} from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+} from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
 import { MAX_GRID_COLUMNS } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';

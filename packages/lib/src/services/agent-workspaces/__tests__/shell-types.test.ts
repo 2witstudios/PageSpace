@@ -7,7 +7,7 @@ import {
   isValidShellCommand,
 } from '../shell-types';
 import { SHELL_AGENT_TYPES } from '../../../agent-workspaces/contract';
-import { isValidShellName } from '../../../agent-workspaces/plan-spawn-session';
+import { isValidShellName } from '../../../agent-workspaces/plan-spawn-worker';
 
 describe('isShellAgentType', () => {
   it('given the shell type, should recognize it', () => {

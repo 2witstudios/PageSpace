@@ -114,7 +114,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
 
   // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a
   // drive's sidebar can show a global-assistant session whose conversations
-  // are with agents from ANY accessible drive (agent-sessions-store.ts's
+  // are with agents from ANY accessible drive (agent-workspaces-store.ts's
   // `list()` now surfaces those), so `agentNamesById` below needs every
   // accessible agent's name, not just this drive's, to label them correctly
   // instead of falling back to the generic "Agent" (review: Codex P2 on
@@ -345,7 +345,7 @@ function SessionList({
   // rule as global mode), surfaces the caller's global sessions (driveId
   // null) — those aren't this drive's data, they're the user's, and the API
   // now includes them in every drive-scoped listing (see
-  // agent-sessions-store.ts's `list()`) — but ONLY when there's at least one:
+  // agent-workspaces-store.ts's `list()`) — but ONLY when there's at least one:
   // unlike global mode's Assistant group, this one has no `canSpawn`
   // always-show escape hatch, because "Global Assistant" already names a
   // different, unrelated affordance in drive mode: the new-session drive

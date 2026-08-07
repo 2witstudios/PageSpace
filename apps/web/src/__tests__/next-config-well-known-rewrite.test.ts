@@ -30,7 +30,7 @@ describe('next.config rewrites — agent-sessions → agent-workspaces compat al
     // must win on their own paths, and this only catches requests that would
     // otherwise 404.
     expect(afterFiles).toContainEqual({
-      source: '/api/agent-sessions',
+      source: '/api/agent-workspaces',
       destination: '/api/agent-workspaces',
     });
     expect(afterFiles).toContainEqual({

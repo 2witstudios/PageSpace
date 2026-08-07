@@ -24,7 +24,7 @@
  * `agent-sessions-runtime.ts` only wires the production deps.
  */
 
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   claimConversationInSessionWith,
   type ClaimConversationInSessionDeps,

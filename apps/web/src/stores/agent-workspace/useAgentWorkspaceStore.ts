@@ -13,7 +13,6 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import {
   applyVerbLocal,
   isLastPane,
-  paneShowing,
   panesOf,
   type PaneState,
   type WorkspaceLayoutVerb,
@@ -879,7 +878,6 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         // DIFFERENT session's key would poison every consumer that trusts
         // `workspace.id` to match.
         if (workspace.id !== sessionId) return;
-        const previous = get().sync[sessionId];
         // A verb still on the wire belongs to the state being replaced.
         bumpGeneration(sessionId);
         commit(

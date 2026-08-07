@@ -297,7 +297,7 @@
           "suite": "web-unit"
         },
         {
-          "file": "packages/lib/src/agent-workspaces/__tests__/decide-session-access.test.ts",
+          "file": "packages/lib/src/agent-workspaces/__tests__/decide-workspace-access.test.ts",
           "name": "denies an UNRESOLVED membership — unknown is never a grant",
           "suite": "lib-unit"
         }

@@ -51,7 +51,7 @@ import {
   MAX_SCROLLBACK_TAIL_BYTES,
   scrollbackLines,
   tailOfLines,
-} from '@pagespace/lib/services/agent-workspaces/session-scrollback';
+} from '@pagespace/lib/services/agent-workspaces/shell-scrollback';
 
 /**
  * How much scrollback one read may ship back. The ring itself holds 64 KiB;

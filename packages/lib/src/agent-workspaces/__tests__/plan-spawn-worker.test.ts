@@ -9,7 +9,7 @@ import {
   MAX_SESSION_CONVERSATIONS,
   SHELL_LABEL_PREFIX,
   type PlanSpawnWorkerSessionInput,
-} from '../plan-spawn-session';
+} from '../plan-spawn-worker';
 
 describe('nextShellLabel', () => {
   it('given no shells, should label the first one shell-1', () => {

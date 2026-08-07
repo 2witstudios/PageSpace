@@ -14,7 +14,7 @@
  *   - a non-owner has access only when the conversation is explicitly shared
  *     AND it is a page conversation whose page the user can view. A shared
  *     GLOBAL conversation has no page to share through, so a non-owner never
- *     has access to it (matching decide-session-access.ts: a null-drive
+ *     has access to it (matching decide-workspace-access.ts: a null-drive
  *     session is owner-only by construction).
  *
  * Fails closed: a conversation with no row is not shared, so callers must

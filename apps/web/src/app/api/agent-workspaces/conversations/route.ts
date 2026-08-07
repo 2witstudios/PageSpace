@@ -19,7 +19,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
-import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   listAllConversationsPaginated,

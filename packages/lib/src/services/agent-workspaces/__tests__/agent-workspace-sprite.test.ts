@@ -4,9 +4,9 @@ import {
   intentForProbeOutcome,
   type AgentSessionSpriteDeps,
   type AgentSessionSpriteRow,
-} from '../agent-session-sprite';
-import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/session-sprite-key';
-import type { AgentSessionRecord } from '../agent-sessions-store';
+} from '../agent-workspace-sprite';
+import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
+import type { AgentSessionRecord } from '../agent-workspaces-store';
 import {
   DRIVE_ID,
   NOW,

@@ -47,7 +47,7 @@ import {
   provisionSessionSandbox,
   toAgentSessionDTO,
 } from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

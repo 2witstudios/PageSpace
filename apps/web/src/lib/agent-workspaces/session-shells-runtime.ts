@@ -2,13 +2,13 @@
  * Production wiring for the session-shell services — DI of the DB-backed shell
  * store and the Sprites host into `spawnSessionShell` / `listSessionShells` /
  * `killSessionShellById` / `resolveSessionShellById`. Naming and kill-target
- * policy live in the pure `plan-spawn-session.ts`; nothing here decides.
+ * policy live in the pure `plan-spawn-worker.ts`; nothing here decides.
  */
 
 import {
   createDbSessionShellStore,
   type SessionShellStore,
-} from '@pagespace/lib/services/agent-workspaces/session-shells-store';
+} from '@pagespace/lib/services/agent-workspaces/workspace-shells-store';
 import {
   spawnSessionShell,
   listSessionShells,
@@ -18,7 +18,7 @@ import {
   type SpawnSessionShellResult,
   type KillSessionShellResult,
   type ResolveSessionShellResult,
-} from '@pagespace/lib/services/agent-workspaces/session-shells';
+} from '@pagespace/lib/services/agent-workspaces/workspace-shells';
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';

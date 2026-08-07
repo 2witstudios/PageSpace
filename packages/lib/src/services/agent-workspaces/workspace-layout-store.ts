@@ -9,7 +9,7 @@
  * (the verb route's idempotency memory). Kept separate from the pure engine
  * (`../../agent-workspaces/workspace-layout-verbs.ts`) so the engine is
  * testable against an in-memory fake without a database — same split as
- * `agent-sessions-store.ts`.
+ * `agent-workspaces-store.ts`.
  *
  * `replaceWorkspaceGrid` is the ONE write primitive: it deletes and
  * re-inserts a workspace's whole grid inside the SAME transaction that mints

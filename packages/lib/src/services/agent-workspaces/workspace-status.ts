@@ -17,7 +17,7 @@
  *  - `'running'` — a Sprite is linked. This DELIBERATELY includes a hibernating
  *    one: idle Sprites hibernate and wake on demand, which is invisible to the
  *    user, so it is not a status of its own (and idleness never destroys — see
- *    `plan-session-lifecycle.ts`).
+ *    `plan-workspace-lifecycle.ts`).
  *  - `'none'` — the session never acquired a Sprite. The common case: most
  *    conversations never touch one.
  *

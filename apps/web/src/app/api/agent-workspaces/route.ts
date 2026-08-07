@@ -55,7 +55,7 @@ const MAX_SESSION_NAME_LENGTH = 120;
  * A blank-name spawn's auto-label: the first collision-free of `base`,
  * `base 2`, `base 3`, … — mirroring `nextShellLabel`'s "count existing,
  * append a number, scan past collisions" pattern
- * (`plan-spawn-session.ts:61-68`), but starting at the bare label rather than
+ * (`plan-spawn-worker.ts:61-68`), but starting at the bare label rather than
  * always suffixing a number: no session is ever born "Shell 1".
  */
 function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {

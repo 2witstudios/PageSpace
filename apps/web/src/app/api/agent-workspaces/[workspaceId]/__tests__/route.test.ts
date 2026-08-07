@@ -42,7 +42,7 @@ vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   toAgentSessionDTO: (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
 }));
-vi.mock('@pagespace/lib/services/agent-workspaces/agent-session-tenant', () => ({
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   canRunCodeForSession: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
 

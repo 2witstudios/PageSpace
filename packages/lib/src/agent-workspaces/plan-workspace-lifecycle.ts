@@ -145,7 +145,7 @@ export interface PlanAgentSessionLifecycleInput {
   intent: AgentSessionIntent;
   /**
    * The caller's freshly-computed code-execution authorization (see
-   * `decide-session-access.ts`), passed through rather than re-derived — every
+   * `decide-workspace-access.ts`), passed through rather than re-derived — every
    * request re-checks it, and a warm session is never handed back to an actor who
    * lost the right to it.
    */
@@ -253,7 +253,7 @@ export function planAgentSessionLifecycle({
     // A CONFIRMED kill is checked BEFORE `sandboxId`, and specifically on
     // `spriteTornDownAt` rather than the broader `isEnded` — teardown never
     // clears `sandboxId` (the row outlives its Sprite, on purpose; see
-    // `agent-sessions-store.ts`'s schema doc), so a NORMALLY-ended session —
+    // `agent-workspaces-store.ts`'s schema doc), so a NORMALLY-ended session —
     // the common shape, `sandboxId` still recorded — used to fall through to
     // `teardown` on every re-end, re-requesting teardown and re-killing an
     // already-confirmed-dead Sprite (review #2261/4). `isEnded` would be the

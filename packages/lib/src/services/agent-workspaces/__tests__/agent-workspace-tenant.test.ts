@@ -29,7 +29,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 const mockCanRunCode = vi.hoisted(() => vi.fn());
 vi.mock('../../sandbox/can-run-code', () => ({ canRunCode: mockCanRunCode }));
 
-import { resolveSessionTenantId, resolveDriveMembership, canRunCodeForSession } from '../agent-session-tenant';
+import { resolveSessionTenantId, resolveDriveMembership, canRunCodeForSession } from '../agent-workspace-tenant';
 
 beforeEach(() => {
   mockDriveFindFirst.mockReset();

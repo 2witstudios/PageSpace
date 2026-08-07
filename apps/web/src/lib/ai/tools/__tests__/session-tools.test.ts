@@ -6,7 +6,7 @@ import {
   UNTRUSTED_TRANSCRIPT_NOTE,
   type SessionToolsDeps,
 } from '../session-tools';
-import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { ToolExecutionContext } from '../../core/types';
 
 const USER_ID = 'user-1';

@@ -16,20 +16,20 @@
  * instead of spawning a duplicate process. A shell row is therefore cheap and
  * inert until someone actually looks at it.
  *
- * Naming and kill-target policy come from `plan-spawn-session.ts` (pure); this
+ * Naming and kill-target policy come from `plan-spawn-worker.ts` (pure); this
  * module executes those verdicts.
  */
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
-import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-session';
+import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-worker';
 import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/contract';
 import { isShellAgentType, isValidShellCommand } from './shell-types';
 import {
   isUniqueViolation,
   type SessionShellRecord,
   type SessionShellStore,
-} from './session-shells-store';
+} from './workspace-shells-store';
 
 /** The default (and, today, only) PTY type — see `shell-types.ts`. */
 const DEFAULT_SHELL_AGENT_TYPE: ShellAgentType = 'shell';

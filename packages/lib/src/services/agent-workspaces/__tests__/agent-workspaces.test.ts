@@ -5,11 +5,11 @@ import {
   listAgentSessions,
   toAgentSessionDTO,
   type SpawnAgentSessionDeps,
-} from '../agent-sessions';
-import type { AgentSessionListFilter } from '../agent-sessions-store';
-import { ensureAgentSessionSandbox, type AgentSessionSpriteRow } from '../agent-session-sprite';
+} from '../agent-workspaces';
+import type { AgentSessionListFilter } from '../agent-workspaces-store';
+import { ensureAgentSessionSandbox, type AgentSessionSpriteRow } from '../agent-workspace-sprite';
 import { agentSessionDtoSchema } from '../../../agent-workspaces/contract';
-import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/session-sprite-key';
+import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
 import {
   DRIVE_ID,
   NOW,

@@ -8,7 +8,7 @@
  * and `create-conversation-in-session.test.ts`'s style.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   claimConversationInSessionWith,
   type ClaimConversationInSessionDeps,

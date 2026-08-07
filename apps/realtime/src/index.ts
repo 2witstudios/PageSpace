@@ -53,16 +53,16 @@ import { buildShellCheckAuth } from './terminal/shell-access';
 import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { handleShellActivityRequest } from './terminal/shell-activity';
-import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-session-access';
+import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
 import {
   resolveSessionTenantId,
   resolveDriveMembership,
   canRunCodeForSession,
-} from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
-import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/session-shells';
-import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/session-shells-store';
-import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-sessions-store';
-import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-session-sprite';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/workspace-shells';
+import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/workspace-shells-store';
+import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import {

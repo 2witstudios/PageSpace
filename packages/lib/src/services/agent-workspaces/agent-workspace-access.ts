@@ -21,7 +21,7 @@ import {
   type AgentSessionAccessDecision,
   type AgentSessionAccessSubject,
   type DriveMembership,
-} from '../../agent-workspaces/decide-session-access';
+} from '../../agent-workspaces/decide-workspace-access';
 
 export interface AgentSessionAccessDeps {
   /** The session row, reduced to the three identity columns the decision needs. `null` = no such session. */

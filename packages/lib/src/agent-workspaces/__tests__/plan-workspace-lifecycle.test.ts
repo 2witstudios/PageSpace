@@ -4,7 +4,7 @@ import {
   planSessionReopen,
   type AgentSessionLifecycleRow,
   type AgentSessionIntent,
-} from '../plan-session-lifecycle';
+} from '../plan-workspace-lifecycle';
 
 const NOW = new Date('2026-07-28T12:00:00.000Z');
 const LONG_AGO = new Date('2020-01-01T00:00:00.000Z');

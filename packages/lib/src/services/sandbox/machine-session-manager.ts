@@ -8,7 +8,7 @@ import type { SandboxCreateOptions } from './sandbox-options';
  * `deriveMachineSessionKey`, …) for the deleted Machine page type — that
  * table and its whole call chain are gone. `sandbox-client/types.ts` extends
  * the two interfaces below; `getSandboxSessionSecret` is still read by both
- * the web and realtime session-key derivations (`agent-workspaces/session-sprite-key.ts`).
+ * the web and realtime session-key derivations (`agent-workspaces/workspace-sprite-key.ts`).
  */
 
 /** Minimal sandbox handle the lifecycle needs. */

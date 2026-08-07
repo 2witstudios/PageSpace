@@ -23,7 +23,7 @@ import { and, eq, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { canRunCode } from '../sandbox/can-run-code';
-import type { DriveMembership } from '../../agent-workspaces/decide-session-access';
+import type { DriveMembership } from '../../agent-workspaces/decide-workspace-access';
 
 export type ResolveSessionTenantIdResult =
   | { ok: true; tenantId: string }

@@ -27,7 +27,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   claimConversationInSession,
   createConversationInSession,

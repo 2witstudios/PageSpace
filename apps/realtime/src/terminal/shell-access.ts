@@ -28,7 +28,7 @@
  */
 
 import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-workspaces/shell-types';
-import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-session-access';
+import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -73,7 +73,7 @@ export interface ShellCheckAuthDeps {
   releaseSlot: (userId: string) => void;
   /**
    * The SHARED provisioning path — `ensureAgentSessionSandbox` from
-   * `packages/lib/src/services/agent-workspaces/agent-session-sprite.ts`, wired
+   * `packages/lib/src/services/agent-workspaces/agent-workspace-sprite.ts`, wired
    * with real deps by the caller. One code path with the web tier, so the CAS
    * inside it actually serializes concurrent provisioners.
    */
@@ -172,7 +172,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
 
         // The ONE shared provisioning path. If the session has no sandbox this
         // creates it; if it has one this resumes/adopts it — every branch of
-        // that verdict lives in `plan-session-lifecycle.ts`, not here.
+        // that verdict lives in `plan-workspace-lifecycle.ts`, not here.
         let ensured: Awaited<ReturnType<ShellCheckAuthDeps['ensureSessionSandbox']>>;
         try {
           ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, userId });

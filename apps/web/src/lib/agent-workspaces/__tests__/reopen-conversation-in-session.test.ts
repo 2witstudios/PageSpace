@@ -6,7 +6,7 @@
  * `close-conversation-in-session.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   reopenConversationInSessionWith,
   type ReopenConversationInSessionDeps,

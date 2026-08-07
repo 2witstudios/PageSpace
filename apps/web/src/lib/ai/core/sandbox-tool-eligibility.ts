@@ -17,7 +17,7 @@
  * whose every call then died at `canRunCode`'s drive-role check.
  */
 
-import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
 /** `driveId`: the agent page's own drive (null for the global assistant). */
 export async function resolveSandboxToolEligibility(

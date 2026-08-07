@@ -19,10 +19,10 @@ import type {
   SandboxStreamSessionInfo,
 } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
-import type { AgentSessionRecord, AgentSessionStore } from '../agent-sessions-store';
-import { stampColumns } from '../agent-sessions-store';
+import type { AgentSessionRecord, AgentSessionStore } from '../agent-workspaces-store';
+import { stampColumns } from '../agent-workspaces-store';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/contract';
-import type { SessionShellRecord, SessionShellStore } from '../session-shells-store';
+import type { SessionShellRecord, SessionShellStore } from '../workspace-shells-store';
 
 export const NOW = new Date('2026-07-28T12:00:00.000Z');
 export const SESSION_ID = 'ses-1';

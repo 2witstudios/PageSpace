@@ -193,7 +193,7 @@ export const nextConfig: NextConfig = {
       // unchanged. The contract PR deletes this block.
       afterFiles: [
         {
-          source: "/api/agent-sessions",
+          source: "/api/agent-workspaces",
           destination: "/api/agent-workspaces",
         },
         {

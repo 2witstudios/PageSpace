@@ -67,7 +67,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 // The tenant gather is mocked (it reads the DB); the pure access decision and
 // the pure redaction rule are deliberately REAL — the whole point of the
 // shared-workspace listing is that it reuses those exact functions.
-vi.mock('@pagespace/lib/services/agent-workspaces/agent-session-tenant', () => ({
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   resolveDriveMembership: mockResolveDriveMembership,
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({

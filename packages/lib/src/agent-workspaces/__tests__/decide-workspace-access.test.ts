@@ -14,7 +14,7 @@ import {
   decideAgentSessionAccess,
   decideAgentSessionEndAccess,
   type AgentSessionAccessSubject,
-} from '../decide-session-access';
+} from '../decide-workspace-access';
 
 const driveSession: AgentSessionAccessSubject = { ownerId: 'owner-1', driveId: 'drive-1' };
 const globalSession: AgentSessionAccessSubject = { ownerId: 'owner-1', driveId: null };

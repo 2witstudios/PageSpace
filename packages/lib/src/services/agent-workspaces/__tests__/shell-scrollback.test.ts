@@ -4,7 +4,7 @@ import {
   scrollbackLines,
   capTailBytes,
   tailOfLines,
-} from '../session-scrollback';
+} from '../shell-scrollback';
 
 describe('scrollbackLines', () => {
   it('given an empty ring, should return no lines', () => {

@@ -81,7 +81,7 @@ describe('drizzle/0254 agent_workspaces rename — migration text', () => {
 
   it('should leave the Sprite-key namespace alone (the fold input, not just the id)', () => {
     const keySource = readFileSync(
-      path.resolve(__dirname, '../../../lib/src/agent-workspaces/session-sprite-key.ts'),
+      path.resolve(__dirname, '../../../lib/src/agent-workspaces/workspace-sprite-key.ts'),
       'utf8',
     );
     // Bumping either of these re-derives every Sprite name from the same ids —

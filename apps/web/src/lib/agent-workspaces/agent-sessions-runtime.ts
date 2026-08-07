@@ -46,32 +46,32 @@ import {
   toAgentSessionDTO,
   type SpawnAgentSessionResult,
   type EndAgentSessionResult,
-} from '@pagespace/lib/services/agent-workspaces/agent-sessions';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspaces';
 import {
   createDbAgentSessionStore,
   type AgentSessionListFilter,
   type AgentSessionRecord,
   type AgentSessionStore,
-} from '@pagespace/lib/services/agent-workspaces/agent-sessions-store';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 import {
   ensureAgentSessionSandbox,
   type EnsureAgentSessionSandboxResult,
-} from '@pagespace/lib/services/agent-workspaces/agent-session-sprite';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import {
   checkAgentSessionAccess,
   checkAgentSessionEndAccess,
   type AgentSessionAccessCheck,
   type AgentSessionAccessDeps,
-} from '@pagespace/lib/services/agent-workspaces/agent-session-access';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
 import {
   resolveSessionTenantId,
   resolveDriveMembership,
   canRunCodeForSession,
-} from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/contract';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-session-access';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
-import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-session-lifecycle';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
@@ -845,7 +845,7 @@ export async function listSessionConversationsBulk(
 
 /**
  * Provision (or resume/adopt) a session row's sandbox — the ONE code path both
- * the web app and the realtime bridge use, per `agent-session-sprite.ts`'s CAS
+ * the web app and the realtime bridge use, per `agent-workspace-sprite.ts`'s CAS
  * doc. `requesterId` is who this provision authorizes as.
  */
 export async function provisionSessionSandbox(

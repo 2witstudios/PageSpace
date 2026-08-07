@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveAgentSessionSpriteKey } from '../session-sprite-key';
+import { deriveAgentSessionSpriteKey } from '../workspace-sprite-key';
 
 const SECRET = 'test-secret-at-least-32-chars-long-xxxxx';
 const base = { tenantId: 'tenant-1', workspaceId: 'conv-1', secret: SECRET };

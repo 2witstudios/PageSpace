@@ -23,7 +23,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
-import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-sessions-store';
+import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-workspaces-store';
 
 const ownerId = createId();
 const driveId = createId();

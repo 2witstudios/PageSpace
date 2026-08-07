@@ -4,14 +4,14 @@
  * DB-backed CRUD for `agent_workspaces` — one row per SESSION: a drive-level
  * workspace that owns one sandbox and hosts many conversations plus shells
  * (see `contract.ts` invariant 1). Kept separate from the lifecycle orchestration
- * (`agent-sessions.ts`, `agent-session-sprite.ts`) so that orchestration is
+ * (`agent-workspaces.ts`, `agent-workspace-sprite.ts`) so that orchestration is
  * testable against an in-memory fake with NO database and NO live Sprite, the
  * same discipline `services/machines/agent-terminals-store.ts` established.
  *
  * Two things are deliberately NOT in this module:
  *
  *  - **No policy.** Every write this store performs is described by a verdict
- *    from `plan-session-lifecycle.ts` — including WHICH columns to stamp, which
+ *    from `plan-workspace-lifecycle.ts` — including WHICH columns to stamp, which
  *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
@@ -23,7 +23,7 @@
  *    filesystem, which the model forbids (moving a thread is a fork).
  */
 
-import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-session-lifecycle';
+import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/contract';
 
 /** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
@@ -158,7 +158,7 @@ export interface AgentSessionStore {
    * measurement is fire-and-forget, so a `du` against generation A can still be
    * in flight when A is torn down and B provisioned — and B's own stamps clear
    * `spriteTornDownAt` AND null the measurement columns
-   * (`plan-session-lifecycle.ts`), so the late write finds a live row, lands A's
+   * (`plan-workspace-lifecycle.ts`), so the late write finds a live row, lands A's
    * bytes on B, and stamps a fresh `storageMeasuredAt` that suppresses B's real
    * measurement for the whole throttle window. The reconcile then bills B's
    * interval against A's disk. The teardown-only guard is the one case where the

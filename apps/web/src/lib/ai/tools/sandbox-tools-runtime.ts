@@ -16,7 +16,7 @@
  * namespaces). This is one of the two sanctioned first-touch provisioning
  * sites (the other is a shell open). It runs through the SAME
  * `ensureSession`/`provisionSessionSandbox` path the API routes and the
- * realtime bridge use, so the CAS in `agent-session-sprite.ts` actually
+ * realtime bridge use, so the CAS in `agent-workspace-sprite.ts` actually
  * serializes every concurrent provisioner.
  */
 
