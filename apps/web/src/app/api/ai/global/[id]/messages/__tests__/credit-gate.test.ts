@@ -177,6 +177,11 @@ vi.mock('@/lib/repositories/message-repository', () => ({
       return { saved: true, rev: 1 };
     }),
     insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
   },
 }));
 

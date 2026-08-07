@@ -153,8 +153,20 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME:
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
+// reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+// PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessages`,
+// which read the unified `messages` table.
 vi.mock('@/lib/repositories/message-repository', () => ({
-  messageRepository: { savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }) },
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    getPageConversationMessages: vi.fn(async () => ALL_MESSAGES),
+    // The route asks for the newest 10 and expects them oldest-first; the
+    // repository is what orders DESC under the limit and reverses, so the mock
+    // reproduces that contract rather than the raw SQL that used to do it.
+    getRecentPageMessages: vi.fn(async (_pageId: string, limit: number) => ALL_MESSAGES.slice(-limit)),
+  },
 }));
 
 const convertToModelMessages = vi.fn().mockImplementation((msgs: unknown) => msgs);

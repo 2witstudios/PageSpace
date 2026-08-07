@@ -98,7 +98,15 @@ type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: stri
 
 interface DatabaseMessage {
   id: string;
-  pageId: string;
+  /**
+   * Structural only — nothing in this module reads it (verified), and since
+   * the message-table merge (Phase 4 / D6) a page is DERIVED at read time from
+   * `conversations.contextId` and can legitimately be absent for the rare
+   * `type='client'` thread. Optional and nullable so the unified readers hand
+   * their rows straight in, exactly as `GlobalAssistantMessage.userId` was
+   * widened in the expand PR.
+   */
+  pageId?: string | null;
   userId: string | null;
   role: string;
   content: string;

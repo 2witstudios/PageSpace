@@ -234,11 +234,15 @@ export async function redoMessageChange(
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
-  const { table, isChannel } = pickConversationTable({ conversationType, hasPageId: !!activity.pageId });
+  const { table, legacyTable, isChannel } = pickConversationTable({ conversationType, hasPageId: !!activity.pageId });
 
   const updateData = planMessageRedo(targetValues, sourceOperation, isChannel, deps.clock());
 
   await deps.db.update(table).set(updateData).where(eq(table.id, activity.resourceId));
+  // Legacy leg — see rollbackMessageChange for why both are written.
+  if (legacyTable) {
+    await deps.db.update(legacyTable).set(updateData).where(eq(legacyTable.id, activity.resourceId));
+  }
 
   return updateData;
 }

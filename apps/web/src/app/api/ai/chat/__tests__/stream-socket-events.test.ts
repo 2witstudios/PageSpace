@@ -265,6 +265,11 @@ vi.mock('@/lib/repositories/message-repository', async () => {
         );
         return { inserted };
       }),
+      // The route's history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12): the raw `chat_messages` SELECT became
+      // `getPageConversationMessages` against the unified `messages` table.
+      getPageConversationMessages: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -275,7 +280,10 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'id', isActive: 'isActive' },
+  conversations: { id: 'id', isActive: 'isActive', type: 'type', contextId: 'contextId' },
+  // Pulled in transitively by `unified-message-scope.ts` since the reader
+  // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12).
+  messages: { id: 'id', conversationId: 'conversationId', isActive: 'isActive', pageId: 'pageId', status: 'status', createdAt: 'createdAt' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { userId: 'userId', displayName: 'displayName' },

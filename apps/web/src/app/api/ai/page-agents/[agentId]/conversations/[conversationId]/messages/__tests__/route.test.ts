@@ -11,15 +11,27 @@ import { GET } from '../route';
 import type { SessionAuthResult } from '@/lib/auth';
 
 // Mock db (boundary — direct usage in this route)
+// The reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
+// D6, PR 12) moved this route onto the unified `messages` table, so its
+// listing query now goes `select → from → innerJoin → where → orderBy →
+// limit`, and the cursor lookup is a `select → from → where → limit` instead
+// of a relational `db.query.chatMessages.findFirst`.
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findFirst: vi.fn() },
-      chatMessages: { findFirst: vi.fn() },
     },
     select: vi.fn(() => ({
       from: vi.fn(() => ({
+        innerJoin: vi.fn(() => ({
+          where: vi.fn(() => ({
+            orderBy: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })),
         where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([]),
           orderBy: vi.fn(() => ({
             limit: vi.fn().mockResolvedValue([]),
           })),
@@ -33,20 +45,37 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ kind: 'eq', a, b })),
   ne: vi.fn((a, b) => ({ kind: 'ne', a, b })),
   and: vi.fn((...c) => ({ kind: 'and', c })),
+  or: vi.fn((...c) => ({ kind: 'or', c })),
   inArray: vi.fn((f, values) => ({ kind: 'inArray', f, values })),
   desc: vi.fn((f) => ({ kind: 'desc', f })),
   sql: Object.assign(vi.fn(), { as: vi.fn() }),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chatMessages.id',
-    pageId: 'chatMessages.pageId',
-    conversationId: 'chatMessages.conversationId',
-    isActive: 'chatMessages.isActive',
-    createdAt: 'chatMessages.createdAt',
-  },
   pages: { id: 'pages.id', type: 'pages.type', isTrashed: 'pages.isTrashed' },
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  messages: {
+    id: 'messages.id',
+    pageId: 'messages.pageId',
+    conversationId: 'messages.conversationId',
+    isActive: 'messages.isActive',
+    createdAt: 'messages.createdAt',
+    role: 'messages.role',
+    content: 'messages.content',
+    toolCalls: 'messages.toolCalls',
+    toolResults: 'messages.toolResults',
+    editedAt: 'messages.editedAt',
+    messageType: 'messages.messageType',
+    status: 'messages.status',
+    userId: 'messages.userId',
+  },
+  conversations: {
+    id: 'conversations.id',
+    type: 'conversations.type',
+    contextId: 'conversations.contextId',
+  },
 }));
 
 // Mock conversation repository (for access gate)
