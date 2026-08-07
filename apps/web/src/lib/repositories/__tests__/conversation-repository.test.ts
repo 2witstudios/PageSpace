@@ -43,6 +43,7 @@ vi.mock('@pagespace/db/db', () => {
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
+  ne: vi.fn((field, value) => ({ kind: 'ne', field, value })),
   and: vi.fn((...conds) => ({ kind: 'and', conds })),
   inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
@@ -505,6 +506,67 @@ describe('conversationRepository.setConversationShared', () => {
       for (const b of sent.filter((x) => x.event === 'conversation:updated')) {
         expect(b.payload.changes?.isShared).toBe(false);
       }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  /**
+   * The other half of the audience widening above. Because the un-share now
+   * addresses the page room, a REDUNDANT un-share (the row is already private)
+   * would announce that conversation's id to every member of the page room —
+   * people who may never have been able to see it. The `ne` in the WHERE makes
+   * a no-op toggle match no row, so nothing is written and nothing is emitted.
+   */
+  it('stays silent when the toggle changes nothing — otherwise a redundant un-share leaks a private conversation id to the page room', async () => {
+    // No row matched: `ne(isShared, false)` finds nothing on an already-private
+    // conversation.
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    const REALTIME_URL = 'http://realtime.noop.invalid';
+    process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
+    process.env.REALTIME_BROADCAST_SECRET =
+      process.env.REALTIME_BROADCAST_SECRET ?? 'unshare-audience-test-secret-0123456789';
+
+    const sent: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      let isRealtime = false;
+      try {
+        isRealtime = new URL(url).origin === new URL(REALTIME_URL).origin;
+      } catch {
+        isRealtime = false;
+      }
+      if (isRealtime) {
+        sent.push(JSON.parse(typeof init?.body === 'string' ? init.body : '{}'));
+        return { ok: true, status: 200 } as unknown as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+
+    try {
+      await conversationRepository.setConversationShared('conv_already_private', false);
+
+      // THE GUARD ITSELF: the UPDATE must be conditional on the value actually
+      // flipping. Asserting only "no row came back, so nothing was emitted"
+      // would pass with or without the `ne` — the mock returns `[]` either way
+      // — so it would prove nothing about the WHERE that produces the `[]`.
+      expect(whereMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'and',
+          conds: expect.arrayContaining([
+            expect.objectContaining({ kind: 'ne', field: 'conversations.isShared', value: false }),
+          ]),
+        }),
+      );
+
+      // And the consequence: no row changed, so nothing goes on the wire.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(sent).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
     }

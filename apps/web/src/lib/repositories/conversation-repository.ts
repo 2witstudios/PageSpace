@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { eq, and, ne, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
@@ -622,14 +622,27 @@ export const conversationRepository = {
     isShared: boolean,
     triggeredBy?: ConversationEventTriggeredBy,
   ): Promise<void> {
+    // ONLY A REAL CHANGE WRITES. `ne` makes a redundant toggle match no row, so
+    // `updated` is undefined and this returns below without bumping `rev` or
+    // emitting anything. That is not just tidiness: it is what makes the
+    // audience widening on the next line safe. Without it, un-sharing an
+    // already-private conversation would announce that conversation's id to
+    // every member of the page room — people who may never have been able to
+    // see it — which would be a (small) existence leak introduced by the fix
+    // for the staleness bug.
     const [updated] = await db
       .update(conversations)
       .set({ isShared, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
-      .where(eq(conversations.id, conversationId))
+      .where(and(eq(conversations.id, conversationId), ne(conversations.isShared, isShared)))
       .returning();
+    // Already in the requested state (or no such row): nothing changed, so no
+    // event and no eviction. The eviction is not lost — a conversation that is
+    // already private either was never shared, or was un-shared by an earlier
+    // call that did run the kick, and join-time authz is the actual gate
+    // either way.
     if (!updated) return;
-    // AUDIENCE IS THE UNION OF BEFORE AND AFTER — which, for a share toggle,
-    // is always "shared".
+    // AUDIENCE IS THE UNION OF BEFORE AND AFTER — which, for a toggle that
+    // actually flipped, is always "shared".
     //
     // `directoryRoomsFor` adds the page room only when the context says the
     // conversation IS shared, and `updated` is the POST-update row. On an
@@ -637,13 +650,12 @@ export const conversationRepository = {
     // directory room and nobody else — and the people who need to hear "this
     // is no longer shared" are exactly the collaborators in the page room the
     // post-update flag just excluded. Sharing needs the page room too, so both
-    // directions want the same audience and the value is simply `true`.
+    // directions want the same audience, and — because the `ne` above proves
+    // the value actually flipped — one side of that union is always `true`.
     //
     // Safe because `isShared` is audience-only: `baseFromContext` never copies
     // it into the payload, and the fact clients act on rides in `changes`
-    // below, which still says what actually happened. On an already-unshared
-    // conversation the wider audience is a no-op — nobody in the page room
-    // lists that row.
+    // below, which still says what actually happened.
     emitConversationLifecycle(
       'updated',
       { ...updated, rev: Number(updated.rev), isShared: true },
