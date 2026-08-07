@@ -3,9 +3,9 @@
  *
  * POST { opId, baseRev, verb } → one ordered, idempotent mutation over the
  * session's relational pane grid, applied by the shared reducer under the
- * per-workspace lock (`workspace-layout-runtime.ts`). Successor to the blob
- * PUT on `../route.ts` (kept there as a rolling-deploy shim; it reconciles
- * blob→rows through the same projection).
+ * per-workspace lock (`workspace-layout-runtime.ts`). It REPLACED the blob PUT
+ * on `../route.ts`, which is now a bare 410 — there is no reconcile left, and
+ * no second writer to disagree with.
  *
  *   200 { rev, grid, applied } — the op landed (or replayed, or no-oped;
  *       `applied` is the content diff's verdict, and decides the broadcast).

@@ -354,3 +354,48 @@ describe('single source: the rows are the whole grid after ANY verb sequence', (
     }
   });
 });
+
+/**
+ * Focus is client-local (#2048), so the server persists none of it. That makes
+ * `open_conversation` on an ALREADY-VISIBLE target a deliberate no-op end to
+ * end: the reducer moves `activePaneId`, `gridFromWorkspaceState` drops it, the
+ * store sees no change, and nothing is broadcast.
+ *
+ * Pinned because "the verb ran and changed nothing" is otherwise
+ * indistinguishable from a bug, and the read of it that isn't written down is
+ * the one someone later "fixes".
+ */
+describe('open_conversation on a target already showing', () => {
+  const showing = (): WorkspaceState => ({
+    id: WORKSPACE_ID,
+    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-1') }] }],
+    activePaneId: 'pane-1',
+    pendingPickerPaneId: null,
+  });
+
+  it('projects to a byte-identical grid, so no rev can move', () => {
+    const before = showing();
+    const after = applyVerbLocal(before, WORKSPACE_ID, {
+      type: 'open_conversation',
+      scope: chatScope('conv-1'),
+      newColumnId: 'col-new',
+      newPaneId: 'pane-new',
+    });
+
+    // The reducer may report `applied` (focus moved in the rich state)...
+    expect(after.state).not.toBeNull();
+    // ...but what PERSISTS is unchanged, which is what decides rev + broadcast.
+    expect(gridFromWorkspaceState(after.state!)).toEqual(gridFromWorkspaceState(before));
+  });
+
+  it('splices no pane and no column', () => {
+    const after = applyVerbLocal(showing(), WORKSPACE_ID, {
+      type: 'open_conversation',
+      scope: chatScope('conv-1'),
+      newColumnId: 'col-new',
+      newPaneId: 'pane-new',
+    });
+    expect(panesOf(after.state!)).toHaveLength(1);
+    expect(after.state!.columns).toHaveLength(1);
+  });
+});

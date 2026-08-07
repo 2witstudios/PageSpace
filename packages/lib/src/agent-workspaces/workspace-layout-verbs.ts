@@ -93,7 +93,7 @@ export interface ColumnState {
 
 /** One session's pane grid. */
 export interface WorkspaceState {
-  /** The SESSION id whose grid this is (`agent_workspaces.id`). */
+  /** The WORKSPACE whose grid this is (`agent_workspaces.id`). */
   id: string;
   columns: ColumnState[];
   activePaneId: string;
@@ -997,6 +997,20 @@ export function applyVerbLocal(
 
       switch (placement.kind) {
         case 'focus': {
+          // SERVER-SIDE THIS PERSISTS NOTHING, deliberately.
+          //
+          // `selectPane` writes only `activePaneId`, and
+          // `gridFromWorkspaceState` drops that field by design — focus is
+          // client-local (#2048; it does not restore cross-device). So the
+          // store sees a byte-identical grid, answers `applied: false`, and no
+          // rev is bumped and no broadcast is sent.
+          //
+          // That is the correct outcome, not a gap: the target is ALREADY
+          // showing, so there is nothing for another client to be told. The
+          // server-side placement helpers therefore no-op on an already-visible
+          // target, which is also correct — the caller asked for it to be
+          // visible and it is. Stated here because "the verb ran and changed
+          // nothing" is otherwise indistinguishable from a bug.
           const next = selectPane(state, placement.paneId);
           return { state: next, applied: next !== state };
         }
@@ -1077,10 +1091,14 @@ export interface LayoutGridColumn {
 }
 
 /**
- * Project the rich state down to exactly what rows persist. Used by the verb
- * engine after every reduce AND by the legacy blob PUT (blob→rows through
- * this same function) — one shared reconcile, so the two writers cannot
- * disagree about the projection.
+ * Project the rich state down to exactly what rows persist — the verb engine
+ * runs it after every reduce.
+ *
+ * It was once shared with the legacy blob PUT, so that the two writers could
+ * not disagree about the projection. That PUT is a 410 now and this has one
+ * caller; the projection still lives here rather than inline because it is the
+ * counterpart to {@link workspaceStateFromGrid} and the two have to stay
+ * inverse.
  */
 export function gridFromWorkspaceState(state: WorkspaceState | PersistedWorkspaceState): LayoutGridColumn[] {
   return state.columns.map((column) => ({

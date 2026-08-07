@@ -1,5 +1,5 @@
 /**
- * The ONE agent-session contract — zod schemas + inferred types shared by the
+ * The ONE agent-workspace contract — zod schemas + inferred types shared by the
  * web API routes, the realtime PTY bridge, and the frontend hooks. No shape in
  * this surface is ever declared twice: if a payload crosses a process boundary,
  * its schema lives here and every side parses with it.
