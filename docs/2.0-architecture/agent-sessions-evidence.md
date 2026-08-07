@@ -76,44 +76,59 @@ Worth knowing before trusting a green run:
   is what review is for — and why several entries cite a *harness pin* alongside the headline
   spec, so a green assertion cannot come from a no-op setup.
 
-## RED GATE: what turning the gate on immediately revealed
+## RED GATE: what turning the gate on revealed, and how it closed
 
-Run these specs against a correctly-built topology and they fail — and the failures are exactly
-the live-delivery assertions the epic exists to make true. Two full runs on the same tree:
+This section is kept as a record. The gate went in red, the failure it exposed was real, and
+**it is now green** — the whole point of wiring it up, start to finish.
 
-| Spec | Run 1 | Run 2 |
-|---|---|---|
-| `16` — a server dispatch into an open pane renders live without reload | **FAIL** | **FAIL** |
-| `16` — two windows on one conversation both see both sides live | **FAIL** | **FAIL** |
-| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** | **FAIL** |
-| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** | **FAIL** |
-| `17` — convergence is DURABLE: a window opened afterwards sees the same grid | pass | **FAIL** |
-| **Totals** | 7 passed, 4 failed | 6 passed, 5 failed |
+Runs 1–2 are local, on the tree before this branch merged `pu/broken-sessions`. Runs 3–4 are the
+CI job on the merged tree (workflow `31156153232`, the second a re-run of the same job on the
+same commit). Run 5 is the CI job after the branch was refreshed onto the integration branch
+carrying **#2363, the socket-churn fix** (workflow `31160491225`).
 
-The four live-delivery specs fail deterministically. The durable-convergence spec is **flaky**,
-which is itself diagnostic: it reads the persisted rows rather than a broadcast, so a spec that
-should not depend on delivery timing failing intermittently points at the same instability.
-Everything with no live-socket dependency passed in both runs: both `16` persistence smokes and
-all three `15` chat smokes.
+| Spec | 1 (local) | 2 (local) | 3 (CI) | 4 (CI) | 5 (CI, post-#2363) |
+|---|---|---|---|---|---|
+| `16` — a server dispatch into an open pane renders live without reload | **FAIL** | **FAIL** | **FAIL** | FAIL → pass on retry | **pass** |
+| `16` — two windows on one conversation both see both sides live | **FAIL** | **FAIL** | **FAIL** | **FAIL** | **pass** |
+| `17` — a split in one window appears in the other LIVE, with no reload | **FAIL** | **FAIL** | pass | pass | **pass** |
+| `17` — converges in BOTH directions: a close in the second window reaches the first | **FAIL** | **FAIL** | pass | pass | **pass** |
+| `17` — convergence is DURABLE: a window opened afterwards sees the same grid | pass | **FAIL** | pass | pass | **pass** |
+| **Totals** | 7 / 4 | 6 / 5 | 9 / 2 | 9 / 1 | **11 passed, 0 failed** |
+
+The clincher is not the column of passes, it is the **clock**. Runs 3 and 4 took 3.5 and 4.1
+minutes, with the failing assertions burning their full 15-second timeout. Run 5 took **34
+seconds** for all eleven, with the two `16` live-delivery specs settling in 2.1s and 3.1s. They
+are not passing by a narrower margin than before; the wait that used to expire is simply gone.
+
+That also explains the run 3–4 anomaly this table previously recorded as unexplained — the three
+`17` specs passing in CI while failing locally. The bug was a reconnect storm, so delivery was a
+race, not a brick wall: a faster machine won it often enough to look fixed. That is exactly why
+"passes in CI" was not accepted as evidence at the time, and the caution was right — the bug was
+still there.
+
+Everything with no live-socket dependency passed in every run, before and after: both `16`
+persistence smokes and all three `15` chat smokes.
 
 The server side was verified healthy in the same run — realtime logged **197**
 `User joined conversation room` entries for the correct `conv:<id>`, and **148** broadcasts were
 sent, including `conversation:message_created` / `conversation:message_updated` to that exact
 room, one second after the client joined it.
 
-The failure is on the client. A single test produced **33** `Creating new Socket.IO connection`
+The failure was on the client. A single test produced **33** `Creating new Socket.IO connection`
 log lines, 33 socket-token fetches and 11+ distinct socket ids, with **no** authentication
-errors and **no** disconnect reasons — the socket store churns connections. No socket survives
+errors and **no** disconnect reasons — the socket store churned connections. No socket survived
 long enough to upgrade off polling (the trace contains zero websocket upgrade attempts), so a
-broadcast lands in a window where the current socket has not yet re-joined, and the pane stays
-blank. This is `apps/web/src/stores/useSocketStore.ts` reconnect behaviour, not a transport or
-CSP problem.
+broadcast landed in a window where the current socket had not yet re-joined, and the pane stayed
+blank. That was `apps/web/src/stores/useSocketStore.ts` reconnect behaviour, not a transport or
+CSP problem — and it is what **#2363** fixed.
 
-`"status": "proven"` in the manifest therefore means **cited, executing, and gated by CI** — it
-does not mean currently green. The checker verifies that a named test exists, runs, and is in a
-suite CI executes; whether it *passes* is what the CI job itself reports. That separation is
-deliberate: a manifest that could only cite green tests would have quietly dropped these four
-the moment they broke, which is the precise failure it exists to prevent.
+`"status": "proven"` in the manifest means **cited, executing, and gated by CI**. It does not
+mean currently green, and that separation is deliberate even now that the gate is green: the
+checker verifies that a named test exists, runs, and is in a suite CI executes; whether it
+*passes* is what the CI job itself reports. A manifest that could only cite green tests would
+have quietly dropped these five the moment they broke — the precise failure it exists to
+prevent, and the reason the citations survived the whole red period above to be vindicated by
+run 5 rather than being deleted somewhere around run 2.
 
 ## Adding a guarantee
 
