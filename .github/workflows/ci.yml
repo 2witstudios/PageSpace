@@ -115,8 +115,9 @@ jobs:
       # packages/db's integration suites are EXCLUDED from its default vitest
       # config (they need a live Postgres), and until now nothing invoked the
       # config that includes them — five suites, 108 assertions, running in no
-      # job at all. They go last because accessible-page-ids truncates the app
-      # database's users/drives/pages between cases.
+      # job at all. Their cleanup is row-scoped (each file deletes only the rows
+      # it seeded), so this step is not order-dependent — it does not empty the
+      # app database out from under anything else.
       - name: Run packages/db integration suites
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test

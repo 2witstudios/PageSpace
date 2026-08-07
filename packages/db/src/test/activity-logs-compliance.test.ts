@@ -5,10 +5,25 @@
  * - Actor snapshot fields (actorEmail, actorDisplayName) for denormalized actor info
  * - FK behavior (onDelete: 'set null') to preserve audit logs when users are deleted
  * - SOX/GDPR compliance patterns
+ *
+ * CLEANUP IS ROW-SCOPED, ON PURPOSE. This file used to end each case with
+ *   TRUNCATE TABLE activity_logs, page_permissions, pages, drive_members, drives, users CASCADE
+ * which is wrong twice over on a SHARED database. Turbo runs `test:coverage`
+ * for @pagespace/db, @pagespace/lib and web concurrently against the one CI
+ * Postgres, so that statement (a) took an ACCESS EXCLUSIVE lock on six tables
+ * those other suites were mid-insert on — deadlocking (40P01) against their
+ * FK RowShare locks, after which the leftover fixture row made the next
+ * beforeEach fail with 23505 on users_email_unique — and (b) when it *did*
+ * win the race, it silently deleted the other packages' fixtures (the hazard
+ * already documented in ../test/setup.ts).
+ *
+ * So: seed nothing but a user + a drive, record every activity_logs row this
+ * file writes, and delete exactly those. Nothing here needs an empty table —
+ * the only non-id lookup is scoped by a per-test unique actorEmail.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { eq, sql } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db'
 import { activityLogs } from '../schema/monitoring'
 import { users } from '../schema/auth'
@@ -20,23 +35,48 @@ describe('activity_logs schema compliance', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
   let testDrive: Awaited<ReturnType<typeof factories.createDrive>>
 
+  /**
+   * Ids of the activity_logs rows written by the current test. Tracked rather
+   * than derived from userId/driveId because both FKs are `onDelete: 'set null'`
+   * — the cases that delete the user (the whole point of this suite) leave logs
+   * whose owning ids are already gone.
+   */
+  let seededLogIds: string[] = []
+
+  /** Mint an activity_logs id and register it for this test's cleanup. */
+  function seedLogId(): string {
+    const id = createId()
+    seededLogIds.push(id)
+    return id
+  }
+
   beforeEach(async () => {
+    seededLogIds = []
     testUser = await factories.createUser({
-      email: 'john@example.com',
+      // Unique per test: `users.email` is UNIQUE, and a fixed address makes the
+      // suite collide with itself (and with any other suite on the shared CI
+      // database) the moment one cleanup does not land.
+      email: `activity-logs-compliance-${createId()}@example.test`,
       name: 'John Doe',
     })
     testDrive = await factories.createDrive(testUser.id)
   })
 
   afterEach(async () => {
-    // Clean up in correct order (FK constraints)
-    await db.execute(sql`TRUNCATE TABLE activity_logs, page_permissions, pages, drive_members, drives, users CASCADE`)
+    // Row-scoped cleanup — delete ONLY what this test seeded. Deleting the user
+    // cascades the drive away (drives.ownerId is onDelete: 'cascade'), but the
+    // logs must go first: they are deliberately outlived by their FKs.
+    if (seededLogIds.length > 0) {
+      await db.delete(activityLogs).where(inArray(activityLogs.id, seededLogIds))
+    }
+    await db.delete(drives).where(eq(drives.id, testDrive.id))
+    await db.delete(users).where(eq(users.id, testUser.id))
   })
 
   describe('actor snapshot fields', () => {
     it('should have actorEmail field for denormalized actor info', async () => {
       // Create an activity log with actorEmail
-      const logId = createId()
+      const logId = seedLogId()
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -57,11 +97,11 @@ describe('activity_logs schema compliance', () => {
       })
 
       expect(log).toBeDefined()
-      expect(log?.actorEmail).toBe('john@example.com')
+      expect(log?.actorEmail).toBe(testUser.email)
     })
 
     it('should have actorDisplayName field for denormalized actor info', async () => {
-      const logId = createId()
+      const logId = seedLogId()
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -85,7 +125,7 @@ describe('activity_logs schema compliance', () => {
 
     it('should use default actorEmail when not provided', async () => {
       // When actorEmail is omitted, the default 'legacy@unknown' is used
-      const logId = createId()
+      const logId = seedLogId()
 
       await db.insert(activityLogs).values({
         id: logId,
@@ -108,7 +148,7 @@ describe('activity_logs schema compliance', () => {
     })
 
     it('should allow null actorDisplayName', async () => {
-      const logId = createId()
+      const logId = seedLogId()
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -134,7 +174,7 @@ describe('activity_logs schema compliance', () => {
   describe('user deletion FK behavior (onDelete: set null)', () => {
     it('should preserve audit logs when user is deleted (userId becomes null)', async () => {
       // Create activity log for user
-      const logId = createId()
+      const logId = seedLogId()
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -169,7 +209,7 @@ describe('activity_logs schema compliance', () => {
       expect(logAfter).toBeDefined()
       expect(logAfter?.userId).toBeNull()
       // Actor info preserved!
-      expect(logAfter?.actorEmail).toBe('john@example.com')
+      expect(logAfter?.actorEmail).toBe(testUser.email)
       expect(logAfter?.actorDisplayName).toBe('John Doe')
       // Audit data preserved!
       expect(logAfter?.operation).toBe('create')
@@ -178,9 +218,9 @@ describe('activity_logs schema compliance', () => {
 
     it('should preserve multiple audit logs when user is deleted', async () => {
       // Create multiple activity logs
-      const log1Id = createId()
-      const log2Id = createId()
-      const log3Id = createId()
+      const log1Id = seedLogId()
+      const log2Id = seedLogId()
+      const log3Id = seedLogId()
 
       await db.insert(activityLogs).values([
         {
@@ -229,13 +269,13 @@ describe('activity_logs schema compliance', () => {
 
       // All logs should be preserved
       const logs = await db.query.activityLogs.findMany({
-        where: eq(activityLogs.actorEmail, 'john@example.com'),
+        where: eq(activityLogs.actorEmail, testUser.email),
       })
 
       expect(logs).toHaveLength(3)
       logs.forEach((log) => {
         expect(log.userId).toBeNull()
-        expect(log.actorEmail).toBe('john@example.com')
+        expect(log.actorEmail).toBe(testUser.email)
         expect(log.actorDisplayName).toBe('John Doe')
       })
     })
@@ -243,7 +283,7 @@ describe('activity_logs schema compliance', () => {
 
   describe('compliance requirements', () => {
     it('should preserve all audit data for SOX 7-year retention', async () => {
-      const logId = createId()
+      const logId = seedLogId()
       const resourceId = createId()
       const contentSnapshot = '{"title":"Financial Report Q4","content":"Important financial data..."}'
 
@@ -272,7 +312,7 @@ describe('activity_logs schema compliance', () => {
 
       // All compliance-critical fields preserved
       expect(log?.timestamp).toBeDefined()
-      expect(log?.actorEmail).toBe('john@example.com')
+      expect(log?.actorEmail).toBe(testUser.email)
       expect(log?.operation).toBe('update')
       expect(log?.resourceType).toBe('page')
       expect(log?.resourceId).toBe(resourceId)
@@ -283,7 +323,7 @@ describe('activity_logs schema compliance', () => {
     })
 
     it('should support AI attribution for automated audit trails', async () => {
-      const logId = createId()
+      const logId = seedLogId()
 
       await db.insert(activityLogs).values({
         id: logId,
