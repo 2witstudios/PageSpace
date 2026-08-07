@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
-import { foldChunksToParts } from '../foldChunksToParts';
+import { createPartsFolder, foldChunksToParts } from '../foldChunksToParts';
 
 /**
  * THE DIFFERENTIAL TEST. This is the point of `foldChunksToParts`.
@@ -604,6 +604,85 @@ describe('foldChunksToParts — deliberate divergences and invariants', () => {
 
     expect(parts).toEqual([
       { type: 'text', text: 'safe', state: 'done', providerMetadata: undefined },
+    ]);
+  });
+});
+
+describe('createPartsFolder — incremental equivalence', () => {
+  const AGENT_TURN = [
+    chunk({ type: 'start', messageId: 'm1' }),
+    chunk({ type: 'data-commandExecution', id: 'm1-command-0', data: { command: 'plan' } }),
+    chunk({ type: 'start-step' }),
+    chunk({ type: 'reasoning-start', id: 'r1' }),
+    chunk({ type: 'reasoning-delta', id: 'r1', delta: 'looking it up' }),
+    chunk({ type: 'reasoning-end', id: 'r1' }),
+    chunk({ type: 'tool-input-start', toolCallId: 'tc1', toolName: 'search_pages' }),
+    chunk({ type: 'tool-input-delta', toolCallId: 'tc1', inputTextDelta: '{"q":"invoices"}' }),
+    chunk({
+      type: 'tool-input-available',
+      toolCallId: 'tc1',
+      toolName: 'search_pages',
+      input: { q: 'invoices' },
+    }),
+    chunk({ type: 'tool-output-available', toolCallId: 'tc1', output: { hits: 3 } }),
+    chunk({ type: 'finish-step' }),
+    chunk({ type: 'start-step' }),
+    chunk({ type: 'text-start', id: 't1' }),
+    chunk({ type: 'text-delta', id: 't1', delta: 'Found ' }),
+    chunk({ type: 'text-delta', id: 't1', delta: '3 invoices.' }),
+    chunk({ type: 'text-end', id: 't1' }),
+    chunk({ type: 'finish-step' }),
+  ];
+
+  it('given frames pushed one at a time, should equal folding them in one batch', async () => {
+    // The incremental folder is what a live subscriber uses; the batch fold is what the
+    // differential test above pins against the SDK. If these two ever disagree, the
+    // subscriber's view is no longer the SDK's reduction — i.e. the fork is back.
+    const folder = createPartsFolder();
+    for (const frame of AGENT_TURN) await folder.push(frame);
+
+    expect(folder.parts).toEqual(await foldChunksToParts(AGENT_TURN));
+  });
+
+  it('given a prefix of the log, should equal folding that prefix in one batch (every intermediate state)', async () => {
+    // Not just the end state: a rejoining client renders the folder's view at every
+    // intermediate point, so each prefix has to match too.
+    const folder = createPartsFolder();
+    for (let i = 0; i < AGENT_TURN.length; i += 1) {
+      await folder.push(AGENT_TURN[i]);
+      expect(folder.parts).toEqual(await foldChunksToParts(AGENT_TURN.slice(0, i + 1)));
+    }
+  });
+
+  it('given repeated reads, should hand out fresh part objects each time', async () => {
+    // The fold mutates its parts in place (mirroring the SDK). If `.parts` leaked those
+    // objects, a memoized React consumer would see a text part whose reference never
+    // changes while its text grows — rendering once and then going stale.
+    const folder = createPartsFolder();
+    await folder.push(chunk({ type: 'text-start', id: 't1' }));
+    await folder.push(chunk({ type: 'text-delta', id: 't1', delta: 'one' }));
+
+    const first = folder.parts;
+    await folder.push(chunk({ type: 'text-delta', id: 't1', delta: ' two' }));
+    const second = folder.parts;
+
+    expect(first).not.toBe(second);
+    expect(first[0]).not.toBe(second[0]);
+    expect(first[0]).toMatchObject({ text: 'one' });
+    expect(second[0]).toMatchObject({ text: 'one two' });
+  });
+
+  it('given a caller that mutates the returned parts, should not corrupt the folder', async () => {
+    const folder = createPartsFolder();
+    await folder.push(chunk({ type: 'text-start', id: 't1' }));
+    await folder.push(chunk({ type: 'text-delta', id: 't1', delta: 'safe' }));
+
+    const leaked = folder.parts as unknown as { text: string }[];
+    leaked[0].text = 'CLOBBERED';
+    leaked.push({ text: 'injected' });
+
+    expect(folder.parts).toEqual([
+      { type: 'text', text: 'safe', state: 'streaming', providerMetadata: undefined },
     ]);
   });
 });

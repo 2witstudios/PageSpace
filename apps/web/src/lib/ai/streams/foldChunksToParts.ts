@@ -100,9 +100,29 @@ const staticToolName = (part: AnyPart): string => part.type.split('-').slice(1).
 
 type MutablePart = Record<string, unknown> & { type: string };
 
-export const foldChunksToParts = async (
-  frames: readonly UIMessageChunk[],
-): Promise<AnyPart[]> => {
+export interface PartsFolder {
+  /** Fold one frame in. Awaiting matters only for `tool-input-delta` (partial JSON). */
+  push(frame: UIMessageChunk): Promise<void>;
+  /**
+   * The parts so far, as a FRESH array of FRESH part objects on every read.
+   *
+   * The fold accumulates by mutating its parts in place (mirroring the SDK), so handing
+   * the live objects out would give a React consumer stable identities whose contents
+   * change underneath it — a text part whose `.text` grows without its reference ever
+   * changing renders once and then never again. Cloning on read costs O(number of parts),
+   * which is tens, not thousands: text and reasoning deltas accumulate INTO a part rather
+   * than adding one. That is the same order as the `[...parts, part]` the client's
+   * `appendPart` already does per frame.
+   */
+  readonly parts: AnyPart[];
+}
+
+/**
+ * Incremental form of the fold, for consumers that see frames one at a time (an SSE
+ * subscriber, the live channel) and would otherwise re-fold the whole log per frame.
+ * `foldChunksToParts` is this, driven to completion.
+ */
+export const createPartsFolder = (): PartsFolder => {
   const parts: MutablePart[] = [];
   // Keyed by chunk id, exactly like the SDK's `state.activeTextParts` /
   // `activeReasoningParts`. Null-prototype so a part id of `__proto__` or
@@ -196,7 +216,7 @@ export const foldChunksToParts = async (
   const findToolInvocation = (toolCallId: string): MutablePart | undefined =>
     parts.find((part) => isToolPart(part as AnyPart) && part.toolCallId === toolCallId);
 
-  for (const frame of frames) {
+  const push = async (frame: UIMessageChunk): Promise<void> => {
     switch (frame.type) {
       case 'text-start': {
         const part: StreamingTextPart = {
@@ -461,5 +481,23 @@ export const foldChunksToParts = async (
     }
   }
 
-  return parts as unknown as AnyPart[];
+  return {
+    push,
+    get parts(): AnyPart[] {
+      return parts.map((part) => ({ ...part })) as unknown as AnyPart[];
+    },
+  };
+};
+
+/**
+ * Fold a whole frame log at once. The server's one-shot callers (the checkpoint snapshot
+ * and the terminal persist) use this; it is also what the differential test compares
+ * against the SDK.
+ */
+export const foldChunksToParts = async (
+  frames: readonly UIMessageChunk[],
+): Promise<AnyPart[]> => {
+  const folder = createPartsFolder();
+  for (const frame of frames) await folder.push(frame);
+  return folder.parts;
 };
