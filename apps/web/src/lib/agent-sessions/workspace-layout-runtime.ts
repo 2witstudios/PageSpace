@@ -112,7 +112,7 @@ export async function applyWorkspaceLayoutVerb(input: {
   });
 
   if (result.status === 'ok' && result.applied) {
-    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: verb.type, grid: result.grid });
+    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: verb.type, opId, grid: result.grid });
   }
   return result;
 }
@@ -137,7 +137,13 @@ export async function saveWorkspaceBlobReconciled(input: {
     return store.replaceWorkspaceGrid({ workspaceId, grid: gridFromWorkspaceState(workspace) });
   });
   if (result.applied) {
-    broadcastWorkspaceUpdated({ workspaceId, rev: result.rev, verb: 'legacy_replace', grid: workspace.columns });
+    broadcastWorkspaceUpdated({
+      workspaceId,
+      rev: result.rev,
+      verb: 'legacy_replace',
+      opId: null,
+      grid: workspace.columns,
+    });
   }
 }
 
@@ -173,10 +179,15 @@ export async function readWorkspaceLayoutSnapshot(workspaceId: string): Promise<
   const labels = await resolvePaneLabels(grid);
   return {
     rev,
+    // Fractions come straight off the rows (issue #2208) — unlike labels there
+    // is nothing to re-derive, and unlike focus they are not client-local. An
+    // unsized container carries no key, matching what the reducer produces.
     grid: grid.map((column) => ({
       id: column.id,
+      ...(column.widthFraction !== null ? { widthFraction: column.widthFraction } : {}),
       panes: column.panes.map((pane) => {
-        if (pane.kind === null) return { id: pane.id, scope: null };
+        const height = pane.heightFraction !== null ? { heightFraction: pane.heightFraction } : {};
+        if (pane.kind === null) return { id: pane.id, scope: null, ...height };
         const label = pane.targetId !== null ? labels.get(`${pane.kind}:${pane.targetId}`) : undefined;
         const scope: PaneScope = {
           kind: pane.kind,
@@ -184,7 +195,7 @@ export async function readWorkspaceLayoutSnapshot(workspaceId: string): Promise<
           name: label?.name ?? '',
           agentPageId: label?.agentPageId ?? null,
         };
-        return { id: pane.id, scope };
+        return { id: pane.id, scope, ...height };
       }),
     })),
   };

@@ -48,6 +48,8 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { countOpenConversations } from '@/lib/agent-sessions/conversation-cap';
+import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-sessions/workspace-placement';
+import { readWorkspaceLayoutSnapshot } from '@/lib/agent-sessions/workspace-layout-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
@@ -947,6 +949,34 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       }
       return { ok: true, workspaceId };
     },
+
+    placeWorkerPane,
+
+    // The layout family's two seams (issue #2208). The read is the SAME
+    // label-joining snapshot the layout GET serves, so a model and a browser
+    // never see different names for the same pane; the write is the same
+    // single writer (`applyWorkspaceLayoutVerb`) behind the verbs route.
+    readPaneGrid: async (workspaceId) => {
+      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId);
+      if (!snapshot.grid || snapshot.grid.length === 0) return null;
+      return {
+        columns: snapshot.grid.map((column) => ({
+          columnId: column.id,
+          widthFraction: column.widthFraction ?? null,
+          panes: column.panes.map((pane) => ({
+            paneId: pane.id,
+            kind: pane.scope?.kind ?? null,
+            targetId: pane.scope?.targetId ?? null,
+            // Labels are display-only and the snapshot already re-derived them
+            // from the live rows — an unbound pane has none at all.
+            name: pane.scope?.name ?? '',
+            heightFraction: pane.heightFraction ?? null,
+          })),
+        })),
+      };
+    },
+
+    applyLayoutVerb: applyLayoutVerbForWorkspace,
 
     dispatch: dispatchThroughChatPipeline,
 

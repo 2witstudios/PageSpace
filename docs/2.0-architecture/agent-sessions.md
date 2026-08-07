@@ -81,6 +81,35 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
   spawn placement) still cannot write placement. / Target: the client store
   rewritten onto the verbs + live `workspace:updated` application, tool paths
   posting verbs, then the blob + localStorage copy dying at contract.
+- **Pane REARRANGE (issue #2208): SHIPPED.** The verb set is complete —
+  `resize_column` / `resize_pane` / `move_pane` / `reorder_columns` join the
+  structural verbs in the same pure engine, and the `widthFraction` /
+  `heightFraction` columns reserved by the promotion are now written, read,
+  and round-tripped. This was blocked BY the promotion by design: as blob
+  writes, rearrange verbs would have added yet another writer of a
+  client-authored JSONB. **The fraction invariant** is stated and enforced in
+  the reducer, never at a call site (`rebalanceFractions`): a container (the
+  grid's columns, or one column's panes) is either wholly UNSIZED — no member
+  carries a fraction, and the renderer splits it evenly — or wholly SIZED,
+  with every member at or above `MIN_FRACTION` and the shares summing to 1
+  within `FRACTION_EPSILON`. Never mixed, in either direction: a resize
+  materializes the whole container from its even split, a membership change
+  re-establishes the invariant for the new membership (newcomers take an even
+  share, survivors keep their relative proportions), and wire input that
+  arrives mixed is read as unsized wholesale. Every verb stays TOTAL — an
+  unresolvable id, a lone-member container, and a re-sent identical resize are
+  no-ops, and an out-of-range fraction or index is clamped rather than
+  refused. Fractions are quantized to 1e-5 on both write and read, because the
+  storage type is `real` (float4) and the store's content diff is a byte
+  comparison — without a shared snap, every write would look like a change.
+- **Agent-facing layout tools (issue #2208): SHIPPED.** `list_panes` /
+  `resize_pane` / `move_pane` / `arrange_panes` on the session tool family —
+  an agent arranging its OWN workspace, addressed by the paneId/columnId
+  `list_panes` returns. They resolve the grid from the CALLER's own
+  conversation (never a workspaceId the model supplies), go through
+  `applyWorkspaceLayoutVerb` in-process — the same single writer, per-workspace
+  lock, and op memory the verbs route uses — and derive their `opId` from the
+  tool call id so an SDK retry replays instead of rearranging twice.
 
 ## 2. Authorization axioms (PR #2336 — product-locked)
 
@@ -326,10 +355,11 @@ textbook forced copy, so it runs under the rule above rather than around it:
     row whose conversation does not exist is a row `messages` would have REFUSED (its
     FK is validated and cascading), so proving there are none is proving the copy PR 15
     keeps can be complete.
-- **Still open:** erasure and retention keep both tables until the contract PR, and
-  `chat_messages` + `messages.pageId` are dropped last (PR 15) — which is now
-  unblocked on the write side: nothing writes the table, and the FK says nothing in it
-  is unrepresentable in `messages`.
+- **Still open:** `chat_messages` and `messages.pageId` are dropped last (Phase 4 PR 15) —
+  now unblocked on the write side: nothing writes the table, and the validated FK says
+  nothing in it is unrepresentable in `messages`. That drop is also when the compliance
+  legs collapse to one and when `type='client'` threads need a real page link (see the
+  wider page scope above), since it removes the `messages.pageId` disjunct they rely on.
 
 Both the reads and the writes now come from `messages` alone. That ends the window in
 which a revert of the reader cutover was safe on its own, and it is deliberate: PR 14 is
@@ -354,6 +384,7 @@ release behind it. Two consequences worth stating plainly:
 | `workspaceId` | An `agent_sessions` row — the working context / sandbox owner | Everywhere except the tool layer: `conversations.sessionId`, `agent_session_shells.sessionId`, `/api/agent-sessions/[sessionId]`, `?session=` URLs |
 | `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts` — mapped to a `conversationId` local at the zod boundary; internally `WorkerRow.conversationId`, with `WorkerRow.workspaceId` naming the workspace) |
 | *(frozen)* `sessionId` | The model-facing tool param | The wire vocabulary is deliberately frozen at the zod boundary: to the model, a "session" is a worker you talk to and a "workspace" is the environment. Internal renames never touch these schemas |
+| `paneId` / `columnId` | One rectangle of a workspace's grid, and the vertical stack it sits in | The layout tools (`list_panes` / `resize_pane` / `move_pane` / `arrange_panes`, issue #2208). These sit on the WORKSPACE side of the frozen split — panes are furniture of the environment — so they deliberately say "pane"/"column"/"workspace" and never "session". They take no workspaceId at all: the grid is the caller's own, resolved from its conversation |
 | `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` (rename lands in the epic's final phase) |
 | — | Auth login sessions (`sessions` table, `packages/db/src/schema/sessions.ts`) | Unrelated. Never mix with any of the above |
 

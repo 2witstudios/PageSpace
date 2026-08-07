@@ -113,14 +113,20 @@ describe('applyWorkspaceLayoutVerb', () => {
       applied: true,
       grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
     });
+    // Row projection carries CANONICAL null fractions on an unsized grid
+    // (issue #2208) — the store's content diff is a JSON.stringify compare,
+    // where an absent key and an explicit null are not the same bytes.
     expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual([
-      { id: 'col-1', panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1' }] },
+      { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
     ]);
     expect(store.blobs.get(WORKSPACE_ID)?.activePaneId).toBe('pane-1');
     expect(mockBroadcast).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       rev: 1,
       verb: 'ensure',
+      // The causing op's key rides along so a subscriber can recognize its
+      // OWN echo and leave its still-queued verb alone.
+      opId: 'op-ensure',
       grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
     });
   });
@@ -198,8 +204,11 @@ describe('saveWorkspaceBlobReconciled (legacy PUT shim)', () => {
     };
     await saveWorkspaceBlobReconciled({ workspaceId: WORKSPACE_ID, workspace });
     expect(store.blobs.get(WORKSPACE_ID)).toEqual(workspace);
+    // Row projection carries CANONICAL null fractions on an unsized grid
+    // (issue #2208) — the store's content diff is a JSON.stringify compare,
+    // where an absent key and an explicit null are not the same bytes.
     expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual([
-      { id: 'col-1', panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1' }] },
+      { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
     ]);
     expect(mockBroadcast).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: WORKSPACE_ID, rev: 1, verb: 'legacy_replace' }),

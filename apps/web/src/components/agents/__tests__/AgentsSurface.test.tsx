@@ -102,7 +102,10 @@ vi.mock('sonner', () => ({ toast: { info: mockToastInfo, error: vi.fn() } }));
 
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 /** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
 const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
@@ -230,7 +233,7 @@ describe('AgentsSurface', () => {
 
 describe('GC when the server says the session is gone (issue #2263, finding 6)', () => {
   beforeEach(() => {
-    useAgentWorkspaceStore.setState({ workspaces: {} });
+    __resetWorkspaceQueuesForTests();
   });
 
   it('forgets the persisted grid and backs out to the empty state', async () => {

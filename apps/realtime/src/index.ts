@@ -69,6 +69,7 @@ import {
   validatePageId,
   validateDriveId,
   validateConversationId,
+  validateSessionId,
   validatePresencePagePayload,
   emitValidationError,
 } from './validation';
@@ -89,6 +90,7 @@ import {
   driveCalendarRoom,
   dmRoom,
   conversationRoom,
+  sessionRoom,
   driveActivityRoom,
   pageActivityRoom,
 } from '@pagespace/lib/realtime/rooms';
@@ -1243,6 +1245,75 @@ io.on('connection', (socket: AuthSocket) => {
     } catch (error) {
       loggers.realtime.error('Error joining conversation', error as Error, { conversationId });
     }
+  });
+
+  // Join an agent workspace's LAYOUT room (`session:<id>`) — where
+  // rev-carrying `workspace:updated` pane-grid events fan out (epic Phase 3).
+  // Authorization is the SAME one session-access decision the web routes run
+  // (`checkAgentSessionAccess` → `decideAgentSessionAccess`): a session is a
+  // drive-level workspace, so access is drive access. Deliberately NOT
+  // `canRunCode`-gated — a pane grid is session surface, not compute (the
+  // shell bridge below re-adds that gate for itself).
+  socket.on('join_session', async (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateSessionId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_session payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_session', validation.error);
+      return;
+    }
+    const sessionId = validation.value;
+
+    try {
+      const store = await dbAgentSessionStorePromise;
+      const row = await store.findById(sessionId);
+      const decision = row
+        ? await checkAgentSessionAccess({
+            requesterId: userId,
+            sessionId,
+            deps: {
+              // The row was just read; hand the wrapper the same subject
+              // rather than paying a second lookup for the same answer.
+              findSession: async () => ({ ownerId: row.ownerId, driveId: row.driveId }),
+              resolveDriveMembership,
+              canRunCode: canRunCodeForSession,
+            },
+          })
+        : { allowed: false as const, reason: 'session_not_found' as const };
+
+      if (!decision.allowed) {
+        // Deny quietly (no disconnect), same as `join_conversation`: a stale
+        // join after a session end or a drive removal is an expected client
+        // state, not a protocol violation.
+        loggers.realtime.warn('Session layout join denied', { userId, sessionId, reason: decision.reason });
+        return;
+      }
+
+      const room = sessionRoom(sessionId);
+      socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
+      loggers.realtime.debug('User joined session layout room', { userId, room });
+    } catch (error) {
+      loggers.realtime.error('Error joining session layout room', error as Error, { sessionId });
+    }
+  });
+
+  socket.on('leave_session', (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateSessionId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_session payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_session', validation.error);
+      return;
+    }
+    const room = sessionRoom(validation.value);
+    socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
+    loggers.realtime.debug('User left session layout room', { userId, room });
   });
 
   socket.on('leave_conversation', (payload: unknown) => {

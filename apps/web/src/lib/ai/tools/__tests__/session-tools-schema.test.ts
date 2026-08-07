@@ -37,14 +37,23 @@ function wireSurface() {
   );
 }
 
-describe('session + shell tools — frozen wire contract', () => {
-  it('exposes exactly the nine tool names', () => {
+describe('session + shell + layout tools — frozen wire contract', () => {
+  it('exposes exactly the thirteen tool names', () => {
+    // The nine worker/shell verbs have been frozen since Phase 1. The four
+    // LAYOUT verbs are the deliberate addition of issue #2208 — the grid
+    // rearrange surface that had to wait for the pane entities to become
+    // relational rows with a verb API. They are ADDITIVE: nothing above them
+    // changed name, description, or schema, which is what the freeze protects.
     expect(Object.keys(wireSurface()).sort()).toEqual([
+      'arrange_panes',
       'kill_session',
       'kill_shell',
+      'list_panes',
       'list_sessions',
+      'move_pane',
       'read_session',
       'read_shell',
+      'resize_pane',
       'send_session',
       'send_shell',
       'spawn_session',
@@ -180,6 +189,71 @@ describe('session + shell tools — frozen wire contract', () => {
             shellId: { type: 'string', minLength: 1 },
           },
           required: ['shellId'],
+          additionalProperties: false,
+        },
+      },
+      // --- The LAYOUT family (issue #2208) -----------------------------
+      // Vocabulary check, per spec §4: these say "pane"/"column" and
+      // "workspace" — never "session", which on this wire is always a worker
+      // you talk to. `list_panes` is what makes the other three usable: an
+      // agent cannot address a paneId it was never told.
+      list_panes: {
+        description:
+          'Show the pane grid of THIS conversation\'s workspace: a left-to-right row of columns, each a top-to-bottom stack of panes. Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address, what each pane is showing, and the current size shares (null means that container is split evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session with an open pane grid.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      resize_pane: {
+        description:
+          'Resize part of this workspace\'s pane grid: pass a columnId to set that column\'s width, or a paneId to set that pane\'s height within its own column. size is a share of the container from 0 to 1, and the siblings absorb the difference in proportion. A size that would squeeze a sibling below its minimum is clamped rather than refused. Heights are always column-local — a pane\'s height says nothing about panes in other columns. Get the ids from list_panes. A container with only one member cannot be resized: it already fills its space.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {
+            paneId: { type: 'string', minLength: 1 },
+            columnId: { type: 'string', minLength: 1 },
+            // Shares are 0..1 exclusive, matching the `real` row column — a 0
+            // or 1 share is a degenerate layout the reducer would clamp away.
+            size: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 },
+          },
+          required: ['size'],
+          additionalProperties: false,
+        },
+      },
+      move_pane: {
+        description:
+          'Move a pane to a different column in this workspace\'s grid, or to a different position within its own column. Pass toColumnId (from list_panes) and, optionally, toIndex — the 0-based slot in the destination stack; omit it to append at the bottom, and out-of-range values clamp to the ends. The pane keeps showing exactly what it was showing; only its position changes. A column left empty by the move is removed.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {
+            paneId: { type: 'string', minLength: 1 },
+            toColumnId: { type: 'string', minLength: 1 },
+            toIndex: { type: 'integer', minimum: 0, maximum: 64 },
+          },
+          required: ['paneId', 'toColumnId'],
+          additionalProperties: false,
+        },
+      },
+      arrange_panes: {
+        description:
+          'Reorder this workspace\'s columns left to right. Pass columnIds (from list_panes) in the order you want them; you do NOT have to list them all — the ones you name go first, in your order, and every column you leave out keeps its current relative position behind them. Ids that no longer exist are skipped rather than failing the call. Panes and sizes travel with their column.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {
+            columnIds: {
+              minItems: 1,
+              maxItems: 64,
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+          },
+          required: ['columnIds'],
           additionalProperties: false,
         },
       },

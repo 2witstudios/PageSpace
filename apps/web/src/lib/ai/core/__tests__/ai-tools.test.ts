@@ -196,7 +196,7 @@ import { commandTools } from '../../tools/command-tools';
 import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
-import { pagePaneTools } from '../../tools/page-pane-tools';
+import { pagePaneTools } from '../../tools/page-pane-tools-runtime';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -205,7 +205,19 @@ describe('ai-tools', () => {
     });
 
     it('equals the merged object of all tool modules plus the chat-only session family', () => {
-      const chatOnlySessionToolNames = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session'];
+      // Worker verbs plus the LAYOUT family (issue #2208) — both chat-only,
+      // both outside TOOL_MODULES, so neither counts as a workspace tool.
+      const chatOnlySessionToolNames = [
+        'list_sessions',
+        'spawn_session',
+        'send_session',
+        'read_session',
+        'kill_session',
+        'list_panes',
+        'resize_pane',
+        'move_pane',
+        'arrange_panes',
+      ];
       const workspaceOnly = Object.fromEntries(
         Object.entries(pageSpaceTools).filter(([name]) => !chatOnlySessionToolNames.includes(name)),
       );

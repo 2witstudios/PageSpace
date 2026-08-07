@@ -109,7 +109,10 @@ import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
@@ -185,7 +188,7 @@ beforeEach(() => {
   // Same leak risk for panes: two tests opening the same session id (every
   // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
   // panes[0], since nothing else clears this store between tests.
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  __resetWorkspaceQueuesForTests();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
   // this default doubles as proof a non-admin gets full access too.
@@ -401,22 +404,32 @@ describe('AgentsSidebar', () => {
           .workspaces['ses-1'].columns.flatMap((c) => c.panes);
         expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
       });
-      // …and the close was PUT to the server, not left to a sync hook that
-      // isn't mounted for a non-displayed session.
+      // …and the close crossed the wire as its own `close_pane` VERB. The
+      // hand-rolled PUT this test used to pin is gone: the store posts every
+      // mutation for every session, displayed or not, so the sidebar has no
+      // persistence of its own left to get wrong.
       await waitFor(() => {
-        const putCall = mockFetchWithAuth.mock.calls.find(
+        const verbCall = mockFetchWithAuth.mock.calls.find(
           ([url, init]) =>
-            url === '/api/agent-sessions/ses-1/workspace' &&
-            (init as RequestInit | undefined)?.method === 'PUT',
+            url === '/api/agent-sessions/ses-1/workspace/verbs' &&
+            (init as RequestInit | undefined)?.method === 'POST',
         );
-        expect(putCall).toBeDefined();
-        const body = JSON.parse((putCall![1] as RequestInit).body as string) as {
-          workspace: WorkspaceState;
+        expect(verbCall).toBeDefined();
+        const body = JSON.parse((verbCall![1] as RequestInit).body as string) as {
+          opId: string;
+          baseRev: number;
+          verb: { type: string; paneId: string };
         };
-        const putPanes = body.workspace.columns.flatMap((c) => c.panes);
-        expect(putPanes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
-        expect(putPanes).toHaveLength(2);
+        expect(body.verb).toEqual({ type: 'close_pane', paneId: 'pane-3' });
+        expect(body.opId).toBeTruthy();
       });
+      // Nothing was PUT — the legacy blob route survives one release for
+      // rolling deploys, but this client no longer calls it.
+      expect(
+        mockFetchWithAuth.mock.calls.find(
+          ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+        ),
+      ).toBeUndefined();
     });
 
     test('closing a row the local store no longer knows refreshes the listing instead of clobbering the server', async () => {
@@ -470,7 +483,11 @@ describe('AgentsSidebar', () => {
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-9');
     });
 
-    test('a failed close-PUT restores the row snapshot locally and surfaces an error', async () => {
+    test('a close whose verb the server rejects converges on the server truth, not a guessed rollback', async () => {
+      // The old hand-rolled PUT rolled back to `session.workspace` and
+      // toasted. The queue's answer is better and needs no local guess: a
+      // 4xx abandons the op and re-reads the server's own snapshot, so what
+      // the user ends up looking at is what is actually durable.
       const withPagePane = {
         ...workspaceFixture,
         columns: [
@@ -484,9 +501,13 @@ describe('AgentsSidebar', () => {
         ],
       };
       mockFetchWithAuth.mockImplementation(async (...args: unknown[]) => {
+        const url = args[0] as string;
         const init = args[1] as RequestInit | undefined;
-        if (init?.method === 'PUT') return { ok: false, status: 500, json: async () => ({}) };
-        return { ok: true, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
+        if (url.endsWith('/workspace/verbs')) return { ok: false, status: 404, json: async () => ({}) };
+        if (url.endsWith('/workspace') && init?.method === undefined) {
+          return { ok: true, status: 200, json: async () => ({ rev: 4, grid: withPagePane.columns }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
       });
       const user = userEvent.setup();
       renderSidebar();
@@ -495,14 +516,13 @@ describe('AgentsSidebar', () => {
       fireEvent.contextMenu(await screen.findByText('Spec doc'));
       await user.click(await screen.findByText('Close'));
 
-      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-      // The close landed locally, the PUT failed — the local grid must be
-      // restored to the durable (server) state rather than silently
-      // diverging until hydration resurrects the pane (review P3).
-      const panes = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-      expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
+        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+      });
+      expect(useAgentWorkspaceStore.getState().sync['ses-1'].rev).toBe(4);
     });
 
     test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
