@@ -744,4 +744,63 @@ describe('chat mutation matrix — one message table', () => {
       expect(conv.agentPageId).toBeNull();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // THE CONTAINMENT AROUND THE PAGE-CHAT WRITE GATE
+  //
+  // `runPageChatTurn` used to decide "does this conversation belong to this
+  // page?" from `contextId` alone, so every `type='global'` conversation
+  // (whose `contextId` is NULL by CHECK) belonged to every page and a
+  // page-agent turn could be written into the global transcript. The gate is
+  // fixed; these cases assert the two containment properties the security
+  // review CLAIMED bounded the blast radius, against a real database rather
+  // than by inspection — because if either were false, the same defect would
+  // have been a cross-user escalation instead of a self-inflicted one.
+  // -------------------------------------------------------------------------
+
+  describe('a global conversation is not a page conversation', () => {
+    async function seedGlobalThread() {
+      const owner = await factories.createUser();
+      const conversationId = createId();
+      await db.insert(conversations).values({
+        id: conversationId, userId: owner.id, type: 'global', contextId: null,
+        isActive: true, updatedAt: new Date(),
+      });
+      const id = createId();
+      await db.insert(messages).values({
+        id, conversationId, userId: owner.id, role: 'user', content: 'private global secret',
+        isActive: true, status: 'complete', sourceAgentId: null,
+      });
+      return { ownerId: owner.id, conversationId, messageId: id };
+    }
+
+    it('discloses no history through the page chat load, whatever page is named', async () => {
+      if (!dbAvailable) return;
+      const globalThread = await seedGlobalThread();
+      const page = await seedPageThread({ contents: [{ role: 'user', content: 'q' }] });
+
+      // The model-context load behind POST /api/ai/chat. `unifiedPageScope`
+      // matches no global row, so even a request that got past the gate read
+      // an EMPTY history — the reason the defect could inject but never
+      // exfiltrate.
+      expect(
+        await messageRepository.getPageConversationMessages(page.pageId, globalThread.conversationId),
+      ).toEqual([]);
+    });
+
+    it('cannot be marked shared, because the only sharing door is page-scoped', async () => {
+      if (!dbAvailable) return;
+      const globalThread = await seedGlobalThread();
+      const page = await seedPageThread({ contents: [{ role: 'user', content: 'q' }] });
+
+      // `setConversationShared` has exactly ONE non-test caller — PATCH
+      // /api/ai/page-agents/[agentId]/conversations/[conversationId] — and it
+      // refuses before that call unless `conversationExists(agentId, id)`,
+      // which is `unifiedPageScope`. No page id can satisfy it for a global
+      // row, so `isShared` is unreachable for globals and the non-owner half
+      // of the write gate (`!ownsIt && isShared`) can never open on one.
+      expect(await conversationRepository.conversationExists(page.pageId, globalThread.conversationId)).toBe(false);
+      expect(await conversationRepository.conversationExists(globalThread.conversationId, globalThread.conversationId)).toBe(false);
+    });
+  });
 });

@@ -138,5 +138,13 @@ export async function resolveOrCreateConversation(
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);
   if (!winner.isActive) throw new ConversationHistoryDeletedError();
   if (winner.userId !== userId) throw new ConversationOwnershipError();
+  // Same `type` check as the `existing` branch above. Narrow to reach (the
+  // first SELECT already catches an ACTIVE non-global row, and an inactive one
+  // exits at the isActive check a line up — only an isActive flip between the
+  // two statements lands a non-global row here), but the two branches
+  // returning different rules is how a gate rots: the global strategy would
+  // then run against a page conversation and append a global-assistant turn to
+  // a page transcript, the exact mirror of the page-side defect this PR fixes.
+  if (winner.type !== 'global') throw new ConversationOwnershipError();
   return { conversation: winner, isNew: true };
 }

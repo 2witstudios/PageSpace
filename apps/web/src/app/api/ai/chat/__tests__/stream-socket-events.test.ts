@@ -597,7 +597,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     // client now loads them, and it will keep POSTing that id. A bare isCuid reject
     // would lock those users out of the conversation we just gave them back.
     it('given a legacy non-cuid conversationId that DOES exist, should accept it and stream normally', async () => {
-      mockGetConversation.mockResolvedValue({ id: 'page-1-default', userId: 'user-1', isShared: false, contextId: 'page-1' });
+      mockGetConversation.mockResolvedValue({ type: 'page', id: 'page-1-default', userId: 'user-1', isShared: false, contextId: 'page-1' });
 
       const response = await POST(makeRequest({ conversationId: 'page-1-default' }));
 
@@ -626,6 +626,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   describe('conversationId authorization', () => {
     it('given an existing conversation owned by ANOTHER user and not shared, should 403', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: 'page-1-default', userId: 'someone-else', isShared: false, contextId: 'page-1',
       });
 
@@ -637,6 +638,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given an existing conversation owned by another user but explicitly SHARED, should allow it AND propagate isShared', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'someone-else', isShared: true, contextId: 'page-1',
       });
 
@@ -655,6 +657,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given an existing conversation belonging to a DIFFERENT page, should 403', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'some-other-page',
       });
 
@@ -679,10 +682,16 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
 
-    // contextId is nullable in the schema (null for global conversations). An owner must
-    // never be locked out of their own row by a historically-unset column.
+    // A `type='page'` row may carry a NULL contextId only because
+    // `conversations_page_context_present_chk` shipped NOT VALID, grandfathering
+    // pre-existing rows — and an owner must never be locked out of their own row by a
+    // historically-unset column. That tolerance is now scoped to `type='page'` AND to
+    // the owner; the un-scoped version was the defect, because a `type='global'` row
+    // has a NULL contextId BY CHECK and so belonged to every page. See
+    // `conversation-page-binding.test.ts` for the whole type matrix.
     it('given the caller OWNS a conversation whose contextId is null, should allow it', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: null,
       });
 
@@ -700,6 +709,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     // messages).
     it('given an existing conversation row that is isActive: false (history-deleted), should 404 and never invoke the lifecycle', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: false,
       });
 
@@ -711,6 +721,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given an existing conversation row that is isActive: true, should NOT be rejected on that basis', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
       });
 
@@ -730,6 +741,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     // coderabbitai on PR #2299).
     it('given the conversation looked active at the early check but a concurrent History-delete committed before the message write, should 404 and never invoke the lifecycle', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
       });
       mockConversationActiveAtLockTime.current = false;
@@ -800,6 +812,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   describe('assistant placeholder row (stream start) — atomic re-check', () => {
     it('given the conversation looked active through the message write but a concurrent History-delete commits before the placeholder insert, should skip the insert without failing the request', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
       });
       mockCreateStreamLifecycle.mockImplementationOnce(async () => {
@@ -827,6 +840,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given the conversation is still active at placeholder-insert time, should NOT skip (no false-positive warning)', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
       });
 
@@ -919,7 +933,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
   describe('user-message broadcast', () => {
     it('given a POST with a user message, should broadcast chat:user_message after the DB save resolves with the saved message and full envelope', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: true });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: true });
       await POST(makeRequest({ browserSessionId: 'session-7' }));
 
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
@@ -958,6 +972,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should broadcast when conversation isShared is true', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'other-user', isShared: true,
       });
 
@@ -968,6 +983,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should suppress broadcast when user owns a private conversation', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -978,6 +994,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should suppress broadcast when private conversation is owned by someone else', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'other-user', isShared: false,
       });
 
@@ -988,6 +1005,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should omit mentionNotify from saveMessageToDatabase when isShared=false', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -1001,6 +1019,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should include mentionNotify in saveMessageToDatabase when isShared=true', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: true,
       });
 
@@ -1015,7 +1034,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
   describe('conversation auto-titling on first message', () => {
     it('given a session conversation and non-empty extracted content, calls autoTitleConversation with the derived title', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
 
       await POST(makeRequest({ conversationId: CONV_ID }));
 
@@ -1029,7 +1048,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     // rows where title IS NULL, so persisting '' would permanently block a later textual
     // message from ever titling the conversation — the route must skip the write instead.
     it('given a session conversation and empty extracted content (e.g. a file-only message), does NOT call autoTitleConversation', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce('');
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1042,7 +1061,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     const HELP_CHIP = '/[help](builtin:help:command)';
 
     it('answers via respondWithHelpAnswer and skips the credit gate entirely', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 
       const response = await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1055,7 +1074,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
 
     it('/help combined with other text is NOT a solo request — the credit gate and normal flow still run', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(`${HELP_CHIP} how do I use spreadsheets`);
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1065,7 +1084,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
 
     it('still takes over any in-flight generation on the conversation before answering', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1076,20 +1095,20 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
 
     it('broadcasts the user message when the conversation is shared, not when private', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: true });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: true });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
       await POST(makeRequest({ conversationId: CONV_ID }));
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
 
       mockBroadcastChatUserMessage.mockClear();
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
       await POST(makeRequest({ conversationId: CONV_ID }));
       expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
 
     it('the injected persist closure writes an assistant message via saveMessageToDatabase with userId null', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1112,7 +1131,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
 
     it('the injected persist closure skips the write when the conversation went inactive in the gap', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1141,6 +1160,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   describe('mention notification exactly-once across terminal writes', () => {
     const sharedConversation = () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: true,
       });
     };
@@ -1195,6 +1215,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given a private conversation, NO terminal write carries mentionNotify', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -1227,6 +1248,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given the outer-catch cleanup fires for a private conversation, it does NOT carry mentionNotify', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
       const { createUIMessageStream } = await import('ai');
