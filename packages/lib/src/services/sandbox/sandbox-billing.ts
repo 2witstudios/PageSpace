@@ -68,7 +68,7 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },
 
-  async trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, sessionId }) {
+  async trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, workspaceId }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
@@ -83,7 +83,9 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
       // so the breakdown can group runtime spend by session/drive without
       // JSON forensics, consistently with the storage charge stream.
       driveId,
-      sessionId,
+      // `AIUsageData.sessionId` is the shared analytics column (`monitoring.session_id`),
+      // written by many sources — out of this rename's scope, so map at the boundary.
+      sessionId: workspaceId,
       providerCostDollars: calculateMachineCostDollars({ activeSeconds }),
       // Active-window duration (ms), matching the quantity that was billed —
       // not a request-latency figure, since there is no single "request" here.

@@ -4,7 +4,7 @@
  * deleted everything around it.
  */
 import { describe, it, expect } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import {
   newWorkspace,
   assignPane,
@@ -31,7 +31,7 @@ function terminalScope(targetId: string | null): PaneScope {
 
 function base(): WorkspaceState {
   return newWorkspace({
-    sessionId: 'ses-1',
+    workspaceId: 'ses-1',
     paneId: 'pane-1',
     columnId: 'col-1',
     scope: chatScope('conv-1'),

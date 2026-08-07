@@ -17,7 +17,7 @@
  * whose every call then died at `canRunCode`'s drive-role check.
  */
 
-import { canRunCodeForSession } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
 
 /** `driveId`: the agent page's own drive (null for the global assistant). */
 export async function resolveSandboxToolEligibility(
@@ -52,7 +52,7 @@ export async function resolveSandboxToolEligibilityForConversation(
   surface: 'page' | 'global',
   userId: string,
 ): Promise<boolean> {
-  const { findSessionForConversation } = await import('@/lib/agent-sessions/agent-sessions-runtime');
+  const { findSessionForConversation } = await import('@/lib/agent-workspaces/agent-sessions-runtime');
   const session = conversationId ? await findSessionForConversation(conversationId) : null;
   if (session) {
     return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });

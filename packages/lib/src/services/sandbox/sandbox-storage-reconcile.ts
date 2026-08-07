@@ -53,9 +53,9 @@
  * Narrowed by the Phase 8 teardown: this used to meter FIVE row sources — a
  * Machine's own Sprite, every live branch-terminal Sprite, every promoted
  * project Sprite, every per-session agent-terminal Sprite, and every
- * `agent_sessions` Sprite — one per tier of the deleted Machine page type's
- * tree, ADDED alongside the `agent_sessions` source in Phase 7 while the
- * machine-tree tables still existed. Only `agent_sessions` survives (the
+ * `agent_workspaces` Sprite — one per tier of the deleted Machine page type's
+ * tree, ADDED alongside the `agent_workspaces` source in Phase 7 while the
+ * machine-tree tables still existed. Only `agent_workspaces` survives (the
  * other four's tables are dropped): a session is a drive-level workspace, so
  * its attribution target is its DRIVE's owner (`driveId` set) OR the
  * session's own `ownerId` directly (a user-scoped global-assistant session,
@@ -125,13 +125,13 @@ export function pickBillableGB(input: {
 }
 
 /**
- * An `agent_sessions` row's own Sprite. Rows without a live Sprite
+ * An `agent_workspaces` row's own Sprite. Rows without a live Sprite
  * (`sandboxId` null) or torn down are expected to be filtered out by the row
  * source, not billed at 0 here.
  */
 export interface AgentSessionStorageRow {
-  /** The `agent_sessions` row's own id. Where THIS Sprite's measurement/watermark are persisted. */
-  sessionId: string;
+  /** The `agent_workspaces` row's own id. Where THIS Sprite's measurement/watermark are persisted. */
+  workspaceId: string;
   /** The session's drive; null for a user-scoped global-assistant session (see `storageBillingTarget`). */
   driveId: string | null;
   /** The session's own owner — the payer of last resort, and the ONLY payer when `driveId` is null. */
@@ -141,13 +141,13 @@ export interface AgentSessionStorageRow {
   measuredBytes: number | null;
   /** When `measuredBytes` was captured; null when never measured. */
   measuredAt: Date | null;
-  /** The session's own last real-work activity — `agent_sessions.lastActiveAt` is a first-class column, no join needed. Used solely for the staleness health flag, never for billing. */
+  /** The session's own last real-work activity — `agent_workspaces.lastActiveAt` is a first-class column, no join needed. Used solely for the staleness health flag, never for billing. */
   lastActiveAt: Date;
 }
 
 export interface ReconcileSandboxStorageDeps {
   /**
-   * Every LIVE `agent_sessions` Sprite to meter. Never wakes a sprite: reads
+   * Every LIVE `agent_workspaces` Sprite to meter. Never wakes a sprite: reads
    * persisted measurements only.
    */
   listAgentSessionSprites: () => Promise<AgentSessionStorageRow[]>;
@@ -160,9 +160,9 @@ export interface ReconcileSandboxStorageDeps {
    */
   lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
   /** Charges the payer for this session's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. `driveId` is omitted for a global-assistant agent-session (no drive to attribute usage-breakdown to). */
-  chargeStorage: (input: { payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }) => Promise<void>;
-  /** Persists the new watermark for an `agent_sessions` Sprite, on the ROW ITSELF — the per-row watermark the design calls for, no separate tracking table needed. */
-  advanceAgentSessionWatermark: (input: { sessionId: string; billedThrough: Date }) => Promise<void>;
+  chargeStorage: (input: { payerId: string; driveId?: string; workspaceId: string; costDollars: number; gbMonths: number }) => Promise<void>;
+  /** Persists the new watermark for an `agent_workspaces` Sprite, on the ROW ITSELF — the per-row watermark the design calls for, no separate tracking table needed. */
+  advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
 }
 
@@ -209,7 +209,7 @@ export async function reconcileSandboxStorage(
   let totalCostDollars = 0;
 
   for (const session of sessions) {
-    const subject: StorageSubject = { sessionId: session.sessionId, driveId: session.driveId, ownerId: session.ownerId };
+    const subject: StorageSubject = { workspaceId: session.workspaceId, driveId: session.driveId, ownerId: session.ownerId };
     // The billing target this filesystem attributes to — the DRIVE's owner
     // when the session has one, OR, for a global-assistant session, the
     // session's own `ownerId` directly (see `storageBillingTarget`'s doc —
@@ -249,7 +249,7 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
-          await deps.advanceAgentSessionWatermark({ sessionId: session.sessionId, billedThrough: now });
+          await deps.advanceAgentSessionWatermark({ workspaceId: session.workspaceId, billedThrough: now });
         }
         continue;
       }
@@ -281,7 +281,7 @@ export async function reconcileSandboxStorage(
       loggers.ai.error(
         'Sandbox storage reconcile failed for session',
         error instanceof Error ? error : new Error(String(error)),
-        { driveId: attributionDriveId, sessionId: session.sessionId },
+        { driveId: attributionDriveId, workspaceId: session.workspaceId },
       );
       continue;
     }
@@ -296,7 +296,7 @@ export async function reconcileSandboxStorage(
       await deps.chargeStorage({
         payerId: resolved.ownerId,
         driveId: attributionDriveId,
-        sessionId: session.sessionId,
+        workspaceId: session.workspaceId,
         costDollars: resolved.costDollars,
         gbMonths: resolved.gbMonths,
       });
@@ -308,7 +308,7 @@ export async function reconcileSandboxStorage(
       loggers.ai.error(
         'Sandbox storage reconcile: chargeStorage failed for session',
         error instanceof Error ? error : new Error(String(error)),
-        { driveId: attributionDriveId, sessionId: session.sessionId },
+        { driveId: attributionDriveId, workspaceId: session.workspaceId },
       );
       continue;
     }
@@ -316,7 +316,7 @@ export async function reconcileSandboxStorage(
     charged += 1;
 
     try {
-      await deps.advanceAgentSessionWatermark({ sessionId: session.sessionId, billedThrough: now });
+      await deps.advanceAgentSessionWatermark({ workspaceId: session.workspaceId, billedThrough: now });
     } catch (error) {
       // The charge already committed (counted above) — only the watermark
       // write failed, so this row's window WILL be billed again on the next
@@ -326,7 +326,7 @@ export async function reconcileSandboxStorage(
       loggers.ai.error(
         'Sandbox storage reconcile: watermark advance failed after a successful charge — this window will be re-billed next run',
         error instanceof Error ? error : new Error(String(error)),
-        { driveId: attributionDriveId, sessionId: session.sessionId },
+        { driveId: attributionDriveId, workspaceId: session.workspaceId },
       );
     }
   }

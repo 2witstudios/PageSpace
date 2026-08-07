@@ -1,17 +1,17 @@
 import { pgTable, text, integer, real, timestamp, bigint, boolean, index, primaryKey, foreignKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { agentSessions } from './agent-sessions';
+import { agentWorkspaces } from './agent-workspaces';
 
 /**
  * Agent Workspace Pane Columns / Panes / Layout Revs / Layout Ops
  *
- * The relational successor to `agent_sessions.workspaceState` (epic Phase 3,
+ * The relational successor to `agent_workspaces.workspaceState` (epic Phase 3,
  * mirroring the #2202 machine-panes promotion): a workspace's pane grid used
  * to be one client-authored JSONB blob with exactly one writer (the browser's
  * debounced full-replace PUT). These tables promote the blob's
  * `columns`/`panes` into rows, mutated by ordered, idempotent VERB writes —
- * see `@pagespace/lib/agent-sessions/workspace-layout-verbs.ts` (the pure
- * engine) and `@pagespace/lib/services/agent-sessions/workspace-layout-store.ts`
+ * see `@pagespace/lib/agent-workspaces/workspace-layout-verbs.ts` (the pure
+ * engine) and `@pagespace/lib/services/agent-workspaces/workspace-layout-store.ts`
  * (the one write primitive). `workspaceState` was kept one release as the
  * rolling-deploy shim and DROPPED at the contract step (migration 0250, with
  * a final sweep and a refuses-to-drop guard); these rows are now the only
@@ -47,10 +47,10 @@ import { agentSessions } from './agent-sessions';
  *
  * `agent_workspace_layout_revs` is the per-WORKSPACE monotonic mutation
  * counter. The rev lives in its OWN table — NOT as a column on
- * `agent_sessions` — so the verb write's
+ * `agent_workspaces` — so the verb write's
  * `INSERT ... ON CONFLICT ("workspaceId") DO UPDATE SET rev = rev + 1
  * RETURNING rev` (which doubles as the serializing row lock, per the machine
- * pattern) never takes a lock on the `agent_sessions` row that sandbox
+ * pattern) never takes a lock on the `agent_workspaces` row that sandbox
  * teardown/ensure CAS writes contend on: a layout split must never queue
  * behind a Sprite provisioning transaction, or vice versa.
  *
@@ -66,10 +66,10 @@ import { agentSessions } from './agent-sessions';
 export const agentWorkspacePaneColumns = pgTable('agent_workspace_pane_columns', {
   /** Client-minted column id — unique per workspace only (compound PK). */
   id: text('id').notNull(),
-  /** The owning workspace (`agent_sessions.id`). */
+  /** The owning workspace (`agent_workspaces.id`). */
   workspaceId: text('workspaceId')
     .notNull()
-    .references(() => agentSessions.id, { onDelete: 'cascade' }),
+    .references(() => agentWorkspaces.id, { onDelete: 'cascade' }),
 
   /** Contiguous 0-based position among the workspace's columns; renumbered by verbs. */
   orderIndex: integer('orderIndex').notNull(),
@@ -86,7 +86,7 @@ export const agentWorkspacePaneColumns = pgTable('agent_workspace_pane_columns',
 export const agentWorkspacePanes = pgTable('agent_workspace_panes', {
   /** Client-minted pane id — unique per workspace only (compound PK). */
   id: text('id').notNull(),
-  /** The owning workspace (`agent_sessions.id`). */
+  /** The owning workspace (`agent_workspaces.id`). */
   workspaceId: text('workspaceId').notNull(),
   /** The owning column (`agent_workspace_pane_columns.id`, same workspace). */
   columnId: text('columnId').notNull(),
@@ -105,7 +105,7 @@ export const agentWorkspacePanes = pgTable('agent_workspace_panes', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.workspaceId, table.id] }),
   // Composite FK to the column's own compound PK — cascading, so deleting a
-  // column (or the whole workspace, cascading from `agent_sessions`) removes
+  // column (or the whole workspace, cascading from `agent_workspaces`) removes
   // its panes with no separate cleanup step.
   columnFk: foreignKey({
     columns: [table.workspaceId, table.columnId],
@@ -117,7 +117,7 @@ export const agentWorkspacePanes = pgTable('agent_workspace_panes', {
 export const agentWorkspaceLayoutRevs = pgTable('agent_workspace_layout_revs', {
   workspaceId: text('workspaceId')
     .primaryKey()
-    .references(() => agentSessions.id, { onDelete: 'cascade' }),
+    .references(() => agentWorkspaces.id, { onDelete: 'cascade' }),
   /** Monotonic per-workspace mutation counter; 0 = no verb has ever applied. */
   rev: bigint('rev', { mode: 'number' }).notNull().default(0),
 });
@@ -125,7 +125,7 @@ export const agentWorkspaceLayoutRevs = pgTable('agent_workspace_layout_revs', {
 export const agentWorkspaceLayoutOps = pgTable('agent_workspace_layout_ops', {
   workspaceId: text('workspaceId')
     .notNull()
-    .references(() => agentSessions.id, { onDelete: 'cascade' }),
+    .references(() => agentWorkspaces.id, { onDelete: 'cascade' }),
   /** Client-minted operation id — the verb POST's idempotency key. */
   opId: text('opId').notNull(),
   /** The rev this op produced (or observed, for a no-op). */
@@ -138,9 +138,9 @@ export const agentWorkspaceLayoutOps = pgTable('agent_workspace_layout_ops', {
 }));
 
 export const agentWorkspacePaneColumnsRelations = relations(agentWorkspacePaneColumns, ({ one, many }) => ({
-  workspace: one(agentSessions, {
+  workspace: one(agentWorkspaces, {
     fields: [agentWorkspacePaneColumns.workspaceId],
-    references: [agentSessions.id],
+    references: [agentWorkspaces.id],
   }),
   panes: many(agentWorkspacePanes),
 }));
@@ -153,16 +153,16 @@ export const agentWorkspacePanesRelations = relations(agentWorkspacePanes, ({ on
 }));
 
 export const agentWorkspaceLayoutRevsRelations = relations(agentWorkspaceLayoutRevs, ({ one }) => ({
-  workspace: one(agentSessions, {
+  workspace: one(agentWorkspaces, {
     fields: [agentWorkspaceLayoutRevs.workspaceId],
-    references: [agentSessions.id],
+    references: [agentWorkspaces.id],
   }),
 }));
 
 export const agentWorkspaceLayoutOpsRelations = relations(agentWorkspaceLayoutOps, ({ one }) => ({
-  workspace: one(agentSessions, {
+  workspace: one(agentWorkspaces, {
     fields: [agentWorkspaceLayoutOps.workspaceId],
-    references: [agentSessions.id],
+    references: [agentWorkspaces.id],
   }),
 }));
 

@@ -99,7 +99,7 @@ describe('useResolvedConversation', () => {
 
     await waitFor(() => expect(result.current.resolved?.sessionId).toBe('ses-new'));
     expect(result.current.resolved?.conversationId).toBe('conv-new');
-    expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+    expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
       driveId: 'drive-1',
       agentPageId: 'agent-1',
     });
@@ -278,7 +278,7 @@ describe('createPageConversation', () => {
     // same session — never spawn a new one, which would abandon a live
     // session (contradicting "a session is never empty") and leave the old
     // session's quota burned for nothing.
-    it('mints the replacement into that session via the session-scoped route, never /api/agent-sessions', async () => {
+    it('mints the replacement into that session via the session-scoped route, never /api/agent-workspaces', async () => {
       mockPost.mockResolvedValue(undefined);
       const created = await createPageConversation({
         agentId: 'agent-1',

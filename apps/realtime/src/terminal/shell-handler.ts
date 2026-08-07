@@ -5,9 +5,9 @@ import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { parseShellConnectPayload } from './validation';
-import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-sessions/contract';
+import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-sessions/session-scrollback';
+import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-workspaces/session-scrollback';
 
 /**
  * Realtime PTY bridge for a named shell inside its agent session's ONE shared
@@ -29,8 +29,8 @@ import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-ses
  * session" could just as easily be a sibling shell's. Each freshly created
  * session announces its own id on its own socket (`session_info` — see
  * `readSessionInfoId`), the shell reports it via `onSessionId`, and this bridge
- * persists it to `agent_session_shells.streamSessionId` (via
- * `persistStreamSessionId`). The sandbox resolution hands that id back on the
+ * persists it to `agent_workspace_shells.spriteExecId` (via
+ * `persistSpriteExecId`). The sandbox resolution hands that id back on the
  * next COLD connect, so THIS specific session is reattached — and if it is gone
  * (exec sessions do not survive a pause), the shell creates a fresh one and
  * persists the new authoritative id in its place.
@@ -64,8 +64,8 @@ export type ShellSandboxResult =
   | {
       ok: true;
       shellId: string;
-      /** The owning session's id (`agent_sessions.id`) — no conversation involved, a shell is a PTY, not a chat thread. */
-      sessionId: string;
+      /** The owning workspace id (`agent_workspaces.id`) — no conversation involved, a shell is a PTY, not a chat thread. */
+      workspaceId: string;
       sandboxId: string;
       /** The working directory for a FRESH session — always `SANDBOX_ROOT` (`/workspace`). */
       cwd: string;
@@ -76,7 +76,7 @@ export type ShellSandboxResult =
       /** A per-shell program override, or null to use `command`/`args` as-is. */
       commandOverride: string | null;
       /** The Sprite exec-session id this shell was last known to run under, if any. */
-      streamSessionId: string | null;
+      spriteExecId: string | null;
       /**
        * Releases the concurrency slot this resolution reserved for the PTY it is
        * about to start. Present ONLY here, on the success result, because this
@@ -222,8 +222,8 @@ export type ShellSessionDeps = {
   sessionMap: TerminalSessionMap;
   openShell: OpenShellFn;
   checkAuth: ShellCheckAuthFn;
-  /** Best-effort: persists the Sprite session id this shell is now known to run under (to `agent_session_shells`), so a later reconnect — even after a realtime-process restart — reattaches to THIS session rather than creating a duplicate. */
-  persistStreamSessionId: (args: { shellId: string; sessionId: string }) => Promise<void>;
+  /** Best-effort: persists the Sprite session id this shell is now known to run under (to `agent_workspace_shells`), so a later reconnect — even after a realtime-process restart — reattaches to THIS session rather than creating a duplicate. */
+  persistSpriteExecId: (args: { shellId: string; spriteExecId: string }) => Promise<void>;
   /** Metering seam — see module doc. Omitted -> unmetered. */
   billing?: SandboxBillingDeps;
   /**
@@ -363,7 +363,7 @@ function endShellSession(
         holdId: session.holdId,
         activeSeconds,
         driveId: session.driveId,
-        sessionId: session.agentSessionId,
+        workspaceId: session.workspaceId,
       })
       .catch((error) => {
         loggers.realtime.error('Shell session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
@@ -573,7 +573,7 @@ async function settleAccruedWindow(
       holdId,
       activeSeconds,
       driveId: session.driveId,
-      sessionId: session.agentSessionId,
+      workspaceId: session.workspaceId,
     });
   } catch (error) {
     loggers.realtime.error('Shell heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
@@ -596,7 +596,7 @@ async function settleAccruedWindow(
           holdId,
           activeSeconds,
           driveId: session.driveId,
-          sessionId: session.agentSessionId,
+          workspaceId: session.workspaceId,
         })
         .catch(() => {});
     }
@@ -805,9 +805,9 @@ const LIST_SESSIONS_TIMEOUT_MS = 5_000;
 type SessionLiveness = 'live' | 'gone' | 'unknown';
 
 /**
- * `streamSessionId` on the row only records a session that existed at some point:
+ * `spriteExecId` on the row only records a session that existed at some point:
  * exec sessions do not survive a Sprite pause, and nothing ever clears the column
- * (see `updateStreamSessionId` — it only ever writes a new id over an old one).
+ * (see `updateSpriteExecId` — it only ever writes a new id over an old one).
  *
  * BOUNDED, because this gates the shell from opening at all. There is no
  * timeout anywhere in the `listSessions` chain, and a stalled control plane would
@@ -816,8 +816,8 @@ type SessionLiveness = 'live' | 'gone' | 'unknown';
  * blocked behind the create claim. A shell that will not open and cannot be
  * retried is a far worse failure than not knowing whether its agent was running.
  */
-async function sessionLiveness(sprite: SpriteInstanceLike, streamSessionId: string | null): Promise<SessionLiveness> {
-  if (!streamSessionId) return 'gone';
+async function sessionLiveness(sprite: SpriteInstanceLike, spriteExecId: string | null): Promise<SessionLiveness> {
+  if (!spriteExecId) return 'gone';
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -826,7 +826,7 @@ async function sessionLiveness(sprite: SpriteInstanceLike, streamSessionId: stri
     });
     const listing = sprite
       .listSessions()
-      .then((sessions): SessionLiveness => (sessions.some((session) => session.id === streamSessionId) ? 'live' : 'gone'));
+      .then((sessions): SessionLiveness => (sessions.some((session) => session.id === spriteExecId) ? 'live' : 'gone'));
 
     return await Promise.race([listing, timeout]);
   } catch {
@@ -929,7 +929,7 @@ export async function ensureShellSession(
   deps: ShellSessionDeps,
   request: EnsureShellSessionRequest,
 ): Promise<EnsureShellSessionResult> {
-  const { sessionMap, openShell, checkAuth, persistStreamSessionId, billing, createTaskHold, persistColdTail } = deps;
+  const { sessionMap, openShell, checkAuth, persistSpriteExecId, billing, createTaskHold, persistColdTail } = deps;
   const { access, target, userId, cols, rows, viewer } = request;
   const { shellId } = target;
   const { sessionKey } = access;
@@ -1043,7 +1043,7 @@ export async function ensureShellSession(
     // `ready` does. A client that types a starting prompt on first output
     // would then type it without yet knowing the agent was resumed, which is
     // precisely the hazard `resumed` exists to prevent.
-    const liveness = await sessionLiveness(sprite, sandbox.streamSessionId);
+    const liveness = await sessionLiveness(sprite, sandbox.spriteExecId);
     const resumed = resumedFor(liveness);
 
     // The verdict has to CONSTRAIN the attach, not merely predict it.
@@ -1060,7 +1060,7 @@ export async function ensureShellSession(
     // `unknown` we could not settle) keeps the id — abandoning a running agent
     // to start a second one is the worse error, and it is the same policy
     // `planReconnect` already applies on every reconnect.
-    const attachSessionId = liveness === 'gone' ? undefined : (sandbox.streamSessionId ?? undefined);
+    const attachSessionId = liveness === 'gone' ? undefined : (sandbox.spriteExecId ?? undefined);
 
     // The pane is already gone. Do not START the agent just to reap it.
     //
@@ -1087,17 +1087,17 @@ export async function ensureShellSession(
       sandboxId,
       sessionKey,
       lastViewerUserId: userId,
-      sessionId: attachSessionId,
+      spriteExecId: attachSessionId,
       releaseSlot,
       payerId: access.payerId,
       holdId,
       connectedAt,
       // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
       // session's own drive (already resolved onto the access verdict) and its
-      // own agent_sessions.id (resolved onto the sandbox result) — no page
+      // own agent_workspaces.id (resolved onto the sandbox result) — no page
       // grouping, since a session is drive-level, not page-anchored.
       driveId: access.driveId ?? undefined,
-      agentSessionId: sandbox.sessionId,
+      workspaceId: sandbox.workspaceId,
       shellId: sandbox.shellId,
       // The creator is viewer #1, registered in the literal — BEFORE
       // `openShell` — so output arriving between the shell opening and
@@ -1128,7 +1128,7 @@ export async function ensureShellSession(
       idleTimer: undefined,
     };
 
-    // Serializes this shell's streamSessionId writes — see `onSessionId`.
+    // Serializes this shell's spriteExecId writes — see `onSessionId`.
     let persistQueue: Promise<void> = Promise.resolve();
 
     const launch = resolveShellCommand({
@@ -1191,7 +1191,7 @@ export async function ensureShellSession(
         },
         // A fresh Sprite session was created and announced its own id (on its
         // own socket — see `readSessionInfoId`): this shell's first PTY, or a
-        // replacement for a streamSessionId left dangling by a pause. Persist
+        // replacement for a spriteExecId left dangling by a pause. Persist
         // it so the next cold connect reattaches to THIS session. The id is
         // authoritative, so it can never name a sibling shell's session —
         // which is precisely what the retired listSessions before/after diff
@@ -1205,9 +1205,9 @@ export async function ensureShellSession(
         // session. A failed write is logged and does NOT break the chain — the
         // next session's id still gets its turn.
         onSessionId: (sessionId) => {
-          session.sessionId = sessionId;
+          session.spriteExecId = sessionId;
           persistQueue = persistQueue
-            .then(() => persistStreamSessionId({ shellId: sandbox.shellId, sessionId }))
+            .then(() => persistSpriteExecId({ shellId: sandbox.shellId, spriteExecId: sessionId }))
             .catch((error) => {
               loggers.realtime.error('Failed to persist shell session id', error instanceof Error ? error : new Error(String(error)), {
                 sessionKey,
@@ -1442,7 +1442,7 @@ export function buildShellHandlers({
   openShell,
   checkAuth,
   socket,
-  persistStreamSessionId,
+  persistSpriteExecId,
   billing,
   createTaskHold,
   persistColdTail,
@@ -1660,7 +1660,7 @@ export function buildShellHandlers({
     // things only a socket has: the pane that will watch the result, and
     // whether that pane is still there by the time there is one.
     const outcome = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing, createTaskHold, persistColdTail },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing, createTaskHold, persistColdTail },
       {
         access: plan.access,
         target: { shellId },
@@ -1686,7 +1686,7 @@ export function buildShellHandlers({
           // line plus a carriage return delivered to a live agent sitting at a
           // confirmation is destructive.
           //
-          // It is a VERIFIED fact, not the row's word for it. `streamSessionId`
+          // It is a VERIFIED fact, not the row's word for it. `spriteExecId`
           // is a memory of a session that was alive once: exec sessions do not
           // survive a Sprite pause, nothing ever clears the column, and
           // `openPtyShell` attaches to the id optimistically and only discovers

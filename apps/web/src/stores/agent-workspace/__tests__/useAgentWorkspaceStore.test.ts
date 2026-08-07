@@ -13,7 +13,7 @@
  * keep having.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
 import { panesOf } from '../pane-reducer';
 import { useEditingStore } from '@/stores/useEditingStore';

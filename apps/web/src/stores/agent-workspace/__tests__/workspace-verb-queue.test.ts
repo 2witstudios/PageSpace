@@ -7,7 +7,7 @@
  * its own unacked work replayed on top — and never double-applies anything.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PaneScope, PersistedColumnState } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope, PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
 import { panesOf } from '../pane-reducer';
 

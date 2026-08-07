@@ -121,8 +121,15 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 
 /** All migrations, in journal order. */
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
-/** Everything BEFORE this PR's migration (… 0250). */
-const baseMigrations = allMigrations.slice(0, allMigrations.length - 1);
+/** Everything BEFORE 0252 (… 0251). */
+const baseMigrations = allMigrations.slice(0, 252);
+/**
+ * Through 0252 and no further. Bounded by INDEX, not by `length - 1`: this
+ * suite is about what 0252 does to a database, not about the head of the
+ * journal, and the next migration to land must not silently join the scenario
+ * (same fix as the 0250 suite's).
+ */
+const throughThisPr = allMigrations.slice(0, 253);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -175,7 +182,7 @@ async function openScenario(name: string): Promise<Scenario> {
     notices,
     migrate: async () => {
       try {
-        await runMigrations(drizzle(pool), allMigrations, {
+        await runMigrations(drizzle(pool), throughThisPr, {
           migrationsSchema: 'drizzle',
           migrationsTable: '__drizzle_migrations',
         });
@@ -295,8 +302,9 @@ describeLive('0252 against a real Postgres', () => {
   }, 120_000);
 
   it('pins the base: 0252 is the only migration under test here', () => {
-    expect(allMigrations.length - baseMigrations.length).toBe(1);
-    expect(journal.entries[journal.entries.length - 1]?.idx).toBe(252);
+    expect(allMigrations.length).toBe(journal.entries.length);
+    expect(throughThisPr.length - baseMigrations.length).toBe(1);
+    expect(journal.entries[252]?.idx).toBe(252);
   });
 
   it('starts from a schema that still has both', async () => {

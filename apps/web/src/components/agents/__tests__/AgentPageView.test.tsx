@@ -489,7 +489,7 @@ describe('AgentPageView', () => {
 
     expect(screen.getByText('Open in Agents')).toHaveAttribute(
       'href',
-      '/dashboard/drive-1/agents?session=ses-1&c=conv-1&agent=agent-1',
+      '/dashboard/drive-1/agents?workspace=ses-1&c=conv-1&agent=agent-1',
     );
   });
 
@@ -544,8 +544,8 @@ describe('AgentPageView', () => {
 
       conversationsState.lastOnConversationDelete?.('conv-1');
 
-      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1', expect.any(Function), { revalidate: false }));
-      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-sessions?driveId=drive-1')!;
+      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1', expect.any(Function), { revalidate: false }));
+      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-workspaces?driveId=drive-1')!;
       const updated = (updater as (current: unknown) => unknown)({
         sessions: [{ sessionId: 'ses-1', conversations: [] }],
       });
@@ -566,7 +566,7 @@ describe('AgentPageView', () => {
       const predicate = mockMutate.mock.calls.find(([key]) => typeof key === 'function')![0] as (
         key: unknown,
       ) => boolean;
-      expect(predicate('/api/agent-sessions?driveId=drive-1')).toBe(true);
+      expect(predicate('/api/agent-workspaces?driveId=drive-1')).toBe(true);
       expect(predicate('/api/pages/agent-1')).toBe(false);
     });
 

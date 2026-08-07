@@ -27,9 +27,9 @@
  * chain (replaced wholesale by the session access decision).
  */
 
-import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-sessions/shell-types';
-import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-sessions/decide-session-access';
-import type { ShellDTO } from '@pagespace/lib/agent-sessions/contract';
+import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-workspaces/shell-types';
+import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-session-access';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import type { ShellCheckAuthFn } from './shell-handler';
@@ -53,11 +53,11 @@ export interface ShellCheckAuthDeps {
    * deleted out from under a live PTY, and it must afford this check.
    */
   resolveShell: (shellId: string) => Promise<
-    | { ok: true; shell: ShellDTO; cwd: string; streamSessionId: string | null }
+    | { ok: true; shell: ShellDTO; cwd: string; spriteExecId: string | null }
     | { ok: false; reason: 'not_found' }
   >;
   /** The ONE session access decision — `checkAgentSessionAccess` wired with real IO. DB-only, never wakes a Sprite. */
-  checkSessionAccess: (input: { requesterId: string; sessionId: string }) => Promise<ShellSessionAccessResult>;
+  checkSessionAccess: (input: { requesterId: string; workspaceId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
    * under. Payer = the session's own DRIVE owner, falling back to the
@@ -73,11 +73,11 @@ export interface ShellCheckAuthDeps {
   releaseSlot: (userId: string) => void;
   /**
    * The SHARED provisioning path — `ensureAgentSessionSandbox` from
-   * `packages/lib/src/services/agent-sessions/agent-session-sprite.ts`, wired
+   * `packages/lib/src/services/agent-workspaces/agent-session-sprite.ts`, wired
    * with real deps by the caller. One code path with the web tier, so the CAS
    * inside it actually serializes concurrent provisioners.
    */
-  ensureSessionSandbox: (input: { sessionId: string; userId: string }) => Promise<
+  ensureSessionSandbox: (input: { workspaceId: string; userId: string }) => Promise<
     | { ok: true; sandboxId: string }
     | { ok: false; reason: string }
   >;
@@ -113,14 +113,14 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       deps.logDenied(resolved.reason, { userId, shellId });
       return { ok: false, reason: resolved.reason };
     }
-    const { shell, cwd, streamSessionId } = resolved;
+    const { shell, cwd, spriteExecId } = resolved;
 
     // THE access decision — the same pure `decideAgentSessionAccess` verdict
     // the web API routes enforce, reached through the same IO wrapper. Nothing
     // here weighs the facts; it only carries the verdict.
-    const access = await deps.checkSessionAccess({ requesterId: userId, sessionId: shell.sessionId });
+    const access = await deps.checkSessionAccess({ requesterId: userId, workspaceId: shell.workspaceId });
     if (!access.allowed) {
-      deps.logDenied(access.reason, { userId, shellId, sessionId: shell.sessionId });
+      deps.logDenied(access.reason, { userId, shellId, workspaceId: shell.workspaceId });
       return { ok: false, reason: access.reason };
     }
 
@@ -175,14 +175,14 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
         // that verdict lives in `plan-session-lifecycle.ts`, not here.
         let ensured: Awaited<ReturnType<ShellCheckAuthDeps['ensureSessionSandbox']>>;
         try {
-          ensured = await deps.ensureSessionSandbox({ sessionId: shell.sessionId, userId });
+          ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, userId });
         } catch (error) {
           releaseSlot();
           throw error;
         }
         if (!ensured.ok) {
           releaseSlot();
-          deps.logDenied(ensured.reason, { userId, shellId, sessionId: shell.sessionId });
+          deps.logDenied(ensured.reason, { userId, shellId, workspaceId: shell.workspaceId });
           return { ok: false, reason: ensured.reason };
         }
 
@@ -207,14 +207,14 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
         return {
           ok: true,
           shellId: shell.shellId,
-          sessionId: shell.sessionId,
+          workspaceId: shell.workspaceId,
           sandboxId: ensured.sandboxId,
           cwd,
           sprite,
           command: spec.command,
           args: spec.args,
           commandOverride: shell.command,
-          streamSessionId,
+          spriteExecId,
           releaseSlot,
         };
       },

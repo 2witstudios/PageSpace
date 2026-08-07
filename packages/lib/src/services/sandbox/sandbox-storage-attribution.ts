@@ -4,9 +4,9 @@
  *
  * Narrowed by the Phase 8 teardown: this used to arbitrate FIVE subject kinds
  * — a Machine's own Sprite, a branch-terminal's, a promoted project's, a
- * per-session agent-terminal's, and an `agent_sessions` row's — one per tier
+ * per-session agent-terminal's, and an `agent_workspaces` row's — one per tier
  * of the deleted Machine page type's tree, all unconditionally attributed to
- * an owning Machine page. Only the `agent_sessions` kind survives, and under
+ * an owning Machine page. Only the `agent_workspaces` kind survives, and under
  * the un-conflated model a session is not page-anchored AT ALL: it is a
  * drive-level workspace, so the bill lands on the DRIVE's owner (`driveId`
  * set), or on the session's own `ownerId` for a user-scoped global-assistant
@@ -20,8 +20,8 @@
 
 /** A billable agent-session Sprite. */
 export interface StorageSubject {
-  /** The `agent_sessions` row's own id. */
-  sessionId: string;
+  /** The `agent_workspaces` row's own id. */
+  workspaceId: string;
   /** The session's drive; null for a user-scoped global-assistant session. */
   driveId: string | null;
   /** The session's own owner — the payer of last resort, and the ONLY payer when `driveId` is null. */

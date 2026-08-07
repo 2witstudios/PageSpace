@@ -43,7 +43,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -83,7 +83,7 @@ import PagePaneView from './PagePaneView';
 import Shell from '../shell/Shell';
 
 export interface AgentPanesProps {
-  /** The session this grid belongs to (`agent_sessions.id`). */
+  /** The session this grid belongs to (`agent_workspaces.id`). */
   sessionId: string;
   /** The session's drive — where the picker's agent list comes from. Null for a global-assistant session. */
   driveId: string | null;
@@ -297,7 +297,7 @@ export default function AgentPanes({
   // only spawning new — otherwise closing a terminal pane orphans its shell
   // with no way back short of the sidebar's (now-stale) count.
   const { data: shellsData } = useSWR(
-    `/api/agent-sessions/${encodeURIComponent(sessionId)}/shells`,
+    `/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells`,
     shellsFetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 },
   );
@@ -379,7 +379,7 @@ export default function AgentPanes({
     [mutateSessionConversations, sessionId],
   );
   // The mirror of `recordMintedConversation`, for the opposite direction: a
-  // successful close stamps `closedInSessionAt` server-side immediately, but
+  // successful close stamps `closedInWorkspaceAt` server-side immediately, but
   // this SWR cache only catches up on its next 20s poll (or a revalidate that
   // is itself in flight and could be slow or fail). Left alone,
   // `selectPaneAgent`'s switch decision — read by every OTHER pane's own
@@ -480,7 +480,7 @@ export default function AgentPanes({
 
   const closeShell = useCallback(
     (shellId: string) => {
-      void del(`/api/agent-sessions/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
+      void del(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
         (error) => {
           console.error('Failed to close shell:', error);
           toast.error('Could not close the shell', {
@@ -559,7 +559,7 @@ export default function AgentPanes({
     async (paneId: string, conversationId: string, rebindTo: string | null, rebindAgentPageId: string | null) => {
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
@@ -618,7 +618,7 @@ export default function AgentPanes({
       // unconditionally (see `recordClosedConversation`'s own doc).
       recordClosedConversation(conversationId);
       // Instant sidebar freshness — the closed listing's row leaves every
-      // open `/api/agent-sessions**` poll without waiting on its interval.
+      // open `/api/agent-workspaces**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);
     },
     [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, resetPane, onConversationClosed, recordClosedConversation],
@@ -730,7 +730,7 @@ export default function AgentPanes({
     let hadOtherOpenConversations = false;
     try {
       const ended = await del<{ hadOtherOpenConversations?: boolean }>(
-        `/api/agent-sessions/${encodeURIComponent(sessionId)}`,
+        `/api/agent-workspaces/${encodeURIComponent(sessionId)}`,
       );
       hadOtherOpenConversations = ended?.hadOtherOpenConversations ?? false;
     } catch (error) {
@@ -794,7 +794,7 @@ export default function AgentPanes({
       // otherwise holding forever (a pre-existing defect this fixes).
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
         // This DELETE can be delayed (a slow network) long enough for a
         // LATER, independent pick of this exact conversation to land in a
@@ -805,7 +805,7 @@ export default function AgentPanes({
         // chatgpt-codex-connector on PR #2299, round 17).
         if (isConversationShownSomewhere(conversationId)) {
           await post(
-            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}/reopen`,
+            `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}/reopen`,
             {},
           );
           // The SAME race applies to this compensating reopen itself: the
@@ -852,7 +852,7 @@ export default function AgentPanes({
       if (!closeDecisionListing.some((c) => c.conversationId === oldConversationId)) return;
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(oldConversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(oldConversationId)}`,
         );
       } catch (error) {
         console.error('Failed to close the replaced conversation:', error);
@@ -972,7 +972,7 @@ export default function AgentPanes({
         if (agentPageId === null) {
           // The ASSISTANT: no agent page, so the session-centric creator is
           // the path (page-agents has no page to hang this on).
-          await post(`/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations`, {
+          await post(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations`, {
             conversationId,
           });
         } else {
@@ -1006,7 +1006,7 @@ export default function AgentPanes({
         // Local optimistic update for THIS component's own switch/close
         // decisions (instant, no network)...
         recordMintedConversation(conversationId, agentPageId);
-        // ...and a broader revalidate covering every OTHER `/api/agent-sessions**`
+        // ...and a broader revalidate covering every OTHER `/api/agent-workspaces**`
         // consumer (the sidebar, other panes) whose differently-scoped cache
         // key the local update above can't reach — it also re-fetches THIS
         // component's own key, which just confirms the optimistic patch above
@@ -1112,7 +1112,7 @@ export default function AgentPanes({
         let reopenResult: { ok: boolean; alreadyOpen: boolean };
         try {
           reopenResult = await post<{ ok: boolean; alreadyOpen: boolean }>(
-            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
+            `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
             {},
           );
         } catch (error) {
@@ -1139,7 +1139,7 @@ export default function AgentPanes({
         }
         const remaining = settleReopen();
         if (!isCurrent()) {
-          // The reopen SUCCEEDED server-side (closedInSessionAt cleared, a
+          // The reopen SUCCEEDED server-side (closedInWorkspaceAt cleared, a
           // cap slot consumed) after a newer pick or agent mint already
           // superseded this one on the same pane — returning early without
           // undoing that leaves an invisible open listing occupying a slot
@@ -1250,7 +1250,7 @@ export default function AgentPanes({
         let claimResult: { ok: boolean; alreadyInSession: boolean };
         try {
           claimResult = await post<{ ok: boolean; alreadyInSession: boolean }>(
-            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/claim`,
+            `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/claim`,
             {},
           );
         } catch (error) {
@@ -1462,7 +1462,7 @@ export default function AgentPanes({
       assignPane(sessionId, paneId, { kind: 'terminal', name: 'shell', targetId: null, agentPageId: null });
       try {
         const { shell } = await post<{ shell: { shellId: string; name: string } }>(
-          `/api/agent-sessions/${encodeURIComponent(sessionId)}/shells`,
+          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells`,
           {},
         );
         if (!paneStillLoading(paneId, { kind: 'terminal', agentPageId: null })) {

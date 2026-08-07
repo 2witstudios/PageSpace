@@ -1,7 +1,7 @@
 /**
  * Default (real) IO composition for the storage reconcile cron (Sprites
  * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to the
- * `agent_sessions` table and the credit pipeline. Reads the last PERSISTED
+ * `agent_workspaces` table and the credit pipeline. Reads the last PERSISTED
  * measured bytes (never the provisioned cap, never waking a sprite).
  *
  * Narrowed by the Phase 8 teardown: this used to also enumerate FOUR
@@ -29,7 +29,7 @@
 import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
-import { agentSessions } from '@pagespace/db/schema/agent-sessions';
+import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -43,17 +43,17 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   async listAgentSessionSprites() {
     const rows = await db
       .select({
-        sessionId: agentSessions.id,
-        driveId: agentSessions.driveId,
-        ownerId: agentSessions.ownerId,
-        storageLastBilledAt: agentSessions.storageLastBilledAt,
-        measuredBytes: agentSessions.storageMeasuredBytes,
-        measuredAt: agentSessions.storageMeasuredAt,
-        lastActiveAt: agentSessions.lastActiveAt,
+        workspaceId: agentWorkspaces.id,
+        driveId: agentWorkspaces.driveId,
+        ownerId: agentWorkspaces.ownerId,
+        storageLastBilledAt: agentWorkspaces.storageLastBilledAt,
+        measuredBytes: agentWorkspaces.storageMeasuredBytes,
+        measuredAt: agentWorkspaces.storageMeasuredAt,
+        lastActiveAt: agentWorkspaces.lastActiveAt,
       })
-      .from(agentSessions)
-      .where(and(isNotNull(agentSessions.sandboxId), isNull(agentSessions.spriteTornDownAt)));
-    // `lastActiveAt` is nullable on `agent_sessions` ("reported only, never
+      .from(agentWorkspaces)
+      .where(and(isNotNull(agentWorkspaces.sandboxId), isNull(agentWorkspaces.spriteTornDownAt)));
+    // `lastActiveAt` is nullable on `agent_workspaces` ("reported only, never
     // acted on") — a row that has never recorded activity falls back to the
     // epoch, the honest-conservative "not awake" reading.
     return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
@@ -61,7 +61,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
 
   lookupDriveOwnerId,
 
-  async chargeStorage({ payerId, driveId, sessionId, costDollars, gbMonths }) {
+  async chargeStorage({ payerId, driveId, workspaceId, costDollars, gbMonths }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
@@ -76,7 +76,9 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // not just freeform metadata forensics. `driveId` undefined for a
       // global-assistant session (mirrors `pageId`'s "unattributed" reading).
       driveId,
-      sessionId,
+      // `AIUsageData.sessionId` is the shared analytics column (`monitoring.session_id`),
+      // written by many sources — out of this rename's scope, so map at the boundary.
+      sessionId: workspaceId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed
@@ -93,14 +95,14 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     });
   },
 
-  // The `agent_sessions` Sprite's OWN watermark — directly on the row itself:
+  // The `agent_workspaces` Sprite's OWN watermark — directly on the row itself:
   // the design's "per-row watermark" made literal, no separate tracking
   // table.
-  async advanceAgentSessionWatermark({ sessionId, billedThrough }) {
+  async advanceAgentSessionWatermark({ workspaceId, billedThrough }) {
     await db
-      .update(agentSessions)
+      .update(agentWorkspaces)
       .set({ storageLastBilledAt: billedThrough })
-      .where(eq(agentSessions.id, sessionId));
+      .where(eq(agentWorkspaces.id, workspaceId));
   },
 
   now: () => new Date(),

@@ -46,7 +46,7 @@ async function sessionFetcher(url: string): Promise<SessionRecordResponse> {
 
 export function useSessionRecord(sessionId: string | null) {
   return useSWR(
-    sessionId ? `/api/agent-sessions/${encodeURIComponent(sessionId)}` : null,
+    sessionId ? `/api/agent-workspaces/${encodeURIComponent(sessionId)}` : null,
     sessionFetcher,
     { revalidateOnFocus: false, dedupingInterval: 30_000 },
   );

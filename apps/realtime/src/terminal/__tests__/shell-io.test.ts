@@ -10,7 +10,7 @@ import {
   type ShellIoDeps,
 } from '../shell-io';
 import { appendScrollback, type TerminalSession } from '../terminal-session-map';
-import { MAX_SHELLS_PER_READ, MAX_SCROLLBACK_TAIL_LINES } from '@pagespace/lib/agent-sessions/contract';
+import { MAX_SHELLS_PER_READ, MAX_SCROLLBACK_TAIL_LINES } from '@pagespace/lib/agent-workspaces/contract';
 
 function makeSession(over: Partial<TerminalSession> = {}): TerminalSession {
   return {

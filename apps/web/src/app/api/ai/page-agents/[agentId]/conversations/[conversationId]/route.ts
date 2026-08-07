@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-sessions-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -241,31 +241,31 @@ export async function DELETE(
     // arbitrarily (they'd never even contend for the same lock), so a delete
     // racing a reopen could commit `isActive: false` right as the reopen's
     // stale-free `isActive` read passed, letting the reopen's UPDATE clear
-    // `closedInSessionAt` on a row that never got a listing slot back —
+    // `closedInWorkspaceAt` on a row that never got a listing slot back —
     // "reopened successfully" but invisible to every session listing (review
     // finding — chatgpt-codex-connector on PR #2296, filed after the
     // previous round's open-only guard). Re-reading inside the lock also
     // means a stale pre-lock snapshot can never smuggle a since-reopened
     // conversation past the never-empty guard.
-    if (conversationRow?.sessionId) {
-      const sessionId = conversationRow.sessionId;
-      const outcome = await withSessionListingLock(sessionId, async () => {
+    if (conversationRow?.workspaceId) {
+      const workspaceId = conversationRow.workspaceId;
+      const outcome = await withSessionListingLock(workspaceId, async () => {
         const fresh = await conversationRepository.getConversation(conversationId);
         if (!fresh || !fresh.isActive) {
           // Already history-deleted by a concurrent request — nothing left
           // to guard or delete.
           return 'already_deleted' as const;
         }
-        // A row whose session was cleared (`conversations.sessionId` is
+        // A row whose session was cleared (`conversations.workspaceId` is
         // `ON DELETE SET NULL`) is still an active conversation that must
-        // be deleted — it's merely detached from `sessionId`'s cap, not
+        // be deleted — it's merely detached from `workspaceId`'s cap, not
         // history-deleted. Only weigh the never-empty guard when the row is
         // STILL bound to the session this lock is keyed on (review finding
         // — coderabbitai on PR #2296: the prior version folded "detached"
         // into "already deleted" and silently skipped the soft-delete).
-        if (fresh.sessionId === sessionId && fresh.closedInSessionAt === null) {
+        if (fresh.workspaceId === workspaceId && fresh.closedInWorkspaceAt === null) {
           // Still open — occupies a listing slot, so the never-empty guard applies.
-          const openCount = await countOpenConversationsForSession(sessionId);
+          const openCount = await countOpenConversationsForSession(workspaceId);
           if (openCount <= 1) return 'last_conversation' as const;
         }
         await conversationRepository.softDeleteConversation(agentId, conversationId);
@@ -278,7 +278,7 @@ export async function DELETE(
           userId: auth.userId,
           resourceType: 'page_agent_conversation',
           resourceId: conversationId,
-          details: { reason: 'last_session_conversation', agentId, sessionId, method: 'DELETE' },
+          details: { reason: 'last_session_conversation', agentId, workspaceId, method: 'DELETE' },
           riskScore: 0,
         });
         return NextResponse.json(

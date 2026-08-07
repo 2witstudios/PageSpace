@@ -39,7 +39,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
   };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: { acquireSlot: () => true, releaseSlot: () => {} },
     buildEnv: () => ({}),
@@ -111,7 +111,7 @@ describe('readMachineGitBlob', () => {
   it('maps a hard runGitInSandbox failure (success: false) to exec_failed', async () => {
     const deps: GitSandboxRunDeps = {
       isEnabled: () => false,
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
       reconnect: async () => {
         throw new Error('unreachable');
       },

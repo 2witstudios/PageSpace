@@ -62,9 +62,9 @@ import {
   MAX_AGENT_DEPTH,
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
-} from '@pagespace/lib/agent-sessions/plan-spawn-session';
-import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-sessions/contract';
-import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
+} from '@pagespace/lib/agent-workspaces/plan-spawn-session';
+import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { ToolExecutionContext } from '../core/types';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
@@ -287,7 +287,7 @@ export interface WorkerRow {
   agentPageId: string | null;
   name: string;
   /**
-   * The WORKSPACE (agent_sessions.id) this conversation is bound to, or null
+   * The WORKSPACE (agent_workspaces.id) this conversation is bound to, or null
    * for a workspace-less conversation. `openOwnSession` requires it non-null (a
    * plain thread is not a worker) but does NOT compare it to the caller's own
    * workspace — worker verbs are resource-addressed (issue #2335 product
@@ -295,7 +295,7 @@ export interface WorkerRow {
    */
   workspaceId: string | null;
   /**
-   * The human closed this conversation's LISTING (`conversations.closedInSessionAt`
+   * The human closed this conversation's LISTING (`conversations.closedInWorkspaceAt`
    * set) — it no longer shows in their sidebar, even though its history is
    * untouched. `openOwnSession` refuses on this: a worker verb must never
    * dispatch new work into, read, or kill a sibling the user has already
@@ -334,7 +334,7 @@ export type ShellSendOutcome =
 
 export interface SessionToolsDeps {
   /**
-   * The caller's WORKSPACE (agent_sessions row id) resolved from their
+   * The caller's WORKSPACE (agent_workspaces row id) resolved from their
    * conversation, or null for a plain conversation with no session. The two
    * id namespaces meet exactly here: everything the shell verbs compare, and
    * everything the listing enumerates, hangs off this one resolution.
@@ -822,7 +822,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     if (!actor) return { ok: false, error: NEEDS_AUTH };
     const conversationId = context?.conversationId;
     if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
-    // Rows store the WORKSPACE id (`agent_sessions.id`), the context carries a
+    // Rows store the WORKSPACE id (`agent_workspaces.id`), the context carries a
     // conversation id — two namespaces, so resolve the caller's workspace and
     // compare inside one of them (review H2: comparing across them refused
     // every real shell, ever).

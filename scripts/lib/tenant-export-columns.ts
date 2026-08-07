@@ -58,7 +58,7 @@ export interface TableColumnSpec {
 }
 
 /**
- * Sprite identity and per-sandbox accounting on `agent_sessions`. All of it
+ * Sprite identity and per-sandbox accounting on `agent_workspaces`. All of it
  * describes a VM in the SOURCE instance's fleet, which the tenant has no
  * access to and must never believe it owns. Left unset, the migrated session
  * row reads as "never provisioned" (`sandboxId IS NULL`), so the tenant lazily
@@ -66,8 +66,8 @@ export interface TableColumnSpec {
  * is born in — and the orphan reconciler's live-sprite predicate
  * (`sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`) never selects it.
  */
-const AGENT_SESSION_SPRITE_EXCLUSIONS: Record<string, string> = {
-  sessionKey: 'Sprite provisioning key in the SOURCE fleet — meaningless to the tenant, which derives its own.',
+const AGENT_WORKSPACE_SPRITE_EXCLUSIONS: Record<string, string> = {
+  spriteKey: 'Sprite provisioning key in the SOURCE fleet — meaningless to the tenant, which derives its own.',
   sandboxId: 'Names a Sprite in the SOURCE fleet; carrying it would point the tenant at a VM it does not own.',
   spriteInstanceId: 'Identity of a SOURCE-fleet Sprite instance — every teardown CAS keys on it, so a stale value is actively dangerous.',
   egressPolicyToken: 'Proof of an egress lockdown confirmed for a SOURCE-fleet VM; unprovable and unusable in the tenant.',
@@ -175,22 +175,22 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   // `agent_workspace_pane_columns` / `agent_workspace_panes`, which are NOT
   // in `TABLE_IMPORT_ORDER` — so a tenant bundle no longer carries pane
   // LAYOUT. Nothing is orphaned by that: every conversation and shell in the
-  // session is carried and still bound (`conversations.sessionId`), so the
+  // session is carried and still bound (`conversations.workspaceId`), so the
   // migrated user gets their threads with a fresh default grid instead of
   // their arrangement. Closing it means WIDENING the carried table set, which
   // this registry deliberately does not do on its own (see SCOPE NOTE above).
-  agent_sessions: {
+  agent_workspaces: {
     columns: [
       'id', 'driveId', 'ownerId', 'name',
       'lastActiveAt', 'endedAt', 'createdAt', 'updatedAt',
     ],
-    excluded: AGENT_SESSION_SPRITE_EXCLUSIONS,
+    excluded: AGENT_WORKSPACE_SPRITE_EXCLUSIONS,
   },
 
   conversations: {
     columns: [
-      'id', 'userId', 'title', 'type', 'contextId', 'agentPageId', 'sessionId',
-      'closedInSessionAt', 'rev', 'lastMessageAt',
+      'id', 'userId', 'title', 'type', 'contextId', 'agentPageId', 'workspaceId',
+      'closedInWorkspaceAt', 'rev', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
     ],
   },

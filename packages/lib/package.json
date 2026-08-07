@@ -62,40 +62,40 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
-    "./agent-sessions/contract": {
-      "types": "./dist/agent-sessions/contract.d.ts",
-      "import": "./dist/agent-sessions/contract.js",
-      "require": "./dist/agent-sessions/contract.js"
+    "./agent-workspaces/contract": {
+      "types": "./dist/agent-workspaces/contract.d.ts",
+      "import": "./dist/agent-workspaces/contract.js",
+      "require": "./dist/agent-workspaces/contract.js"
     },
-    "./agent-sessions/workspace-layout-verbs": {
-      "types": "./dist/agent-sessions/workspace-layout-verbs.d.ts",
-      "import": "./dist/agent-sessions/workspace-layout-verbs.js",
-      "require": "./dist/agent-sessions/workspace-layout-verbs.js"
+    "./agent-workspaces/workspace-layout-verbs": {
+      "types": "./dist/agent-workspaces/workspace-layout-verbs.d.ts",
+      "import": "./dist/agent-workspaces/workspace-layout-verbs.js",
+      "require": "./dist/agent-workspaces/workspace-layout-verbs.js"
     },
-    "./agent-sessions/session-sprite-key": {
-      "types": "./dist/agent-sessions/session-sprite-key.d.ts",
-      "import": "./dist/agent-sessions/session-sprite-key.js",
-      "require": "./dist/agent-sessions/session-sprite-key.js"
+    "./agent-workspaces/session-sprite-key": {
+      "types": "./dist/agent-workspaces/session-sprite-key.d.ts",
+      "import": "./dist/agent-workspaces/session-sprite-key.js",
+      "require": "./dist/agent-workspaces/session-sprite-key.js"
     },
-    "./agent-sessions/plan-session-lifecycle": {
-      "types": "./dist/agent-sessions/plan-session-lifecycle.d.ts",
-      "import": "./dist/agent-sessions/plan-session-lifecycle.js",
-      "require": "./dist/agent-sessions/plan-session-lifecycle.js"
+    "./agent-workspaces/plan-session-lifecycle": {
+      "types": "./dist/agent-workspaces/plan-session-lifecycle.d.ts",
+      "import": "./dist/agent-workspaces/plan-session-lifecycle.js",
+      "require": "./dist/agent-workspaces/plan-session-lifecycle.js"
     },
-    "./agent-sessions/decide-session-access": {
-      "types": "./dist/agent-sessions/decide-session-access.d.ts",
-      "import": "./dist/agent-sessions/decide-session-access.js",
-      "require": "./dist/agent-sessions/decide-session-access.js"
+    "./agent-workspaces/decide-session-access": {
+      "types": "./dist/agent-workspaces/decide-session-access.d.ts",
+      "import": "./dist/agent-workspaces/decide-session-access.js",
+      "require": "./dist/agent-workspaces/decide-session-access.js"
     },
-    "./agent-sessions/plan-spawn-session": {
-      "types": "./dist/agent-sessions/plan-spawn-session.d.ts",
-      "import": "./dist/agent-sessions/plan-spawn-session.js",
-      "require": "./dist/agent-sessions/plan-spawn-session.js"
+    "./agent-workspaces/plan-spawn-session": {
+      "types": "./dist/agent-workspaces/plan-spawn-session.d.ts",
+      "import": "./dist/agent-workspaces/plan-spawn-session.js",
+      "require": "./dist/agent-workspaces/plan-spawn-session.js"
     },
-    "./agent-sessions/redact-conversation-listing": {
-      "types": "./dist/agent-sessions/redact-conversation-listing.d.ts",
-      "import": "./dist/agent-sessions/redact-conversation-listing.js",
-      "require": "./dist/agent-sessions/redact-conversation-listing.js"
+    "./agent-workspaces/redact-conversation-listing": {
+      "types": "./dist/agent-workspaces/redact-conversation-listing.d.ts",
+      "import": "./dist/agent-workspaces/redact-conversation-listing.js",
+      "require": "./dist/agent-workspaces/redact-conversation-listing.js"
     },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
@@ -682,60 +682,60 @@
       "import": "./dist/services/sandbox/github-token.js",
       "require": "./dist/services/sandbox/github-token.js"
     },
-    "./services/agent-sessions/agent-session-access": {
-      "types": "./dist/services/agent-sessions/agent-session-access.d.ts",
-      "import": "./dist/services/agent-sessions/agent-session-access.js",
-      "require": "./dist/services/agent-sessions/agent-session-access.js"
+    "./services/agent-workspaces/agent-session-access": {
+      "types": "./dist/services/agent-workspaces/agent-session-access.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-session-access.js",
+      "require": "./dist/services/agent-workspaces/agent-session-access.js"
     },
-    "./services/agent-sessions/agent-session-sprite": {
-      "types": "./dist/services/agent-sessions/agent-session-sprite.d.ts",
-      "import": "./dist/services/agent-sessions/agent-session-sprite.js",
-      "require": "./dist/services/agent-sessions/agent-session-sprite.js"
+    "./services/agent-workspaces/agent-session-sprite": {
+      "types": "./dist/services/agent-workspaces/agent-session-sprite.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-session-sprite.js",
+      "require": "./dist/services/agent-workspaces/agent-session-sprite.js"
     },
-    "./services/agent-sessions/agent-session-tenant": {
-      "types": "./dist/services/agent-sessions/agent-session-tenant.d.ts",
-      "import": "./dist/services/agent-sessions/agent-session-tenant.js",
-      "require": "./dist/services/agent-sessions/agent-session-tenant.js"
+    "./services/agent-workspaces/agent-session-tenant": {
+      "types": "./dist/services/agent-workspaces/agent-session-tenant.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-session-tenant.js",
+      "require": "./dist/services/agent-workspaces/agent-session-tenant.js"
     },
-    "./services/agent-sessions/agent-sessions": {
-      "types": "./dist/services/agent-sessions/agent-sessions.d.ts",
-      "import": "./dist/services/agent-sessions/agent-sessions.js",
-      "require": "./dist/services/agent-sessions/agent-sessions.js"
+    "./services/agent-workspaces/agent-sessions": {
+      "types": "./dist/services/agent-workspaces/agent-sessions.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-sessions.js",
+      "require": "./dist/services/agent-workspaces/agent-sessions.js"
     },
-    "./services/agent-sessions/agent-sessions-store": {
-      "types": "./dist/services/agent-sessions/agent-sessions-store.d.ts",
-      "import": "./dist/services/agent-sessions/agent-sessions-store.js",
-      "require": "./dist/services/agent-sessions/agent-sessions-store.js"
+    "./services/agent-workspaces/agent-sessions-store": {
+      "types": "./dist/services/agent-workspaces/agent-sessions-store.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-sessions-store.js",
+      "require": "./dist/services/agent-workspaces/agent-sessions-store.js"
     },
-    "./services/agent-sessions/workspace-layout-store": {
-      "types": "./dist/services/agent-sessions/workspace-layout-store.d.ts",
-      "import": "./dist/services/agent-sessions/workspace-layout-store.js",
-      "require": "./dist/services/agent-sessions/workspace-layout-store.js"
+    "./services/agent-workspaces/workspace-layout-store": {
+      "types": "./dist/services/agent-workspaces/workspace-layout-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-layout-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-layout-store.js"
     },
-    "./services/agent-sessions/session-scrollback": {
-      "types": "./dist/services/agent-sessions/session-scrollback.d.ts",
-      "import": "./dist/services/agent-sessions/session-scrollback.js",
-      "require": "./dist/services/agent-sessions/session-scrollback.js"
+    "./services/agent-workspaces/session-scrollback": {
+      "types": "./dist/services/agent-workspaces/session-scrollback.d.ts",
+      "import": "./dist/services/agent-workspaces/session-scrollback.js",
+      "require": "./dist/services/agent-workspaces/session-scrollback.js"
     },
-    "./services/agent-sessions/session-shells": {
-      "types": "./dist/services/agent-sessions/session-shells.d.ts",
-      "import": "./dist/services/agent-sessions/session-shells.js",
-      "require": "./dist/services/agent-sessions/session-shells.js"
+    "./services/agent-workspaces/session-shells": {
+      "types": "./dist/services/agent-workspaces/session-shells.d.ts",
+      "import": "./dist/services/agent-workspaces/session-shells.js",
+      "require": "./dist/services/agent-workspaces/session-shells.js"
     },
-    "./services/agent-sessions/session-shells-store": {
-      "types": "./dist/services/agent-sessions/session-shells-store.d.ts",
-      "import": "./dist/services/agent-sessions/session-shells-store.js",
-      "require": "./dist/services/agent-sessions/session-shells-store.js"
+    "./services/agent-workspaces/session-shells-store": {
+      "types": "./dist/services/agent-workspaces/session-shells-store.d.ts",
+      "import": "./dist/services/agent-workspaces/session-shells-store.js",
+      "require": "./dist/services/agent-workspaces/session-shells-store.js"
     },
-    "./services/agent-sessions/session-status": {
-      "types": "./dist/services/agent-sessions/session-status.d.ts",
-      "import": "./dist/services/agent-sessions/session-status.js",
-      "require": "./dist/services/agent-sessions/session-status.js"
+    "./services/agent-workspaces/session-status": {
+      "types": "./dist/services/agent-workspaces/session-status.d.ts",
+      "import": "./dist/services/agent-workspaces/session-status.js",
+      "require": "./dist/services/agent-workspaces/session-status.js"
     },
-    "./services/agent-sessions/shell-types": {
-      "types": "./dist/services/agent-sessions/shell-types.d.ts",
-      "import": "./dist/services/agent-sessions/shell-types.js",
-      "require": "./dist/services/agent-sessions/shell-types.js"
+    "./services/agent-workspaces/shell-types": {
+      "types": "./dist/services/agent-workspaces/shell-types.d.ts",
+      "import": "./dist/services/agent-workspaces/shell-types.js",
+      "require": "./dist/services/agent-workspaces/shell-types.js"
     },
     "./services/sandbox/sprite-orphan-reconcile": {
       "types": "./dist/services/sandbox/sprite-orphan-reconcile.d.ts",

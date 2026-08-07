@@ -85,7 +85,7 @@ function makeSprite(sessions: Array<{ id: string; command: string; isActive: boo
  */
 function makeAuthSuccess(over: Partial<{
   sessionKey: string;
-  streamSessionId: string | null;
+  spriteExecId: string | null;
   sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }>;
   command: string;
   args: string[];
@@ -100,14 +100,14 @@ function makeAuthSuccess(over: Partial<{
   const sandbox = {
     ok: true as const,
     shellId: 'shell-row-1',
-    sessionId: 'conv-1',
+    workspaceId: 'conv-1',
     sandboxId: 'sbx1',
     cwd: over.cwd ?? SANDBOX_ROOT,
     sprite,
     command: over.command ?? 'pagespace-cli',
     args: over.args ?? [],
     commandOverride: over.commandOverride ?? null,
-    streamSessionId: over.streamSessionId ?? null,
+    spriteExecId: over.spriteExecId ?? null,
     releaseSlot,
   };
   return {
@@ -254,7 +254,7 @@ describe('buildShellHandlers', () => {
   let openShell: ReturnType<typeof vi.fn> & OpenShellFn;
   let checkAuth: ReturnType<typeof vi.fn> & ShellCheckAuthFn;
   let socket: ReturnType<typeof makeSocket>;
-  let persistStreamSessionId: ReturnType<typeof vi.fn>;
+  let persistSpriteExecId: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -263,7 +263,7 @@ describe('buildShellHandlers', () => {
     openShell = vi.fn().mockReturnValue(shell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
     checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
     socket = makeSocket();
-    persistStreamSessionId = vi.fn().mockResolvedValue(undefined);
+    persistSpriteExecId = vi.fn().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -272,7 +272,7 @@ describe('buildShellHandlers', () => {
 
   describe('onConnect', () => {
     it('given valid payload and auth succeeds, should launch the resolved agent command and emit shell:ready', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(
@@ -282,7 +282,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given any shell, should launch inside the session sandbox home cwd resolved by checkAuth — no scope-derived path exists', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: SANDBOX_ROOT }));
@@ -291,7 +291,7 @@ describe('buildShellHandlers', () => {
     it('given a claude shell, should launch claude instead of pagespace-cli', async () => {
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'claude', args: ['--dangerously-skip-permissions'] })) as unknown as ReturnType<typeof vi.fn> &
         ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: 'claude', args: ['--dangerously-skip-permissions'] }));
@@ -301,7 +301,7 @@ describe('buildShellHandlers', () => {
       const originalShell = process.env.SHELL;
       process.env.SHELL = '/bin/zsh';
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'shell', args: [], cwd: SANDBOX_ROOT })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: '/bin/zsh', args: [] }));
@@ -312,7 +312,7 @@ describe('buildShellHandlers', () => {
       const originalShell = process.env.SHELL;
       process.env.SHELL = '/bin/zsh';
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'shell', commandOverride: 'htop' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: '/bin/zsh', args: ['-c', 'htop'] }));
@@ -320,7 +320,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given valid payload and auth succeeds, should store the session under its shell-derived key', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
@@ -332,10 +332,10 @@ describe('buildShellHandlers', () => {
       const claudeAuth = makeAuthSuccess({ sessionKey: 'shell:shl-2', command: 'claude' });
       checkAuth = vi.fn().mockResolvedValueOnce(cliAuth).mockResolvedValueOnce(claudeAuth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       const secondSocket = makeSocket('sock2');
-      const secondHandlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: secondSocket, persistStreamSessionId });
+      const secondHandlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: secondSocket, persistSpriteExecId });
       await secondHandlers.onConnect({ ...validPayload, shellId: 'shl-2' });
 
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
@@ -344,7 +344,7 @@ describe('buildShellHandlers', () => {
 
     it('given auth fails, should emit shell:error and not store session', async () => {
       checkAuth = vi.fn().mockResolvedValue({ ok: false, reason: 'no_edit_access' }) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.any(String) }));
@@ -353,7 +353,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given invalid payload (missing shellId), should emit shell:error without calling checkAuth', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const { shellId: _omit, ...rest } = validPayload;
       await onConnect(rest);
 
@@ -365,7 +365,7 @@ describe('buildShellHandlers', () => {
       // One socket carries every pane of the grid, and a client treats an untagged
       // event as its own — so an untagged error is rendered by EVERY pane at once,
       // covering healthy running terminals with a failure that belongs to one.
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const { shellId: _omit, ...rest } = validPayload;
       await onConnect({ ...rest, connectionId: 'pane-b' });
 
@@ -376,7 +376,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a valid payload, should call checkAuth with the shellId alone — the whole address', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(checkAuth).toHaveBeenCalledWith({ userId: 'user1', shellId: 'shl-1' });
@@ -388,7 +388,7 @@ describe('buildShellHandlers', () => {
       openShell = vi.fn().mockImplementation(() => {
         throw new Error('sprite unreachable');
       }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.any(String) }));
@@ -396,27 +396,27 @@ describe('buildShellHandlers', () => {
       expect(auth.releaseSlot).toHaveBeenCalled();
     });
 
-    it('given a known streamSessionId the Sprite STILL HAS, should reattach to it instead of creating a fresh session', async () => {
+    it('given a known spriteExecId the Sprite STILL HAS, should reattach to it instead of creating a fresh session', async () => {
       // The Sprite is asked, and it still has the session — so continuity across a
       // realtime restart is preserved. (A stored id the Sprite does NOT have is
       // dangling: attaching to it optimistically is what the shell used to do and
       // what the liveness verdict now prevents — see the dangling-id test below.)
       checkAuth = vi.fn().mockResolvedValue(
         makeAuthSuccess({
-          streamSessionId: 'sess-existing',
+          spriteExecId: 'sess-existing',
           sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
         }),
       ) as unknown as ReturnType<typeof vi.fn> &
         ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-existing' }));
       // Already-known session id — nothing new to discover/persist.
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(persistSpriteExecId).not.toHaveBeenCalled();
     });
 
-    it('given a streamSessionId the Sprite STILL HAS, should tell the client the agent was RESUMED', async () => {
+    it('given a spriteExecId the Sprite STILL HAS, should tell the client the agent was RESUMED', async () => {
       // This process holds no session for it (a restart empties the map), so the
       // connect takes the cold CREATE path — but the Sprite still has the agent
       // running and the shell picks it back up. The client cannot tell that apart
@@ -425,17 +425,17 @@ describe('buildShellHandlers', () => {
       // running for hours, sitting at a confirmation prompt, is destructive.
       checkAuth = vi.fn().mockResolvedValue(
         makeAuthSuccess({
-          streamSessionId: 'sess-existing',
+          spriteExecId: 'sess-existing',
           sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
         }),
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: true });
     });
 
-    it('given a DANGLING streamSessionId, should report a fresh boot — the row is a memory, not a fact', async () => {
+    it('given a DANGLING spriteExecId, should report a fresh boot — the row is a memory, not a fact', async () => {
       // Exec sessions do not survive a Sprite pause, and nothing ever clears the
       // column: the id names a session the Sprite no longer has, so the shell will
       // discover the dangling attach and launch a FRESH agent (`planReconnect`).
@@ -443,21 +443,21 @@ describe('buildShellHandlers', () => {
       // agent's pane its starting prompt had already been taken, and the agent
       // would sit there having never been given its task.
       checkAuth = vi.fn().mockResolvedValue(
-        makeAuthSuccess({ streamSessionId: 'sess-long-dead', sessions: [] }),
+        makeAuthSuccess({ spriteExecId: 'sess-long-dead', sessions: [] }),
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: false });
     });
 
     it('given the Sprite will not say which sessions it has, should assume the agent is STILL RUNNING', async () => {
-      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      const auth = makeAuthSuccess({ spriteExecId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(async () => {
         throw new Error('control plane unreachable');
       });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       // The two ways of being wrong are not symmetric: refusing to type at an agent
@@ -469,15 +469,15 @@ describe('buildShellHandlers', () => {
     it('given a FRESH session whose shell reports its authoritative id, should persist that id', async () => {
       // The shell learns the id from the created session's own socket and hands it
       // up via onSessionId — the handler no longer discovers anything itself.
-      const auth = makeAuthSuccess({ streamSessionId: null });
+      const auth = makeAuthSuccess({ spriteExecId: null });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       announceSessionId(openShell, 'sess-new');
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(persistStreamSessionId).toHaveBeenCalledWith({ shellId: 'shell-row-1', sessionId: 'sess-new' });
+      expect(persistSpriteExecId).toHaveBeenCalledWith({ shellId: 'shell-row-1', spriteExecId: 'sess-new' });
     });
 
     it('given two sessions announced in quick succession, should persist them IN ORDER (a dead id must not win)', async () => {
@@ -487,14 +487,14 @@ describe('buildShellHandlers', () => {
       // chained, so the last session announced is the last one written.
       const writes: string[] = [];
       const slowFirst = deferred<void>();
-      persistStreamSessionId = vi.fn().mockImplementationOnce(async (a: { sessionId: string }) => {
+      persistSpriteExecId = vi.fn().mockImplementationOnce(async (a: { spriteExecId: string }) => {
         await slowFirst.promise;            // A's write is slow...
-        writes.push(a.sessionId);
-      }).mockImplementation(async (a: { sessionId: string }) => {
-        writes.push(a.sessionId);           // ...B's would otherwise overtake it
+        writes.push(a.spriteExecId);
+      }).mockImplementation(async (a: { spriteExecId: string }) => {
+        writes.push(a.spriteExecId);           // ...B's would otherwise overtake it
       });
-      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: null })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ spriteExecId: null })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       const args = openShell.mock.calls[0][0] as OpenPtyShellArgs;
@@ -505,17 +505,17 @@ describe('buildShellHandlers', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(writes).toEqual(['sess-a', 'sess-b']); // B last — the live session wins
-      expect(sessionMap.getByKey('shell:shl-1')?.sessionId).toBe('sess-b');
+      expect(sessionMap.getByKey('shell:shl-1')?.spriteExecId).toBe('sess-b');
     });
 
-    it('given a FRESH session whose shell never reports an id, should not call persistStreamSessionId', async () => {
-      const auth = makeAuthSuccess({ streamSessionId: null, sessions: [] });
+    it('given a FRESH session whose shell never reports an id, should not call persistSpriteExecId', async () => {
+      const auth = makeAuthSuccess({ spriteExecId: null, sessions: [] });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(persistSpriteExecId).not.toHaveBeenCalled();
     });
 
     it('given a FRESH session, should NOT list the Sprite\'s sessions at all (identity comes from the create handle, not a diff)', async () => {
@@ -523,9 +523,9 @@ describe('buildShellHandlers', () => {
       // listSessions diff added two control-plane round
       // trips to every cold connect AND could not tell our new shell from a
       // sibling terminal's. Both are gone: the connect path never lists.
-      const auth = makeAuthSuccess({ streamSessionId: null });
+      const auth = makeAuthSuccess({ spriteExecId: null });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -535,10 +535,10 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a persist that rejects with a NON-Error value, should coerce it and still not throw', async () => {
-      const auth = makeAuthSuccess({ streamSessionId: null });
-      persistStreamSessionId = vi.fn().mockRejectedValue('db string blip');
+      const auth = makeAuthSuccess({ spriteExecId: null });
+      persistSpriteExecId = vi.fn().mockRejectedValue('db string blip');
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       announceSessionId(openShell, 'sess-new');
@@ -547,10 +547,10 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a persist that rejects, should not throw out of the connect (best-effort persistence)', async () => {
-      const auth = makeAuthSuccess({ streamSessionId: null });
-      persistStreamSessionId = vi.fn().mockRejectedValue(new Error('db unreachable'));
+      const auth = makeAuthSuccess({ spriteExecId: null });
+      persistSpriteExecId = vi.fn().mockRejectedValue(new Error('db unreachable'));
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       announceSessionId(openShell, 'sess-new');
@@ -560,21 +560,21 @@ describe('buildShellHandlers', () => {
 
     it('given no authenticated user on the socket, should call checkAuth with an empty-string userId rather than throwing', async () => {
       socket.data.user = undefined;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: '' }));
     });
 
     it('given a reconnect while a prior disconnect\'s idle timer is still pending, should cancel the pending reap so the session survives past the original timeout', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
 
       // Reconnect partway through the idle window — cancels the pending reap.
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS / 2);
       const reconnectSocket = makeSocket('sock2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       // Advance past when the ORIGINAL idle timer would have fired.
@@ -585,7 +585,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the re-auth interval fires after the session was already removed, should clear the interval rather than re-checking auth', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       expect(checkAuth).toHaveBeenCalledTimes(1);
 
@@ -597,12 +597,12 @@ describe('buildShellHandlers', () => {
     });
 
     it('given reconnecting to an in-memory live session, should reuse it and emit scrollback instead of reopening', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
       const reconnectSocket = makeSocket('sock2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledTimes(1);
@@ -610,7 +610,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a live in-memory session, should reattach after the access check with ZERO sprite SDK calls and without resolving the sandbox', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -619,7 +619,7 @@ describe('buildShellHandlers', () => {
       const reattachAuth = makeAuthSuccess();
       checkAuth.mockResolvedValueOnce(reattachAuth);
       const reconnectSocket = makeSocket('sock2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       expect(reattachAuth.resolveSandbox).not.toHaveBeenCalled();
@@ -642,7 +642,7 @@ describe('buildShellHandlers', () => {
     it('given no live session, should follow the cold path and resolve the sandbox', async () => {
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(auth.resolveSandbox).toHaveBeenCalledTimes(1);
@@ -651,14 +651,14 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
       // A different, now-unauthorized user tabs back to the same (scope, name).
       checkAuth.mockResolvedValueOnce({ ok: false, reason: 'permission_revoked' });
       const attackerSocket = makeSocket('attacker-sock', 'user2');
-      const attacker = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: attackerSocket, persistStreamSessionId });
+      const attacker = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: attackerSocket, persistSpriteExecId });
       await attacker.onConnect(validPayload);
 
       expect(attackerSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.any(String) }));
@@ -677,7 +677,7 @@ describe('buildShellHandlers', () => {
       const authA = makeAuthSuccess();
       const authB = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await Promise.all([
         onConnect({ ...validPayload, connectionId: 'pane-a' }),
@@ -699,16 +699,16 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a CONCURRENT connect while a cold create is attaching to a PERSISTED Sprite session, should never kill that session', async () => {
-      // The destructive case: both connects resolve the SAME streamSessionId, so
+      // The destructive case: both connects resolve the SAME spriteExecId, so
       // openPtyShell would attachSession() to one shared server-side exec session.
       // A "discard the duplicate" strategy would SIGKILL the very process the
       // survivor is attached to. Serializing means the second never opens one.
       const shared = { id: 'sess-shared', command: 'pagespace-cli', isActive: true, tty: true };
       checkAuth = vi
         .fn()
-        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared', sessions: [shared] }))
-        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared', sessions: [shared] })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+        .mockResolvedValueOnce(makeAuthSuccess({ spriteExecId: 'sess-shared', sessions: [shared] }))
+        .mockResolvedValueOnce(makeAuthSuccess({ spriteExecId: 'sess-shared', sessions: [shared] })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await Promise.all([
         onConnect({ ...validPayload, connectionId: 'pane-a' }),
@@ -727,7 +727,7 @@ describe('buildShellHandlers', () => {
       failing.resolveSandbox = vi.fn(async () => ({ ok: false as const, reason: 'provision_failed' }));
       const succeeding = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(succeeding) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await Promise.all([
         onConnect({ ...validPayload, connectionId: 'pane-a' }),
@@ -748,21 +748,21 @@ describe('buildShellHandlers', () => {
       // learns its id on its own socket, so a sibling is simply irrelevant: we
       // persist the right id instead of abstaining.
       const auth = makeAuthSuccess({
-        streamSessionId: null,
+        spriteExecId: null,
         sessions: [
           { id: 'sess-ours', command: 'pagespace-cli', isActive: true, tty: true },
           { id: 'sess-sibling', command: 'claude', isActive: true, tty: true },
         ],
       });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       announceSessionId(openShell, 'sess-ours');
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(persistStreamSessionId).toHaveBeenCalledWith({ shellId: 'shell-row-1', sessionId: 'sess-ours' });
-      expect(persistStreamSessionId).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-sibling' }));
+      expect(persistSpriteExecId).toHaveBeenCalledWith({ shellId: 'shell-row-1', spriteExecId: 'sess-ours' });
+      expect(persistSpriteExecId).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-sibling' }));
     });
 
     it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
@@ -771,7 +771,7 @@ describe('buildShellHandlers', () => {
       // second must find it via getByKey and reattach rather than open a second
       // PTY — the existing setNew/getByKey identity is what prevents a duplicate.
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'shell:shl-1' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, connectionId: 'pane-b' });
@@ -784,7 +784,7 @@ describe('buildShellHandlers', () => {
 
     it('given a successful connect, should set up a re-auth interval on the session', async () => {
       const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
@@ -793,7 +793,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given re-auth fires and checkAuth still succeeds, should not kill the shell', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       await vi.advanceTimersByTimeAsync(60_000);
@@ -805,7 +805,7 @@ describe('buildShellHandlers', () => {
     it('given a 60s re-auth tick on a live ATTACHED session, should perform zero sprite SDK calls (DB-only check)', async () => {
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       await vi.advanceTimersByTimeAsync(60_000);
@@ -825,7 +825,7 @@ describe('buildShellHandlers', () => {
       // detached session must lose access on the SAME 60s cadence an attached
       // one does; letting it run unsupervised until the 30-min idle reap would
       // leave a revoked user's process executing long after access was pulled.
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -842,7 +842,7 @@ describe('buildShellHandlers', () => {
       checkAuth
         .mockResolvedValueOnce(auth) // connect
         .mockImplementationOnce(() => new Promise((res) => { resolveReauth = res; })); // re-auth tick hangs
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing: makeBilling() });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing: makeBilling() });
       await onConnect(validPayload);
 
       await vi.advanceTimersByTimeAsync(60_000); // re-auth fires and is left pending
@@ -858,12 +858,12 @@ describe('buildShellHandlers', () => {
     });
 
     it('given two users attached, should re-auth EVERY attached viewer — checking any single identity would let a revoked co-viewer keep streaming (#2093)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload); // user1 creates
 
       // user2 JOINS on their own socket; user1 stays attached.
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       checkAuth.mockClear();
@@ -878,11 +878,11 @@ describe('buildShellHandlers', () => {
       // creator — who of course remains authorized — a viewer who joined and
       // then had their access revoked would keep receiving PTY output, and could
       // keep typing, indefinitely.
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload); // user1 creates
 
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload); // user2 joins
       onDisconnect(); // user1's socket leaves — user2 is the sole viewer
 
@@ -894,11 +894,11 @@ describe('buildShellHandlers', () => {
     });
 
     it('given one of two attached users loses access, should evict ONLY that viewer — the other keeps streaming and the PTY survives (#2093)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload); // user1 creates
 
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload); // user2 joins
 
       // user2's access is revoked; user1 still passes.
@@ -925,7 +925,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the SOLE viewer loses access, should evict them AND tear the session down in the same tick — no grace for an unsupervised revoked process', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
@@ -937,7 +937,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a DETACHED session whose checkAuth THROWS, should keep the session alive (fail-open in both tick shapes — no unhandled rejection)', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect(); // detach — the tick now checks lastViewerUserId
 
@@ -949,7 +949,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given an authorized viewer who joins WHILE the detached tick\'s checkAuth is in flight, should not tear the session down under them', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload); // user1 creates
       onDisconnect(); // detached; lastViewerUserId = user1
 
@@ -961,7 +961,7 @@ describe('buildShellHandlers', () => {
       // …and an authorized user2 joins DURING that round-trip.
       checkAuth.mockResolvedValue(makeAuthSuccess());
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       // The in-flight check now resolves REVOKED for user1 (who is long gone).
@@ -978,7 +978,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a checkAuth slower than the tick cadence, should not stack overlapping re-auth rounds (re-entry guard)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockClear();
@@ -989,7 +989,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the shell resume THROWS during an attach, the joiner is still fully tracked — a later disconnect collects them and the reap still fires (no ghost viewer)', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect(); // detached, reap armed
 
@@ -1010,7 +1010,7 @@ describe('buildShellHandlers', () => {
     it('given the same user in TWO panes, should checkAuth once per distinct userId per tick, not once per pane', async () => {
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'shell:shl-1' })) as unknown as ReturnType<typeof vi.fn> &
         ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, connectionId: 'pane-b' }); // same user, same session, second pane
 
@@ -1022,7 +1022,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockRejectedValue(new Error('db blip'));
@@ -1036,7 +1036,7 @@ describe('buildShellHandlers', () => {
 
   describe('onInput', () => {
     it('given input within size limits, should write to the shell', async () => {
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onInput({ data: 'ls\n' });
 
@@ -1046,7 +1046,7 @@ describe('buildShellHandlers', () => {
     it('given multi-byte input under the byte cap but over it in UTF-16 units, should still accept it', async () => {
       // The HTTP session-input path measures BYTES; this path used to measure
       // String.length, so the same payload could pass one and fail the other.
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       // 1000 emoji: 4 bytes each = 4000 bytes (under 4096), but 2000 UTF-16 units.
       onInput({ data: '\u{1F600}'.repeat(1000) });
@@ -1054,7 +1054,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given input whose BYTE length exceeds the cap, should drop it even when its string length does not', async () => {
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       shell.write.mockClear();
       // 1500 emoji = 6000 bytes (over), but only 3000 UTF-16 units (under 4096).
@@ -1065,7 +1065,7 @@ describe('buildShellHandlers', () => {
     it('given a non-string data payload, should ignore it without emitting an error', async () => {
       // A malformed frame is not the user pasting too much — telling them their
       // "input was too large" would be a lie, and the shell should simply not act.
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       socket.emit.mockClear();
 
@@ -1079,7 +1079,7 @@ describe('buildShellHandlers', () => {
       // Same reason the connect error is tagged: an untagged shell:error is
       // claimed by every pane on the socket, so a paste that is too large in ONE
       // pane must not report itself in the others.
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect({ ...validPayload, connectionId: 'conn-X' });
       socket.emit.mockClear();
 
@@ -1091,7 +1091,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given input over the cap, should tell the caller rather than silently swallow the paste', async () => {
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       socket.emit.mockClear();
 
@@ -1113,7 +1113,7 @@ describe('buildShellHandlers', () => {
       // Asserted explicitly because a mutation flipping `recoverable` to `false`
       // passed the entire suite: every other over-cap test checks the message or
       // the dropped write, and none of them the flag that keeps the shell alive.
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       socket.emit.mockClear();
 
@@ -1124,7 +1124,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given input over MAX_INPUT_BYTES, should drop it', async () => {
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onInput({ data: 'x'.repeat(MAX_INPUT_BYTES + 1) });
 
@@ -1132,14 +1132,14 @@ describe('buildShellHandlers', () => {
     });
 
     it('given no session for this socket, should not throw', () => {
-      const { onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       expect(() => onInput({ data: 'ls\n' })).not.toThrow();
     });
   });
 
   describe('onResize', () => {
     it('given valid dimensions, should resize the shell', async () => {
-      const { onConnect, onResize } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onResize } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onResize({ cols: 100, rows: 40 });
 
@@ -1157,7 +1157,7 @@ describe('buildShellHandlers', () => {
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-1' }))
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-2', command: 'claude' })) as unknown as ReturnType<typeof vi.fn> &
         ShellCheckAuthFn;
-      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, shellId: 'shl-2', connectionId: 'pane-b' });
@@ -1182,7 +1182,7 @@ describe('buildShellHandlers', () => {
         .fn()
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-1' }))
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-2' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, shellId: 'shl-2', connectionId: 'pane-b' });
@@ -1204,7 +1204,7 @@ describe('buildShellHandlers', () => {
         .fn()
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-1' }))
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-2' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, shellId: 'shl-2', connectionId: 'pane-b' });
@@ -1224,7 +1224,7 @@ describe('buildShellHandlers', () => {
         .fn()
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-1' }))
         .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'shell:shl-2' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, shellId: 'shl-2', connectionId: 'pane-b' });
@@ -1242,7 +1242,7 @@ describe('buildShellHandlers', () => {
       // merely claiming someone else's connectionId (e.g. observed, guessed,
       // or replayed) must never be able to write input to, resize, or tear
       // down that session.
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect({ ...validPayload, connectionId: 'victim-pane' });
 
       const attackerSocket = makeSocket('attacker-sock');
@@ -1251,7 +1251,7 @@ describe('buildShellHandlers', () => {
         openShell,
         checkAuth,
         socket: attackerSocket,
-        persistStreamSessionId,
+        persistSpriteExecId,
       });
 
       attackerHandlers.onInput({ data: 'rm -rf /\n', connectionId: 'victim-pane' });
@@ -1270,7 +1270,7 @@ describe('buildShellHandlers', () => {
       // takeover: 'pane-b' arriving must not steal 'pane-a's mapping.
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'shell:shl-1' })) as unknown as ReturnType<typeof vi.fn> &
         ShellCheckAuthFn;
-      const { onConnect, onInput, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, connectionId: 'pane-b' });
@@ -1299,7 +1299,7 @@ describe('buildShellHandlers', () => {
 
   describe('onDisconnect', () => {
     it('given a disconnect, should silence output but keep the session alive until the idle timeout', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -1308,7 +1308,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a disconnect, should signal the shell that no viewer is attached (leaf 3-2: stops the watchdog reconnect loop)', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -1320,7 +1320,7 @@ describe('buildShellHandlers', () => {
       // return it, or a user's tier capacity bleeds away one abandoned tab at a time.
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
@@ -1330,7 +1330,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the idle timeout elapses, should kill the shell and drop the session', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
@@ -1348,7 +1348,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the idle reap fires, should persist the byte-capped tail and hasOutput once, keyed by the row\'s shellId', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, persistColdTail });
       await onConnect(validPayload);
       const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
       onOutput('last words\r\n');
@@ -1366,7 +1366,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given the PTY exits naturally (onExit), should persist the cold tail', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, persistColdTail });
       await onConnect(validPayload);
       const args = openShell.mock.calls[0][0] as OpenPtyShellArgs;
       (args.onOutput as (data: string) => void)('bye\r\n');
@@ -1380,7 +1380,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a forced teardown (access revoked, sole viewer), should persist the cold tail', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, persistColdTail });
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
@@ -1394,7 +1394,7 @@ describe('buildShellHandlers', () => {
     });
 
     it('given no persistColdTail dep is wired, should tear the session down without throwing', async () => {
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -1404,7 +1404,7 @@ describe('buildShellHandlers', () => {
 
     it('given persistColdTail REJECTS, should not break teardown — the session is still removed and its timers still cleared', async () => {
       persistColdTail = vi.fn().mockRejectedValue(new Error('db unreachable'));
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, persistColdTail });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -1417,10 +1417,10 @@ describe('buildShellHandlers', () => {
   describe('multi-viewer fan-out — attach is a join, not a takeover (#2093)', () => {
     /** Creator on `socket`, then a second user joins on their own socket. */
     async function connectTwoViewers() {
-      const handlers1 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers1 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await handlers1.onConnect(validPayload);
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
       const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
       return { handlers1, handlers2, socket2, onOutput };
@@ -1436,13 +1436,13 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a joiner, they get the buffered scrollback and the incumbent gets NO duplicate replay', async () => {
-      const handlers1 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers1 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await handlers1.onConnect(validPayload);
       const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
       onOutput('history line');
 
       const socket2 = makeSocket('sock2', 'user2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
       await handlers2.onConnect(validPayload);
 
       expect(socket2.emit).toHaveBeenCalledWith('shell:ready', {
@@ -1511,10 +1511,10 @@ describe('buildShellHandlers', () => {
         const localCheckAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
         const billing = makeBilling();
 
-        const h1 = buildShellHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockA', 'user1'), persistStreamSessionId, billing });
+        const h1 = buildShellHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockA', 'user1'), persistSpriteExecId, billing });
         await h1.onConnect(validPayload);
         if (viewerCount === 2) {
-          const h2 = buildShellHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockB', 'user2'), persistStreamSessionId, billing });
+          const h2 = buildShellHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockB', 'user2'), persistSpriteExecId, billing });
           await h2.onConnect(validPayload);
         }
 
@@ -1539,7 +1539,7 @@ describe('buildShellHandlers', () => {
 
   describe('machine billing (Terminal Epic 3)', () => {
     it('given no billing dep, connects unmetered (no gate, no settle)', async () => {
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
@@ -1547,7 +1547,7 @@ describe('buildShellHandlers', () => {
 
     it('places a hold for the resolved payerId BEFORE opening the shell', async () => {
       const billing = makeBilling();
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       expect(billing.gate).toHaveBeenCalledWith({ payerId: 'owner-1' });
@@ -1559,7 +1559,7 @@ describe('buildShellHandlers', () => {
       const auth = makeAuthSuccess();
       checkAuth.mockResolvedValue(auth);
       const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'insufficient_balance' }) });
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       expect(openShell).not.toHaveBeenCalled();
@@ -1571,7 +1571,7 @@ describe('buildShellHandlers', () => {
     it('given openShell throws AFTER the hold was placed, releases the hold (safety net)', async () => {
       const billing = makeBilling();
       openShell = vi.fn().mockImplementation(() => { throw new Error('sprite unreachable'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
@@ -1588,7 +1588,7 @@ describe('buildShellHandlers', () => {
      */
     it('given the shell quiesced, settles the window so far and then STOPS the clock (a paused sprite is not billable)', async () => {
       const billing = makeBilling();
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       // Ten minutes of real, live session — billable.
@@ -1610,7 +1610,7 @@ describe('buildShellHandlers', () => {
 
     it('given a quiesced shell, does not reserve the payer\'s credits for a window that is not running', async () => {
       const billing = makeBilling();
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
       const gatesAtConnect = billing.gate.mock.calls.length;
 
@@ -1625,7 +1625,7 @@ describe('buildShellHandlers', () => {
       // The heartbeat is ten minutes wide. Restarting the clock on the next beat
       // would hand the payer up to ten minutes of a live, running sandbox free.
       const billing = makeBilling();
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await handlers.onConnect(validPayload);
 
       shell.setQuiesced(true);
@@ -1646,7 +1646,7 @@ describe('buildShellHandlers', () => {
 
     it('given a viewer returns to a quiesced shell, restarts the clock on the reattach', async () => {
       const billing = makeBilling();
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await handlers.onConnect(validPayload);
 
       shell.setQuiesced(true);
@@ -1657,7 +1657,7 @@ describe('buildShellHandlers', () => {
       shell.setQuiesced(false);
 
       const socket2 = makeSocket('sock2');
-      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId, billing });
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId, billing });
       await handlers2.onConnect(validPayload); // tab-back -> attachToLiveSession
 
       const session = sessionMap.getByKey('shell:shl-1') as { connectedAt?: number };
@@ -1669,7 +1669,7 @@ describe('buildShellHandlers', () => {
       // terminal closes must not strand the session in the map (leaking its slot
       // and its PTY) — the window is lost, the terminal is not.
       const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue(new Error('ledger unreachable')) });
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
@@ -1686,7 +1686,7 @@ describe('buildShellHandlers', () => {
       // The catch normalizes an arbitrary thrown value; a bare string must not
       // blow up the logger call and take the teardown down with it.
       const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue('ledger string blip') });
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
@@ -1708,7 +1708,7 @@ describe('buildShellHandlers', () => {
         openShell,
         checkAuth: globalCheckAuth as unknown as ShellCheckAuthFn,
         socket,
-        persistStreamSessionId,
+        persistSpriteExecId,
         billing,
       });
       await onConnect(validPayload);
@@ -1724,12 +1724,12 @@ describe('buildShellHandlers', () => {
       // First-class attribution: no drive to group under, but the session id
       // still rides top-level (never JSON-forensics-only).
       expect(call.driveId).toBeUndefined();
-      expect(call.sessionId).toBe('conv-1');
+      expect(call.workspaceId).toBe('conv-1');
     });
 
     it('on natural shell exit, settles the hold to the real connected-window seconds and never releases it separately', async () => {
       const billing = makeBilling();
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
@@ -1743,7 +1743,7 @@ describe('buildShellHandlers', () => {
       expect((call as { pageId?: string }).pageId).toBeUndefined();
       // First-class drive/session attribution (Terminal Epic 3 usage-breakdown fix).
       expect(call.driveId).toBe('drive-1');
-      expect(call.sessionId).toBe('conv-1');
+      expect(call.workspaceId).toBe('conv-1');
       expect(call.activeSeconds).toBeCloseTo(7, 0);
       expect(billing.releaseHold).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
@@ -1751,7 +1751,7 @@ describe('buildShellHandlers', () => {
 
     it('on idle-timeout reap after disconnect, settles the FULL active window across heartbeat slices (revenue conservation)', async () => {
       const billing = makeBilling();
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       onDisconnect();
@@ -1768,7 +1768,7 @@ describe('buildShellHandlers', () => {
         // No page grouping: a session is drive-scoped, not page-anchored.
         expect(call.pageId).toBeUndefined();
         expect(call.driveId).toBe('drive-1');
-        expect(call.sessionId).toBe('conv-1');
+        expect(call.workspaceId).toBe('conv-1');
       }
       expect(calls[0].holdId).toBe('hold-1');
       expect(billing.releaseHold).not.toHaveBeenCalled();
@@ -1780,7 +1780,7 @@ describe('buildShellHandlers', () => {
         const billing = makeBilling({
           gate: vi.fn().mockImplementation(async () => ({ allowed: true, holdId: `hold-${++holdN}` })),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1790,7 +1790,7 @@ describe('buildShellHandlers', () => {
         expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
         expect((first as { pageId?: string }).pageId).toBeUndefined();
         expect(first.driveId).toBe('drive-1');
-        expect(first.sessionId).toBe('conv-1');
+        expect(first.workspaceId).toBe('conv-1');
         expect(first.activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         // The session survives the heartbeat with a fresh hold in place.
         expect(shell.kill).not.toHaveBeenCalled();
@@ -1813,7 +1813,7 @@ describe('buildShellHandlers', () => {
             .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
             .mockResolvedValue({ allowed: false, reason: 'insufficient_balance' }),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1835,7 +1835,7 @@ describe('buildShellHandlers', () => {
             .mockRejectedValueOnce(new Error('db blip'))
             .mockResolvedValue(undefined),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // settle fails
@@ -1858,7 +1858,7 @@ describe('buildShellHandlers', () => {
             .mockImplementationOnce(() => new Promise((_, rej) => { rejectSettle = rej; })) // heartbeat settle hangs, then fails
             .mockResolvedValue(undefined),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat fires; settle in flight
@@ -1882,7 +1882,7 @@ describe('buildShellHandlers', () => {
             .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
             .mockRejectedValue(new Error('db unreachable')),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1894,7 +1894,7 @@ describe('buildShellHandlers', () => {
 
       it('records usage at session end even when the gate placed no hold (settle keys on payer, hold optional)', async () => {
         const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: true }) });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
@@ -1909,7 +1909,7 @@ describe('buildShellHandlers', () => {
 
       it('given a settle that rejects with a NON-Error value, wraps it and keeps the session alive (fail-open)', async () => {
         const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue('db string blip') });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1923,7 +1923,7 @@ describe('buildShellHandlers', () => {
         const billing = makeBilling({
           gate: vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' }).mockRejectedValue('gate string blip'),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1947,7 +1947,7 @@ describe('buildShellHandlers', () => {
             .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' }) // the connect-time hold
             .mockImplementationOnce(() => reHold.promise), // re-hold hangs
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat: settle done, gate in flight
@@ -1970,7 +1970,7 @@ describe('buildShellHandlers', () => {
             .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
             .mockImplementationOnce(() => reHold.promise),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -1991,7 +1991,7 @@ describe('buildShellHandlers', () => {
         const billing = makeBilling({
           trackUsage: vi.fn().mockImplementationOnce(() => settle.promise).mockResolvedValue(undefined),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat: settle in flight
@@ -2008,7 +2008,7 @@ describe('buildShellHandlers', () => {
       it('given a session with no resolved payer, heartbeats settle nothing (an unmetered session is not billable)', async () => {
         const billing = makeBilling();
         checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ payerId: '' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
@@ -2020,7 +2020,7 @@ describe('buildShellHandlers', () => {
 
       it('given the session was already removed when a heartbeat fires, clears its interval without settling', async () => {
         const billing = makeBilling();
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         // Session vanished (e.g. reaped elsewhere) before the heartbeat tick.
@@ -2040,7 +2040,7 @@ describe('buildShellHandlers', () => {
             .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSettle = () => resolve(undefined); }))
             .mockResolvedValue(undefined),
         });
-        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // first heartbeat: settle hangs
@@ -2061,7 +2061,7 @@ describe('buildShellHandlers', () => {
       // releases it; a late onExit for the same (now killed) PTY must be a no-op.
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing: makeBilling() });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing: makeBilling() });
       await onConnect(validPayload);
       const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
 
@@ -2074,7 +2074,7 @@ describe('buildShellHandlers', () => {
 
     it('given the shell exits naturally WHILE disconnected (idle reap still pending), should cancel the pending reap so it never double-settles', async () => {
       const billing = makeBilling();
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -2091,7 +2091,7 @@ describe('buildShellHandlers', () => {
 
     it('on a re-auth failure kill, settles the hold rather than leaking it', async () => {
       const billing = makeBilling();
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
@@ -2105,7 +2105,7 @@ describe('buildShellHandlers', () => {
 
     it('given a re-auth failure WHILE disconnected (idle reap still pending), should clear the pending idle timer too, settling only once', async () => {
       const billing = makeBilling();
-      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
       onDisconnect();
 
@@ -2126,7 +2126,7 @@ describe('buildShellHandlers', () => {
       const authA = makeAuthSuccess();
       const authB = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
 
       await Promise.all([
         onConnect({ ...validPayload, connectionId: 'pane-a' }),
@@ -2146,7 +2146,7 @@ describe('buildShellHandlers', () => {
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
       const billing = makeBilling({ gate: vi.fn().mockRejectedValue(new Error('billing db blip')) });
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
 
       await expect(onConnect(validPayload)).rejects.toThrow('billing db blip');
 
@@ -2157,13 +2157,13 @@ describe('buildShellHandlers', () => {
 
     it('reattaching to a live session does NOT place a second hold', async () => {
       const billing = makeBilling();
-      const { onConnect: connect1 } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      const { onConnect: connect1 } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await connect1(validPayload);
       expect(billing.gate).toHaveBeenCalledTimes(1);
 
       const socket2 = makeSocket('sock2');
       checkAuth.mockResolvedValue(makeAuthSuccess());
-      const { onConnect: connect2 } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId, billing });
+      const { onConnect: connect2 } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId, billing });
       await connect2(validPayload);
 
       expect(billing.gate).toHaveBeenCalledTimes(1);
@@ -2179,11 +2179,11 @@ describe('buildShellHandlers', () => {
       // holding a starting prompt would type it into an agent running for hours.
       checkAuth = vi.fn().mockResolvedValue(
         makeAuthSuccess({
-          streamSessionId: 'sess-existing',
+          spriteExecId: 'sess-existing',
           sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
         }),
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       // A second pane connects to the same live session, before any output.
@@ -2193,7 +2193,7 @@ describe('buildShellHandlers', () => {
         openShell,
         checkAuth,
         socket: reconnectSocket,
-        persistStreamSessionId,
+        persistSpriteExecId,
       });
       await onReconnect({ ...validPayload, connectionId: 'pane-b' });
 
@@ -2207,7 +2207,7 @@ describe('buildShellHandlers', () => {
       // The mirror image: a cold boot the pane is still waiting on. Re-mounting onto
       // it must NOT spend the prompt — an agent that has emitted nothing cannot be
       // sitting at a confirmation.
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       const reconnectSocket = makeSocket();
@@ -2216,7 +2216,7 @@ describe('buildShellHandlers', () => {
         openShell,
         checkAuth,
         socket: reconnectSocket,
-        persistStreamSessionId,
+        persistSpriteExecId,
       });
       await onReconnect({ ...validPayload, connectionId: 'pane-b' });
 
@@ -2238,7 +2238,7 @@ describe('buildShellHandlers', () => {
       // comment: re-inline the await and this fails.
       const order: string[] = [];
       const auth = makeAuthSuccess({
-        streamSessionId: 'sess-existing',
+        spriteExecId: 'sess-existing',
         sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
       });
       auth.sprite.listSessions = vi.fn(async () => {
@@ -2251,7 +2251,7 @@ describe('buildShellHandlers', () => {
       }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(order).toEqual(['listSessions', 'openShell']);
@@ -2272,12 +2272,12 @@ describe('buildShellHandlers', () => {
       }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
       checkAuth = vi.fn().mockResolvedValue(
         makeAuthSuccess({
-          streamSessionId: 'sess-existing',
+          spriteExecId: 'sess-existing',
           sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
         }),
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2295,11 +2295,11 @@ describe('buildShellHandlers', () => {
       // never runs — every later connect for this terminal blocked behind the
       // create claim. A terminal that will not open and cannot be retried is far
       // worse than not knowing whether its agent was running.
-      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      const auth = makeAuthSuccess({ spriteExecId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(() => new Promise(() => {})) as unknown as typeof auth.sprite.listSessions;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const connecting = onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(6000);
       await connecting;
@@ -2320,13 +2320,13 @@ describe('buildShellHandlers', () => {
       //
       // An unknown recorded as resumed costs a prompt the user retypes, and stops
       // costing anything the moment the agent speaks. The asymmetry decides it.
-      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      const auth = makeAuthSuccess({ spriteExecId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(async () => {
         throw new Error('429');
       }) as unknown as typeof auth.sprite.listSessions;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: true });
@@ -2337,12 +2337,12 @@ describe('buildShellHandlers', () => {
       // The end-to-end shape of the same hazard: the connect could not confirm
       // liveness, the agent IS running, and a second pane attaches before it has
       // spoken. `hasOutput` is false, so only the durable verdict can answer.
-      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      const auth = makeAuthSuccess({ spriteExecId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(async () => {
         throw new Error('429');
       }) as unknown as typeof auth.sprite.listSessions;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       const reconnectSocket = makeSocket();
@@ -2351,7 +2351,7 @@ describe('buildShellHandlers', () => {
         openShell,
         checkAuth,
         socket: reconnectSocket,
-        persistStreamSessionId,
+        persistSpriteExecId,
       });
       await onReconnect({ ...validPayload, connectionId: 'pane-b' });
 
@@ -2371,9 +2371,9 @@ describe('buildShellHandlers', () => {
       // LIVE agent having just told the client it was safe to type into it. So
       // `gone` makes itself true: no id, a genuinely fresh session.
       checkAuth = vi.fn().mockResolvedValue(
-        makeAuthSuccess({ streamSessionId: 'sess-long-dead', sessions: [] }),
+        makeAuthSuccess({ spriteExecId: 'sess-long-dead', sessions: [] }),
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
@@ -2381,12 +2381,12 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a liveness it could not settle, should still attach — abandoning a running agent is the worse error', async () => {
-      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      const auth = makeAuthSuccess({ spriteExecId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(async () => {
         throw new Error('429');
       }) as unknown as typeof auth.sprite.listSessions;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-existing' }));
@@ -2415,7 +2415,7 @@ describe('buildShellHandlers', () => {
       }) as unknown as typeof auth.resolveSandbox;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const connecting = handlers.onConnect(validPayload);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2448,7 +2448,7 @@ describe('buildShellHandlers', () => {
       }) as unknown as typeof auth.resolveSandbox;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const creating = handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
       await vi.advanceTimersByTimeAsync(0);
       // Pane B lands on the same key while A is still booting: it joins rather than
@@ -2478,7 +2478,7 @@ describe('buildShellHandlers', () => {
       // further disconnect can ever collect.
       const first = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(first) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
       handlers.onDisconnect({ connectionId: 'pane-a' });
@@ -2490,7 +2490,7 @@ describe('buildShellHandlers', () => {
         await authGate.promise;
         return makeAuthSuccess();
       }) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const reattaching = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const reattaching = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const connecting = reattaching.onConnect({ ...validPayload, connectionId: 'pane-b' });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2516,7 +2516,7 @@ describe('buildShellHandlers', () => {
       // and undo: the session it was joining already has an owner.
       const auth = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       // Pane A creates the terminal and is watching it.
       await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
@@ -2528,7 +2528,7 @@ describe('buildShellHandlers', () => {
         await authGate.promise;
         return makeAuthSuccess();
       }) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const second = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const second = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       const connecting = second.onConnect({ ...validPayload, connectionId: 'pane-b' });
       await vi.advanceTimersByTimeAsync(0);
       second.onDisconnect({ connectionId: 'pane-b' });
@@ -2561,7 +2561,7 @@ describe('buildShellHandlers', () => {
       // The key itself has to make the collision unrepresentable.
       const first = makeAuthSuccess({ sessionKey: 'shell:shl-1' });
       checkAuth = vi.fn().mockResolvedValue(first) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const owner = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const owner = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await owner.onConnect({ ...validPayload, connectionId: 'shared-id' });
       const live = sessionMap.getByKey('shell:shl-1');
 
@@ -2569,7 +2569,7 @@ describe('buildShellHandlers', () => {
       const second = makeAuthSuccess({ sessionKey: 'branch1:agent:other' });
       checkAuth = vi.fn().mockResolvedValue(second) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
       const otherSocket = makeSocket('sock2', 'user2');
-      const intruder = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: otherSocket, persistStreamSessionId });
+      const intruder = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: otherSocket, persistSpriteExecId });
       await intruder.onConnect({ ...validPayload, name: 'other', connectionId: 'shared-id' });
 
       // The first socket's session is still its own — not displaced, not orphaned.
@@ -2599,7 +2599,7 @@ describe('buildShellHandlers', () => {
       checkAuth = vi.fn(async ({ shellId }: { shellId: string }) =>
         shellId === 'shl-1' ? first : second,
       ) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
 
       await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
       const live = sessionMap.getByKey('shell:shl-1');
@@ -2641,7 +2641,7 @@ describe('ensureShellSession — headless start', () => {
   let shell: ReturnType<typeof makeShell>;
   let openShell: ReturnType<typeof vi.fn> & OpenShellFn;
   let checkAuth: ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-  let persistStreamSessionId: ReturnType<typeof vi.fn>;
+  let persistSpriteExecId: ReturnType<typeof vi.fn>;
 
   const target = { shellId: 'shl-1' };
 
@@ -2656,7 +2656,7 @@ describe('ensureShellSession — headless start', () => {
     shell = makeShell();
     openShell = vi.fn().mockReturnValue(shell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
     checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
-    persistStreamSessionId = vi.fn().mockResolvedValue(undefined);
+    persistSpriteExecId = vi.fn().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -2666,7 +2666,7 @@ describe('ensureShellSession — headless start', () => {
   it('given no viewer, should still open the PTY and install the session under its key', async () => {
     const access = makeAuthSuccess();
     const result = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
 
@@ -2685,7 +2685,7 @@ describe('ensureShellSession — headless start', () => {
 
   it('given a headless start, should bind NO socket — there is no connection to route input from', async () => {
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(makeAuthSuccess()),
     );
 
@@ -2705,7 +2705,7 @@ describe('ensureShellSession — headless start', () => {
     const access = makeAuthSuccess();
     const billing = makeBilling();
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
       headlessRequest(access),
     );
     const session = sessionMap.getByKey('shell:shl-1');
@@ -2740,7 +2740,7 @@ describe('ensureShellSession — headless start', () => {
     // to MOVE the deadline, not add another timer beside it.
     const access = makeAuthSuccess();
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
     const session = sessionMap.getByKey('shell:shl-1')!;
@@ -2772,7 +2772,7 @@ describe('ensureShellSession — headless start', () => {
     // output it started the shell to read. The shell quiets itself through
     // `attach-quiet` if the session actually goes idle.
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(makeAuthSuccess()),
     );
 
@@ -2787,7 +2787,7 @@ describe('ensureShellSession — headless start', () => {
   it('given a headless start, should start the billing window at PTY start', async () => {
     const billing = makeBilling();
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
       headlessRequest(makeAuthSuccess()),
     );
     const session = sessionMap.getByKey('shell:shl-1');
@@ -2807,7 +2807,7 @@ describe('ensureShellSession — headless start', () => {
   it('given a headless start, should take the platform task hold — the agent is working with nobody watching', async () => {
     const taskHold = { tick: vi.fn(), end: vi.fn(), tickIntervalMs: 60_000, agentIdleMs: 300_000 };
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, createTaskHold: () => taskHold },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, createTaskHold: () => taskHold },
       headlessRequest(makeAuthSuccess()),
     );
 
@@ -2827,14 +2827,14 @@ describe('ensureShellSession — headless start', () => {
     const access = makeAuthSuccess();
     checkAuth = vi.fn().mockResolvedValue(access) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
     const session = sessionMap.getByKey('shell:shl-1');
     session!.scrollback.push('hello from the agent');
 
     const socket = makeSocket();
-    const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+    const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
     await onConnect(validPayload);
 
     assert({
@@ -2858,13 +2858,13 @@ describe('ensureShellSession — headless start', () => {
   it('given a session already live under this key, should join it rather than open a second PTY', async () => {
     const access = makeAuthSuccess();
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
     const first = sessionMap.getByKey('shell:shl-1');
 
     const second = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(makeAuthSuccess()),
     );
 
@@ -2888,12 +2888,12 @@ describe('ensureShellSession — headless start', () => {
     // reaching the create's own `abandoned()` check.
     const access = makeAuthSuccess();
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
 
     const result = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       { ...headlessRequest(makeAuthSuccess()), abandoned: () => true },
     );
 
@@ -2916,7 +2916,7 @@ describe('ensureShellSession — headless start', () => {
       return { allowed: true, holdId: 'hold-1' };
     });
     const abandonedWithHold = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing: bootBilling },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing: bootBilling },
       { ...headlessRequest(makeAuthSuccess()), abandoned: () => leftDuringBoot },
     );
     assert({
@@ -2938,7 +2938,7 @@ describe('ensureShellSession — headless start', () => {
       return (await makeAuthSuccess().resolveSandbox()) as unknown as Awaited<ReturnType<typeof access.resolveSandbox>>;
     }) as unknown as typeof access.resolveSandbox;
 
-    const deps = { sessionMap, openShell, checkAuth, persistStreamSessionId };
+    const deps = { sessionMap, openShell, checkAuth, persistSpriteExecId };
     const first = ensureShellSession(deps, headlessRequest(access));
     const second = ensureShellSession(deps, headlessRequest(makeAuthSuccess()));
     gate.resolve();
@@ -2967,7 +2967,7 @@ describe('ensureShellSession — headless start', () => {
       return (await makeAuthSuccess().resolveSandbox()) as unknown as Awaited<ReturnType<typeof access.resolveSandbox>>;
     }) as unknown as typeof access.resolveSandbox;
 
-    const deps = { sessionMap, openShell, checkAuth, persistStreamSessionId };
+    const deps = { sessionMap, openShell, checkAuth, persistSpriteExecId };
     let loserAbandoned = false;
     const winner = ensureShellSession(deps, headlessRequest(access));
     const loser = ensureShellSession(deps, {
@@ -2991,14 +2991,14 @@ describe('ensureShellSession — headless start', () => {
     access.resolveSandbox = vi.fn(async () => ({ ok: false as const, reason: 'concurrency_limit' })) as unknown as typeof access.resolveSandbox;
 
     const result = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
     // The key claim must not survive its own failed create — asserted by
     // RETRYING rather than by reading the claim, because a caller only ever
     // experiences the claim as "can I create?".
     const retry = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(makeAuthSuccess()),
     );
 
@@ -3025,7 +3025,7 @@ describe('ensureShellSession — headless start', () => {
     const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false }) });
 
     const result = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
       headlessRequest(access),
     );
 
@@ -3047,7 +3047,7 @@ describe('ensureShellSession — headless start', () => {
     openShell = vi.fn(() => { throw new Error('sprite exec refused'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
 
     const result = await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
       headlessRequest(access),
     );
 
@@ -3079,7 +3079,7 @@ describe('ensureShellSession — headless start', () => {
     checkAuth = vi.fn().mockResolvedValue({ ok: false, reason: 'no_edit_access' }) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
 
     await ensureShellSession(
-      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { sessionMap, openShell, checkAuth, persistSpriteExecId },
       headlessRequest(access),
     );
     await vi.advanceTimersByTimeAsync(60_000);

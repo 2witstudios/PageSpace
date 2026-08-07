@@ -115,7 +115,7 @@ beforeEach(() => {
   // blanket response, since a session-fetch shape and a conversations-list
   // shape are never interchangeable.
   mockFetchWithAuth.mockImplementation(async (url: string) => {
-    if (url.includes('/api/agent-sessions/conversations')) {
+    if (url.includes('/api/agent-workspaces/conversations')) {
       return { ok: true, json: async () => EMPTY_CONVERSATIONS };
     }
     // A selected session exists by default — the tests that care about a GONE
@@ -137,7 +137,7 @@ afterEach(() => {
 
 describe('AgentsSurface', () => {
   test('hydrates the selection from a deep link on mount', () => {
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
 
@@ -161,7 +161,7 @@ describe('AgentsSurface', () => {
     render(<AgentsSurface />);
 
     act(() => {
-      window.history.replaceState({}, '', '/dashboard/agents?session=ses-2&c=conv-2');
+      window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-2&c=conv-2');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 
@@ -174,12 +174,12 @@ describe('AgentsSurface', () => {
     // `router.push` changes only the query string, so nothing here remounts and
     // no popstate fires — only `useSearchParams()` changing. Before this fix the
     // panes kept showing whichever tab's selection was hydrated last.
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     const { rerender } = render(<AgentsSurface />);
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
 
     act(() => {
-      window.history.replaceState({}, '', '/dashboard/agents?session=ses-2&c=conv-2&agent=agent-2');
+      window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-2&c=conv-2&agent=agent-2');
     });
     rerender(<AgentsSurface />);
 
@@ -193,7 +193,7 @@ describe('AgentsSurface', () => {
     unmount();
 
     act(() => {
-      window.history.replaceState({}, '', '/dashboard/agents?session=ses-3');
+      window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-3');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 
@@ -211,13 +211,13 @@ describe('AgentsSurface', () => {
     // name), and a hand-trimmed deep link does the same. The grid mounts
     // and renders whatever the store/hydration holds; a null
     // `initialConversation` seeds nothing.
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1');
     render(<AgentsSurface />);
     expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/no-conversation');
   });
 
   test('renders the pane grid, keyed by the session, once a conversation is selected', () => {
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     render(<AgentsSurface />);
     expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1/agent-1');
   });
@@ -225,7 +225,7 @@ describe('AgentsSurface', () => {
   test('a conversation with no agent still renders the grid', () => {
     // Global-assistant conversations have no agent page; the grid (not this
     // shell) owns what that pane shows.
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1&c=conv-1');
     render(<AgentsSurface />);
     expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1/no-agent');
   });
@@ -244,7 +244,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
       targetId: 'conv-1',
       agentPageId: 'agent-1',
     });
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-gone&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-gone&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
 
@@ -261,7 +261,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
       targetId: 'conv-1',
       agentPageId: 'agent-1',
     });
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-live&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-live&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
 
@@ -279,13 +279,13 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
     });
     // A session id no earlier test fetched — SWR's cache is module-global and
     // this key's first answer would otherwise win for 30s.
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-m5&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-m5&c=conv-1&agent=agent-1');
     render(<AgentsSurface />);
 
     await waitFor(() =>
       expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-7'),
     );
-    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-m5');
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces/ses-m5');
   });
 
   it('does not mount the grid as global while the session record is still unresolved', async () => {
@@ -299,7 +299,7 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
     let resolveSession!: (value: { ok: true; json: () => Promise<{ session: { driveId: string } }> }) => void;
     mockFetchWithAuth.mockReturnValue(new Promise((resolve) => (resolveSession = resolve)));
     // A session id no earlier test fetched — SWR's cache is module-global.
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-unresolved&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-unresolved&c=conv-1&agent=agent-1');
     render(<AgentsSurface />);
 
     // Still unresolved: the grid must not be mounted at all (neither as
@@ -317,7 +317,7 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
 
 describe('onConversationClosed — following the grid\'s own close/rebind', () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     useAgentSurfaceStore.getState().hydrateFromSearch();
   });
 
@@ -421,7 +421,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     // A drive scope no earlier test fetched — SWR's cache is module-global and
     // an earlier test's empty answer for the SAME key would otherwise win here.
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         return {
           ok: true,
           json: async () => ({
@@ -456,7 +456,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
   it('clicking a session-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
     // A drive scope no earlier test fetched — see the cache note above.
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         return {
           ok: true,
           json: async () => ({
@@ -518,7 +518,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         const parsed = new URL(url, 'http://localhost');
         const driveLabel = parsed.searchParams.get('driveId') ?? 'none';
         const cursor = parsed.searchParams.get('cursor');
@@ -549,7 +549,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     let pageTwoShouldFail = false;
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         const parsed = new URL(url, 'http://localhost');
         const cursor = parsed.searchParams.get('cursor');
         if (cursor && pageTwoShouldFail) {
@@ -632,7 +632,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
         if (!cursor) return pageResponse('page-1', 'conv-page-1');
         return pageTwoFetch;
@@ -662,7 +662,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
 
   it('clicking a client (API-managed) conversation shows a toast instead of navigating — no in-app surface can open it', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/api/agent-sessions/conversations')) {
+      if (url.includes('/api/agent-workspaces/conversations')) {
         return {
           ok: true,
           json: async () => ({

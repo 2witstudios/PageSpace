@@ -22,16 +22,16 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 import type {
   ShellReadPayload,
   ShellReadResult,
   ShellSendPayload,
   ShellSendResult,
-} from '@pagespace/lib/agent-sessions/contract';
+} from '@pagespace/lib/agent-workspaces/contract';
 import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-seam';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-sessions/session-scrollback';
+import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-workspaces/session-scrollback';
 import type { ShellReadOutcome, ShellSendOutcome } from './session-tools';
 
 /** How long the realtime service gets to answer — a map lookup, not a Sprite call. */

@@ -269,31 +269,31 @@ describe('session runtime guardrail', () => {
   });
 
   it('given a fresh session with no recorded activity, should allow', () => {
-    const decision = checkSessionRuntimeGuardrail({ sessionId: 'ses-1', now: 1_000, maxActiveSeconds: 60 });
+    const decision = checkSessionRuntimeGuardrail({ workspaceId: 'ses-1', now: 1_000, maxActiveSeconds: 60 });
     expect(decision).toEqual({ allowed: true });
   });
 
   it('given continuous activity under the cap, should allow', () => {
-    recordSessionActivity({ sessionId: 'ses-1', now: 0 });
-    recordSessionActivity({ sessionId: 'ses-1', now: 30_000 });
-    const decision = checkSessionRuntimeGuardrail({ sessionId: 'ses-1', now: 59_000, maxActiveSeconds: 60 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 0 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 30_000 });
+    const decision = checkSessionRuntimeGuardrail({ workspaceId: 'ses-1', now: 59_000, maxActiveSeconds: 60 });
     expect(decision).toEqual({ allowed: true });
   });
 
   it('given continuous activity that crosses the cap, should deny session_runtime_exceeded', () => {
-    recordSessionActivity({ sessionId: 'ses-1', now: 0 });
-    recordSessionActivity({ sessionId: 'ses-1', now: 30_000 });
-    const decision = checkSessionRuntimeGuardrail({ sessionId: 'ses-1', now: 61_000, maxActiveSeconds: 60 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 0 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 30_000 });
+    const decision = checkSessionRuntimeGuardrail({ workspaceId: 'ses-1', now: 61_000, maxActiveSeconds: 60 });
     expect(decision).toEqual({ allowed: false, reason: 'session_runtime_exceeded' });
   });
 
   it('given a gap longer than the grace window, should reset the continuous-activity clock', () => {
-    recordSessionActivity({ sessionId: 'ses-1', now: 0 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 0 });
     // Exceed the cap, but only after a long idle gap — the clock should have reset.
     const idleGapEnd = SESSION_ACTIVITY_GRACE_MS + 1;
-    recordSessionActivity({ sessionId: 'ses-1', now: idleGapEnd });
+    recordSessionActivity({ workspaceId: 'ses-1', now: idleGapEnd });
     const decision = checkSessionRuntimeGuardrail({
-      sessionId: 'ses-1',
+      workspaceId: 'ses-1',
       now: idleGapEnd + 60_000,
       maxActiveSeconds: 60,
     });
@@ -302,7 +302,7 @@ describe('session runtime guardrail', () => {
 
     // A fresh key never touched near the deadline stays under budget.
     const freshDecision = checkSessionRuntimeGuardrail({
-      sessionId: 'ses-1',
+      workspaceId: 'ses-1',
       now: idleGapEnd + 1,
       maxActiveSeconds: 60,
     });
@@ -310,8 +310,8 @@ describe('session runtime guardrail', () => {
   });
 
   it('given activity on one session, should track another session independently', () => {
-    recordSessionActivity({ sessionId: 'ses-1', now: 0 });
-    const decision = checkSessionRuntimeGuardrail({ sessionId: 'ses-2', now: 61_000, maxActiveSeconds: 60 });
+    recordSessionActivity({ workspaceId: 'ses-1', now: 0 });
+    const decision = checkSessionRuntimeGuardrail({ workspaceId: 'ses-2', now: 61_000, maxActiveSeconds: 60 });
     expect(decision).toEqual({ allowed: true });
   });
 
@@ -331,26 +331,26 @@ describe('session runtime guardrail', () => {
   });
 
   it('given a session that has gone idle past the grace window, should evict its entry (bounded memory)', () => {
-    recordSessionActivity({ sessionId: 'stale-session', now: 0 });
+    recordSessionActivity({ workspaceId: 'stale-session', now: 0 });
     expect(sessionActivityMapSize()).toBe(1);
 
     // A later acquisition on a DIFFERENT session, well past the first
     // session's grace window, should sweep the stale entry rather than
     // accumulating it forever.
     const now = SESSION_ACTIVITY_GRACE_MS + 1;
-    recordSessionActivity({ sessionId: 'other-session', now });
+    recordSessionActivity({ workspaceId: 'other-session', now });
 
     expect(sessionActivityMapSize()).toBe(1);
   });
 
   it('given many sessions that all go idle, should not grow unbounded across acquisitions', () => {
     for (let i = 0; i < 50; i++) {
-      recordSessionActivity({ sessionId: `session-${i}`, now: 0 });
+      recordSessionActivity({ workspaceId: `session-${i}`, now: 0 });
     }
     expect(sessionActivityMapSize()).toBe(50);
 
     // One more acquisition, long after all 50 went idle, should sweep them all.
-    recordSessionActivity({ sessionId: 'fresh-session', now: SESSION_ACTIVITY_GRACE_MS + 1 });
+    recordSessionActivity({ workspaceId: 'fresh-session', now: SESSION_ACTIVITY_GRACE_MS + 1 });
 
     expect(sessionActivityMapSize()).toBe(1);
   });

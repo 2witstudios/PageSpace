@@ -32,7 +32,7 @@
  * overlays its own focus on top of whatever structure comes back.
  */
 
-import type { PersistedColumnState } from '@pagespace/lib/agent-sessions/contract';
+import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from './pane-reducer';
 
 /**

@@ -19,7 +19,7 @@ const API_DIR = join(__dirname, '..');
  * Regex matching any form of security audit call used across the codebase.
  * Covers: direct securityAudit.* calls, logAuditEvent helper, logAuthEvent
  * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
- * `agent-sessions/[sessionId]` family's shared not-found/denied helpers
+ * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
  * (`session-unavailable-response.ts`, review #2261/5) — both call
  * `auditRequest` internally, one hop removed from the route file.
  */
@@ -78,7 +78,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
 
   // --- Agent-session history (read-only, own-data listing) ---
-  ['agent-sessions/conversations', 'GET-only listing of the requester\'s OWN conversations (ownerId rides every filter) — open to every authenticated user since the sessions surface opened up (#2326, which removed the admin gate that carried this route\'s only audit call); rows the requester can no longer see are dropped/masked by design (silent, to avoid a drive-membership oracle), so there is no denial path to audit and no shared data written'],
+  ['agent-workspaces/conversations', 'GET-only listing of the requester\'s OWN conversations (ownerId rides every filter) — open to every authenticated user since the sessions surface opened up (#2326, which removed the admin gate that carried this route\'s only audit call); rows the requester can no longer see are dropped/masked by design (silent, to avoid a drive-membership oracle), so there is no denial path to audit and no shared data written'],
 
   // --- Direct-to-S3 attachment uploads (thin routes; audit lives in the shared
   //     orchestrator) — presign/complete emit data.write via attachment-direct.ts
