@@ -220,6 +220,35 @@ describe('payload shaping', () => {
       truncated: true,
     });
   });
+
+  /**
+   * A MISSING TIMESTAMP IS OMITTED, NEVER FABRICATED (review finding).
+   *
+   * This used to fall back to `new Date().toISOString()`, which reads as a
+   * tidy default and is the one answer certain to be wrong: `createdAt` is the
+   * key clients order on, and this shape is reached by OVERSIZED messages —
+   * exactly where a backfill or a replay shows up. Stamping "now" on one puts
+   * it at the bottom of a transcript it belongs in the middle of. Absent is a
+   * fact a reader can act on.
+   */
+  it('omits createdAt entirely when the message has none, rather than stamping "now"', () => {
+    const big = {
+      id: 'msgnodate',
+      role: 'assistant',
+      status: 'complete',
+      parts: [{ type: 'text', text: 'x'.repeat(MAX_INLINE_MESSAGE_BYTES + 1024) }],
+    } as unknown as UIMessage & { status: string };
+    const shaped = shapeMessageForEvent(big);
+
+    expect(shaped).toEqual({
+      messageRef: { id: 'msgnodate', role: 'assistant', status: 'complete' },
+      truncated: true,
+    });
+    // Not merely undefined — the key is absent, so a consumer distinguishing
+    // "no timestamp" from "timestamp is undefined" gets the same answer either
+    // way, and nothing serializes a null ordering key onto the wire.
+    expect('messageRef' in shaped && 'createdAt' in shaped.messageRef).toBe(false);
+  });
 });
 
 /**

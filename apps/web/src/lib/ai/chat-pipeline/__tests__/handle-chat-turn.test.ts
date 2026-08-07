@@ -140,6 +140,32 @@ describe('handleChatTurn — one entry, conversation-keyed strategy', () => {
     expect(runGlobalChatTurn).not.toHaveBeenCalled();
   });
 
+  /**
+   * SELECTION IS OWNER-SCOPED, so the two branches refuse identically (review
+   * finding — MINOR 3).
+   *
+   * Access was never at stake: `resolveOrCreateConversation` re-enforces owner
+   * + type + isActive on its own. What WAS at stake is that someone else's
+   * global conversation reached the global strategy and came back
+   * `404 "Conversation not found"`, while every other id fell through to
+   * `400 "chatId is required"` — so an authenticated caller could tell "this id
+   * is an existing global conversation" from everything else. Nothing beyond
+   * existence leaked, and cuid2 ids are not enumerable, but this codebase
+   * refuses uniformly across "forbidden" and "does not exist" everywhere else
+   * it decides anything, and the row is already in hand.
+   *
+   * Fails on the pre-fix code: it routed to `global`.
+   */
+  it('leaves ANOTHER user\'s global conversation on the page strategy, so it cannot be distinguished from an unknown id', async () => {
+    getConversation.mockResolvedValue({ id: 'conv-1', type: 'global', userId: 'someone-else' });
+
+    const res = await handle(post({ messages: [], conversationId: 'conv-1' }), { surface: 'page-chat' });
+
+    // The same answer an id that names nothing gets — see the `null` case above.
+    expect(await res.text()).toBe('page');
+    expect(runGlobalChatTurn).not.toHaveBeenCalled();
+  });
+
   it('falls through to the page strategy when the strategy lookup itself fails — never fails open', async () => {
     getConversation.mockRejectedValue(new Error('connection reset'));
 

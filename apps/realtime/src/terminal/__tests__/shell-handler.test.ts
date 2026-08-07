@@ -173,6 +173,23 @@ describe('resolveShellCommand', () => {
       args: ['-c', 'htop'],
     });
   });
+
+  /**
+   * The shell binary is a PARAMETER, not an ambient read (review finding: this
+   * was the one impure line in a file whose three sibling resolvers are
+   * labelled `Pure:`). The `process.env` default keeps every existing call
+   * site unchanged; passing it makes "what does this resolve to" a question
+   * about the arguments rather than about the process.
+   */
+  it('given an explicit shell, should use it and ignore $SHELL entirely', () => {
+    process.env.SHELL = '/bin/zsh';
+    expect(
+      resolveShellCommand({ command: 'shell', args: [], commandOverride: null, shell: '/bin/fish' }),
+    ).toEqual({ command: '/bin/fish', args: [] });
+    expect(
+      resolveShellCommand({ command: 'x', args: [], commandOverride: 'htop', shell: '/bin/fish' }),
+    ).toEqual({ command: '/bin/fish', args: ['-c', 'htop'] });
+  });
 });
 
 describe('planConnect', () => {
