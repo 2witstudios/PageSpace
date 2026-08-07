@@ -27,6 +27,8 @@ interface FakeState {
   deletedPages: unknown[];
   userUpdates: Record<string, unknown>[];
   lockedRows: number;
+  /** Ordered log of the operations the installer performs, for ordering assertions. */
+  ops: string[];
 }
 
 function makeFakeClient(state: FakeState): DbClient {
@@ -36,6 +38,7 @@ function makeFakeClient(state: FakeState): DbClient {
     const chain = {
       from: (table: unknown) => {
         if (table === users) {
+          state.ops.push('read:users');
           return result(state.userExists ? [{ starterSkillsInstalledAt: state.starterSkillsInstalledAt }] : []);
         }
         if (table === commands) {
@@ -59,6 +62,7 @@ function makeFakeClient(state: FakeState): DbClient {
     // The FOR UPDATE lock the installer takes on the user row.
     execute: async () => {
       state.lockedRows += 1;
+      state.ops.push('lock');
       return [];
     },
     select: () => result([]),
@@ -99,6 +103,7 @@ const baseState = (): FakeState => ({
   deletedPages: [],
   userUpdates: [],
   lockedRows: 0,
+  ops: [],
 });
 
 describe('installStarterSkills', () => {
@@ -209,7 +214,13 @@ describe('installStarterSkills', () => {
     // NULL and both install.
     const state2 = baseState();
     await installStarterSkills('user-1', 'drive-home', makeFakeClient(state2));
+
     expect(state2.lockedRows).toBe(1);
+    // ORDER is the property, not merely that a lock happened: a lock taken
+    // after the stamp read would leave the read-then-stamp exactly as racy as
+    // having no lock at all.
+    expect(state2.ops.indexOf('lock')).toBeGreaterThanOrEqual(0);
+    expect(state2.ops.indexOf('read:users')).toBeGreaterThan(state2.ops.indexOf('lock'));
   });
 
   it('does not report a trigger as installed when the command insert is skipped', async () => {

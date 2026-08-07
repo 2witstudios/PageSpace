@@ -112,3 +112,31 @@ describe('PlanChip', () => {
     expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PlanChip revalidation is not wasteful', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    delMock.mockReset();
+  });
+
+  it('does not double-fetch on mount when history already contains a completed set_plan', async () => {
+    // Opening a conversation whose history includes an earlier bind: SWR's own
+    // initial fetch already covers it, so reacting to the pre-existing call
+    // would fetch the same key twice on every mount.
+    respondWith(BOUND);
+    render(<PlanChip conversationId="conv-8" messages={messagesWith(toolPart('set_plan'))} />);
+    await screen.findByTitle('Active plan');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-fetch when messages change without a new plan-tool completion', async () => {
+    respondWith(BOUND);
+    const { rerender } = render(<PlanChip conversationId="conv-9" messages={[]} />);
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1));
+
+    rerender(<PlanChip conversationId="conv-9" messages={messagesWith(toolPart('read_page'))} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
+  });
+});

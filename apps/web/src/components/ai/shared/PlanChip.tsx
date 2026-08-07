@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { UIMessage } from 'ai';
 import useSWR from 'swr';
 import { ClipboardList, ExternalLink, X } from 'lucide-react';
@@ -87,8 +87,15 @@ export function PlanChip({ conversationId, messages }: PlanChipProps) {
   );
 
   const completedPlanToolCalls = useCompletedPlanToolCount(messages);
+  const seenPlanToolCalls = useRef<number | null>(null);
   useEffect(() => {
-    if (completedPlanToolCalls > 0) void mutate();
+    const previous = seenPlanToolCalls.current;
+    seenPlanToolCalls.current = completedPlanToolCalls;
+    // Only a NEW completion needs a re-read. The first observation is skipped
+    // because SWR's own initial fetch already covers opening a conversation
+    // whose history happens to contain earlier plan-tool calls — reacting to it
+    // would just double-fetch on every mount.
+    if (previous !== null && completedPlanToolCalls > previous) void mutate();
   }, [completedPlanToolCalls, mutate]);
 
   const plan = data?.plan ?? null;
