@@ -22,7 +22,7 @@
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
-import { chatMessages, pages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
@@ -165,38 +165,34 @@ export function resolveSelfBaseUrl(): string | null {
 
 /**
  * The latest completed assistant turn — what a `wait: true` dispatch hands
- * back after the drained stream finishes. Page-anchored transcripts live in
- * `chat_messages`; global-assistant ones in `messages`.
+ * back after the drained stream finishes.
+ *
+ * ONE conversation-scoped query since the message-table merge (epic
+ * "Agent-Session Single Source of Truth", Phase 4 / D6 — reader cutover).
+ * Page-anchored transcripts used to live in `chat_messages` and
+ * global-assistant ones in `messages`; both now live in `messages`, and a
+ * conversation id is globally unique (cuid2), so the `pageId` half of the old
+ * page-branch predicate was never load-bearing — the page is
+ * `conversations.contextId` and is already implied by the conversation.
+ *
+ * The global branch GAINS `status <> 'streaming'`, which only the page branch
+ * had: a streaming placeholder is an empty row, and returning it as "the
+ * reply" reported a completed dispatch as an empty answer. Same correctness
+ * class as `readSessionTranscript`'s `pending` mapping below.
  */
-async function readLatestAssistantReply(conversationId: string, agentPageId: string | null): Promise<string> {
-  if (agentPageId === null) {
-    const [row] = await db
-      .select({ content: globalMessages.content })
-      .from(globalMessages)
-      .where(
-        and(
-          eq(globalMessages.conversationId, conversationId),
-          eq(globalMessages.role, 'assistant'),
-          eq(globalMessages.isActive, true),
-        ),
-      )
-      .orderBy(desc(globalMessages.createdAt))
-      .limit(1);
-    return row?.content ?? '';
-  }
+async function readLatestAssistantReply(conversationId: string): Promise<string> {
   const [row] = await db
-    .select({ content: chatMessages.content })
-    .from(chatMessages)
+    .select({ content: globalMessages.content })
+    .from(globalMessages)
     .where(
       and(
-        eq(chatMessages.pageId, agentPageId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.role, 'assistant'),
-        eq(chatMessages.isActive, true),
-        ne(chatMessages.status, 'streaming'),
+        eq(globalMessages.conversationId, conversationId),
+        eq(globalMessages.role, 'assistant'),
+        eq(globalMessages.isActive, true),
+        ne(globalMessages.status, 'streaming'),
       ),
     )
-    .orderBy(desc(chatMessages.createdAt))
+    .orderBy(desc(globalMessages.createdAt))
     .limit(1);
   return row?.content ?? '';
 }
@@ -309,7 +305,7 @@ export async function dispatchThroughChatPipeline(input: {
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  const reply = await readLatestAssistantReply(input.conversationId, input.agentPageId);
+  const reply = await readLatestAssistantReply(input.conversationId);
   return { ok: true, waited: true, reply };
 }
 
@@ -599,42 +595,38 @@ async function listSharedWorkspaces({
   }));
 }
 
+/**
+ * A worker's recent turns, oldest-last-N first.
+ *
+ * ONE conversation-scoped query since the message-table merge (Phase 4 / D6 —
+ * reader cutover). The old `agentPageId === null` branch picked the TABLE, not
+ * the rows: `messages` for global-assistant threads, `chat_messages` for
+ * page-anchored ones. With one table the branch has nothing left to decide —
+ * `conversationId` alone selects the thread (cuid2, globally unique), and a
+ * page conversation's page is `conversations.contextId`, already implied.
+ *
+ * GLOBAL THREADS GAIN THE `pending` MAPPING. Only the page branch carried
+ * `status === 'streaming' ⇒ pending`; the global branch did not even select
+ * `status`, so a turn still being generated was handed to the model as a
+ * completed, empty message. Both now report it honestly. This is a deliberate
+ * behaviour change on global threads and the one intended non-parity in this
+ * reader.
+ */
 async function readSessionTranscript(input: {
   conversationId: string;
   agentPageId: string | null;
   limit: number;
 }): Promise<TranscriptEntry[]> {
-  if (input.agentPageId === null) {
-    const rows = await db
-      .select({ role: globalMessages.role, content: globalMessages.content, createdAt: globalMessages.createdAt })
-      .from(globalMessages)
-      .where(and(eq(globalMessages.conversationId, input.conversationId), eq(globalMessages.isActive, true)))
-      .orderBy(desc(globalMessages.createdAt))
-      .limit(input.limit);
-    return rows
-      .reverse()
-      .map((row) => ({
-        role: row.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-        content: row.content,
-        at: row.createdAt,
-      }));
-  }
   const rows = await db
     .select({
-      role: chatMessages.role,
-      content: chatMessages.content,
-      createdAt: chatMessages.createdAt,
-      status: chatMessages.status,
+      role: globalMessages.role,
+      content: globalMessages.content,
+      createdAt: globalMessages.createdAt,
+      status: globalMessages.status,
     })
-    .from(chatMessages)
-    .where(
-      and(
-        eq(chatMessages.pageId, input.agentPageId),
-        eq(chatMessages.conversationId, input.conversationId),
-        eq(chatMessages.isActive, true),
-      ),
-    )
-    .orderBy(desc(chatMessages.createdAt))
+    .from(globalMessages)
+    .where(and(eq(globalMessages.conversationId, input.conversationId), eq(globalMessages.isActive, true)))
+    .orderBy(desc(globalMessages.createdAt))
     .limit(input.limit);
   return rows.reverse().map((row) => ({
     role: row.role === 'assistant' ? ('assistant' as const) : ('user' as const),

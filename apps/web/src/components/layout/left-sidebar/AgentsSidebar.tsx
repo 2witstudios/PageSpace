@@ -102,9 +102,15 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     mutate: retrySessions,
   } = useSWR<{ sessions: SessionListEntry[] }>(sessionsKey, sessionsFetcher, {
     revalidateOnFocus: false,
-    // Modest poll: session/conversation rows change on spawn and end, which
-    // other tabs and agents can do. The pane grid itself never lives here.
-    refreshInterval: 20_000,
+    // BACKSTOP, not the mechanism (Agent-Session SSoT epic, Phase 2 / plan PR 4).
+    // Session/conversation rows change on spawn and end, which other tabs and
+    // agents can do — and those changes now ARRIVE, as
+    // `conversation:created/updated/closed/reopened/deleted` and `session:*` on the
+    // owner's `user:<id>:sessions` room, applied to this cache by
+    // `session-directory-listener.ts`. The poll only catches a broadcast lost
+    // outright. Demoted from 20s to 120s; SLATED FOR DELETION at the epic's final
+    // contract PR.
+    refreshInterval: 120_000,
   });
 
   // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a

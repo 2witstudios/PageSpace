@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { eq, and, ne, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
-import { pages, chatMessages } from '@pagespace/db/schema/core'
+import { pages } from '@pagespace/db/schema/core'
+// Aliased: `conversations` and `messages` are both used as local variable
+// names inside the tools below.
+import { conversations as conversationsTable, messages } from '@pagespace/db/schema/conversations'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
@@ -986,48 +989,57 @@ export const pageReadTools = {
           return { success: false, error: 'Insufficient permissions to access this agent' };
         }
 
-        // Query conversations grouped by conversationId
+        // Query conversations grouped by conversationId.
+        //
+        // Reads the unified `messages` table since the message-table merge
+        // (epic "Agent-Session Single Source of Truth", Phase 4 / D6). Page
+        // scope is the JOIN (`conversations.type = 'page'` AND
+        // `conversations.contextId = pageId`), not `messages.pageId` — the
+        // former is the end-state authority and indexed, the latter is
+        // transitional and dropped at the contract PR.
         const conversationData = await db
           .select({
-            conversationId: chatMessages.conversationId,
-            messageCount: count(chatMessages.id),
-            lastActivity: max(chatMessages.createdAt),
-            firstMessageTime: min(chatMessages.createdAt),
+            conversationId: messages.conversationId,
+            messageCount: count(messages.id),
+            lastActivity: max(messages.createdAt),
+            firstMessageTime: min(messages.createdAt),
           })
-          .from(chatMessages)
+          .from(messages)
+          .innerJoin(conversationsTable, eq(conversationsTable.id, messages.conversationId))
           .where(and(
-            eq(chatMessages.pageId, pageId),
-            eq(chatMessages.isActive, true)
+            eq(conversationsTable.type, 'page'),
+            eq(conversationsTable.contextId, pageId),
+            eq(messages.isActive, true)
           ))
-          .groupBy(chatMessages.conversationId);
+          .groupBy(messages.conversationId);
 
         // Get first message preview for each conversation
         const conversations = await Promise.all(
           conversationData.map(async (conv) => {
-            // Get first message for preview - include pageId to use composite index
-            const firstMessage = await db.query.chatMessages.findFirst({
-              where: and(
-                eq(chatMessages.pageId, pageId),
-                eq(chatMessages.conversationId, conv.conversationId),
-                eq(chatMessages.isActive, true)
-              ),
-              orderBy: asc(chatMessages.createdAt),
-              columns: {
-                content: true,
-                role: true,
-                userId: true,
-              },
-            });
-
-            // Get unique participants - include pageId to use composite index
-            const participants = await db
-              .selectDistinct({ userId: chatMessages.userId })
-              .from(chatMessages)
+            // Get first message for preview — scoped by conversationId, which
+            // is globally unique (cuid2) and already implies the page.
+            const [firstMessage] = await db
+              .select({
+                content: messages.content,
+                role: messages.role,
+                userId: messages.userId,
+              })
+              .from(messages)
               .where(and(
-                eq(chatMessages.pageId, pageId),
-                eq(chatMessages.conversationId, conv.conversationId),
-                eq(chatMessages.isActive, true),
-                isNotNull(chatMessages.userId)
+                eq(messages.conversationId, conv.conversationId),
+                eq(messages.isActive, true)
+              ))
+              .orderBy(asc(messages.createdAt))
+              .limit(1);
+
+            // Get unique participants
+            const participants = await db
+              .selectDistinct({ userId: messages.userId })
+              .from(messages)
+              .where(and(
+                eq(messages.conversationId, conv.conversationId),
+                eq(messages.isActive, true),
+                isNotNull(messages.userId)
               ));
 
             // Extract preview text - prefer originalContent, then parts, then textParts
@@ -1148,25 +1160,37 @@ export const pageReadTools = {
         // Get all messages for this conversation. Excludes 'streaming' placeholders — this
         // is delivered straight to the model as a tool result. See Server Stream Durability
         // epic PR 2.
-        const messages = await db
-          .select()
-          .from(chatMessages)
+        //
+        // Unified `messages` table since the merge (Phase 4 / D6). The page
+        // predicate is kept — it is what stops a caller pairing someone else's
+        // conversation id with a page they can see — but it is now
+        // `conversations.contextId`, the end-state authority, rather than the
+        // transitional `messages.pageId`.
+        const conversationMessages = await db
+          .select({
+            role: messages.role,
+            content: messages.content,
+            sourceAgentId: messages.sourceAgentId,
+          })
+          .from(messages)
+          .innerJoin(conversationsTable, eq(conversationsTable.id, messages.conversationId))
           .where(and(
-            eq(chatMessages.conversationId, conversationId),
-            eq(chatMessages.pageId, pageId),
-            eq(chatMessages.isActive, true),
-            ne(chatMessages.status, 'streaming')
+            eq(messages.conversationId, conversationId),
+            eq(conversationsTable.type, 'page'),
+            eq(conversationsTable.contextId, pageId),
+            eq(messages.isActive, true),
+            ne(messages.status, 'streaming')
           ))
-          .orderBy(asc(chatMessages.createdAt));
+          .orderBy(asc(messages.createdAt));
 
-        if (messages.length === 0) {
+        if (conversationMessages.length === 0) {
           return {
             success: false,
             error: `Conversation "${conversationId}" not found or has no messages`,
           };
         }
 
-        const totalMessages = messages.length;
+        const totalMessages = conversationMessages.length;
 
         // Calculate effective range (1-indexed, inclusive)
         const effectiveStart = lineStart ?? 1;
@@ -1188,7 +1212,7 @@ export const pageReadTools = {
         }
 
         // Extract messages in range (convert to 0-indexed for slice)
-        const selectedMessages = messages.slice(effectiveStart - 1, effectiveEnd);
+        const selectedMessages = conversationMessages.slice(effectiveStart - 1, effectiveEnd);
 
         // Batch fetch all source agent names upfront to avoid N+1 queries
         const uniqueSourceAgentIds = [...new Set(

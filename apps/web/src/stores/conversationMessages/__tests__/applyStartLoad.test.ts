@@ -12,6 +12,7 @@ describe('applyStartLoad', () => {
       loadGeneration: 1,
       pendingMutationsSinceLoad: [],
       loadStatus: 'loading', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+      rev: null,
     });
   });
 
@@ -23,6 +24,7 @@ describe('applyStartLoad', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
         loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+        rev: null,
       },
     };
     const { byConversationId, generation } = applyStartLoad(initial, 'c1');
@@ -38,6 +40,7 @@ describe('applyStartLoad', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
         loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+        rev: null,
       },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');
@@ -47,7 +50,7 @@ describe('applyStartLoad', () => {
 
   it('given other conversations tracked, should not touch them', () => {
     const initial: ConversationMessagesById = {
-      other: { messages: [], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      other: { messages: [], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');
     expect(byConversationId.other).toBe(initial.other);
@@ -61,6 +64,7 @@ describe('applyStartLoad', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [{ type: 'remoteMessage', message: { id: 'm1', role: 'user', parts: [] } }],
         loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+        rev: null,
       },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');
@@ -79,6 +83,7 @@ describe('applyStartLoad', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
         loadStatus: 'loaded', olderCursor: 'cursor-1', hasMoreOlder: true, isLoadingOlder: true,
+        rev: null,
       },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');

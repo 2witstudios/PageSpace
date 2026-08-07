@@ -36,6 +36,20 @@ vi.mock('@pagespace/db/operators', () => ({
   max: vi.fn(),
   min: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', type: 'type', contextId: 'contextId' },
+  messages: {
+    id: 'id',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+    content: 'content',
+    role: 'role',
+    userId: 'userId',
+    status: 'status',
+    sourceAgentId: 'sourceAgentId',
+  },
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
   drives: { id: 'id' },
@@ -148,6 +162,27 @@ const createMockAccessLevel = (level: 'viewer' | 'editor' | 'admin') => ({
   canShare: level === 'admin',
   canDelete: level === 'admin',
 });
+
+
+/**
+ * Chainable drizzle SELECT stub.
+ *
+ * The unified-message readers join `conversations` to derive the page from
+ * `contextId` (epic "Agent-Session Single Source of Truth", Phase 4 / D6 —
+ * reader cutover), so a mocked chain must tolerate `.innerJoin(...)` between
+ * `.from(...)` and `.where(...)`. Non-terminal steps return the chain; the
+ * terminals a given test needs are supplied by name.
+ */
+function mockSelectChain(terminals: Record<string, unknown>) {
+  const chain: Record<string, unknown> = {};
+  for (const step of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy', 'groupBy', 'limit']) {
+    chain[step] = vi.fn(() => chain);
+  }
+  for (const [name, value] of Object.entries(terminals)) {
+    chain[name] = vi.fn().mockResolvedValue(value);
+  }
+  return chain;
+}
 
 describe('page-read-tools', () => {
   beforeEach(() => {
@@ -872,13 +907,9 @@ describe('page-read-tools', () => {
 
     it('allows the drive owner to list trash', async () => {
       mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
 
       const context = {
         toolCallId: '1', messages: [],
@@ -1614,13 +1645,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty conversations query
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ groupBy: [] }),
+      );
 
       const result = await pageReadTools.list_conversations.execute!(
         { pageId: 'page-1', title: 'Test Agent' },
@@ -1646,34 +1673,27 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
 
-      // Mock the main select for conversation aggregation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([
-              {
-                conversationId: 'conv-1',
-                messageCount: 5,
-                lastActivity: new Date('2025-01-15'),
-              },
-              {
-                conversationId: 'conv-2',
-                messageCount: 10,
-                lastActivity: new Date('2025-01-20'),
-              },
-            ]),
-          }),
+      // Both selects in this tool share one chain stub: the aggregation
+      // terminates on `.groupBy(...)`, the first-message preview on
+      // `.limit(1)` (a plain SELECT since the cutover, where it used to be
+      // `db.query.chatMessages.findFirst`).
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({
+          groupBy: [
+            {
+              conversationId: 'conv-1',
+              messageCount: 5,
+              lastActivity: new Date('2025-01-15'),
+            },
+            {
+              conversationId: 'conv-2',
+              messageCount: 10,
+              lastActivity: new Date('2025-01-20'),
+            },
+          ],
+          limit: [{ content: 'Hello, how can I help?', role: 'user', userId: 'user-1' }],
         }),
-      });
-
-      // Mock the chatMessages.findFirst for getting first message preview
-      mockDb.query.chatMessages = {
-        findFirst: vi.fn().mockResolvedValue({
-          content: 'Hello, how can I help?',
-          role: 'user',
-          userId: 'user-1',
-        }),
-      } as unknown as typeof mockDb.query.chatMessages;
+      );
 
       // Mock selectDistinct for participants
       (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -1770,13 +1790,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty messages for this conversation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
 
       const result = await pageReadTools.read_conversation.execute!(
         { pageId: 'page-1', conversationId: 'non-existent', title: 'Test Agent' },
@@ -1812,13 +1828,9 @@ describe('page-read-tools', () => {
         mockDb.query.pages.findMany = vi.fn()
           .mockResolvedValue([{ id: 'global-assistant-id', title: 'Global Assistant' }]);
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(mockMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: mockMessages }),
+        );
       });
 
       it('returns all messages when no line params', async () => {
@@ -1890,13 +1902,9 @@ describe('page-read-tools', () => {
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(fiveMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: fiveMessages }),
+        );
       });
 
       it('returns only messages in range when lineStart and lineEnd provided', async () => {

@@ -334,6 +334,18 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
 /** Writes no message row at all — only the conversation rev + emissions. */
 const nonMessageWritePaths = ['recordUndoApplied'];
 
+/**
+ * READ seams on the repository — no leg to drift, by construction. They are
+ * enumerated anyway so the closed classification below stays closed: a new
+ * method has to be declared a writer or a reader, never left unclassified.
+ *
+ * `getMessagesByConversationId` is the unified read seam added by the reader
+ * cutover (Phase 4 PR 11). Its parity with the legacy `chat_messages` query it
+ * replaces is pinned by
+ * `src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`.
+ */
+const readPaths = ['getMessagesByConversationId'];
+
 describe('unified message dual-write — behavioural drift guard', () => {
   beforeEach(() => {
     touches.length = 0;
@@ -379,6 +391,7 @@ describe('unified message dual-write — behavioural drift guard', () => {
       ...pageWritePaths.map((p) => p.name),
       ...globalWritePaths.map((p) => p.name),
       ...nonMessageWritePaths,
+      ...readPaths,
     ]);
     const actual = Object.keys(messageRepository).sort();
     expect(actual).toEqual([...classified].sort());

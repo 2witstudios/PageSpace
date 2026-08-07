@@ -200,7 +200,14 @@ export async function GET(
         prevCursor,
         limit,
         direction
-      }
+      },
+      // The rev watermark this snapshot was read at (Agent-Session SSoT epic,
+      // Phase 2) — the client proves currency against every `conversation:*`
+      // event with it (`apps/web/src/lib/realtime/conversation-apply.ts`).
+      // `null` for a legacy page conversation with no `conversations` row: no
+      // row, no rev, so the subscriber has no baseline and refetches on doubt.
+      // Read from the row the access gate above already fetched.
+      rev: conversationRow?.rev ?? null,
     });
 
   } catch (error) {

@@ -23,6 +23,7 @@ describe('applyConfirmedMessage', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
         loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+        rev: null,
       },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1', 'full reply') });
@@ -37,6 +38,7 @@ describe('applyConfirmedMessage', () => {
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
         loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false,
+        rev: null,
       },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1', 'full reply') });
@@ -45,7 +47,7 @@ describe('applyConfirmedMessage', () => {
 
   it('given the id matches an optimistic send, should append to messages and reconcile it out of optimisticSends', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('opt1') });
     expect(result.c1.messages).toEqual([msg('opt1')]);
@@ -54,7 +56,7 @@ describe('applyConfirmedMessage', () => {
 
   it('given other optimistic sends unrelated to the confirmed id, should leave them untouched', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [msg('opt1'), msg('opt2')], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      c1: { messages: [], optimisticSends: [msg('opt1'), msg('opt2')], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('opt1') });
     expect(result.c1.optimisticSends).toEqual([msg('opt2')]);
@@ -62,7 +64,7 @@ describe('applyConfirmedMessage', () => {
 
   it('given an append, should record it in pendingMutationsSinceLoad so an in-flight load can replay it', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1') });
     expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'confirmedMessage', message: msg('m1') }]);
@@ -70,7 +72,7 @@ describe('applyConfirmedMessage', () => {
 
   it('given a replace, should also record a pending mutation (unlike applyRemoteUserMessage, which skips no-ops)', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1', 'partial')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      c1: { messages: [msg('m1', 'partial')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1', 'full') });
     expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'confirmedMessage', message: msg('m1', 'full') }]);
@@ -78,7 +80,7 @@ describe('applyConfirmedMessage', () => {
 
   it('given an append or replace, should NOT bump loadGeneration', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1') });
     expect(result.c1.loadGeneration).toBe(1);

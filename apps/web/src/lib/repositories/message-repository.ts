@@ -44,7 +44,7 @@
 
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
+import { eq, and, ne } from '@pagespace/db/operators';
 import { chatMessages } from '@pagespace/db/schema/core';
 import { messages } from '@pagespace/db/schema/conversations';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -314,6 +314,27 @@ async function saveGlobalMessageRow({
  * throw to abort the transaction; `{conversationCreated: true}` tells the
  * repository to emit `conversation:created` after commit.
  */
+/**
+ * One durable row of the unified `messages` table, as the read seam returns
+ * it. Structurally the useful subset of `ChatMessage` (chat-message-repository)
+ * minus `pageId` — the transitional column this cutover deliberately stops
+ * reading — so the OpenAI-shaped serializers accept it unchanged.
+ */
+export interface UnifiedMessageRow {
+  id: string;
+  conversationId: string;
+  userId: string | null;
+  role: string;
+  content: string;
+  messageType: 'standard' | 'todo_list';
+  isActive: boolean;
+  createdAt: Date;
+  editedAt: Date | null;
+  toolCalls: unknown | null;
+  toolResults: unknown | null;
+  status: 'streaming' | 'complete' | 'interrupted';
+}
+
 export type BeforeSaveHook = (
   tx: DbExecutor,
 ) => Promise<void | boolean | { proceed: boolean; conversationCreated?: boolean }>;
@@ -1047,6 +1068,52 @@ export const messageRepository = {
       { mode: args.mode, affectedMessageIds: args.affectedMessageIds },
       { skipDirectory: row === null },
     );
+  },
+
+  /**
+   * Every durable row of one conversation, oldest first — read from the
+   * UNIFIED `messages` table (epic "Agent-Session Single Source of Truth",
+   * Phase 4 / D6, reader cutover).
+   *
+   * The unified twin of `chatMessageRepository.getMessagesByConversationId`,
+   * which it replaces reader-by-reader; the legacy one stays until PR 12
+   * finishes the chat-route/repository merge. Deliberately scoped by
+   * `conversationId` ALONE, exactly as the legacy query was: a conversation id
+   * is a cuid2, so it already names one thread, and the page (when there is
+   * one) is `conversations.contextId`, not a second key this reader has to
+   * carry. That also makes the shape type-agnostic — a `type: 'client'`
+   * conversation, whose rows can name a different agent page per row, reads
+   * correctly here for the same reason it did before.
+   *
+   * `includeStreaming` mirrors the legacy default: mid-flight placeholders are
+   * hidden unless a caller explicitly opts in.
+   */
+  async getMessagesByConversationId(
+    conversationId: string,
+    includeStreaming = false,
+  ): Promise<UnifiedMessageRow[]> {
+    return db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        userId: messages.userId,
+        role: messages.role,
+        content: messages.content,
+        messageType: messages.messageType,
+        isActive: messages.isActive,
+        createdAt: messages.createdAt,
+        editedAt: messages.editedAt,
+        toolCalls: messages.toolCalls,
+        toolResults: messages.toolResults,
+        status: messages.status,
+      })
+      .from(messages)
+      .where(and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true),
+        ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
+      ))
+      .orderBy(messages.createdAt);
   },
 
 };

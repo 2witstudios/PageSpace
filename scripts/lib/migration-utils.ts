@@ -64,7 +64,7 @@ export function toSqlInList(ids: string[] | Set<string> | readonly string[]): st
  */
 export function buildInsert(
   tableName: string,
-  columns: string[],
+  columns: readonly string[],
   rows: Record<string, unknown>[],
 ): string {
   if (rows.length === 0) return '';
@@ -82,6 +82,40 @@ export function buildInsert(
     'ON CONFLICT DO NOTHING;',
     '',
   ].join('\n');
+}
+
+/**
+ * Build `UPDATE ... SET <cols> WHERE "id" = ...` statements for columns that
+ * are carried but cannot ride in their own table's INSERT because they
+ * reference a table inserted LATER (a forward FK — `drives.homePageId` and
+ * `drives.not_found_page_id` point at `pages`, while `pages.driveId` points
+ * back at `drives`, so no insert order satisfies both).
+ *
+ * Emitted after the referenced table has landed. Rows whose deferred columns
+ * are all NULL produce no statement — there is nothing to set, and the INSERT
+ * already left them NULL. Re-running the bundle re-applies identical values,
+ * so this stays as idempotent as the `ON CONFLICT DO NOTHING` inserts around it.
+ */
+export function buildDeferredUpdate(
+  tableName: string,
+  columns: readonly string[],
+  rows: Record<string, unknown>[],
+): string {
+  if (columns.length === 0 || rows.length === 0) return '';
+
+  const statements: string[] = [];
+  for (const row of rows) {
+    if (columns.every((col) => row[col] === null || row[col] === undefined)) continue;
+    const assignments = columns
+      .map((col) => `"${col}" = ${escapeSqlValue(row[col])}`)
+      .join(', ');
+    statements.push(
+      `UPDATE "${tableName}" SET ${assignments} WHERE "id" = ${escapeSqlValue(row.id)};`,
+    );
+  }
+
+  if (statements.length === 0) return '';
+  return `${statements.join('\n')}\n`;
 }
 
 /**

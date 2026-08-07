@@ -316,7 +316,17 @@ export default function AgentPanes({
   const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
     agentSessionsKey(driveId),
     sessionConversationsFetcher,
-    { revalidateOnFocus: false, refreshInterval: 20_000 },
+    {
+      revalidateOnFocus: false,
+      // BACKSTOP, not the mechanism (Agent-Session SSoT epic, Phase 2 / plan PR 4).
+      // `session-directory-listener.ts` now applies `conversation:created/updated/
+      // closed/reopened/deleted` and `session:*` to this exact cache the moment they
+      // happen, so the poll no longer carries the freshness of the listing — it only
+      // catches the case where a broadcast was lost entirely. Demoted from 20s to
+      // 120s; SLATED FOR DELETION at the epic's final contract PR, once the legacy
+      // `chat:*` emissions are gone and the directory plane is the only path.
+      refreshInterval: 120_000,
+    },
   );
   // THIS session's own entry, looked up once and reused for both the
   // conversation list and the readiness check below — a session that

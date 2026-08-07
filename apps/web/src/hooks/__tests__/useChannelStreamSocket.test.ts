@@ -647,12 +647,21 @@ describe('useChannelStreamSocket', () => {
     });
   });
 
-  // A page room holds every member of the page, but conversations are private by default
-  // (`listConversations` shows you only `userId = you OR isShared`). The server refuses
-  // these joins anyway; skipping them client-side is what stops every member firing a
-  // doomed /stream-join per assistant message — each one an authz denial in the audit log.
-  describe('chat:stream_start — conversation privacy pre-filter', () => {
-    it("given another user's stream in a PRIVATE conversation, should not attach or even attempt the join", () => {
+  // GATE DELETED (Agent-Session SSoT epic, Phase 2 / plan PR 3). There used to be a
+  // client-side "conversation privacy pre-filter" here: drop a `chat:stream_start`
+  // whose `triggeredBy.userId` is not mine when `isShared === false`, to save a
+  // /stream-join the server would refuse anyway.
+  //
+  // It was wrong about "not mine". `triggeredBy.userId` is the ACTOR, and a
+  // server-side dispatch (send_session, a workflow, the /help short-circuit) acts as
+  // whoever it acts as -- so the user's OWN private conversation, written on their
+  // behalf from another surface, matched the filter and every pane showing it went
+  // dark. That is the epic's canonical blank-pane bug in its stream-plane half.
+  //
+  // These tests now pin the ABSENCE of the filter: every start attaches, and the
+  // server (which re-authorizes every join with `canAccessConversation`) decides.
+  describe('chat:stream_start -- no client-side privacy pre-filter', () => {
+    it("given another user's stream in a PRIVATE conversation, should still attach and let the server refuse the join", () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => {
@@ -663,8 +672,11 @@ describe('useChannelStreamSocket', () => {
         });
       });
 
-      expect(mockAddStream).not.toHaveBeenCalled();
-      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+      // A refused join is a quiet 404 the hook already handles benignly -- and the
+      // conversation-scoped bootstrap in useConversationSubscription is what actually
+      // keeps a pane from asking about streams it has no business in.
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
     it("given another user's stream in an explicitly SHARED conversation, should attach (multiplayer)", () => {
@@ -682,7 +694,7 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // The same user in a second tab: a different browserSessionId, so `isOwn` is false —
+    // The same user in a second tab: a different browserSessionId, so `isOwn` is false --
     // but it is still THEIR stream and their private conversation. They must see it.
     it('given MY OWN stream from another tab in a private conversation, should still attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
@@ -699,19 +711,18 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // `useAuth()` returns `user: null` until auth resolves. Treating "I don't know who I
-    // am" as "not me" would drop the user's OWN private stream in that window — the exact
-    // failure this whole PR exists to fix. Skip only on certainty; when in doubt, attach
-    // and let the server decide (an unauthorized join is a quiet 404).
-    it('given the signed-in user is not known yet, should NOT drop a private stream (it may be the user\'s own)', () => {
-      mockAuthUserId = null;
+    // The dispatch case the old filter broke: a server-side write attributed to a
+    // DIFFERENT user id in the caller's own private conversation. Nothing about the
+    // payload distinguishes it from "somebody else's private chat" -- which is exactly
+    // why the client cannot be the one deciding.
+    it('given a server dispatch in a private conversation attributed to another actor, should attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => {
         mockSocket._trigger('chat:stream_start', {
           ...START_PAYLOAD,
           isShared: false,
-          triggeredBy: { userId: LOCAL_USER_ID, displayName: 'Me', browserSessionId: 'another-tab' },
+          triggeredBy: { userId: 'user-other', displayName: 'Agent', browserSessionId: 'agent-dispatch-xyz' },
         });
       });
 
@@ -719,10 +730,7 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // Rolling deploy: an originator on the previous build emits no `isShared` field.
-    // Dropping on `undefined` would black out multiplayer for shared conversations
-    // mid-deploy, so only an explicit `false` skips. The server is the authority anyway.
-    it('given no isShared field at all (old server, rolling deploy), should attempt the join rather than drop it', () => {
+    it('given no isShared field at all (old server, rolling deploy), should attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });

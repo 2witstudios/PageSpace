@@ -241,11 +241,31 @@ textbook forced copy, so it runs under the rule above rather than around it:
     plus the `reconcile-message-unification` cron comparing per-conversation counts and
     `MAX(createdAt)` for recently-active page conversations, logging at error level on
     divergence.
-- **Still open:** readers still read the legacy leg (Phase 4 PRs 11/12), compliance
-  keeps both tables until the contract PR (PR 13/15), and `chat_messages` +
-  `messages.pageId` are dropped last (PR 15).
+- **Reader cutover, internal readers — SHIPPED** (Phase 4 PR 11): the session tools'
+  transcript readers, the agent-session conversation listing, the search / page-read /
+  agent-communication tools, memory discovery, both pulse routes, the page-payload
+  service, the admin users route and `GET /api/v1/conversations/[id]` all read
+  `messages` now. Two rules govern the rewrite:
+  - **Page scope comes from the JOIN, not the column.** `chat_messages.pageId = X`
+    became `JOIN conversations ON id = "conversationId" WHERE type = 'page' AND
+    "contextId" = X`. `conversations.contextId` is the end-state authority and is
+    indexed; `messages.pageId` is transitional and is dropped at PR 15, so nothing new
+    is built on it. One consequence is deliberate: a `type='client'` conversation's rows
+    NAME a page but do not BELONG to that page's chat, so they no longer appear in
+    page-scoped reads — they are still reached, as before, by `conversationId`.
+  - **A conversation id already implies its page.** Readers keyed on
+    `(pageId, conversationId)` keep only the conversation key unless the page predicate
+    was an authorization check, in which case it survives as the join.
+  - Parity is pinned by
+    `apps/web/src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`
+    (old query vs new query over one deliberately awkward corpus), which lives until
+    PR 15 deletes `chat_messages`.
+- **Still open:** the chat routes, page-agents routes, consult, undo/edit and trash
+  still read the legacy leg (Phase 4 PR 12), compliance keeps both tables until the
+  contract PR (PR 13/15), and `chat_messages` + `messages.pageId` are dropped last
+  (PR 15).
 
-Until the readers cut over, the legacy leg is authoritative and the unified leg must
+Until every reader cuts over, the legacy leg is authoritative and the unified leg must
 never be able to break a write that works today — which is why the unified INSERT paths
 skip (loudly, at error level) rather than abort when a `conversations` row is genuinely
 missing.
