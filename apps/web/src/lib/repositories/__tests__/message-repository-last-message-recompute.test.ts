@@ -1,9 +1,20 @@
 /**
- * Issue #2153 — conversations.lastMessageAt is derived from the surviving
- * active messages. Every mutation that can remove the newest message
- * (soft-delete, hard-delete, purge) must recompute it via the one shared
- * writer, `recomputeLastMessageAt`, instead of leaving the timestamp
- * pointing at a message that no longer exists.
+ * Issue #2153 — `conversations.lastMessageAt` is derived from the surviving
+ * active messages. Every mutation that can remove the newest message (purge,
+ * and the delete paths that route through the repository) must recompute it
+ * via the one shared writer, `recomputeLastMessageAt`, instead of leaving the
+ * timestamp pointing at a message that no longer exists.
+ *
+ * MOVED from `global-conversation-last-message-recompute.test.ts` with the
+ * code it pins: the message-table merge (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6, PR 12) made `messages` the one message table, so the
+ * recompute and the purge moved from `global-conversation-repository.ts` into
+ * `message-repository.ts` — and they now cover PAGE conversations too, which
+ * had no recompute at all while they lived in `chat_messages`.
+ *
+ * The dead members that used to be pinned here (`softDeleteMessage`,
+ * `hardDeleteMessage` — no non-test caller since the repository choke point
+ * landed) were deleted rather than carried across.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -19,9 +30,8 @@ const {
   mockLoggerWarn,
 } = vi.hoisted(() => ({
   mockSelectLimit: vi.fn(),
-  // The conversation-row lock (`.for('update')`) recomputeLastMessageAt now
-  // takes before reading the surviving messages (#2153) — see the
-  // concurrency-safety tests below.
+  // The conversation-row lock (`.for('update')`) recomputeLastMessageAt takes
+  // before reading the surviving messages (#2153).
   mockSelectFor: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
@@ -48,41 +58,84 @@ vi.mock('@pagespace/db/db', () => {
     delete: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({ returning: mockDeleteReturning }),
     }),
-    // recomputeLastMessageAt now runs its lock+read+write inside its own
-    // transaction (#2153) — the mock just invokes the callback with the
-    // same shape, since none of these tests need real transactional
-    // isolation, only to observe the calls made through `tx`.
     transaction: mockTransaction,
   };
   mockTransaction.mockImplementation((cb: (tx: typeof dbShape) => unknown) => cb(dbShape));
   return { db: dbShape };
 });
+
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ type: 'or', conditions })),
+  ne: vi.fn((field, value) => ({ type: 'ne', field, value })),
   desc: vi.fn((field) => ({ type: 'desc', field })),
-  sql: vi.fn(),
   lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
-  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+  sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
-vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: {} }));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  chatMessages: { id: 'chat_messages.id', isActive: 'chat_messages.isActive', createdAt: 'chat_messages.createdAt' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', name: 'users.name', image: 'users.image' } }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'conversations.id', lastMessageAt: 'conversations.lastMessageAt' },
+  conversations: {
+    id: 'conversations.id',
+    type: 'conversations.type',
+    contextId: 'conversations.contextId',
+    lastMessageAt: 'conversations.lastMessageAt',
+  },
   messages: {
     id: 'messages.id',
     conversationId: 'messages.conversationId',
     isActive: 'messages.isActive',
     createdAt: 'messages.createdAt',
+    pageId: 'messages.pageId',
   },
 }));
-vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
-  invalidate: vi.fn(),
-}));
+
+vi.mock('@pagespace/lib/encryption/field-crypto', () => ({ decryptField: vi.fn(async (v) => v) }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { ai: { warn: mockLoggerWarn } },
+  loggers: {
+    ai: { warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn(), info: vi.fn() },
+    api: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
+}));
+vi.mock('@pagespace/lib/ai/global-channel-id', () => ({ globalChannelId: (id: string) => `user:${id}:global` }));
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({ notifyMentionedUsers: vi.fn() }));
+vi.mock('@/lib/ai/core/message-utils', () => ({
+  extractStructuredContentFromParts: vi.fn(async (_parts: unknown, content: string) => content),
+  convertDbMessageToUIMessage: vi.fn(async () => ({ id: 'm', role: 'assistant', parts: [] })),
+  MessageConversationConflictError: class extends Error {},
+}));
+vi.mock('@/lib/websocket/conversation-events', () => ({
+  SERVER_TRIGGERED_BROWSER_SESSION: 'server',
+  conversationEvents: {
+    messageCreated: vi.fn().mockResolvedValue(undefined),
+    messageUpdated: vi.fn().mockResolvedValue(undefined),
+    messageDeleted: vi.fn().mockResolvedValue(undefined),
+    undoApplied: vi.fn().mockResolvedValue(undefined),
+    created: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAiMessageEdited: vi.fn().mockResolvedValue(undefined),
+  broadcastAiMessageDeleted: vi.fn().mockResolvedValue(undefined),
+  broadcastAiUndoApplied: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/repositories/conversation-rev', () => ({
+  bumpConversationRev: vi.fn().mockResolvedValue(null),
+  emitContextFromRow: vi.fn(),
+}));
+vi.mock('@/lib/repositories/unified-message-leg', () => ({
+  upsertUnifiedPageMessage: vi.fn(),
+  insertUnifiedPageMessage: vi.fn(),
+  materializeUnifiedPageMessage: vi.fn(),
+  mutateUnifiedMessageById: vi.fn(),
+  serializeJsonColumn: vi.fn(() => null),
 }));
 
-import { globalConversationRepository } from '../global-conversation-repository';
+import { messageRepository } from '../message-repository';
 
 interface AssertParams {
   given: string;
@@ -102,8 +155,6 @@ beforeEach(() => {
   mockSelectLimit.mockResolvedValue([]);
   mockSelectFor.mockResolvedValue([]);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-  mockUpdateWhere.mockReturnValue({ returning: mockUpdateReturning });
-  // Awaiting the update chain without .returning() must also work.
   mockUpdateWhere.mockImplementation(() => {
     const result = Promise.resolve([]);
     return Object.assign(result, { returning: mockUpdateReturning });
@@ -113,11 +164,11 @@ beforeEach(() => {
   mockLoggerWarn.mockReset();
 });
 
-describe('globalConversationRepository.recomputeLastMessageAt', () => {
+describe('messageRepository.recomputeLastMessageAt', () => {
   it('sets lastMessageAt from the newest surviving active message', async () => {
     mockSelectLimit.mockResolvedValue([{ createdAt: NEWEST }]);
 
-    await globalConversationRepository.recomputeLastMessageAt('conv-1');
+    await messageRepository.recomputeLastMessageAt('conv-1');
 
     const setArg = mockUpdateSet.mock.calls[0]?.[0];
     assert({
@@ -131,7 +182,7 @@ describe('globalConversationRepository.recomputeLastMessageAt', () => {
   it('nulls lastMessageAt when no active message survives', async () => {
     mockSelectLimit.mockResolvedValue([]);
 
-    await globalConversationRepository.recomputeLastMessageAt('conv-1');
+    await messageRepository.recomputeLastMessageAt('conv-1');
 
     const setArg = mockUpdateSet.mock.calls[0]?.[0];
     assert({
@@ -145,7 +196,7 @@ describe('globalConversationRepository.recomputeLastMessageAt', () => {
   it('locks the conversation row (SELECT ... FOR UPDATE) inside its own transaction before reading the surviving messages (#2153)', async () => {
     mockSelectLimit.mockResolvedValue([{ createdAt: NEWEST }]);
 
-    await globalConversationRepository.recomputeLastMessageAt('conv-1');
+    await messageRepository.recomputeLastMessageAt('conv-1');
 
     assert({
       given: 'a lastMessageAt recompute',
@@ -159,38 +210,8 @@ describe('globalConversationRepository.recomputeLastMessageAt', () => {
   });
 });
 
-describe('globalConversationRepository message deletions recompute lastMessageAt (#2153)', () => {
-  it('softDeleteMessage recomputes the owning conversation after tombstoning', async () => {
-    mockUpdateReturning.mockResolvedValue([{ conversationId: 'conv-9' }]);
-    mockSelectLimit.mockResolvedValue([{ createdAt: NEWEST }]);
-
-    await globalConversationRepository.softDeleteMessage('msg-1');
-
-    const lastSet = mockUpdateSet.mock.calls.at(-1)?.[0];
-    assert({
-      given: 'a soft-delete of a global conversation message',
-      should: 'follow up with a conversations.lastMessageAt recompute from the surviving rows',
-      actual: { updates: mockUpdateSet.mock.calls.length, lastMessageAt: lastSet?.lastMessageAt },
-      expected: { updates: 2, lastMessageAt: NEWEST },
-    });
-  });
-
-  it('hardDeleteMessage recomputes the owning conversation after removal', async () => {
-    mockDeleteReturning.mockResolvedValue([{ conversationId: 'conv-9' }]);
-    mockSelectLimit.mockResolvedValue([]);
-
-    await globalConversationRepository.hardDeleteMessage('msg-1');
-
-    const lastSet = mockUpdateSet.mock.calls.at(-1)?.[0];
-    assert({
-      given: 'a hard-delete of a global conversation message',
-      should: 'recompute lastMessageAt (nulled here — nothing survives)',
-      actual: { updates: mockUpdateSet.mock.calls.length, lastMessageAt: lastSet?.lastMessageAt },
-      expected: { updates: 1, lastMessageAt: null },
-    });
-  });
-
-  it('purgeInactiveMessages recomputes each affected conversation exactly once', async () => {
+describe('messageRepository.purgeInactiveMessages', () => {
+  it('recomputes each affected conversation exactly once and returns the true purge count', async () => {
     mockDeleteReturning.mockResolvedValue([
       { id: 'm1', conversationId: 'conv-a' },
       { id: 'm2', conversationId: 'conv-a' },
@@ -198,7 +219,7 @@ describe('globalConversationRepository message deletions recompute lastMessageAt
     ]);
     mockSelectLimit.mockResolvedValue([]);
 
-    const purged = await globalConversationRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
+    const purged = await messageRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
 
     assert({
       given: 'a purge removing tombstones across two conversations',
@@ -207,52 +228,27 @@ describe('globalConversationRepository message deletions recompute lastMessageAt
       expected: { purged: 3, updates: 2 },
     });
   });
-});
 
-describe('globalConversationRepository recompute failures are isolated from the caller (#2153)', () => {
-  it('softDeleteMessage does not throw when the recompute fails, and logs a warning', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ conversationId: 'conv-9' }]);
-    mockTransaction.mockImplementationOnce(() => {
-      throw new Error('lock timeout');
-    });
+  it('returns 0 when nothing matches, and recomputes nothing', async () => {
+    mockDeleteReturning.mockResolvedValue([]);
 
-    await expect(globalConversationRepository.softDeleteMessage('msg-1')).resolves.toBeUndefined();
+    const purged = await messageRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
 
     assert({
-      given: 'a soft-delete whose recompute throws',
-      should: 'swallow the recompute failure and log a warning instead of failing the delete',
-      actual: {
-        warnCalls: mockLoggerWarn.mock.calls.length,
-        conversationId: mockLoggerWarn.mock.calls[0]?.[1]?.conversationId,
-      },
-      expected: { warnCalls: 1, conversationId: 'conv-9' },
+      given: 'a purge that matched no tombstones',
+      should: 'report zero and leave every conversation timestamp alone',
+      actual: { purged, updates: mockUpdateSet.mock.calls.length },
+      expected: { purged: 0, updates: 0 },
     });
   });
 
-  it('hardDeleteMessage does not throw when the recompute fails, and logs a warning', async () => {
-    mockDeleteReturning.mockResolvedValueOnce([{ conversationId: 'conv-9' }]);
-    mockTransaction.mockImplementationOnce(() => {
-      throw new Error('lock timeout');
-    });
-
-    await expect(globalConversationRepository.hardDeleteMessage('msg-1')).resolves.toBeUndefined();
-
-    assert({
-      given: 'a hard-delete whose recompute throws',
-      should: 'swallow the recompute failure and log a warning instead of failing the delete',
-      actual: {
-        warnCalls: mockLoggerWarn.mock.calls.length,
-        conversationId: mockLoggerWarn.mock.calls[0]?.[1]?.conversationId,
-      },
-      expected: { warnCalls: 1, conversationId: 'conv-9' },
-    });
-  });
-
-  it('purgeInactiveMessages keeps recomputing later conversations after one recompute fails, and still returns the full purge count', async () => {
+  it('keeps recomputing later conversations after one recompute fails, and still returns the full purge count', async () => {
     mockDeleteReturning.mockResolvedValueOnce([
       { id: 'm1', conversationId: 'conv-a' },
       { id: 'm2', conversationId: 'conv-b' },
     ]);
+    // The delete itself runs OUTSIDE a transaction, so the first transaction
+    // call is the first recompute.
     mockTransaction
       .mockImplementationOnce(() => {
         throw new Error('lock timeout');
@@ -271,13 +267,28 @@ describe('globalConversationRepository recompute failures are isolated from the 
         })
       );
 
-    const purged = await globalConversationRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
+    const purged = await messageRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
 
     assert({
       given: 'a purge across two conversations where the first recompute throws',
       should: 'still recompute the second conversation, still report the true purge count, and log exactly one warning',
       actual: { purged, warnCalls: mockLoggerWarn.mock.calls.length, updates: mockUpdateSet.mock.calls.length },
       expected: { purged: 2, warnCalls: 1, updates: 1 },
+    });
+  });
+});
+
+describe('messageRepository.purgeInactiveLegacyChatMessages', () => {
+  it('sweeps the legacy leg and reports its own count, without recomputing anything', async () => {
+    mockDeleteReturning.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
+
+    const purged = await messageRepository.purgeInactiveLegacyChatMessages(new Date('2026-01-01T00:00:00Z'));
+
+    assert({
+      given: 'a sweep of soft-deleted rows on the legacy chat_messages leg',
+      should: 'return the removed count and touch no conversation timestamp — lastMessageAt is derived from the unified leg, and recomputing it from a table no reader consults would be a second answer',
+      actual: { purged, recomputes: mockTransaction.mock.calls.length },
+      expected: { purged: 2, recomputes: 0 },
     });
   });
 });

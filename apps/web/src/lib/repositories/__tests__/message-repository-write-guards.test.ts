@@ -43,17 +43,33 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'chat_messages.id', conversationId: 'chat_messages.conversation_id', role: 'chat_messages.role', status: 'chat_messages.status' },
+  chatMessages: { id: 'chat_messages.id', conversationId: 'chat_messages.conversation_id', role: 'chat_messages.role', status: 'chat_messages.status', isActive: 'chat_messages.is_active', createdAt: 'chat_messages.created_at' },
+}));
+
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', name: 'users.name', image: 'users.image' },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  messages: { id: 'messages.id', conversationId: 'messages.conversation_id', role: 'messages.role', status: 'messages.status' },
-  conversations: { id: 'conversations.id', isActive: 'conversations.is_active' },
+  messages: { id: 'messages.id', conversationId: 'messages.conversation_id', role: 'messages.role', status: 'messages.status', pageId: 'messages.page_id', isActive: 'messages.is_active', createdAt: 'messages.created_at' },
+  conversations: { id: 'conversations.id', isActive: 'conversations.is_active', type: 'conversations.type', contextId: 'conversations.context_id' },
 }));
 
+vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
+  decryptField: vi.fn(async (v: unknown) => v),
+}));
+
+// `ne`/`lt`/`desc`/`or`/`sql` arrived with the reader cutover (Phase 4 PR 12):
+// the repository now READS as well as writes, and `unified-message-scope.ts`
+// builds its page predicate at module load.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conds: unknown[]) => ({ kind: 'and', conds })),
+  or: vi.fn((...conds: unknown[]) => ({ kind: 'or', conds })),
+  ne: vi.fn((field: unknown, value: unknown) => ({ kind: 'ne', field, value })),
+  lt: vi.fn((field: unknown, value: unknown) => ({ kind: 'lt', field, value })),
+  desc: vi.fn((field: unknown) => ({ kind: 'desc', field })),
+  sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -88,17 +104,6 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastAiMessageEdited: vi.fn().mockResolvedValue(undefined),
   broadcastAiMessageDeleted: vi.fn().mockResolvedValue(undefined),
   broadcastAiUndoApplied: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: { getMessageById: vi.fn().mockResolvedValue(null) },
-}));
-
-vi.mock('@/lib/repositories/global-conversation-repository', () => ({
-  globalConversationRepository: {
-    getMessageById: vi.fn().mockResolvedValue(null),
-    recomputeLastMessageAt: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@/lib/repositories/conversation-rev', () => ({

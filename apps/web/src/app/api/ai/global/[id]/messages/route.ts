@@ -793,15 +793,12 @@ export async function POST(
     // placeholder here would both poison this job's own turn and risk being silently
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
-    const dbMessages = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true),
-        ne(messages.status, 'streaming')
-      ))
-      .orderBy(messages.createdAt);
+    // Through the repository since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6): `messages` was
+    // always the global leg, so no rows move — what changes is that the one
+    // reader for durable messages is now the same seam the page chat uses, and
+    // the query stops being spelled out a second time here.
+    const dbMessages = await messageRepository.getMessagesByConversationId(conversationId);
 
     // Convert database messages to UI format
     const conversationHistory = await Promise.all(dbMessages.map(msg =>

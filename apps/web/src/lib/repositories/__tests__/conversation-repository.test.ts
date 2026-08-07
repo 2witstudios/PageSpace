@@ -295,19 +295,24 @@ describe('conversationRepository.createConversation', () => {
   // page at all — asserted here on the WHERE clause itself, because mocking the row lookup (as
   // the tests above do) cannot see the scoping bug that let the wrong rows through.
   it('asks who owns the conversation ACROSS ALL PAGES — a page-scoped guard let an attacker squat it from outside', async () => {
-    const chatMessagesWhere = vi.fn().mockResolvedValue([]);
+    const messagesWhere = vi.fn().mockResolvedValue([]);
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => ({ where: chatMessagesWhere }));
+      .mockImplementationOnce(() => ({ where: messagesWhere }));
     mockInsert([{ id: 'conv-victim' }]);
 
     await conversationRepository.createConversation('conv-victim', 'attacker-user', 'attacker-page');
 
-    const predicate = chatMessagesWhere.mock.calls[0][0] as { kind: string; conds: Array<{ field?: string }> };
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12). The
+    // property under test is unchanged and is the whole point of this case:
+    // the predicate must name the conversation and nothing about the page.
+    const predicate = messagesWhere.mock.calls[0][0] as { kind: string; conds: Array<{ field?: string }> };
     const fields = predicate.conds.map((c) => c.field);
-    expect(fields).toContain('chatMessages.conversationId');
-    expect(fields).toContain('chatMessages.isActive');
+    expect(fields).toContain('messages.conversationId');
+    expect(fields).toContain('messages.isActive');
     // The page must NOT narrow it — that narrowing IS the vulnerability.
+    expect(fields).not.toContain('messages.pageId');
     expect(fields).not.toContain('chatMessages.pageId');
   });
 

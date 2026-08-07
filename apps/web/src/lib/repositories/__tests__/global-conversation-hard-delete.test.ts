@@ -1,10 +1,13 @@
 /**
  * Global Conversation Hard Delete Tests
  *
- * Tests for hard-delete and purge methods on globalConversationRepository:
- * - hardDeleteMessage: physical removal by ID
- * - purgeInactiveMessages: bulk removal of soft-deleted messages past retention
  * - purgeInactiveConversations: bulk removal of soft-deleted conversations past retention
+ *
+ * The MESSAGE purge and hard-delete that used to be pinned here moved to
+ * message-repository.ts with the message-table merge (epic "Agent-Session
+ * Single Source of Truth", Phase 4 / D6, PR 12) and are pinned by
+ * message-repository-last-message-recompute.test.ts. What is left here is what
+ * this repository still owns: `conversations` ROWS.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -109,50 +112,6 @@ describe('globalConversationRepository hard-delete', () => {
     mockReturning.mockResolvedValue([]);
     mockWhere.mockReturnValue({ returning: mockReturning });
     vi.mocked(db.delete).mockReturnValue({ where: mockWhere } as never);
-  });
-
-  describe('hardDeleteMessage', () => {
-    it('should call db.delete with the correct message ID', async () => {
-      await globalConversationRepository.hardDeleteMessage('msg-456');
-
-      expect(db.delete).toHaveBeenCalled();
-      expect(mockWhere).toHaveBeenCalled();
-    });
-  });
-
-  describe('purgeInactiveMessages', () => {
-    it('should delete inactive messages older than cutoff and return count', async () => {
-      mockReturning.mockResolvedValue([
-        { id: 'msg-1', conversationId: 'conv-1' },
-        { id: 'msg-2', conversationId: 'conv-1' },
-        { id: 'msg-3', conversationId: 'conv-2' },
-      ]);
-
-      const cutoff = new Date('2024-06-01');
-      const count = await globalConversationRepository.purgeInactiveMessages(cutoff);
-
-      expect(db.delete).toHaveBeenCalled();
-      expect(count).toBe(3);
-    });
-
-    it('recomputes lastMessageAt under a row lock for each affected conversation (#2153)', async () => {
-      mockReturning.mockResolvedValue([
-        { id: 'msg-1', conversationId: 'conv-1' },
-        { id: 'msg-2', conversationId: 'conv-2' },
-      ]);
-
-      await globalConversationRepository.purgeInactiveMessages(new Date('2024-06-01'));
-
-      expect(mockTransaction).toHaveBeenCalledTimes(2);
-    });
-
-    it('should return 0 when no inactive messages match', async () => {
-      mockReturning.mockResolvedValue([]);
-
-      const count = await globalConversationRepository.purgeInactiveMessages(new Date());
-
-      expect(count).toBe(0);
-    });
   });
 
   describe('purgeInactiveConversations', () => {

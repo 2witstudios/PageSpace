@@ -3,13 +3,12 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
-import {
-  chatMessageRepository,
-  processMessageContentUpdate,
-} from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { messageRepository } from '@/lib/repositories/message-repository';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -64,7 +63,12 @@ export async function PATCH(
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -193,7 +197,12 @@ export async function DELETE(
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }

@@ -11,28 +11,24 @@ import { PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
+// The reader cutover (Phase 4 PR 12) folded `chat-message-repository` into
+// this module, so the read seam (`getMessageById`) and the pure
+// `processMessageContentUpdate` are mocked here alongside the writes.
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
+    getMessageById: vi.fn(),
     editPageMessage: vi.fn().mockResolvedValue(undefined),
     softDeletePageMessage: vi.fn().mockResolvedValue(undefined),
     editGlobalMessage: vi.fn().mockResolvedValue(undefined),
     softDeleteGlobalMessage: vi.fn().mockResolvedValue(undefined),
   },
+  processMessageContentUpdate: vi.fn((existing, newContent) => newContent),
 }));
 
 vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
   resolveTriggeredBy: vi
     .fn()
     .mockResolvedValue({ userId: 'user_123', displayName: 'Tester', browserSessionId: '' }),
-}));
-
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
-    getMessageById: vi.fn(),
-    updateMessageContent: vi.fn(),
-    softDeleteMessage: vi.fn(),
-  },
-  processMessageContentUpdate: vi.fn((existing, newContent) => newContent),
 }));
 
 // Mock auth (boundary)
@@ -89,7 +85,6 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: {},
 }));
 
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
@@ -261,7 +256,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     // Default: message exists
-    vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
+    vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: update succeeds
     vi.mocked(messageRepository.editPageMessage).mockResolvedValue(undefined);
@@ -327,7 +322,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
   describe('resource not found', () => {
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -340,7 +335,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should return 409 when the message is a still-streaming placeholder', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -420,9 +415,9 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should call processMessageContentUpdate with existing and new content', async () => {
-      const { processMessageContentUpdate } = await import('@/lib/repositories/chat-message-repository');
+      const { processMessageContentUpdate } = await import('@/lib/repositories/message-repository');
       const existingMessage = mockChatMessage({ content: 'Existing content' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createPatchRequest(mockMessageId, { content: 'New content' });
       const context = createContext(mockMessageId);
@@ -469,7 +464,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
   describe('activity logging boundary', () => {
     it('should log message_update with content diff on successful PATCH', async () => {
       const existingMessage = mockChatMessage({ content: 'Original content' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated content' });
       const context = createContext(mockMessageId);
@@ -517,7 +512,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -584,7 +579,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     // Default: message exists
-    vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
+    vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: delete succeeds
     vi.mocked(messageRepository.softDeletePageMessage).mockResolvedValue(undefined);
@@ -615,7 +610,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
   describe('resource not found', () => {
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -628,7 +623,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should return 409 when the message is a still-streaming placeholder', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -735,7 +730,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
   describe('activity logging boundary', () => {
     it('should log message_delete with previous content on successful DELETE', async () => {
       const existingMessage = mockChatMessage({ content: 'Content to be deleted' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -782,7 +777,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -831,8 +826,8 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 describe('processMessageContentUpdate (pure function)', () => {
   it('should return new content for plain text messages', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const result = processMessageContentUpdate('Old text', 'New text');
@@ -842,8 +837,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should return new content for invalid JSON', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const result = processMessageContentUpdate('not json', 'New text');
@@ -853,8 +848,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should preserve structure for messages with textParts', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const structured = JSON.stringify({
@@ -873,8 +868,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should return new content when JSON lacks textParts', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const jsonWithoutTextParts = JSON.stringify({ other: 'data' });

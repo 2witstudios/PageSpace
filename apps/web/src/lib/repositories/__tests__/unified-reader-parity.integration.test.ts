@@ -57,7 +57,8 @@ import { pages, chatMessages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { messageRepository } from '@/lib/repositories/message-repository';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { unifiedPageScope } from '@/lib/repositories/unified-message-scope';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 
 let dbAvailable = false;
@@ -172,9 +173,76 @@ async function seedCorpus(): Promise<Corpus> {
   };
 }
 
-/** The join every page-scoped reader was rewritten onto. */
+/**
+ * The join the PR-11 (internal) readers were rewritten onto: page
+ * CONVERSATIONS only. A `type='client'` row that merely names the page is
+ * deliberately excluded there — see the delta assertion below.
+ */
 const pageScope = (pageId: string) =>
   and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId));
+
+/**
+ * FROZEN COPY of `chatMessageRepository.getMessagesByConversationId`, the
+ * legacy reader PR 12 deleted along with its module. Kept verbatim here so the
+ * parity property still has an "old path" to compare against for as long as
+ * `chat_messages` exists.
+ */
+const legacyMessagesByConversationId = (conversationId: string, includeStreaming = false) =>
+  db
+    .select({
+      id: chatMessages.id,
+      pageId: chatMessages.pageId,
+      conversationId: chatMessages.conversationId,
+      userId: chatMessages.userId,
+      role: chatMessages.role,
+      content: chatMessages.content,
+      messageType: chatMessages.messageType,
+      isActive: chatMessages.isActive,
+      createdAt: chatMessages.createdAt,
+      editedAt: chatMessages.editedAt,
+      toolCalls: chatMessages.toolCalls,
+      toolResults: chatMessages.toolResults,
+      status: chatMessages.status,
+    })
+    .from(chatMessages)
+    .where(and(
+      eq(chatMessages.conversationId, conversationId),
+      eq(chatMessages.isActive, true),
+      ...(includeStreaming ? [] : [ne(chatMessages.status, 'streaming')]),
+    ))
+    .orderBy(chatMessages.createdAt);
+
+/**
+ * FROZEN COPY of `chatMessageRepository.getMessagesForPage` (author join
+ * omitted — the rows are what parity is about, and `users` is unchanged by
+ * the merge).
+ */
+const legacyMessagesForPage = (pageId: string, conversationId?: string, includeStreaming = false) =>
+  db
+    .select({
+      id: chatMessages.id,
+      pageId: chatMessages.pageId,
+      conversationId: chatMessages.conversationId,
+      userId: chatMessages.userId,
+      role: chatMessages.role,
+      content: chatMessages.content,
+      createdAt: chatMessages.createdAt,
+      status: chatMessages.status,
+    })
+    .from(chatMessages)
+    .where(and(
+      eq(chatMessages.pageId, pageId),
+      eq(chatMessages.isActive, true),
+      ...(conversationId ? [eq(chatMessages.conversationId, conversationId)] : []),
+      ...(includeStreaming ? [] : [ne(chatMessages.status, 'streaming')]),
+    ))
+    .orderBy(chatMessages.createdAt);
+
+/** FROZEN COPY of `chatMessageRepository.getMessageById`. */
+const legacyMessageById = async (messageId: string) => {
+  const [row] = await db.select().from(chatMessages).where(eq(chatMessages.id, messageId)).limit(1);
+  return row ?? null;
+};
 
 describe('unified reader parity — legacy chat_messages vs unified messages', () => {
   let corpus: Corpus;
@@ -198,7 +266,7 @@ describe('unified reader parity — legacy chat_messages vs unified messages', (
     it('returns the same rows as the legacy chat-message repository, in the same order', async () => {
       if (!dbAvailable) return;
 
-      const legacy = await chatMessageRepository.getMessagesByConversationId(corpus.pageConversationId);
+      const legacy = await legacyMessagesByConversationId(corpus.pageConversationId);
       const unified = await messageRepository.getMessagesByConversationId(corpus.pageConversationId);
 
       // `pageId` is the ONE field the unified seam deliberately drops (the
@@ -238,7 +306,7 @@ describe('unified reader parity — legacy chat_messages vs unified messages', (
     it('matches the legacy reader with includeStreaming=1 too', async () => {
       if (!dbAvailable) return;
 
-      const legacy = await chatMessageRepository.getMessagesByConversationId(corpus.pageConversationId, true);
+      const legacy = await legacyMessagesByConversationId(corpus.pageConversationId, true);
       const unified = await messageRepository.getMessagesByConversationId(corpus.pageConversationId, true);
 
       expect(unified.map((m) => m.id)).toEqual(legacy.map((m) => m.id));
@@ -248,7 +316,7 @@ describe('unified reader parity — legacy chat_messages vs unified messages', (
     it('reads a type: "client" conversation identically — conversationId alone scopes it', async () => {
       if (!dbAvailable) return;
 
-      const legacy = await chatMessageRepository.getMessagesByConversationId(corpus.clientConversationId);
+      const legacy = await legacyMessagesByConversationId(corpus.clientConversationId);
       const unified = await messageRepository.getMessagesByConversationId(corpus.clientConversationId);
 
       expect(unified.map((m) => m.content)).toEqual(legacy.map((m) => m.content));
@@ -858,6 +926,374 @@ describe('unified reader parity — legacy chat_messages vs unified messages', (
         }
         expect(row.unified).toEqual(row.legacy);
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // C. PR 12 — the chat routes' and mutation surfaces' readers
+  // -------------------------------------------------------------------------
+
+  describe('messageRepository.getMessagesForPage (page chat history GET, v1 thread mode)', () => {
+    it('returns the same rows as the legacy page-scoped reader, unfiltered by conversation', async () => {
+      if (!dbAvailable) return;
+
+      const legacy = await legacyMessagesForPage(corpus.agentPageId);
+      const unified = await messageRepository.getMessagesForPage(corpus.agentPageId);
+
+      expect(unified.map((m) => m.id)).toEqual(legacy.map((m) => m.id));
+      // The corpus's page rows across three conversations, minus the
+      // soft-deleted and streaming ones: 2 in thread one, 1 in thread two,
+      // 1 in the client thread that names this page.
+      expect(unified).toHaveLength(4);
+    });
+
+    it('keeps the `type: "client"` thread reachable — the v1 route\'s history load depends on it', async () => {
+      if (!dbAvailable) return;
+
+      const legacy = await legacyMessagesForPage(corpus.agentPageId, corpus.clientConversationId);
+      const unified = await messageRepository.getMessagesForPage(
+        corpus.agentPageId,
+        corpus.clientConversationId,
+      );
+
+      expect(unified.map((m) => m.content)).toEqual(legacy.map((m) => m.content));
+      expect(unified).toHaveLength(1);
+      // THE REASON `unifiedPageScope` keeps its transitional disjunct: this
+      // conversation's `contextId` is the DRIVE, so a contextId-only join
+      // returns nothing and pagespace-cli thread mode silently loses its
+      // history.
+      const contextIdOnly = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .where(and(pageScope(corpus.agentPageId), eq(messages.conversationId, corpus.clientConversationId)));
+      expect(contextIdOnly).toHaveLength(0);
+    });
+
+    it('does not return the other page in the same drive', async () => {
+      if (!dbAvailable) return;
+
+      const unified = await messageRepository.getMessagesForPage(corpus.agentPageId);
+      const otherPage = await messageRepository.getMessagesForPage(corpus.otherAgentPageId);
+
+      const ids = new Set(unified.map((m) => m.id));
+      for (const row of otherPage) expect(ids.has(row.id)).toBe(false);
+      expect(otherPage).toHaveLength(1);
+    });
+
+    it('matches the legacy reader with includeStreaming=1', async () => {
+      if (!dbAvailable) return;
+
+      const legacy = await legacyMessagesForPage(corpus.agentPageId, corpus.pageConversationId, true);
+      const unified = await messageRepository.getMessagesForPage(
+        corpus.agentPageId,
+        corpus.pageConversationId,
+        true,
+      );
+
+      expect(unified.map((m) => m.id)).toEqual(legacy.map((m) => m.id));
+      expect(unified).toHaveLength(3);
+    });
+  });
+
+  describe('messageRepository.getPageConversationMessages (chat route + consult history load)', () => {
+    it('returns exactly what the chat route\'s frozen legacy query returned', async () => {
+      if (!dbAvailable) return;
+
+      // Frozen copy of apps/web/src/app/api/ai/chat/route.ts's pre-cutover load.
+      const legacy = await db
+        .select({ id: chatMessages.id, content: chatMessages.content })
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.pageId, corpus.agentPageId),
+          eq(chatMessages.conversationId, corpus.pageConversationId),
+          eq(chatMessages.isActive, true),
+          ne(chatMessages.status, 'streaming'),
+        ))
+        .orderBy(chatMessages.createdAt);
+
+      const unified = await messageRepository.getPageConversationMessages(
+        corpus.agentPageId,
+        corpus.pageConversationId,
+      );
+
+      expect(unified.map((m) => ({ id: m.id, content: m.content }))).toEqual(legacy);
+      expect(unified).toHaveLength(2);
+    });
+
+    it('refuses a conversation that belongs to a different page (the scope is not decoration)', async () => {
+      if (!dbAvailable) return;
+
+      const crossed = await messageRepository.getPageConversationMessages(
+        corpus.agentPageId,
+        corpus.otherPageConversationId,
+      );
+
+      expect(crossed).toEqual([]);
+    });
+  });
+
+  describe('messageRepository.getRecentPageMessages (consult fallback context)', () => {
+    it('returns the newest N oldest-first, exactly as the legacy DESC+reverse did', async () => {
+      if (!dbAvailable) return;
+
+      const legacyRows = await db
+        .select({ id: chatMessages.id, content: chatMessages.content })
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.pageId, corpus.agentPageId),
+          eq(chatMessages.isActive, true),
+          ne(chatMessages.status, 'streaming'),
+        ))
+        .orderBy(desc(chatMessages.createdAt))
+        .limit(3);
+      const legacy = legacyRows.slice().reverse();
+
+      const unified = await messageRepository.getRecentPageMessages(corpus.agentPageId, 3);
+
+      expect(unified.map((m) => ({ id: m.id, content: m.content }))).toEqual(legacy);
+    });
+  });
+
+  describe('messageRepository.getMessageById (edit/delete routes\' read)', () => {
+    it('derives the page a legacy row carried in its own column', async () => {
+      if (!dbAvailable) return;
+
+      const [target] = await db
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.conversationId, corpus.pageConversationId),
+          eq(chatMessages.role, 'user'),
+          eq(chatMessages.isActive, true),
+        ))
+        .limit(1);
+
+      const legacy = await legacyMessageById(target.id);
+      const unified = await messageRepository.getMessageById(target.id);
+
+      expect(unified).not.toBeNull();
+      expect(unified!.pageId).toBe(legacy!.pageId);
+      expect(unified!.conversationId).toBe(legacy!.conversationId);
+      expect(unified!.content).toBe(legacy!.content);
+      expect(unified!.isActive).toBe(legacy!.isActive);
+      expect(unified!.status).toBe(legacy!.status);
+    });
+
+    it('derives the page for a `type: "client"` row too, from the transitional column', async () => {
+      if (!dbAvailable) return;
+
+      const [target] = await db
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(eq(chatMessages.conversationId, corpus.clientConversationId))
+        .limit(1);
+
+      const unified = await messageRepository.getMessageById(target.id);
+      expect(unified?.pageId).toBe(corpus.agentPageId);
+    });
+
+    it('resolves a GLOBAL message with pageId null — the page routes must keep 404-ing it', async () => {
+      if (!dbAvailable) return;
+
+      const [globalRow] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.conversationId, corpus.globalConversationId), eq(messages.role, 'user')))
+        .limit(1);
+
+      // Before the cutover this id had no `chat_messages` row at all, so the
+      // page edit/delete routes simply 404-ed. The unified reader DOES find
+      // it, which is why those routes gate on `pageId === null`.
+      const legacy = await legacyMessageById(globalRow.id);
+      const unified = await messageRepository.getMessageById(globalRow.id);
+
+      expect(legacy).toBeNull();
+      expect(unified).not.toBeNull();
+      expect(unified!.pageId).toBeNull();
+    });
+
+    it('returns a soft-deleted row, like the legacy reader (the routes decide, not the query)', async () => {
+      if (!dbAvailable) return;
+
+      const [deleted] = await db
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.conversationId, corpus.pageConversationId),
+          eq(chatMessages.isActive, false),
+        ))
+        .limit(1);
+
+      const unified = await messageRepository.getMessageById(deleted.id);
+      expect(unified?.isActive).toBe(false);
+    });
+  });
+
+  describe('messageRepository.getMessageInConversation (global edit/delete read)', () => {
+    it('matches the legacy global reader, including its isActive filter', async () => {
+      if (!dbAvailable) return;
+
+      const [target] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.conversationId, corpus.globalConversationId), eq(messages.role, 'user')))
+        .limit(1);
+
+      // Frozen copy of globalConversationRepository.getMessageById.
+      const [legacy] = await db
+        .select()
+        .from(messages)
+        .where(and(
+          eq(messages.id, target.id),
+          eq(messages.conversationId, corpus.globalConversationId),
+          eq(messages.isActive, true),
+        ));
+
+      const unified = await messageRepository.getMessageInConversation(
+        corpus.globalConversationId,
+        target.id,
+      );
+
+      expect(unified?.id).toBe(legacy.id);
+      expect(unified?.content).toBe(legacy.content);
+    });
+
+    it('refuses a message id paired with the wrong conversation', async () => {
+      if (!dbAvailable) return;
+
+      const [pageRow] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.conversationId, corpus.pageConversationId))
+        .limit(1);
+
+      const crossed = await messageRepository.getMessageInConversation(
+        corpus.globalConversationId,
+        pageRow.id,
+      );
+      expect(crossed).toBeNull();
+    });
+  });
+
+  describe('conversationRepository page-agent aggregates (listing, count, exists, metadata)', () => {
+    it('counts the same conversations as the legacy chat_messages aggregate', async () => {
+      if (!dbAvailable) return;
+
+      const legacyRows = await db
+        .selectDistinct({ conversationId: chatMessages.conversationId })
+        .from(chatMessages)
+        .innerJoin(conversations, eq(conversations.id, chatMessages.conversationId))
+        .where(and(
+          eq(chatMessages.pageId, corpus.agentPageId),
+          eq(chatMessages.isActive, true),
+          eq(conversations.userId, corpus.ownerId),
+        ));
+
+      const count = await conversationRepository.countConversations(corpus.agentPageId, corpus.ownerId);
+      expect(count).toBe(legacyRows.length);
+      // Threads one and two, plus the client thread that names this page.
+      expect(count).toBe(3);
+    });
+
+    it('conversationExists and getConversationMetadata agree with the legacy queries', async () => {
+      if (!dbAvailable) return;
+
+      const exists = await conversationRepository.conversationExists(
+        corpus.agentPageId,
+        corpus.pageConversationId,
+      );
+      const missing = await conversationRepository.conversationExists(
+        corpus.agentPageId,
+        corpus.otherPageConversationId,
+      );
+      const metadata = await conversationRepository.getConversationMetadata(
+        corpus.agentPageId,
+        corpus.pageConversationId,
+      );
+
+      const [legacyMeta] = await db
+        .select({ messageCount: count(chatMessages.id) })
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.pageId, corpus.agentPageId),
+          eq(chatMessages.conversationId, corpus.pageConversationId),
+          eq(chatMessages.isActive, true),
+        ));
+
+      expect({ exists, missing }).toEqual({ exists: true, missing: false });
+      expect(Number(metadata?.messageCount)).toBe(Number(legacyMeta.messageCount));
+    });
+
+    it('lists a page\'s conversations with the same ids, counts and previews', async () => {
+      if (!dbAvailable) return;
+
+      const listed = await conversationRepository.listConversations(
+        corpus.agentPageId,
+        50,
+        0,
+        corpus.ownerId,
+      );
+
+      const legacyIds = await db
+        .selectDistinct({ conversationId: chatMessages.conversationId })
+        .from(chatMessages)
+        .innerJoin(conversations, eq(conversations.id, chatMessages.conversationId))
+        .where(and(
+          eq(chatMessages.pageId, corpus.agentPageId),
+          eq(chatMessages.isActive, true),
+          ne(chatMessages.status, 'streaming'),
+          eq(conversations.userId, corpus.ownerId),
+        ));
+
+      expect(new Set(listed.map((c) => c.conversationId)))
+        .toEqual(new Set(legacyIds.map((c) => c.conversationId)));
+
+      const threadOne = listed.find((c) => c.conversationId === corpus.pageConversationId);
+      // Two durable rows; the streaming placeholder must not inflate the count
+      // nor become the last-message preview.
+      expect(Number(threadOne?.messageCount)).toBe(2);
+      expect(threadOne?.lastMessageContent).toBe('an answer about widgets');
+      expect(threadOne?.firstUserMessage).toBe('first question about widgets');
+    });
+  });
+
+  describe('unifiedPageScope vs the PR-11 contextId-only scope', () => {
+    it('differs by exactly the `type: "client"` rows, and that difference is the point', async () => {
+      if (!dbAvailable) return;
+
+      const strict = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .where(and(pageScope(corpus.agentPageId), eq(messages.isActive, true)));
+
+      const parity = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .where(and(unifiedPageScope(corpus.agentPageId), eq(messages.isActive, true)));
+
+      const clientRows = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.conversationId, corpus.clientConversationId));
+
+      const strictIds = new Set(strict.map((r) => r.id));
+      const parityIds = new Set(parity.map((r) => r.id));
+      const clientIds = clientRows.map((r) => r.id);
+
+      // The parity scope is a strict superset, and the extra rows are exactly
+      // the client thread's. PR 11's internal readers chose the narrower form
+      // ("the page's own chat"); PR 12's route readers chose the wider one
+      // (exact behavioural parity with `chat_messages.pageId = X`). Both are
+      // deliberate; the contract PR that drops `messages.pageId` has to pick.
+      for (const id of strictIds) expect(parityIds.has(id)).toBe(true);
+      for (const id of clientIds) {
+        expect(parityIds.has(id)).toBe(true);
+        expect(strictIds.has(id)).toBe(false);
+      }
+      expect(parityIds.size).toBe(strictIds.size + clientIds.length);
     });
   });
 });

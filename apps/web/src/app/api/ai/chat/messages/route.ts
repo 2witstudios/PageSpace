@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -48,8 +48,11 @@ export async function GET(request: Request) {
       }, { status: 403 });
     }
 
-    // Get messages from repository
-    const dbMessages = await chatMessageRepository.getMessagesForPage(
+    // Get messages from the repository — the UNIFIED `messages` table since
+    // the message-table merge (epic "Agent-Session Single Source of Truth",
+    // Phase 4 / D6). Page scope is the join through `conversations.contextId`;
+    // `chat_messages` is still dual-written, so this PR reverts cleanly.
+    const dbMessages = await messageRepository.getMessagesForPage(
       pageId,
       conversationId || undefined,
       includeStreaming

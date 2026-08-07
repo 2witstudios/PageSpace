@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, sql } from '@pagespace/db/operators'
+import { and, eq, sql } from '@pagespace/db/operators'
 import { pages, favorites, pageTags, chatMessages } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { channelMessages } from '@pagespace/db/schema/chat';
+import { inArray, or } from '@pagespace/db/operators'
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -24,6 +26,33 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     await tx.delete(pagePermissions).where(eq(pagePermissions.pageId, pageId));
     await tx.delete(favorites).where(eq(favorites.pageId, pageId));
     await tx.delete(pageTags).where(eq(pageTags.pageId, pageId));
+
+    // UNIFIED `messages` — permanent delete of a page must take its chat
+    // history with it (epic "Agent-Session Single Source of Truth", Phase 4 /
+    // D6). Explicit, because nothing else would do it: `chat_messages.pageId`
+    // carries an ON DELETE CASCADE to `pages` and `messages.pageId`
+    // deliberately does not (it is the transitional column), while
+    // `conversations.contextId` has never been a foreign key. Without this
+    // statement the reader cutover would leave every page-chat message alive
+    // and readable by conversation id after its page was permanently deleted.
+    //
+    // Two predicates, the same pair `unifiedPageScope` documents: the page's
+    // own `type='page'` conversations, plus any row still naming the page in
+    // the transitional column (the `type='client'` API threads). Together they
+    // are exactly the set `chat_messages`' cascade removes.
+    const pageConversationIds = await tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId)));
+    await tx.delete(messages).where(
+      pageConversationIds.length > 0
+        ? or(
+            inArray(messages.conversationId, pageConversationIds.map((c) => c.id)),
+            eq(messages.pageId, pageId),
+          )
+        : eq(messages.pageId, pageId),
+    );
+
     await tx.delete(chatMessages).where(eq(chatMessages.pageId, pageId));
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 
