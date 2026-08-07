@@ -87,6 +87,19 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   userActivities: { userId: 'userActivities.userId' },
 }));
 
+// The un-share eviction. Mocked rather than left to the real client so the
+// assertions are about what this repository ASKS FOR — the room pattern and
+// the excepted user — rather than about whether a POST happened to reach a
+// non-existent realtime host.
+// The implementation is passed to `vi.fn` rather than set with
+// `mockResolvedValue`, so it survives both `mockClear` and `mockReset` — the
+// call site does `kickUserFromRooms(…).catch(…)`, which a mock returning
+// `undefined` would turn into a TypeError instead of a test failure.
+const mockKickUserFromRooms = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock('@pagespace/lib/realtime/kick-client', () => ({
+  kickUserFromRooms: mockKickUserFromRooms,
+}));
+
 const mockInvalidateCompaction = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
   invalidate: (...args: unknown[]) => mockInvalidateCompaction(...args),
@@ -536,6 +549,12 @@ describe('conversationRepository.setConversationShared', () => {
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+    // The owner lookup the eviction falls back to when no row came back.
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue([{ userId: 'owner-1' }]),
+      }),
+    });
 
     const REALTIME_URL = 'http://realtime.noop.invalid';
     process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
@@ -581,6 +600,116 @@ describe('conversationRepository.setConversationShared', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  /**
+   * THE EVICTION IS NOT PART OF WHAT THE `ne` GUARD SKIPS (review finding
+   * MINOR 2).
+   *
+   * The guard above is right about the emit and was wrong about the kick: it
+   * short-circuited before `kickUserFromRooms`, so a repeat un-share stopped
+   * evicting. That matters because the kick is best-effort — `kick-client`
+   * never throws and the call site swallows — which makes re-issuing the
+   * un-share the only recovery path when a kick is lost to a downed realtime,
+   * an HMAC reject or a timeout. With the early return in front of it, the
+   * retry did nothing and non-owner sockets kept receiving `conv:<id>` content
+   * events until they reconnected.
+   *
+   * Fails on the pre-fix code: the return happened before any kick.
+   */
+  it('still evicts non-owners on a REPEAT un-share — the kick is best-effort, so re-issuing it is the only retry there is', async () => {
+    // Already private: the guarded UPDATE matches no row.
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    const OWNER = 'owner-1';
+    const limitMock = vi.fn().mockResolvedValue([{ userId: OWNER }]);
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({ limit: limitMock }),
+    });
+
+    await conversationRepository.setConversationShared('conv_already_private', false);
+
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '*',
+        roomPattern: 'conv:conv_already_private',
+        reason: 'conversation_unshared',
+      }),
+    );
+    // THE OWNER MUST BE EXCEPTED. `updated` is undefined on this path, so
+    // hoisting the kick verbatim would have left `exceptUserId` undefined —
+    // and `userId: '*'` with no exception evicts the owner from their own
+    // conversation as a side effect of a toggle that changed nothing. Hence
+    // the fallback read this asserts on.
+    expect(limitMock).toHaveBeenCalled();
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({ exceptUserId: OWNER }),
+    );
+  });
+
+  /**
+   * The fallback read can come back empty — a conversation deleted between the
+   * un-share request and this lookup, or an id that never existed. There is
+   * then no owner to except, and `userId: '*'` without an exception is an
+   * indiscriminate eviction, so the kick is skipped rather than issued blind.
+   */
+  it('skips the eviction entirely when no owner can be resolved — a `*` kick with no exception would evict indiscriminately', async () => {
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+    });
+
+    await conversationRepository.setConversationShared('conv_gone', false);
+
+    expect(mockKickUserFromRooms).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The common path still takes the owner off the row it just wrote — the
+   * fallback read is for the no-op path only, not an extra query on every
+   * un-share.
+   */
+  it('uses the updated row for the owner on a real un-share, without a second read', async () => {
+    const OWNER = 'owner-1';
+    const returningMock = vi.fn().mockResolvedValue([
+      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+    mockDb.select = vi.fn(() => mockSelectChain) as unknown as typeof mockDb.select;
+
+    await conversationRepository.setConversationShared('conv_abc', false);
+
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({ exceptUserId: OWNER, roomPattern: 'conv:conv_abc' }),
+    );
+    expect(mockDb.select).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Sharing is not an eviction event — the kick belongs to `isShared === false`
+   * only. Pinned because the hoist moved it above the early return, where a
+   * miswritten condition would fire it on every toggle.
+   */
+  it('never evicts on a SHARE', async () => {
+    const returningMock = vi.fn().mockResolvedValue([
+      { id: 'conv_abc', userId: 'owner-1', isShared: true, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await conversationRepository.setConversationShared('conv_abc', true);
+
+    expect(mockKickUserFromRooms).not.toHaveBeenCalled();
   });
 });
 

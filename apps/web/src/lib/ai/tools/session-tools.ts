@@ -367,10 +367,14 @@ export interface SessionToolsDeps {
     callerUserId: string;
   }) => Promise<SessionWorkspaceListing>;
   /**
-   * ALL the caller's active workspaces (minus `excludeWorkspaceId`, their
-   * current one) with each workspace's workers — how a worker anywhere
-   * becomes addressable, and how `spawn_session`'s `workspace` targeting
-   * discovers its targets.
+   * The caller's active workspaces they can still ACCESS (minus
+   * `excludeWorkspaceId`, the one their conversation is bound to) with each
+   * workspace's workers — how a worker anywhere becomes addressable, and how
+   * `spawn_session`'s `workspace` targeting discovers its targets.
+   *
+   * Access, not just ownership: implementations must apply the same
+   * `decideAgentSessionAccess` gate `listSharedWorkspaces` carries, which
+   * denies an owner removed from the workspace's drive.
    */
   listOwnWorkspaces: (input: {
     userId: string;
@@ -928,15 +932,26 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // both: the caller's current workspace is the top-level detail view
         // whoever owns it (a caller spawned into a shared workspace has a
         // current workspace they do not own).
+        //
+        // THE EXCLUSION IS `boundWorkspace`, NOT `workspace` (review finding —
+        // MAJOR). They differ on exactly one path: the revocation denial above,
+        // where `workspace` collapses to null. Excluding `workspace` there
+        // excluded nothing, so the workspace the check had just refused came
+        // straight back under `otherWorkspaces` — richer than a bare id, since
+        // that listing carries every worker's sessionId. Keying the exclusion
+        // on the BINDING means a refused binding is never re-listed by either
+        // sibling, whatever the reason for the refusal.
+        //
+        // Belt and braces, deliberately: `listOwnWorkspaces` now runs the same
+        // per-row access decision `listSharedWorkspaces` does, so a revoked
+        // workspace is dropped there too. This exclusion is the tool-level
+        // half — it holds for any deps implementation, including the stubs in
+        // tests, and it is what makes the denial local to the code that
+        // decided it.
+        const excludeWorkspaceId = boundWorkspace?.workspaceId;
         const [otherWorkspaces, sharedWorkspaces] = await Promise.all([
-          deps.listOwnWorkspaces({
-            userId: actor.userId,
-            excludeWorkspaceId: workspace?.workspaceId,
-          }),
-          deps.listSharedWorkspaces({
-            userId: actor.userId,
-            excludeWorkspaceId: workspace?.workspaceId,
-          }),
+          deps.listOwnWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
+          deps.listSharedWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
         ]);
 
         if (!conversationId || !workspace) {

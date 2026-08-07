@@ -192,9 +192,72 @@ describe('a revoked member reaching the session and shell verbs', () => {
     expect(JSON.stringify(result)).not.toContain('deploy-prod');
   });
 
+  /**
+   * THE REFUSED WORKSPACE MUST NOT COME BACK ONE FIELD OVER (review finding —
+   * MAJOR, and the reason this assertion exists at all).
+   *
+   * The test above asserts `not.toContain(ALICE_WORKSPACE)` while `makeDeps`
+   * stubs `listOwnWorkspaces` to `[]` — so it passed on an EMPTY sibling list
+   * rather than on a suppressed one, and could never have seen the bug. The
+   * case that can is the one where the caller OWNS the workspace they were
+   * just refused: `list_sessions` passed `workspace?.workspaceId` as the
+   * exclusion, and `workspace` is null on exactly that denial, so nothing was
+   * excluded and the refused workspace was re-listed under `otherWorkspaces`
+   * — with its name, driveId, live sandbox status and every worker's
+   * sessionId.
+   *
+   * Ownership does not survive revocation: `decideAgentSessionAccess` is
+   * explicit that losing the drive loses its working contexts, owner included.
+   */
+  it('list_sessions: a refused workspace the caller OWNS is not re-listed under otherWorkspaces', async () => {
+    deps = makeDeps({
+      findShell: vi.fn(async () => ALICE_SHELL),
+      // The caller owns the bound workspace — so the own-listing would return
+      // it, and the exclusion is the only thing standing between the denial
+      // and the data. The stub HONOURS `excludeWorkspaceId` rather than
+      // ignoring it, because that is the dep's contract: a stub that returned
+      // the row unconditionally would fail whatever the tool passed, and a
+      // stub that returned `[]` (as `makeDeps` does) would pass whatever it
+      // passed. Only one that filters can tell the two apart.
+      listOwnWorkspaces: vi.fn(async ({ excludeWorkspaceId }) =>
+        [
+          {
+            workspaceId: ALICE_WORKSPACE,
+            name: 'deploy-prod-workspace',
+            driveId: 'drive-alice',
+            sandbox: 'running' as const,
+            workers: [{ sessionId: 'conv-alice-private', name: 'Q3 layoffs plan', agent: null }],
+          },
+        ].filter((w) => w.workspaceId !== excludeWorkspaceId),
+      ),
+    });
+
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_sessions as Tool, {});
+
+    // The exclusion is keyed on the BINDING, which survives the denial —
+    // not on `workspace`, which the denial nulls.
+    expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
+      userId: MALLORY,
+      excludeWorkspaceId: ALICE_WORKSPACE,
+    });
+    expect(deps.listSharedWorkspaces).toHaveBeenCalledWith({
+      userId: MALLORY,
+      excludeWorkspaceId: ALICE_WORKSPACE,
+    });
+    // And the payload is clean of everything that listing carries.
+    expect(JSON.stringify(result)).not.toContain(ALICE_WORKSPACE);
+    expect(JSON.stringify(result)).not.toContain('Q3 layoffs plan');
+    expect(JSON.stringify(result)).not.toContain('drive-alice');
+  });
+
   it('send_shell: refuses, and nothing is written to the PTY', async () => {
     const tools = createSessionTools(deps);
-    const result = await run(tools.send_shell as Tool, { shellId: 'sh-alice', input: 'rm -rf /\n' });
+    // `keystrokes`, not `input` — `execute` is invoked directly here, so
+    // nothing validates the payload against the input schema and a wrong field
+    // name would still fail for the right reason while describing a call the
+    // model can never make.
+    const result = await run(tools.send_shell as Tool, { shellId: 'sh-alice', keystrokes: 'rm -rf /\n' });
 
     expect(result.success).toBe(false);
     expect(deps.shellIo.send).not.toHaveBeenCalled();

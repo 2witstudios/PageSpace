@@ -419,6 +419,11 @@ async function listWorkspaceWorkers({
  * `workspace` target. Composed from the SAME primitives the sidebar uses
  * (`listSessions` + `listSessionConversationsBulk`), never a second query
  * shape; agent labels resolved in one batched lookup.
+ *
+ * Owned, and separately ACCESSIBLE: every row is decided by
+ * `decideAgentSessionAccess`, the same one gate `listSharedWorkspaces` and the
+ * routes run, because owning a workspace in a drive you have been removed from
+ * does not entitle you to it. See the comment on the filter.
  */
 async function listOwnWorkspaces({
   userId,
@@ -440,8 +445,46 @@ async function listOwnWorkspaces({
   // finding — CodeRabbit; the two-constants coupling this used to lean on is
   // now one constant, pinned by session-list-limit-invariant.test.ts). If
   // the cap ever stops being structural, revisit this filter's ordering.
-  const sessions = (await listSessions({ ownerId: userId })).filter(
+  const owned = (await listSessions({ ownerId: userId })).filter(
     (session) => session.workspaceId !== excludeWorkspaceId,
+  );
+  if (owned.length === 0) return [];
+
+  // OWNERSHIP IS NOT ACCESS (review finding — MAJOR, `list_sessions`).
+  //
+  // This listing used to filter on `ownerId` alone, which made it the one
+  // session-surface read with no access predicate — `listSharedWorkspaces`
+  // below runs `decideAgentSessionAccess` per row, and so does every route.
+  // `decideAgentSessionAccess` is explicit that the gate applies to the OWNER
+  // too ("losing the drive loses its working contexts"), so an owner removed
+  // from a drive was refused the detail view by `list_sessions`' own
+  // revocation re-check and then handed the same workspace one field over,
+  // under `otherWorkspaces` — its name, driveId, live sandbox status, and
+  // every worker's sessionId and title. One documented rule, enforced in one
+  // branch and waived in its sibling.
+  //
+  // The SAME one decision, never a second predicate: membership is resolved
+  // once per distinct drive rather than per session, since an owner's
+  // workspaces cluster into few drives. A global-assistant workspace
+  // (`driveId` null) is owner-only by construction and passes on `isOwner`
+  // without a membership lookup.
+  const driveIds = [...new Set(owned.flatMap((s) => (s.driveId ? [s.driveId] : [])))];
+  const membershipByDrive = new Map(
+    await Promise.all(
+      driveIds.map(
+        async (driveId) => [driveId, await resolveDriveMembership({ userId, driveId })] as const,
+      ),
+    ),
+  );
+  const sessions = owned.filter(
+    (session) =>
+      decideAgentSessionAccess({
+        requesterId: userId,
+        session: { ownerId: session.ownerId, driveId: session.driveId },
+        // Absent from the map only if `driveId` is null, which the decision
+        // handles on its own branch; `null` there would deny.
+        driveMembership: session.driveId ? membershipByDrive.get(session.driveId) ?? null : null,
+      }).allowed,
   );
   if (sessions.length === 0) return [];
 

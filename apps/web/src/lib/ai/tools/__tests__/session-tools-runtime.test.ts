@@ -569,3 +569,111 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     expect(shared[99].workspaceId).toBe('ses-050');
   });
 });
+
+// ============================================================================
+// Tests for session-tools-runtime.ts — listOwnWorkspaces
+//
+// OWNERSHIP IS NOT ACCESS (review finding — MAJOR).
+//
+// This listing filtered on `ownerId` alone, making it the one session-surface
+// read with no access predicate while its sibling above ran the real gate on
+// every row. `decideAgentSessionAccess` denies the OWNER of a workspace in a
+// drive they have been removed from — "losing the drive loses its working
+// contexts" — so an owner refused everywhere else was still handed the
+// workspace's name, driveId, live sandbox status and every worker's sessionId
+// by `list_sessions`' `otherWorkspaces`.
+//
+// Same construction as the suite above: the REAL pure decision, mocked IO.
+// ============================================================================
+
+describe('listOwnWorkspaces — owned, and separately still accessible', () => {
+  const OWNER = 'user-1';
+
+  const ownedSession = {
+    workspaceId: 'ses-mine',
+    sessionId: 'ses-mine',
+    driveId: 'drive-a',
+    ownerId: OWNER,
+    name: 'my workspace',
+    sandboxStatus: 'running' as const,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    lastActiveAt: '2026-08-02T00:00:00.000Z',
+    endedAt: null,
+  };
+
+  test('a workspace the caller OWNS in a drive they were removed from is dropped — the same decision that refuses the detail view refuses the listing', async () => {
+    mockListSessions.mockResolvedValue([ownedSession]);
+    mockResolveDriveMembership.mockResolvedValue('none');
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+
+    expect(own).toEqual([]);
+    // Nothing downstream of the gate is even asked — no worker ids fetched for
+    // a workspace the caller may not see.
+    expect(mockListSessionConversationsBulk).not.toHaveBeenCalled();
+  });
+
+  test('membership is resolved once per DRIVE, not once per workspace', async () => {
+    mockListSessions.mockResolvedValue([
+      ownedSession,
+      { ...ownedSession, workspaceId: 'ses-mine-2', sessionId: 'ses-mine-2' },
+      { ...ownedSession, workspaceId: 'ses-other-drive', sessionId: 'ses-other-drive', driveId: 'drive-b' },
+    ]);
+    mockResolveDriveMembership.mockResolvedValue('member');
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+
+    expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine', 'ses-mine-2', 'ses-other-drive']);
+    expect(mockResolveDriveMembership).toHaveBeenCalledTimes(2);
+    expect(mockResolveDriveMembership.mock.calls.map(([arg]) => (arg as { driveId: string }).driveId).sort())
+      .toEqual(['drive-a', 'drive-b']);
+  });
+
+  test('a GLOBAL-assistant workspace (no drive) survives on ownership alone, without a membership lookup', async () => {
+    mockListSessions.mockResolvedValue([{ ...ownedSession, driveId: null }]);
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+
+    // Owner-only by construction — there is no drive to derive access from,
+    // and asking for membership in `null` would be a denial, not a question.
+    expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine']);
+    expect(mockResolveDriveMembership).not.toHaveBeenCalled();
+  });
+
+  test('the revoked drive is dropped while the caller\'s other drives still list — a denial is per-workspace, not a collapse', async () => {
+    mockListSessions.mockResolvedValue([
+      ownedSession,
+      { ...ownedSession, workspaceId: 'ses-kept', sessionId: 'ses-kept', driveId: 'drive-b' },
+    ]);
+    mockResolveDriveMembership.mockImplementation(async ({ driveId }: { driveId: string }) =>
+      driveId === 'drive-a' ? 'none' : 'member',
+    );
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+
+    expect(own.map((w) => w.workspaceId)).toEqual(['ses-kept']);
+    expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-kept']);
+  });
+
+  test('the bound workspace is still excluded — the detail view owns it', async () => {
+    mockListSessions.mockResolvedValue([
+      ownedSession,
+      { ...ownedSession, workspaceId: 'ses-current', sessionId: 'ses-current' },
+    ]);
+    mockResolveDriveMembership.mockResolvedValue('member');
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const own = await deps.listOwnWorkspaces({ userId: OWNER, excludeWorkspaceId: 'ses-current' });
+
+    expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine']);
+  });
+});

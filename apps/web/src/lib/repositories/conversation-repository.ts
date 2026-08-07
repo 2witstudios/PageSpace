@@ -754,6 +754,11 @@ export const conversationRepository = {
    * socket out of the `conv:<id>` room (best-effort, alongside the existing
    * revocation-kick sets) — room membership is a delivery optimization; the
    * authoritative fact is this row, re-checked at join time.
+   *
+   * Only a REAL change writes and emits; the kick runs on every un-share
+   * request regardless, so re-issuing one remains the retry for a kick that
+   * did not land. See the two comments in the body for why each half is where
+   * it is.
    */
   async setConversationShared(
     conversationId: string,
@@ -773,11 +778,52 @@ export const conversationRepository = {
       .set({ isShared, updatedAt: new Date(), rev: revBump() })
       .where(and(eq(conversations.id, conversationId), ne(conversations.isShared, isShared)))
       .returning();
+    // THE EVICTION RUNS ON EVERY UN-SHARE REQUEST, INCLUDING ONE THAT CHANGED
+    // NOTHING — and therefore ABOVE the `if (!updated) return` below (review
+    // finding MINOR 2).
+    //
+    // The kick is best-effort by construction: `kick-client` never throws and
+    // this call swallows. So when a kick is lost (realtime down, HMAC reject,
+    // timeout), re-issuing the un-share is the ONLY recovery path there is.
+    // Gating it on `updated` took that away — the retry matched no row and
+    // returned before kicking, leaving sockets joined to `conv:<id>` receiving
+    // content events until they happened to reconnect. An earlier call having
+    // *run* the kick is not the same fact as the kick having *landed*, which
+    // is what the comment this replaces quietly assumed.
+    //
+    // It cannot reintroduce the existence leak the `ne` guard prevents: this
+    // posts only to `/api/kick` and emits nothing to the page room.
+    if (!isShared) {
+      // `updated` is absent exactly when the row was already private, so the
+      // owner has to come from a read. Without it `exceptUserId` is undefined
+      // and `userId: '*'` would evict the OWNER from their own room — a no-op
+      // toggle logging its owner out of their own conversation, strictly worse
+      // than the staleness being fixed. A PK lookup on the rare redundant path.
+      const ownerId =
+        updated?.userId ??
+        (
+          await db
+            .select({ userId: conversations.userId })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1)
+        )[0]?.userId;
+
+      // No row at all (deleted, or never existed): nobody to except, and
+      // `userId: '*'` with no exception would evict indiscriminately.
+      if (ownerId) {
+        // Evict everyone but the owner from the content room. Join-time authz
+        // remains the gate; room membership is only a delivery optimization.
+        void kickUserFromRooms({
+          userId: '*',
+          exceptUserId: ownerId,
+          roomPattern: conversationRoom(conversationId),
+          reason: 'conversation_unshared',
+        }).catch(() => {});
+      }
+    }
     // Already in the requested state (or no such row): nothing changed, so no
-    // event and no eviction. The eviction is not lost — a conversation that is
-    // already private either was never shared, or was un-shared by an earlier
-    // call that did run the kick, and join-time authz is the actual gate
-    // either way.
+    // event. The eviction above deliberately already ran.
     if (!updated) return;
     // AUDIENCE IS THE UNION OF BEFORE AND AFTER — which, for a toggle that
     // actually flipped, is always "shared".
@@ -800,16 +846,6 @@ export const conversationRepository = {
       triggeredBy,
       { isShared },
     );
-    if (!isShared) {
-      // Evict everyone but the owner from the content room. Best-effort by
-      // design (kick-client never throws); join-time authz remains the gate.
-      void kickUserFromRooms({
-        userId: '*',
-        exceptUserId: updated.userId,
-        roomPattern: conversationRoom(conversationId),
-        reason: 'conversation_unshared',
-      }).catch(() => {});
-    }
   },
 
   /**
