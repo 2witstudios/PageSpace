@@ -143,8 +143,19 @@ branches, in the same transaction); existing users are covered by the one-shot
 
 Note the prompt-budget consequence: a starter is scope `user`, so it rides the
 VOLATILE `AVAILABLE COMMANDS` block rather than the cache-stable `SKILLS:`
-block. Keep starter descriptions short (≤ ~140 chars) so the user's own commands
-aren't pushed down the degradation ladder.
+block. Two limits apply, both enforced by
+`packages/lib/src/commands/__tests__/starter-skills.test.ts`:
+
+- **Per description: ≤ 200 chars**, matching `COMMAND_CATALOG_FULL_CLIP` — past
+  that the catalog clips the text anyway, so the extra characters are written
+  for nobody.
+- **In aggregate: ≤ 40% of `COMMAND_CATALOG_CHAR_BUDGET`** (2,000). This is the
+  limit that actually bites as more starters land; exceed it and the whole list,
+  including the commands the *user* wrote, degrades to shorter clips and then to
+  names only.
+
+The per-description cap cannot catch crowding on its own, which is why the
+aggregate guard exists alongside it.
 
 ## Plan binding (`conversations.planPageId`)
 

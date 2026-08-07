@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { UIMessage } from 'ai';
 import useSWR from 'swr';
 import { ClipboardList, ExternalLink, X } from 'lucide-react';
 import Link from 'next/link';
@@ -23,15 +24,56 @@ import { toast } from 'sonner';
  * a pointer to it.
  */
 
+/** The tools that change `conversations.planPageId` server-side. */
+const PLAN_TOOL_NAMES = new Set(['set_plan', 'clear_plan']);
+
+interface MessagePart {
+  type?: string;
+  toolName?: string;
+  state?: string;
+}
+
+/**
+ * How many plan-tool calls have COMPLETED in this conversation.
+ *
+ * This is an invalidation signal only — never the source of truth. The binding
+ * still comes from the server on every read, which is what lets the chip survive
+ * a reload and a context summary. But the agent can rebind mid-stream via
+ * `set_plan`, and without watching for that the chip would keep showing a stale
+ * (or absent) plan until SWR happened to revalidate. Counting completed calls
+ * gives a value that only ever moves forward, so it works as an SWR dependency
+ * without re-fetching on every render.
+ */
+function useCompletedPlanToolCount(messages: UIMessage[] | undefined): number {
+  return useMemo(() => {
+    if (!messages) return 0;
+    let count = 0;
+    for (const message of messages) {
+      for (const part of ((message as { parts?: MessagePart[] }).parts ?? [])) {
+        const toolName =
+          part.toolName ?? (part.type?.startsWith('tool-') ? part.type.slice('tool-'.length) : undefined);
+        if (!toolName || !PLAN_TOOL_NAMES.has(toolName)) continue;
+        if (part.state === 'output-available' || part.state === 'done') count += 1;
+      }
+    }
+    return count;
+  }, [messages]);
+}
+
 interface PlanChipProps {
   conversationId?: string | null;
+  /**
+   * Used ONLY to notice that a plan tool finished, so the persisted binding can
+   * be re-fetched. The chip never derives its contents from these.
+   */
+  messages?: UIMessage[];
 }
 
 interface ActivePlanResponse {
   plan: { pageId: string; title: string; driveId: string } | null;
 }
 
-export function PlanChip({ conversationId }: PlanChipProps) {
+export function PlanChip({ conversationId, messages }: PlanChipProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
@@ -43,6 +85,11 @@ export function PlanChip({ conversationId }: PlanChipProps) {
       return response.json();
     },
   );
+
+  const completedPlanToolCalls = useCompletedPlanToolCount(messages);
+  useEffect(() => {
+    if (completedPlanToolCalls > 0) void mutate();
+  }, [completedPlanToolCalls, mutate]);
 
   const plan = data?.plan ?? null;
 

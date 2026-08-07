@@ -20,9 +20,13 @@ interface FakeState {
   userExists: boolean;
   existingTriggers: string[];
   existingSkillsFolderId: string | null;
+  /** Simulates onConflictDoNothing skipping the command insert (lost race). */
+  commandInsertConflicts: boolean;
   insertedPages: Record<string, unknown>[];
   insertedCommands: Record<string, unknown>[];
+  deletedPages: unknown[];
   userUpdates: Record<string, unknown>[];
+  lockedRows: number;
 }
 
 function makeFakeClient(state: FakeState): DbClient {
@@ -45,23 +49,39 @@ function makeFakeClient(state: FakeState): DbClient {
       where: () => chain,
       limit: () => chain,
       onConflictDoNothing: () => chain,
+      returning: () => result(rows),
       then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
     };
     return chain;
   };
 
   return {
+    // The FOR UPDATE lock the installer takes on the user row.
+    execute: async () => {
+      state.lockedRows += 1;
+      return [];
+    },
     select: () => result([]),
     insert: (table: unknown) => ({
       values: (row: Record<string, unknown>) => {
-        if (table === pages) state.insertedPages.push(row);
-        if (table === commands) state.insertedCommands.push(row);
-        return result([]);
+        if (table === pages) {
+          state.insertedPages.push(row);
+          return result([]);
+        }
+        state.insertedCommands.push(row);
+        // An empty returning() is how drizzle reports an onConflictDoNothing skip.
+        return result(state.commandInsertConflicts ? [] : [{ id: 'cmd-1' }]);
       },
     }),
     update: (table: unknown) => ({
       set: (row: Record<string, unknown>) => {
         if (table === users) state.userUpdates.push(row);
+        return result([]);
+      },
+    }),
+    delete: (table: unknown) => ({
+      where: (predicate: unknown) => {
+        if (table === pages) state.deletedPages.push(predicate);
         return result([]);
       },
     }),
@@ -73,9 +93,12 @@ const baseState = (): FakeState => ({
   userExists: true,
   existingTriggers: [],
   existingSkillsFolderId: null,
+  commandInsertConflicts: false,
   insertedPages: [],
   insertedCommands: [],
+  deletedPages: [],
   userUpdates: [],
+  lockedRows: 0,
 });
 
 describe('installStarterSkills', () => {
@@ -179,5 +202,34 @@ describe('installStarterSkills', () => {
     expect(result).toEqual({ installed: [], skipped: [], alreadyInstalled: false });
     expect(state.insertedPages).toEqual([]);
     expect(state.userUpdates).toEqual([]);
+  });
+  it('locks the user row before reading the stamp', async () => {
+    // The read-then-stamp must be atomic even when the CALLER holds no lock —
+    // the backfill script does not. Without this, two concurrent runs both see
+    // NULL and both install.
+    const state2 = baseState();
+    await installStarterSkills('user-1', 'drive-home', makeFakeClient(state2));
+    expect(state2.lockedRows).toBe(1);
+  });
+
+  it('does not report a trigger as installed when the command insert is skipped', async () => {
+    state.commandInsertConflicts = true;
+
+    const result = await installStarterSkills('user-1', 'drive-home', makeFakeClient(state));
+
+    // Over-reporting here would make the backfill summary claim installs that
+    // never happened.
+    expect(result.installed).toEqual([]);
+    expect(result.skipped).toEqual(STARTER_SKILLS.map((s) => s.trigger));
+  });
+
+  it('deletes the orphaned page when the command insert is skipped', async () => {
+    state.commandInsertConflicts = true;
+
+    await installStarterSkills('user-1', 'drive-home', makeFakeClient(state));
+
+    // Otherwise the Skills folder keeps a document that looks like a skill but
+    // has no command pointing at it, so it can never be invoked.
+    expect(state.deletedPages).toHaveLength(STARTER_SKILLS.length);
   });
 });

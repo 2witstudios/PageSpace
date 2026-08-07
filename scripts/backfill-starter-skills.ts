@@ -31,7 +31,12 @@ export interface BackfillSummary {
   installed: number;
   skippedCollision: number;
   alreadyStamped: number;
-  noHomeDrive: number;
+  /**
+   * Users still without a stamp after the walk, EXCLUDING the ones that failed
+   * in this run. Mostly users with no Home drive yet (they get theirs at
+   * provisioning) plus any created mid-run.
+   */
+  unstampedRemaining: number;
   failed: number;
 }
 
@@ -42,7 +47,7 @@ export async function runBackfill({ dryRun = false }: { dryRun?: boolean } = {})
     installed: 0,
     skippedCollision: 0,
     alreadyStamped: 0,
-    noHomeDrive: 0,
+    unstampedRemaining: 0,
     failed: 0,
   };
 
@@ -92,16 +97,20 @@ export async function runBackfill({ dryRun = false }: { dryRun?: boolean } = {})
     console.log(`  …${summary.scanned} users scanned`);
   }
 
-  // Whatever still has a null stamp after the walk has no HOME drive, since the
-  // loop covered every user that does. Not an error — they get theirs when
-  // provisioning next creates their Home — but report it so a surprising number
-  // is visible rather than silent. Skipped on a dry run, which writes no stamps.
+  // Count what is STILL unstamped after the walk. Deliberately not labelled "no
+  // Home drive": a failed transaction rolls its stamp back, and users created
+  // after the walk started were never visited, so this set is
+  // {no Home drive} ∪ {failed here} ∪ {created mid-run}. Reporting it as
+  // "no Home drive yet" would let an operator read real failures as benign.
+  // The failures we know about are subtracted and reported separately; the rest
+  // is genuinely benign and clears on the next run or at provisioning.
+  // Skipped on a dry run, which writes no stamps and would count everyone.
   if (!dryRun) {
     const [remaining] = await db
       .select({ total: count() })
       .from(users)
       .where(isNull(users.starterSkillsInstalledAt));
-    summary.noHomeDrive = remaining?.total ?? 0;
+    summary.unstampedRemaining = Math.max(0, (remaining?.total ?? 0) - summary.failed);
   }
 
   console.log(
@@ -109,7 +118,7 @@ export async function runBackfill({ dryRun = false }: { dryRun?: boolean } = {})
       `${summary.scanned} user(s) scanned, ${summary.installed} skill(s) installed, ` +
       `${summary.skippedCollision} skipped (trigger already taken), ` +
       `${summary.alreadyStamped} already stamped, ${summary.failed} failed, ` +
-      `${summary.noHomeDrive} left unstamped (no Home drive yet).`,
+      `${summary.unstampedRemaining} still unstamped (no Home drive yet, or created mid-run).`,
   );
   return summary;
 }

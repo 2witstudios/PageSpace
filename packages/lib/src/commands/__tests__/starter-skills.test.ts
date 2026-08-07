@@ -20,12 +20,25 @@ const MIN_BODY_CHARS = 2_000;
 const MAX_BODY_LINES = 500;
 
 /**
- * A personal command rides the volatile AVAILABLE COMMANDS block, which clips
- * descriptions at 200 chars before degrading the whole list to shorter clips.
- * Keeping starters under that keeps the user's OWN commands off the degradation
- * ladder.
+ * A starter installs as a personal command, so it rides the volatile
+ * AVAILABLE COMMANDS block. Two separate limits apply, and both are enforced
+ * below because either one alone is misleading:
+ *
+ * 1. PER DESCRIPTION — `COMMAND_CATALOG_FULL_CLIP` in
+ *    apps/web/src/lib/ai/core/skill-catalog.ts. Past this the catalog clips the
+ *    text anyway, so the extra characters are written for nobody. Mirrored here
+ *    rather than imported: packages/lib cannot depend on apps/web.
+ * 2. IN AGGREGATE — `COMMAND_CATALOG_CHAR_BUDGET` (2,000). This is the limit
+ *    that actually matters as more starters land: exceed it and the whole list,
+ *    including the user's OWN commands, degrades to shorter clips and then to
+ *    names only.
+ *
+ * Documented in docs/specs/agent-skills.md; keep the three in sync.
  */
 const MAX_DESCRIPTION_CHARS = 200;
+const COMMAND_CATALOG_CHAR_BUDGET = 2_000;
+/** Leave most of the budget for the commands the USER writes, not our starters. */
+const STARTER_BUDGET_SHARE = 0.4;
 
 describe('starter skills', () => {
   it('ships at least one starter skill', () => {
@@ -65,6 +78,18 @@ describe('starter skills', () => {
       expect(description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS);
     },
   );
+
+  it('the whole starter set fits comfortably inside the command-catalog budget', () => {
+    // The per-description cap above cannot catch this on its own: N starters,
+    // each individually legal, can still crowd out the user's own commands. This
+    // is the guard that actually bites as `orchestrate`/`research`/`execute`
+    // land. Mirrors renderCommandList's line shape in skill-catalog.ts.
+    const rendered = STARTER_SKILLS.map(
+      (skill) => `• ${skill.trigger} (personal) — ${skill.description}`,
+    ).join('\n');
+
+    expect(rendered.length).toBeLessThanOrEqual(COMMAND_CATALOG_CHAR_BUDGET * STARTER_BUDGET_SHARE);
+  });
 
   it.each(STARTER_SKILLS.map((s) => [s.trigger, s.body] as const))(
     '%s body respects the skill size guards',

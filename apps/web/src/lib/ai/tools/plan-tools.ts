@@ -22,8 +22,8 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { canActorViewPage } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
 
 const planLogger = loggers.ai.child({ module: 'plan-tools' });
@@ -59,9 +59,8 @@ export const planTools = {
       .strict(),
     execute: async ({ pageId }, { experimental_context: context }) => {
       const ctx = context as ToolExecutionContext | undefined;
-      const userId = ctx?.userId;
-      const conversationId = ctx?.conversationId;
-      if (!userId) return { success: false, error: 'No authenticated user in this context.' };
+      if (!ctx?.userId) return { success: false, error: 'No authenticated user in this context.' };
+      const { userId, conversationId } = ctx;
       if (!conversationId) {
         return {
           success: false,
@@ -78,7 +77,12 @@ export const planTools = {
 
         // A page the caller cannot see must be indistinguishable from one that
         // does not exist — same contract as the command resolver.
-        if (!page || page.isTrashed || !(await canUserViewPage(userId, pageId))) {
+        //
+        // canActorViewPage, not canUserViewPage: this tool also runs under a
+        // scoped MCP token or a page-agent, and binding a plan the ACTOR cannot
+        // reach would smuggle that page's title back through the ACTIVE PLAN
+        // prompt section on every later turn.
+        if (!page || page.isTrashed || !(await canActorViewPage(ctx, pageId))) {
           return { success: false, error: `No page found with id "${pageId}".` };
         }
         if (page.type !== 'DOCUMENT') {

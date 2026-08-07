@@ -947,7 +947,7 @@ const GlobalAssistantView: React.FC = () => {
           />
         </div>
         <div className="flex items-center space-x-2">
-          <PlanChip conversationId={currentConversationId} />
+          <PlanChip conversationId={currentConversationId} messages={plainMessages} />
           <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
             variant="ghost"

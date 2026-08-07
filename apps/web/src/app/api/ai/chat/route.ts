@@ -1477,7 +1477,15 @@ export async function POST(request: Request) {
     // never on navigation, so it is cache-stable per conversation. It has to be
     // here rather than in the volatile block — the compaction summary is lossy,
     // and this pointer is precisely what the agent needs after a summary.
-    systemPrompt += buildActivePlanPrompt(await getActivePlan(conversationId, userId));
+    // Scoped MCP/OAuth tokens reach this route too, and a plan can be bound to a
+    // page in ANOTHER drive — so the principal-aware check is required here. A
+    // user-level check would leak an out-of-scope plan's title and id to a token
+    // that may not reach that drive.
+    systemPrompt += buildActivePlanPrompt(
+      await getActivePlan(conversationId, userId, (pageId) =>
+        canPrincipalViewPage(authResult, pageId),
+      ),
+    );
 
 
     // Build timestamp system prompt for temporal awareness

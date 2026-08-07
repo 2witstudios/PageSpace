@@ -1,5 +1,25 @@
-import { describe, it, expect } from 'vitest';
-import { buildActivePlanPrompt, type ActivePlan } from '../plan-binding';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const selectChain = { from: vi.fn(), innerJoin: vi.fn(), where: vi.fn(), limit: vi.fn() };
+selectChain.from.mockReturnValue(selectChain);
+selectChain.innerJoin.mockReturnValue(selectChain);
+selectChain.where.mockReturnValue(selectChain);
+
+const canUserViewPageMock = vi.fn();
+
+vi.mock('@pagespace/db/db', () => ({ db: { select: () => selectChain } }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(() => ({})) }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', planPageId: 'planPageId' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', title: 'title', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserViewPage: (...args: unknown[]) => canUserViewPageMock(...args),
+}));
+
+import { buildActivePlanPrompt, getActivePlan, type ActivePlan } from '../plan-binding';
 
 const plan: ActivePlan = { pageId: 'pg_abc123', title: 'Migrate billing to Stripe' };
 
@@ -59,3 +79,63 @@ describe('buildActivePlanPrompt', () => {
     expect(result.length).toBeLessThan(1_000);
   });
 });
+
+describe('getActivePlan authorization', () => {
+  const row = { pageId: 'pg_plan', title: 'Migrate billing', isTrashed: false };
+
+  beforeEach(() => {
+    selectChain.limit.mockReset().mockResolvedValue([row]);
+    canUserViewPageMock.mockReset().mockResolvedValue(true);
+  });
+
+  it('returns null without a conversation id', async () => {
+    expect(await getActivePlan(undefined, 'user-1')).toBeNull();
+  });
+
+  it('returns the plan when the caller may view it', async () => {
+    expect(await getActivePlan('conv-1', 'user-1')).toEqual({
+      pageId: 'pg_plan',
+      title: 'Migrate billing',
+    });
+  });
+
+  it('suppresses a trashed plan page', async () => {
+    selectChain.limit.mockResolvedValue([{ ...row, isTrashed: true }]);
+    expect(await getActivePlan('conv-1', 'user-1')).toBeNull();
+  });
+
+  it('suppresses an unbound conversation', async () => {
+    // The innerJoin yields no row when planPageId is NULL.
+    selectChain.limit.mockResolvedValue([]);
+    expect(await getActivePlan('conv-1', 'user-1')).toBeNull();
+  });
+
+  it('defaults to the USER-level check when no principal check is injected', async () => {
+    await getActivePlan('conv-1', 'user-1');
+    expect(canUserViewPageMock).toHaveBeenCalledWith('user-1', 'pg_plan');
+  });
+
+  it('uses the INJECTED check instead of the user-level one when given', async () => {
+    // The page-chat route passes canPrincipalViewPage here. If the injected
+    // check were ignored, a scoped token would fall back to the (wider)
+    // user-level answer — the exact leak this parameter exists to close.
+    const principalCheck = vi.fn().mockResolvedValue(true);
+    await getActivePlan('conv-1', 'user-1', principalCheck);
+    expect(principalCheck).toHaveBeenCalledWith('pg_plan');
+    expect(canUserViewPageMock).not.toHaveBeenCalled();
+  });
+
+  it('suppresses the plan when the principal check denies it, even though the USER can view it', async () => {
+    // A drive-scoped MCP token whose human owner can see the page in another
+    // drive: the title and id must not reach the prompt.
+    canUserViewPageMock.mockResolvedValue(true);
+    const principalCheck = vi.fn().mockResolvedValue(false);
+    expect(await getActivePlan('conv-1', 'user-1', principalCheck)).toBeNull();
+  });
+
+  it('degrades to null rather than throwing when the lookup fails', async () => {
+    // Fail-open to "no plan section" — a broken lookup must never fail the turn.
+    selectChain.limit.mockRejectedValue(new Error('db down'));
+    await expect(getActivePlan('conv-1', 'user-1')).resolves.toBeNull();
+  });
+})

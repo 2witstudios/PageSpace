@@ -1014,7 +1014,7 @@ const SidebarChatTab: React.FC = () => {
                 compact
               />
             )}
-            <PlanChip conversationId={currentConversationId} />
+            <PlanChip conversationId={currentConversationId} messages={displayMessages} />
             <TasksDropdown messages={displayMessages} driveId={locationContext?.currentDrive?.id} />
           </div>
         )}

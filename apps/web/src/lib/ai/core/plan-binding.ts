@@ -41,15 +41,30 @@ export interface ActivePlan {
 
 /**
  * Resolve the plan bound to `conversationId`, or null when unbound, trashed,
- * no longer viewable, or on any error.
+ * not visible to the caller, or on any error.
  *
  * Access is re-checked at use rather than trusted from bind time: a plan page
  * can be moved or have its permissions revoked after `set_plan` ran, and a
  * pointer the caller can no longer open must not keep appearing in their prompt.
+ *
+ * `canView` is the authorization check, injected so this module stays free of
+ * auth plumbing. It defaults to the USER-level check, which is correct only for
+ * session-authenticated surfaces (the Global Assistant). The page-chat route
+ * also accepts scoped MCP and OAuth tokens, and must pass
+ * `canPrincipalViewPage` instead — "can this human see it" is strictly wider
+ * than "may this token reach it".
+ *
+ * That distinction matters more here than for the neighbouring Agent Memory
+ * section, which gets away with a bare user-level check: an Agent Memory page is
+ * by construction a child of the agent page, hence always in the chat's own
+ * drive, whereas a plan binding can point at a page in a completely different
+ * drive. Without a principal-aware check, a token scoped to drive A would see
+ * the title and id of a plan the user bound in drive B.
  */
 export async function getActivePlan(
   conversationId: string | undefined,
   userId: string,
+  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(userId, pageId),
 ): Promise<ActivePlan | null> {
   if (!conversationId) return null;
   try {
@@ -65,7 +80,7 @@ export async function getActivePlan(
       .limit(1);
 
     if (!row || row.isTrashed) return null;
-    if (!(await canUserViewPage(userId, row.pageId))) return null;
+    if (!(await canView(row.pageId))) return null;
 
     return { pageId: row.pageId, title: row.title };
   } catch {
