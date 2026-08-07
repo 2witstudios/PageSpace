@@ -60,7 +60,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       setSpawning(true);
       try {
         if (input.kind === 'shell') {
-          const created = await post<{ session: { sessionId: string }; shellId: string; shellName: string }>(
+          const created = await post<{ session: { workspaceId: string }; shellId: string; shellName: string }>(
             '/api/agent-workspaces',
             { driveId: input.driveId, firstThing: 'shell', name: input.name },
           );
@@ -73,8 +73,8 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
           // is named independently server-side (spawnShell, no name passed) —
           // use its own name, not the session label, so the pane title
           // matches the shell row shown in the sidebar.
-          selectSession(created.session.sessionId);
-          useAgentWorkspaceStore.getState().openConversation(created.session.sessionId, {
+          selectSession(created.session.workspaceId);
+          useAgentWorkspaceStore.getState().openConversation(created.session.workspaceId, {
             kind: 'terminal',
             name: created.shellName,
             targetId: created.shellId,
@@ -82,7 +82,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
           });
           return;
         }
-        const created = await post<{ session: { sessionId: string }; conversationId: string }>(
+        const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
           '/api/agent-workspaces',
           { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
         );
@@ -92,7 +92,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         // Land the user IN the new session's first conversation — no empty
         // state is ever visible.
         selectConversation({
-          sessionId: created.session.sessionId,
+          sessionId: created.session.workspaceId,
           conversationId: created.conversationId,
           agentId: input.agentPageId,
         });

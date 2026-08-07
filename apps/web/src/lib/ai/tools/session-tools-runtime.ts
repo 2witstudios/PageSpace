@@ -441,19 +441,19 @@ async function listOwnWorkspaces({
   // now one constant, pinned by session-list-limit-invariant.test.ts). If
   // the cap ever stops being structural, revisit this filter's ordering.
   const sessions = (await listSessions({ ownerId: userId })).filter(
-    (session) => session.sessionId !== excludeWorkspaceId,
+    (session) => session.workspaceId !== excludeWorkspaceId,
   );
   if (sessions.length === 0) return [];
 
-  const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.sessionId));
+  const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.workspaceId));
   const agentTitles = await resolveAgentTitles(workersBySession);
 
   return sessions.map((session) => ({
-    workspaceId: session.sessionId,
+    workspaceId: session.workspaceId,
     name: session.name,
     driveId: session.driveId,
     sandbox: session.sandboxStatus,
-    workers: (workersBySession.get(session.sessionId) ?? []).map((worker) => ({
+    workers: (workersBySession.get(session.workspaceId) ?? []).map((worker) => ({
       sessionId: worker.conversationId,
       name: worker.title ?? '',
       agent:
@@ -551,7 +551,7 @@ async function listSharedWorkspaces({
             // The caller's own sessions belong to the OWN listing; the
             // current workspace is the top-level detail view.
             session.ownerId !== userId &&
-            session.sessionId !== excludeWorkspaceId &&
+            session.workspaceId !== excludeWorkspaceId &&
             // THE gate — the same pure decision `checkSessionAccess` applies
             // on spawn_session's explicit-workspaceId path.
             decideAgentSessionAccess({
@@ -574,17 +574,17 @@ async function listSharedWorkspaces({
     .slice(0, MAX_MEMBER_VISIBLE_WORKSPACES);
   if (shared.length === 0) return [];
 
-  const workersBySession = await listSessionConversationsBulk(shared.map((s) => s.sessionId));
+  const workersBySession = await listSessionConversationsBulk(shared.map((s) => s.workspaceId));
   const agentTitles = await resolveAgentTitles(workersBySession);
 
   return shared.map((session) => ({
-    workspaceId: session.sessionId,
+    workspaceId: session.workspaceId,
     name: session.name,
     // Non-null by construction: only drive-scoped sessions pass the filter
     // (a global-assistant session is owner-only, and own rows are excluded).
     driveId: session.driveId ?? '',
     sandbox: session.sandboxStatus,
-    workers: (workersBySession.get(session.sessionId) ?? []).map((worker) => ({
+    workers: (workersBySession.get(session.workspaceId) ?? []).map((worker) => ({
       sessionId: worker.conversationId,
       name:
         redactConversationTitleForViewer({

@@ -468,6 +468,8 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
   const OTHER_OWNER = 'user-2';
 
   const sharedSession = {
+    // Both ids, as the real DTO carries them.
+    workspaceId: 'ses-shared',
     sessionId: 'ses-shared',
     driveId: 'drive-member',
     ownerId: OTHER_OWNER,
@@ -486,9 +488,9 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     mockListSessions.mockResolvedValue([
       sharedSession,
       // The caller's OWN session in the shared drive — the own listing's job.
-      { ...sharedSession, sessionId: 'ses-mine', ownerId: VIEWER },
+      { ...sharedSession, workspaceId: 'ses-mine', sessionId: 'ses-mine', ownerId: VIEWER },
       // The caller's CURRENT workspace — the top-level detail view.
-      { ...sharedSession, sessionId: 'ses-current' },
+      { ...sharedSession, workspaceId: 'ses-current', sessionId: 'ses-current' },
     ]);
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
@@ -550,6 +552,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     mockResolveDriveMembership.mockResolvedValue('member');
     const many = Array.from({ length: 150 }, (_, i) => ({
       ...sharedSession,
+      workspaceId: `ses-${String(i).padStart(3, '0')}`,
       sessionId: `ses-${String(i).padStart(3, '0')}`,
       lastActiveAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
     }));

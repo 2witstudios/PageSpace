@@ -144,7 +144,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
         if (claimingId) return;
         setClaimingId(target.conversationId);
         try {
-          const created = await post<{ session: { sessionId: string }; conversationId: string }>(
+          const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
             '/api/agent-workspaces',
             { firstThing: 'claim', conversationId: target.conversationId, driveId: target.driveId ?? undefined },
           );
@@ -153,7 +153,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
           // its own 20s poll happens to fire.
           void mutate(isAgentSessionsKey);
           selectConversation({
-            sessionId: created.session.sessionId,
+            sessionId: created.session.workspaceId,
             conversationId: created.conversationId,
             agentId: target.agentPageId,
           });

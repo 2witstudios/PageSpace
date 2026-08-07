@@ -93,7 +93,7 @@ describe('useResolvedConversation', () => {
 
   it('with the session capability, a fresh conversation is born WITH a session', async () => {
     agentConversations.fetchMostRecentAgentConversation.mockResolvedValue(null);
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
 
     const { result } = renderHook(() => useResolvedConversation('agent-1', SESSION_OPTS));
 
@@ -154,7 +154,7 @@ describe('useResolvedConversation', () => {
     // Key acceptance case: a hard refresh must never mint an admin's first
     // conversation session-less just because the role hasn't loaded yet.
     agentConversations.fetchMostRecentAgentConversation.mockResolvedValue(null);
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
 
     const { result, rerender } = renderHook(
       ({ authLoading, canUseSessions }: { authLoading: boolean; canUseSessions: boolean }) =>
@@ -264,7 +264,7 @@ describe('useResolvedConversation', () => {
 
 describe('createPageConversation', () => {
   it('is the ONE creation path the page shares between resolution, New Chat and delete-replacement', async () => {
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-x' }, conversationId: 'conv-x' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-x', sessionId: 'ses-x' }, conversationId: 'conv-x' });
     const created = await createPageConversation({
       agentId: 'agent-1',
       driveId: 'drive-1',

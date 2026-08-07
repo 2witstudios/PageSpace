@@ -20,9 +20,15 @@ export interface SessionConversationSummary {
   lastMessageAt: string | null;
 }
 
-/** One session's row in the `/api/agent-workspaces**` listing response. */
+/** One workspace's row in the `/api/agent-workspaces**` listing response. */
 export interface SessionListEntry {
-  sessionId: string;
+  /**
+   * `agent_workspaces.id`. Reads the CANONICAL field, not the `sessionId`
+   * compat twin beside it in `agentSessionDtoSchema` — that one is marked
+   * "@deprecated ROLLING-DEPLOY COMPAT, one release only ... nothing new may
+   * read it", and every reader here was reading it.
+   */
+  workspaceId: string;
   conversations: SessionConversationSummary[];
 }
 
@@ -115,7 +121,7 @@ export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): 
   void mutate(
     isSessionListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
-      current ? { ...current, sessions: current.sessions.filter((session) => session.sessionId !== sessionId) } : current,
+      current ? { ...current, sessions: current.sessions.filter((session) => session.workspaceId !== sessionId) } : current,
     { revalidate: false },
   );
 }
@@ -131,13 +137,13 @@ export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): 
  * already-in-hand snapshot, independent of the network (review finding —
  * chatgpt-codex-connector on PR #2318). Generic over the caller's own row
  * shape (`AgentPanes.tsx`'s minimal one vs. `AgentsSidebar.tsx`'s richer
- * one) — this only ever needs `sessionId` to place it back correctly.
+ * one) — this only ever needs `workspaceId` to place it back correctly.
  */
-export function restoreSessionInCache<T extends { sessionId: string }>(mutate: ScopedMutator, entry: T): void {
+export function restoreSessionInCache<T extends { workspaceId: string }>(mutate: ScopedMutator, entry: T): void {
   void mutate(
     isSessionListingKey,
     (current: { sessions: T[] } | undefined) =>
-      current && !current.sessions.some((session) => session.sessionId === entry.sessionId)
+      current && !current.sessions.some((session) => session.workspaceId === entry.workspaceId)
         ? { ...current, sessions: [...current.sessions, entry] }
         : current,
     { revalidate: false },
@@ -145,7 +151,7 @@ export function restoreSessionInCache<T extends { sessionId: string }>(mutate: S
 }
 
 /**
- * Insert (or merge into) one conversation listing on `sessionId`'s row,
+ * Insert (or merge into) one conversation listing on `workspaceId`'s row,
  * everywhere — the event-driven twin of `AgentPanes.tsx`'s optimistic
  * `recordMintedConversation`, for a `conversation:created` that this client did
  * not originate (a worker spawned by an agent, a mint in another window).
@@ -170,12 +176,12 @@ export function upsertConversationInCache<T extends { conversationId: string }>(
 ): void {
   void mutate(
     isSessionListingKey,
-    (current: { sessions: Array<{ sessionId: string; conversations: T[] }> } | undefined) => {
+    (current: { sessions: Array<{ workspaceId: string; conversations: T[] }> } | undefined) => {
       if (!current) return current;
       return {
         ...current,
         sessions: current.sessions.map((session) => {
-          if (session.sessionId !== sessionId) return session;
+          if (session.workspaceId !== sessionId) return session;
           const existing = session.conversations.find((c) => c.conversationId === conversation.conversationId);
           return {
             ...session,
@@ -210,7 +216,7 @@ export function touchConversationInCache(
 ): void {
   void mutate(
     isSessionListingKey,
-    (current: { sessions: Array<{ sessionId: string; conversations: SessionConversationSummary[] }> } | undefined) => {
+    (current: { sessions: Array<{ workspaceId: string; conversations: SessionConversationSummary[] }> } | undefined) => {
       if (!current) return current;
       return {
         ...current,
@@ -259,7 +265,7 @@ export function forgetConversationInCache(mutate: ScopedMutator, sessionId: stri
         ? {
             ...current,
             sessions: current.sessions.map((session) =>
-              session.sessionId === sessionId
+              session.workspaceId === sessionId
                 ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
                 : session,
             ),

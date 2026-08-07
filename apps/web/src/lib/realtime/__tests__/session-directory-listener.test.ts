@@ -49,7 +49,7 @@ const applyMutation = <T,>(callIndex: number, current: T): T => {
 };
 
 const listing = (conversations: Array<Record<string, unknown>>) => ({
-  sessions: [{ sessionId: SESSION, conversations }],
+  sessions: [{ workspaceId: SESSION, sessionId: SESSION, conversations }],
 });
 
 const base = (overrides: Record<string, unknown> = {}) => ({

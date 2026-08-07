@@ -131,6 +131,8 @@ const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}):
 });
 
 interface SessionFixture {
+  workspaceId: string;
+  /** The rolling-deploy compat twin the DTO still carries; nothing reads it. */
   sessionId: string;
   driveId: string | null;
   name: string;
@@ -142,6 +144,9 @@ interface SessionFixture {
 }
 
 const SESSION: SessionFixture = {
+  // The listing spreads AgentSessionDTO, which carries the canonical id AND
+  // the rolling-deploy compat twin. The sidebar reads the canonical one.
+  workspaceId: 'ses-1',
   sessionId: 'ses-1',
   driveId: 'drive-1',
   name: 'api refactor',
@@ -952,7 +957,7 @@ describe('AgentsSidebar', () => {
 
   describe('new session', () => {
     test('the inline "+" opens a searchable agent palette; picking an agent advances to a naming step, and submitting blank still spawns the session AND its first conversation, landing inside it', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -980,7 +985,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('the drive palette also offers Global Assistant, first — picking it spawns a session in THIS drive with no agent', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1006,7 +1011,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1353,7 +1358,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning from the Assistant group posts driveId: null, distinct from the drive palette\'s own "Global Assistant" agent pick', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-a', sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([
         SESSION,
         {
@@ -1478,7 +1483,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       respondWithSessions([]);
       const user = userEvent.setup();
       renderSidebar();
@@ -1505,7 +1510,7 @@ describe('AgentsSidebar', () => {
       // Sessions are always deliberately named now — the Assistant group's "+"
       // goes through the naming step too, even though there's no agent to
       // choose (the assistant is the counterpart).
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-a', sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([]);
       const user = userEvent.setup();
       renderSidebar();

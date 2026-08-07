@@ -11,7 +11,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 const API_DIR = join(__dirname, '..');
 
@@ -181,6 +181,39 @@ function collectRouteFiles(dir: string): string[] {
   return results;
 }
 
+
+/**
+ * A route's auditable surface: its own text PLUS any sibling module in the same
+ * directory that it imports and re-exports handlers from.
+ *
+ * A `route.ts` is a URL binding, not necessarily where the behaviour lives. When
+ * a route delegates (`export { getFoo as GET } from './foo-handlers'`), the
+ * audit calls are in the sibling — and a scan of `route.ts` alone reports a
+ * coverage gap that does not exist. The two ways to silence that are adding a
+ * meaningless `auditRequest` to the binding, or an exemption entry that would
+ * then hide a REAL gap later. Following the delegation is the only reading that
+ * keeps the guard honest about thin routes.
+ *
+ * Deliberately one level and same-directory only: enough for a route split,
+ * not a general import graph that would eventually swallow the whole app and
+ * pass everything.
+ */
+function auditableSurface(routeFile: string): string {
+  const own = readFileSync(routeFile, 'utf-8');
+  const dir = dirname(routeFile);
+  let combined = own;
+  for (const match of own.matchAll(/from\s+'\.\/([\w.-]+)'/g)) {
+    const sibling = join(dir, `${match[1]}.ts`);
+    try {
+      combined += '\n' + readFileSync(sibling, 'utf-8');
+    } catch {
+      // Not a local .ts module (a directory index, a .tsx, a type-only path) —
+      // nothing to add, and a missing sibling is the compiler's problem.
+    }
+  }
+  return combined;
+}
+
 function toLogicalPath(absolutePath: string): string {
   const relative = absolutePath.replace(API_DIR + '/', '');
   return relative.replace(/\/route\.ts$/, '');
@@ -210,7 +243,7 @@ describe('Security Audit Route Coverage', () => {
     for (const route of routes) {
       if (isExempt(route.path)) continue;
 
-      const content = readFileSync(route.file, 'utf-8');
+      const content = auditableSurface(route.file);
       if (!AUDIT_CALL_PATTERN.test(content)) {
         violations.push(route.path);
       }
@@ -299,7 +332,7 @@ describe('Security Audit Route Coverage', () => {
         violations.push(`${routePath} (route file not found)`);
         continue;
       }
-      const content = readFileSync(file, 'utf-8');
+      const content = auditableSurface(file);
       if (!/authz\.access\.denied/.test(content)) {
         violations.push(routePath);
       }

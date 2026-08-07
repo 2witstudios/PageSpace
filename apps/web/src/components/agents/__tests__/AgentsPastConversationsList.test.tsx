@@ -148,7 +148,7 @@ describe('AgentsPastConversationsList', () => {
 
   test('a session-less page row claims into a freshly spawned session and selects it', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     renderList();
     const user = userEvent.setup();
 
@@ -169,7 +169,7 @@ describe('AgentsPastConversationsList', () => {
 
   test('a successful claim invalidates the shared sessions cache so the sidebar picks it up', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     renderList();
     const user = userEvent.setup();
 
@@ -192,7 +192,7 @@ describe('AgentsPastConversationsList', () => {
 
   test('a session-less global row claims with the surface\'s own (absent) drive scope', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([GLOBAL_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-global' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-global' });
     renderList();
     const user = userEvent.setup();
 
@@ -251,7 +251,7 @@ describe('AgentsPastConversationsList', () => {
     await user.click(row);
 
     expect(mockPost).toHaveBeenCalledTimes(1);
-    resolveClaim({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    resolveClaim({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'));
   });
 });

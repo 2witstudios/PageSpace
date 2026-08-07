@@ -282,7 +282,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 if (!current) return current;
                 return {
                   sessions: current.sessions.map((session) =>
-                    session.sessionId === insertedSessionId
+                    session.workspaceId === insertedSessionId
                       ? {
                           ...session,
                           conversations: [

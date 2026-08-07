@@ -360,7 +360,7 @@ export default function AgentPanes({
   // conversation list and the readiness check below — a session that
   // hasn't appeared here yet is not the same fact as an empty list.
   const currentSessionConversationsEntry = useMemo(
-    () => (sessionsData?.sessions ?? []).find((session) => session.sessionId === sessionId),
+    () => (sessionsData?.sessions ?? []).find((session) => session.workspaceId === sessionId),
     [sessionsData, sessionId],
   );
   const sessionConversations: SessionConversationSummary[] = useMemo(
@@ -394,7 +394,7 @@ export default function AgentPanes({
         if (!current) return current;
         return {
           sessions: current.sessions.map((session) =>
-            session.sessionId === sessionId
+            session.workspaceId === sessionId
               ? {
                   ...session,
                   conversations: [{ conversationId, agentPageId, lastMessageAt: null }, ...session.conversations],
@@ -422,7 +422,7 @@ export default function AgentPanes({
         if (!current) return current;
         return {
           sessions: current.sessions.map((session) =>
-            session.sessionId === sessionId
+            session.workspaceId === sessionId
               ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
               : session,
           ),
@@ -735,7 +735,7 @@ export default function AgentPanes({
     // the peeked pane's own.
     const { scope } = pendingEndClose;
     const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[sessionId] ?? null;
-    const sessionEntrySnapshot = sessionsData?.sessions.find((s) => s.sessionId === sessionId) ?? null;
+    const sessionEntrySnapshot = sessionsData?.sessions.find((s) => s.workspaceId === sessionId) ?? null;
     forgetWorkspace(sessionId);
     setPendingEndClose(null);
     // The bare top-level `mutate` import, matching every other call site in

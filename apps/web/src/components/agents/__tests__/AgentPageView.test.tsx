@@ -547,10 +547,10 @@ describe('AgentPageView', () => {
       await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1', expect.any(Function), { revalidate: false }));
       const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-workspaces?driveId=drive-1')!;
       const updated = (updater as (current: unknown) => unknown)({
-        sessions: [{ sessionId: 'ses-1', conversations: [] }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }],
       });
       expect(updated).toEqual({
-        sessions: [{ sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
       });
     });
 

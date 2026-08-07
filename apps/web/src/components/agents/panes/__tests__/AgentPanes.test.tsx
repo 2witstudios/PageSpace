@@ -165,7 +165,7 @@ function mockSessionConversations(
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.includes('/api/agent-workspaces')) {
       return jsonOk({
-        sessions: [{ sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
       });
     }
     return jsonOk(defaultFetchRoute(url));
@@ -474,7 +474,7 @@ describe('AgentPanes', () => {
       // membership is still unknown (caught in review).
       mockFetchWithAuth.mockImplementation(async (url: string) => {
         if (url.includes('/api/agent-workspaces')) {
-          return jsonOk({ sessions: [{ sessionId: 'ses-other', conversations: [] }] });
+          return jsonOk({ sessions: [{ workspaceId: 'ses-other', sessionId: 'ses-other', conversations: [] }] });
         }
         return jsonOk(defaultFetchRoute(url));
       });
@@ -1568,7 +1568,7 @@ describe('AgentPanes', () => {
               resolve(
                 jsonOk({
                   sessions: [
-                    { sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
+                    { workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
                   ],
                 }),
               );
@@ -2579,7 +2579,7 @@ describe('AgentPanes', () => {
         // the WRONG pending promise (both URLs start with the same prefix).
         if (url.includes('/api/agent-workspaces?')) {
           return new Promise((resolve) => {
-            resolveSessions = () => resolve(jsonOk({ sessions: [{ sessionId: 'ses-1', conversations: [] }] }));
+            resolveSessions = () => resolve(jsonOk({ sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }] }));
           });
         }
         return jsonOk(defaultFetchRoute(url));
@@ -2616,7 +2616,7 @@ describe('AgentPanes', () => {
           // Warm cache, real data, but for a DIFFERENT session — exactly
           // what a shared per-drive SWR key can already hold when a brand
           // new session opens.
-          return jsonOk({ sessions: [{ sessionId: 'some-other-session', conversations: [] }] });
+          return jsonOk({ sessions: [{ workspaceId: 'some-other-session', sessionId: 'some-other-session', conversations: [] }] });
         }
         return jsonOk(defaultFetchRoute(url));
       });
