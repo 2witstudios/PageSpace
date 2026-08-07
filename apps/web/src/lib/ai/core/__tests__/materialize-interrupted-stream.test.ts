@@ -116,9 +116,19 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation },
 }));
-vi.mock('@/lib/repositories/global-conversation-repository', () => ({
-  globalConversationRepository: { recomputeLastMessageAt: mockRecomputeLastMessageAt },
-}));
+// `recomputeLastMessageAt` moved from `global-conversation-repository` to
+// `message-repository` with the repository merge (epic "Agent-Session Single
+// Source of Truth", Phase 4 / D6, PR 12) — page conversations read from the
+// same table now, so the field they sort on has one writer for both kinds.
+// Only that method is redirected: the rest of the module (the materializer's
+// own CAS terminal writes) stays REAL, which is what these tests exercise.
+vi.mock('@/lib/repositories/message-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/repositories/message-repository')>();
+  return {
+    ...actual,
+    messageRepository: { ...actual.messageRepository, recomputeLastMessageAt: mockRecomputeLastMessageAt },
+  };
+});
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
 import type { UIMessagePart } from '../stream-multicast-registry';

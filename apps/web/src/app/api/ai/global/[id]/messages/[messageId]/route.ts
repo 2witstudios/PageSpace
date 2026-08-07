@@ -4,10 +4,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { messageRepository } from '@/lib/repositories/message-repository';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -50,7 +52,7 @@ export async function PATCH(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -174,7 +176,7 @@ export async function DELETE(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }

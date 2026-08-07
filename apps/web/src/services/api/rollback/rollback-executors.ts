@@ -236,7 +236,7 @@ export async function rollbackMessageChange(
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
 
-  const { table, isChannel, label: tableLabel } = pickConversationTable({
+  const { table, legacyTable, isChannel, label: tableLabel } = pickConversationTable({
     conversationType,
     hasPageId: !!activity.pageId,
   });
@@ -244,6 +244,13 @@ export async function rollbackMessageChange(
   const plan = planMessageRollback(activity, isChannel);
 
   await deps.db.update(table).set(plan.set).where(eq(table.id, messageId));
+  // Mirror onto the legacy `chat_messages` leg for a page conversation
+  // (Phase 4 / D6 dual-write window): the unified table above is what readers
+  // consult, but leaving the legacy row un-rolled-back would resurrect the
+  // change the moment anyone reverted the reader cutover. Drops out at PR 15.
+  if (legacyTable) {
+    await deps.db.update(legacyTable).set(plan.set).where(eq(legacyTable.id, messageId));
+  }
 
   deps.logger.info(`[RollbackService] Applied message rollback (${tableLabel})`, {
     messageId,

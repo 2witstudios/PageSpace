@@ -111,9 +111,9 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 import { db } from '@pagespace/db/db'
-import { eq, and, ne } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { createId, isCuid } from '@paralleldrive/cuid2';
@@ -1557,21 +1557,18 @@ export async function POST(request: Request) {
     if (askUserSyncPromise) await askUserSyncPromise;
 
     const pageId = chatId as string;
+    // Reads the UNIFIED `messages` table (epic "Agent-Session Single Source of
+    // Truth", Phase 4 / D6 — reader cutover). Same rows, same order, same page
+    // scope: the repository's page predicate is the join through
+    // `conversations.contextId`, which is what `chat_messages.pageId` became.
+    // `chat_messages` is still dual-written, so reverting this PR alone is safe.
+    //
     // Exclude 'streaming' placeholders — this load is the model-context source AND the
     // compaction source (prepareHistoryForModel below), so a placeholder here would both
     // poison this job's own turn (it hasn't finished writing yet) and risk being silently
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
-    const dbMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true),
-        ne(chatMessages.status, 'streaming')
-      ))
-      .orderBy(chatMessages.createdAt);
+    const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
 
     const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({

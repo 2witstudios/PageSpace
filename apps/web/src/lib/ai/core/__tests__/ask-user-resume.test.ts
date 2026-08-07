@@ -9,6 +9,10 @@ let selectRows: unknown[] = [];
 function makeSelectChain() {
   const chain = {
     from: vi.fn(() => chain),
+    // The page adapter joins `conversations` since the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — page
+    // scope moved from `chat_messages.pageId` to `unifiedPageScope`.
+    innerJoin: vi.fn(() => chain),
     where: vi.fn(() => chain),
     orderBy: vi.fn(() => chain),
     limit: vi.fn(() => Promise.resolve(selectRows)),
@@ -25,6 +29,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   ne: vi.fn(),
   and: vi.fn(),
+  or: vi.fn(),
   desc: vi.fn(),
   sql: vi.fn(),
   exists: vi.fn(),
@@ -34,8 +39,10 @@ vi.mock('@pagespace/db/operators', () => ({
   isNotNull: vi.fn(),
   inArray: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/core', () => ({ chatMessages: {} }));
-vi.mock('@pagespace/db/schema/conversations', () => ({ messages: {}, conversations: {} }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  messages: { pageId: 'messages.pageId' },
+  conversations: { type: 'conversations.type', contextId: 'conversations.contextId', id: 'conversations.id' },
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), info: vi.fn() } },
 }));

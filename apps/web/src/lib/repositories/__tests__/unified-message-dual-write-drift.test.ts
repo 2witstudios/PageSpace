@@ -151,9 +151,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastAiUndoApplied: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: { getMessageById: vi.fn().mockResolvedValue(null) },
-}));
+
 
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: {
@@ -332,7 +330,24 @@ const globalWritePaths: Array<{ name: string; run: () => Promise<unknown> }> = [
 ];
 
 /** Writes no message row at all — only the conversation rev + emissions. */
-const nonMessageWritePaths = ['recordUndoApplied'];
+const nonMessageWritePaths = [
+  'recordUndoApplied',
+  // Absorbed from `chat-message-repository` by the reader cutover (Phase 4
+  // PR 12). It IS a message write, but a single-column one that predates the
+  // save methods; it dual-writes through `mutateUnifiedMessageById` and is
+  // pinned by message-repository-update-tool-results.test.ts, which asserts
+  // both legs and one transaction directly.
+  'updateMessageToolResults',
+  // Message-table housekeeping absorbed from `global-conversation-repository`
+  // (Phase 4 PR 12). These DELETE/derive rather than persist a message, and
+  // each has its own leg by construction: `purgeInactiveMessages` sweeps the
+  // unified table, `purgeInactiveLegacyChatMessages` the legacy one, and
+  // `recomputeLastMessageAt` writes `conversations`, not a message table.
+  // Pinned by message-repository-last-message-recompute.test.ts.
+  'purgeInactiveMessages',
+  'purgeInactiveLegacyChatMessages',
+  'recomputeLastMessageAt',
+];
 
 /**
  * READ seams on the repository — no leg to drift, by construction. They are
@@ -344,7 +359,18 @@ const nonMessageWritePaths = ['recordUndoApplied'];
  * replaces is pinned by
  * `src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`.
  */
-const readPaths = ['getMessagesByConversationId'];
+const readPaths = [
+  'getMessagesByConversationId',
+  // The rest arrived with the reader cutover of the chat ROUTES and mutation
+  // surfaces (Phase 4 PR 12), which absorbed `chat-message-repository`
+  // wholesale. Every one is pinned against its frozen legacy query in
+  // unified-reader-parity.integration.test.ts.
+  'getMessagesForPage',
+  'getPageConversationMessages',
+  'getRecentPageMessages',
+  'getMessageById',
+  'getMessageInConversation',
+];
 
 describe('unified message dual-write — behavioural drift guard', () => {
   beforeEach(() => {
@@ -411,11 +437,15 @@ describe('unified message dual-write — behavioural drift guard', () => {
 const LEGACY_WRITE_ALLOWLIST: Array<{ file: string; dualWrites: boolean; why?: string }> = [
   { file: 'src/lib/repositories/message-repository.ts', dualWrites: true },
   { file: 'src/lib/repositories/conversation-repository.ts', dualWrites: true },
-  { file: 'src/lib/repositories/chat-message-repository.ts', dualWrites: true },
   {
     file: 'src/app/api/trash/[pageId]/route.ts',
     dualWrites: false,
-    why: 'Hard delete of a purged page. Deletion paths are Phase 4 PR 13/15 (compliance + contract); until then `messages` rows are cleared by their own FK cascade on conversations.',
+    why: 'Hard delete of a purged page. Writes BOTH legs (the reader cutover, Phase 4 PR 12, added the unified DELETE — nothing else would remove those rows, since `messages.pageId` deliberately has no FK to `pages`), but with plain statements rather than the shared unified-leg writer: that module mirrors row-level content writes, not a page-teardown sweep.',
+  },
+  {
+    file: 'src/services/api/ai-undo-service.ts',
+    dualWrites: false,
+    why: 'Undo tombstones a RANGE of a conversation on both legs (unified first, legacy mirrored) inside one transaction. Not through the shared unified-leg writer for the same reason: that module writes one row at a time.',
   },
   {
     file: 'src/app/api/debug/chat-messages/route.ts',
@@ -482,12 +512,17 @@ describe('unified message dual-write — structural drift guard', () => {
       [
         // The one shared unified-leg writer used by every dual-writing path.
         'src/lib/repositories/unified-message-leg.ts',
-        // The global assistant's own leg: `messages` IS its legacy table, so
-        // its statements live with the rest of the message writer.
+        // The message repository itself: the global assistant's own leg
+        // (`messages` IS its legacy table), plus the purge and the
+        // lastMessageAt recompute the repository merge moved in from
+        // global-conversation-repository.ts (Phase 4 PR 12).
         'src/lib/repositories/message-repository.ts',
-        // Global conversation lifecycle (recompute/purge/hard-delete) — the
-        // global side of the table, untouched by the page-chat merge.
-        'src/lib/repositories/global-conversation-repository.ts',
+        // Page teardown and undo — both range/sweep writers rather than
+        // row-level content writes; see LEGACY_WRITE_ALLOWLIST for why they
+        // are not routed through the shared unified-leg writer, and note that
+        // each writes the LEGACY leg in the same transaction.
+        'src/app/api/trash/[pageId]/route.ts',
+        'src/services/api/ai-undo-service.ts',
       ].sort(),
     );
   });

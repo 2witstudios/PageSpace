@@ -30,7 +30,6 @@ import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/valida
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
@@ -386,7 +385,14 @@ export async function POST(request: Request): Promise<Response> {
 
     let inferenceMessages = messages;
     if (isThreadMode && !clientManagesHistory) {
-      const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
+      // Reads the UNIFIED `messages` table since the message-table merge (epic
+      // "Agent-Session Single Source of Truth", Phase 4 / D6 — #2349 deferred
+      // this route's history load to this PR). `pageId` stays a real scope:
+      // it is what stops a caller pairing another page's conversationId with a
+      // page they can reach. For the `type='client'` threads this route mints,
+      // that scope resolves through the transitional `messages.pageId` — see
+      // `unifiedPageScope`.
+      const dbMessages = await messageRepository.getMessagesForPage(pageId, conversationId);
       inferenceMessages = [...await Promise.all(dbMessages.map(convertDbMessageToUIMessage)), userMessage];
     }
 
@@ -406,7 +412,7 @@ export async function POST(request: Request): Promise<Response> {
       if (resultsByCallId.size > 0) {
         // Fire-and-forget — the response does not wait for back-fill to complete.
         // Best-effort: a failure is logged but does not affect the streaming reply.
-        chatMessageRepository.getMessagesByConversationId(conversationId)
+        messageRepository.getMessagesByConversationId(conversationId)
           .then(dbRows => {
             for (const row of dbRows) {
               if (row.role !== 'assistant' || !row.isActive) continue;
@@ -424,7 +430,7 @@ export async function POST(request: Request): Promise<Response> {
                 )
                 .map(tc => resultsByCallId.get(tc.toolCallId as string)!);
               if (matched.length > 0) {
-                chatMessageRepository.updateMessageToolResults(row.id, conversationId, matched)
+                messageRepository.updateMessageToolResults(row.id, conversationId, matched)
                   .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
               }
             }

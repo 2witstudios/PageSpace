@@ -40,14 +40,28 @@
  * Kill switch: `UNIFIED_MESSAGES_DUAL_WRITE=off` disables the unified leg
  * alone (apps/web/src/lib/config/unified-messages-env.ts). Nothing here reads
  * `process.env` directly.
+ *
+ * ── READER CUTOVER + REPOSITORY MERGE (Phase 4 PR 12, D6) ─────────────────
+ * This module is now also the one READER for durable chat messages. The whole
+ * message surface of `chat-message-repository.ts` (deleted by this PR) and the
+ * message-table half of `global-conversation-repository.ts` moved in here, and
+ * every one reads the UNIFIED `messages` table. `chat_messages` is still
+ * WRITTEN (the dual-write above is untouched) and still purged, so reverting
+ * this PR alone restores a working system: the legacy leg it would read from
+ * never stopped being populated.
+ *
+ * Page scope is `unifiedPageScope()` — see its doc for why it is a JOIN
+ * through `conversations`, not `messages.pageId`.
  */
 
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
-import { eq, and, ne } from '@pagespace/db/operators';
+import { eq, and, ne, lt, desc } from '@pagespace/db/operators';
 import { chatMessages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { messages } from '@pagespace/db/schema/conversations';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
@@ -70,8 +84,10 @@ import {
   broadcastAiUndoApplied,
 } from '@/lib/websocket/socket-utils';
 import type { TriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import {
+  derivedPageId,
+  unifiedPageScope,
+} from '@/lib/repositories/unified-message-scope';
 import {
   bumpConversationRev,
   emitContextFromRow,
@@ -316,9 +332,10 @@ async function saveGlobalMessageRow({
  */
 /**
  * One durable row of the unified `messages` table, as the read seam returns
- * it. Structurally the useful subset of `ChatMessage` (chat-message-repository)
- * minus `pageId` — the transitional column this cutover deliberately stops
- * reading — so the OpenAI-shaped serializers accept it unchanged.
+ * it. Structurally the useful subset of the former `ChatMessage`
+ * (chat-message-repository) minus `pageId` — the transitional column this
+ * cutover deliberately stops reading — so the OpenAI-shaped serializers accept
+ * it unchanged.
  */
 export interface UnifiedMessageRow {
   id: string;
@@ -334,6 +351,43 @@ export interface UnifiedMessageRow {
   toolResults: unknown | null;
   status: 'streaming' | 'complete' | 'interrupted';
 }
+
+/**
+ * A page-chat row plus the page it belongs to, derived at read time. Returned
+ * by the readers whose callers need the page for a permission check
+ * (`checkMCPPageScope`, `canPrincipalEditPage`) — historically
+ * `chat_messages.pageId`.
+ */
+export interface UnifiedPageMessageRow extends UnifiedMessageRow {
+  /**
+   * `conversations.contextId` for a page conversation; the transitional
+   * `messages.pageId` otherwise (see `derivedPageId`). Null when the row
+   * names no page at all — a global-assistant message.
+   */
+  pageId: string | null;
+}
+
+/** A page-chat row with its author's display fields, for client-facing history. */
+export interface UnifiedPageMessageWithAuthor extends UnifiedPageMessageRow {
+  userName?: string | null;
+  userImage?: string | null;
+}
+
+/** The column list every unified reader selects. Kept in one place so the shapes cannot drift. */
+const unifiedColumns = {
+  id: messages.id,
+  conversationId: messages.conversationId,
+  userId: messages.userId,
+  role: messages.role,
+  content: messages.content,
+  messageType: messages.messageType,
+  isActive: messages.isActive,
+  createdAt: messages.createdAt,
+  editedAt: messages.editedAt,
+  toolCalls: messages.toolCalls,
+  toolResults: messages.toolResults,
+  status: messages.status,
+} as const;
 
 export type BeforeSaveHook = (
   tx: DbExecutor,
@@ -876,7 +930,7 @@ export const messageRepository = {
     });
 
     void (async () => {
-      const updated = await chatMessageRepository.getMessageById(args.messageId);
+      const updated = await messageRepository.getMessageById(args.messageId);
       if (!updated) return;
       const uiMessage = await convertDbMessageToUIMessage(updated);
       await broadcastAiMessageEdited({
@@ -1008,7 +1062,7 @@ export const messageRepository = {
     // Preserve the pre-existing recompute-on-delete behavior (#2153) — the
     // newest surviving message decides lastMessageAt, not "now".
     try {
-      await globalConversationRepository.recomputeLastMessageAt(args.conversationId);
+      await messageRepository.recomputeLastMessageAt(args.conversationId);
     } catch (error) {
       loggers.ai.warn('messageRepository: lastMessageAt recompute failed after delete', {
         conversationId: args.conversationId,
@@ -1075,9 +1129,8 @@ export const messageRepository = {
    * UNIFIED `messages` table (epic "Agent-Session Single Source of Truth",
    * Phase 4 / D6, reader cutover).
    *
-   * The unified twin of `chatMessageRepository.getMessagesByConversationId`,
-   * which it replaces reader-by-reader; the legacy one stays until PR 12
-   * finishes the chat-route/repository merge. Deliberately scoped by
+   * Replaced `chatMessageRepository.getMessagesByConversationId` outright —
+   * that repository is deleted as of this PR. Deliberately scoped by
    * `conversationId` ALONE, exactly as the legacy query was: a conversation id
    * is a cuid2, so it already names one thread, and the page (when there is
    * one) is `conversations.contextId`, not a second key this reader has to
@@ -1093,20 +1146,7 @@ export const messageRepository = {
     includeStreaming = false,
   ): Promise<UnifiedMessageRow[]> {
     return db
-      .select({
-        id: messages.id,
-        conversationId: messages.conversationId,
-        userId: messages.userId,
-        role: messages.role,
-        content: messages.content,
-        messageType: messages.messageType,
-        isActive: messages.isActive,
-        createdAt: messages.createdAt,
-        editedAt: messages.editedAt,
-        toolCalls: messages.toolCalls,
-        toolResults: messages.toolResults,
-        status: messages.status,
-      })
+      .select(unifiedColumns)
       .from(messages)
       .where(and(
         eq(messages.conversationId, conversationId),
@@ -1116,4 +1156,278 @@ export const messageRepository = {
       .orderBy(messages.createdAt);
   },
 
+  /**
+   * A page's chat history, optionally narrowed to one conversation, with the
+   * author's display fields joined on — the client-facing history read
+   * (`GET /api/ai/chat/messages`) and the OpenAI-compatible route's thread
+   * mode. The unified replacement for
+   * `chatMessageRepository.getMessagesForPage`.
+   *
+   * The `pageId` argument stays a real scope, not decoration: the v1 route
+   * pairs a caller-supplied conversationId with a page the caller has already
+   * been authorized for, and it is that pairing which stops a supplied id from
+   * another page's thread reading through.
+   */
+  async getMessagesForPage(
+    pageId: string,
+    conversationId?: string,
+    includeStreaming = false,
+  ): Promise<UnifiedPageMessageWithAuthor[]> {
+    const rows = await db
+      .select({
+        ...unifiedColumns,
+        pageId: derivedPageId(),
+        userName: users.name,
+        userImage: users.image,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .leftJoin(users, eq(messages.userId, users.id))
+      .where(and(
+        unifiedPageScope(pageId),
+        eq(messages.isActive, true),
+        ...(conversationId ? [eq(messages.conversationId, conversationId)] : []),
+        ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
+      ))
+      .orderBy(messages.createdAt);
+
+    // Decrypt PII at the edge (GDPR #965) so the message author name is plaintext.
+    return Promise.all(
+      rows.map(async (m) => ({ ...m, userName: await decryptField(m.userName) })),
+    ) as Promise<UnifiedPageMessageWithAuthor[]>;
+  },
+
+  /**
+   * One page conversation's durable history, oldest first, WITHOUT the author
+   * join — the model-context load behind the page chat route and the consult
+   * route. Same rows as `getMessagesForPage(pageId, conversationId)`; the
+   * author's name and avatar are pure cost for a read that only ever feeds a
+   * model.
+   *
+   * Keeps the page predicate rather than scoping by conversationId alone. The
+   * chat route already proved `conversations.contextId === pageId` before
+   * reaching here, so this is defence in depth — and defence in depth is not
+   * something a cutover gets to quietly drop.
+   */
+  async getPageConversationMessages(
+    pageId: string,
+    conversationId: string,
+    includeStreaming = false,
+  ): Promise<UnifiedPageMessageRow[]> {
+    return db
+      .select({ ...unifiedColumns, pageId: derivedPageId() })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(
+        unifiedPageScope(pageId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true),
+        ...(includeStreaming ? [] : [ne(messages.status, 'streaming')]),
+      ))
+      .orderBy(messages.createdAt);
+  },
+
+  /**
+   * A page's most recent durable messages across ALL its conversations,
+   * returned oldest-first — the consult route's no-conversationId fallback
+   * context. Ordered DESC then reversed, because ordering ASC under a LIMIT
+   * would return the agent's FIRST n messages ever.
+   */
+  async getRecentPageMessages(pageId: string, limit: number): Promise<UnifiedPageMessageRow[]> {
+    const rows = await db
+      .select({ ...unifiedColumns, pageId: derivedPageId() })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(
+        unifiedPageScope(pageId),
+        eq(messages.isActive, true),
+        ne(messages.status, 'streaming'),
+      ))
+      .orderBy(desc(messages.createdAt))
+      .limit(limit);
+    return rows.reverse();
+  },
+
+  /**
+   * One message by id, with its page derived — the edit/delete routes' read.
+   * The unified replacement for `chatMessageRepository.getMessageById`.
+   *
+   * Returns soft-deleted rows too (the legacy reader did; the routes make
+   * their own `isActive` decision). A GLOBAL-assistant row resolves with
+   * `pageId: null`, which is the callers' cue to 404 — before the cutover
+   * those ids simply did not exist in `chat_messages`, and a page route must
+   * not become a second door onto a global message.
+   */
+  async getMessageById(messageId: string): Promise<UnifiedPageMessageRow | null> {
+    const [row] = await db
+      .select({ ...unifiedColumns, pageId: derivedPageId() })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(eq(messages.id, messageId))
+      .limit(1);
+    return row ?? null;
+  },
+
+  /**
+   * One ACTIVE message scoped to its conversation — the global-assistant
+   * edit/delete routes' read (formerly
+   * `globalConversationRepository.getMessageById`).
+   */
+  async getMessageInConversation(
+    conversationId: string,
+    messageId: string,
+  ): Promise<UnifiedMessageRow | null> {
+    const [row] = await db
+      .select(unifiedColumns)
+      .from(messages)
+      .where(and(
+        eq(messages.id, messageId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true),
+      ))
+      .limit(1);
+    return row ?? null;
+  },
+
+  /**
+   * Overwrite (not merge) a message's `toolResults` — the OpenAI-compatible
+   * route's client-tool-result back-fill, and the one durable message-content
+   * write that never had a full save path. No-op when there is nothing to
+   * persist. Idempotent: the same results are re-supplied on every subsequent
+   * request.
+   *
+   * Still dual-writes: the unified leg is now the READ side, the legacy leg is
+   * still written, and one transaction keeps them from disagreeing.
+   */
+  async updateMessageToolResults(
+    messageId: string,
+    conversationId: string,
+    toolResults: ToolResult[],
+  ): Promise<void> {
+    if (toolResults.length === 0) return;
+    const serialized = JSON.stringify(toolResults);
+    await db.transaction(async (tx) => {
+      await tx
+        .update(chatMessages)
+        .set({ toolResults: serialized })
+        .where(and(eq(chatMessages.id, messageId), eq(chatMessages.conversationId, conversationId)));
+      await mutateUnifiedMessageById(tx, messageId, { toolResults: serialized }, { conversationId });
+    });
+  },
+
+  /**
+   * The single "message mutated" recompute for `conversations.lastMessageAt`
+   * (#2153). Every mutation that can change which active message is newest —
+   * soft-delete, hard-delete, purge, and the interrupted-stream materializer
+   * — calls this instead of writing the field ad hoc, so a recovered or
+   * deleted message can't leave a conversation sorted on a stale timestamp.
+   *
+   * Runs in its own transaction and locks the conversation row FIRST, before
+   * reading the surviving messages. Without this, a concurrent writer (a
+   * normal message save, or another recompute from a concurrent delete)
+   * targeting the same conversation can commit between this function's own
+   * SELECT and UPDATE, and this UPDATE then silently overwrites that writer's
+   * fresher timestamp with a stale snapshot. The lock forces concurrent
+   * recomputes (and any other writer to this row — a plain UPDATE takes the
+   * same implicit row lock even without FOR UPDATE) to serialize.
+   * Mirrors `recomputeConversationLastMessage` in dm-message-repository.ts.
+   *
+   * Since the merge it covers PAGE conversations too — they read from the same
+   * table now, so the field they sort on has to be recomputed from the same
+   * rows.
+   */
+  async recomputeLastMessageAt(conversationId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .for('update');
+
+      const [newest] = await tx
+        .select({ createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(
+          eq(messages.conversationId, conversationId),
+          eq(messages.isActive, true),
+        ))
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
+
+      await tx
+        .update(conversations)
+        .set({ lastMessageAt: newest ? newest.createdAt : null })
+        .where(eq(conversations.id, conversationId));
+    });
+  },
+
+  /**
+   * Hard-delete soft-deleted UNIFIED messages older than the cutoff, and
+   * recompute `lastMessageAt` for every conversation that lost a row. Returns
+   * the number of rows removed.
+   *
+   * Absorbs `globalConversationRepository.purgeInactiveMessages`, and now
+   * covers page rows as well — they live in this table.
+   */
+  async purgeInactiveMessages(olderThan: Date): Promise<number> {
+    const result = await db
+      .delete(messages)
+      .where(and(eq(messages.isActive, false), lt(messages.createdAt, olderThan)))
+      .returning({ id: messages.id, conversationId: messages.conversationId });
+
+    const affectedConversationIds = new Set(result.map((m) => m.conversationId));
+    for (const conversationId of affectedConversationIds) {
+      // Isolated per conversation (#2153 review follow-up): the primary delete
+      // has already committed, and a single throw would abort every remaining
+      // conversation in iteration order and lose an already-correct count.
+      try {
+        await messageRepository.recomputeLastMessageAt(conversationId);
+      } catch (error) {
+        loggers.ai.warn('purgeInactiveMessages: lastMessageAt recompute failed', {
+          conversationId,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+
+    return result.length;
+  },
+
+  /**
+   * Hard-delete soft-deleted LEGACY `chat_messages` rows older than the
+   * cutoff. Purely the legacy leg's own housekeeping: nothing reads that table
+   * any more, but the dual-write still fills it, so it still has to be swept
+   * until PR 15 drops it. No `lastMessageAt` recompute — that field is derived
+   * from the unified leg (see `purgeInactiveMessages`), and recomputing it
+   * from a table no reader consults would be inventing a second answer.
+   */
+  async purgeInactiveLegacyChatMessages(olderThan: Date): Promise<number> {
+    const result = await db
+      .delete(chatMessages)
+      .where(and(eq(chatMessages.isActive, false), lt(chatMessages.createdAt, olderThan)))
+      .returning({ id: chatMessages.id });
+    return result.length;
+  },
 };
+
+/**
+ * Process message content, preserving structured content format if present.
+ * Pure function, moved verbatim from the deleted `chat-message-repository.ts`.
+ */
+export function processMessageContentUpdate(
+  existingContent: string,
+  newContent: string,
+): string {
+  try {
+    const parsed = JSON.parse(existingContent);
+    if (parsed.textParts && parsed.partsOrder) {
+      // Update only textParts, preserve structure
+      parsed.textParts = [newContent];
+      parsed.originalContent = newContent;
+      return JSON.stringify(parsed);
+    }
+  } catch {
+    // Plain text, use as-is
+  }
+  return newContent;
+}

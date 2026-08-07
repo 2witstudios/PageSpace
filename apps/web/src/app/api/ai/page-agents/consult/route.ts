@@ -16,8 +16,8 @@ import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-mid
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, desc } from '@pagespace/db/operators'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { eq } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -274,7 +274,7 @@ export async function POST(request: Request) {
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
-    // Without this, chatMessages are persisted but the conversation itself is
+    // Without this, messages are persisted but the conversation itself is
     // invisible to list_conversations. createConversation itself refuses to
     // claim ownership of a supplied conversationId that already has messages
     // from a different user (see its doc comment) — safe to call unconditionally.
@@ -284,35 +284,22 @@ export async function POST(request: Request) {
     // placeholders (empty, mid-flight rows) — see Server Stream Durability epic PR 2. The
     // fallback branch was also missing the isActive filter the conversationId branch already
     // had (pre-existing gap, called out in the PR 2 board's reader inventory).
+    //
+    // Both branches read the UNIFIED `messages` table since the message-table
+    // merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6). Page
+    // scope moved from `chat_messages.pageId` to the repository's join through
+    // `conversations`; `chat_messages` is still dual-written, so a revert of
+    // the cutover is safe.
     let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {
       // Scoped to this conversation only, in chronological order.
-      historyMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, agentId),
-          eq(chatMessages.conversationId, conversationId),
-          eq(chatMessages.isActive, true),
-          ne(chatMessages.status, 'streaming')
-        ))
-        .orderBy(chatMessages.createdAt);
+      historyMessages = await messageRepository.getPageConversationMessages(agentId, conversationId);
     } else {
       // No conversationId: fall back to the agent's most recent messages across
-      // all conversations for lightweight context. Must order DESC then reverse
-      // — ordering ASCENDING with limit(10) returns the agent's FIRST 10
-      // messages ever, not the most recent.
-      const recentMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, agentId),
-          eq(chatMessages.isActive, true),
-          ne(chatMessages.status, 'streaming')
-        ))
-        .orderBy(desc(chatMessages.createdAt))
-        .limit(10);
-      historyMessages = recentMessages.slice().reverse();
+      // all conversations for lightweight context. The repository orders DESC
+      // under the limit and reverses — ordering ASCENDING with limit(10) would
+      // return the agent's FIRST 10 messages ever, not the most recent.
+      historyMessages = await messageRepository.getRecentPageMessages(agentId, 10);
     }
 
     // Build conversation messages (exclude system - handled separately)

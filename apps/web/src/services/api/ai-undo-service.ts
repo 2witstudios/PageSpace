@@ -82,57 +82,60 @@ interface AiMessage {
 }
 
 /**
- * Get a message by ID with its conversation info
- * Tries both chat_messages (page chats) and messages (global chats)
+ * Get a message by ID with its conversation info.
+ *
+ * ONE lookup against the UNIFIED `messages` table since the message-table
+ * merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6). The
+ * "try page chat, then try global" two-table probe is exactly the duplication
+ * the merge removes: `source` is now derived from the conversation's own type
+ * — `type='global'` is a global thread, anything else is a page/client thread
+ * — rather than inferred from which table happened to answer first.
+ *
+ * That also fixes the old probe's ordering bug in passing: an id present in
+ * both tables (the dual-write window makes that the NORMAL state for a page
+ * row) was always reported as `page_chat`, which happens to be right, but only
+ * by accident of statement order.
  */
 async function getMessage(messageId: string): Promise<AiMessage | null> {
   loggers.api.debug('[AiUndo:Preview] Looking up message', { messageId });
 
-  // Try page chat messages first
-  const pageMessage = await db.query.chatMessages.findFirst({
-    where: eq(chatMessages.id, messageId),
-  });
-
-  if (pageMessage) {
-    loggers.api.debug('[AiUndo:Preview] Message found in page_chat', {
-      messageId,
-      conversationId: pageMessage.conversationId,
-      pageId: pageMessage.pageId,
-      isActive: pageMessage.isActive,
-    });
-    return {
-      id: pageMessage.id,
-      conversationId: pageMessage.conversationId,
-      pageId: pageMessage.pageId,
-      createdAt: pageMessage.createdAt,
-      isActive: pageMessage.isActive,
-      source: 'page_chat',
-    };
-  }
-
-  // Try global assistant messages
-  const globalMessage = await db.query.messages.findFirst({
+  const row = await db.query.messages.findFirst({
     where: eq(messages.id, messageId),
+    // The conversation carries the two facts this lookup exists to derive:
+    // which KIND of thread it is, and (for a page thread) which page.
+    with: { conversation: { columns: { type: true, contextId: true } } },
   });
 
-  if (globalMessage) {
-    loggers.api.debug('[AiUndo:Preview] Message found in global_chat', {
-      messageId,
-      conversationId: globalMessage.conversationId,
-      isActive: globalMessage.isActive,
-    });
-    return {
-      id: globalMessage.id,
-      conversationId: globalMessage.conversationId,
-      pageId: null, // Global messages don't have a pageId directly
-      createdAt: globalMessage.createdAt,
-      isActive: globalMessage.isActive,
-      source: 'global_chat',
-    };
+  if (!row) {
+    loggers.api.debug('[AiUndo:Preview] Message not found', { messageId });
+    return null;
   }
 
-  loggers.api.debug('[AiUndo:Preview] Message not found in any table', { messageId });
-  return null;
+  const conversationType = row.conversation?.type;
+  const source: MessageSource = conversationType === 'global' ? 'global_chat' : 'page_chat';
+  // A global thread has no page (and its `contextId` is NULL by CHECK). A page
+  // thread's page IS `contextId`; a `type='client'` thread still carries it in
+  // the transitional column — the same derivation `unifiedPageScope` documents.
+  const pageId = source === 'global_chat'
+    ? null
+    : (conversationType === 'page' ? (row.conversation?.contextId ?? null) : row.pageId);
+
+  loggers.api.debug('[AiUndo:Preview] Message found', {
+    messageId,
+    conversationId: row.conversationId,
+    pageId,
+    source,
+    isActive: row.isActive,
+  });
+
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    pageId,
+    createdAt: row.createdAt,
+    isActive: row.isActive,
+    source,
+  };
 }
 
 /**
@@ -174,10 +177,15 @@ export async function previewAiUndo(
     const driveId = pageId ? await getPageDriveId(pageId) : null;
     loggers.api.debug('[AiUndo:Preview] Drive context resolved', { driveId });
 
-    // Count messages that will be affected (from this message forward in the conversation)
-    // Use the correct table based on source
-    const table = source === 'page_chat' ? chatMessages : messages;
-
+    // Count messages that will be affected (from this message forward in the
+    // conversation). One table since the merge — the `source` ternary that used
+    // to pick between `chat_messages` and `messages` is gone, and with it the
+    // question of which table the count and the sweep each looked at. `source`
+    // survives because callers still report it.
+    //
+    // Scoped by conversationId ALONE, as the plan's D6 calls for: a
+    // conversation id is a cuid2 and already names one thread.
+    //
     // SAFE DEFAULT (undo-vs-in-flight-stream UX still needs a product call — see the PR 2
     // board's "Open decision"): a 'streaming' row is excluded from the sweep entirely, not
     // just skipped in the count. Undo must never soft-delete a row a live generation still
@@ -186,14 +194,14 @@ export async function previewAiUndo(
     // finishes. Everything else in range still gets undone; only the live placeholder is left
     // untouched. See Server Stream Durability epic PR 2.
     const affectedMessages = await db
-      .select({ id: table.id })
-      .from(table)
+      .select({ id: messages.id })
+      .from(messages)
       .where(
         and(
-          eq(table.conversationId, conversationId),
-          gte(table.createdAt, createdAt),
-          eq(table.isActive, true),
-          ne(table.status, 'streaming')
+          eq(messages.conversationId, conversationId),
+          gte(messages.createdAt, createdAt),
+          eq(messages.isActive, true),
+          ne(messages.status, 'streaming')
         )
       );
 
@@ -205,23 +213,14 @@ export async function previewAiUndo(
 
     // Find the message immediately preceding this one in the same conversation
     // to include any tool calls that happened before this message was created
-    const precedingMessage = source === 'page_chat'
-      ? await db.query.chatMessages.findFirst({
-          where: and(
-            eq(chatMessages.conversationId, conversationId),
-            lt(chatMessages.createdAt, createdAt),
-            eq(chatMessages.isActive, true)
-          ),
-          orderBy: desc(chatMessages.createdAt),
-        })
-      : await db.query.messages.findFirst({
-          where: and(
-            eq(messages.conversationId, conversationId),
-            lt(messages.createdAt, createdAt),
-            eq(messages.isActive, true)
-          ),
-          orderBy: desc(messages.createdAt),
-        });
+    const precedingMessage = await db.query.messages.findFirst({
+      where: and(
+        eq(messages.conversationId, conversationId),
+        lt(messages.createdAt, createdAt),
+        eq(messages.isActive, true)
+      ),
+      orderBy: desc(messages.createdAt),
+    });
 
     // Use preceding message's timestamp (if it exists) to catch all activities in this turn
     // If no preceding message, we still start from createdAt but tool calls might be missed
@@ -536,38 +535,39 @@ export async function executeAiUndo(
         fromTimestamp: createdAt.toISOString(),
       });
 
-      // Update primary table first (based on source). Excludes 'streaming' rows — see the
-      // SAFE DEFAULT note on previewAiUndo's affectedMessages query above; the same exclusion
-      // must apply to the actual mutation, not just its preview count.
-      const primaryTable = preview.source === 'page_chat' ? chatMessages : messages;
+      // The UNIFIED leg — the one every reader now consults. Excludes
+      // 'streaming' rows: see the SAFE DEFAULT note on previewAiUndo's
+      // affectedMessages query above; the same exclusion must apply to the
+      // actual mutation, not just its preview count.
       await tx
-        .update(primaryTable)
+        .update(messages)
         .set({ isActive: false })
         .where(
           and(
-            eq(primaryTable.conversationId, conversationId),
-            gte(primaryTable.createdAt, createdAt),
-            eq(primaryTable.isActive, true),
-            ne(primaryTable.status, 'streaming')
+            eq(messages.conversationId, conversationId),
+            gte(messages.createdAt, createdAt),
+            eq(messages.isActive, true),
+            ne(messages.status, 'streaming')
           )
         );
 
-      // Also update secondary table to catch any orphaned messages
-      // This handles edge cases where conversationId exists in both tables
-      const secondaryTable = preview.source === 'page_chat' ? messages : chatMessages;
-      loggers.api.debug('[AiUndo:Execute] Soft-deleting from secondary table', {
-        secondaryTable: preview.source === 'page_chat' ? 'messages' : 'chatMessages',
-        conversationId,
-      });
+      // The LEGACY leg, mirrored in the same transaction. Not "the other
+      // table for the other kind of chat" any more — since the merge both
+      // kinds live in `messages`, and this is the dual-write's tombstone half.
+      // It stays until PR 15 drops `chat_messages`, because a revert of the
+      // reader cutover must find that table already correct: an undo that only
+      // tombstoned the unified leg would resurrect every undone message the
+      // moment a reader went back to the legacy one. Matches nothing for a
+      // global conversation, which is the right no-op.
       await tx
-        .update(secondaryTable)
+        .update(chatMessages)
         .set({ isActive: false })
         .where(
           and(
-            eq(secondaryTable.conversationId, conversationId),
-            gte(secondaryTable.createdAt, createdAt),
-            eq(secondaryTable.isActive, true),
-            ne(secondaryTable.status, 'streaming')
+            eq(chatMessages.conversationId, conversationId),
+            gte(chatMessages.createdAt, createdAt),
+            eq(chatMessages.isActive, true),
+            ne(chatMessages.status, 'streaming')
           )
         );
 
