@@ -38,11 +38,24 @@ ALTER TABLE "messages" ADD CONSTRAINT "messages_sourceAgentId_pages_id_fk" FOREI
 -- enforced that — `conversationId` is client-suppliable and self-minting — so
 -- it is asserted here, before a single row is written.
 --
--- Failing loudly on real data is the CORRECT outcome: a conversation whose
+-- Failing loudly on real data is the CORRECT outcome: a PAGE conversation whose
 -- messages straddle two pages cannot be synthesized into one row without
 -- guessing which page it belongs to, and a wrong guess silently relocates
 -- someone's history. The fix is a deliberate split (a data repair, reviewed on
 -- its own), not a default inside a migration.
+--
+-- SCOPE — `type='client'` threads are EXCLUDED from the abort, deliberately.
+-- An API thread is anchored to a DRIVE, not a page: its `contextId` is the
+-- drive id, so the "contextId must represent the page" premise above simply
+-- does not apply to it. Addressing more than one agent page over a thread's
+-- life is a DOCUMENTED, SUPPORTED shape (docs/2.0-architecture/
+-- agent-sessions.md), and 0252 already handles it gracefully downstream —
+-- it derives `conversations."agentPageId"` from the EARLIEST naming row and
+-- merely warns ('% client conversation(s) named more than one agent page;
+-- anchored to the earliest'). Aborting here would make the upgrade impossible
+-- for any deployment that ever served a two-agent API thread, to protect an
+-- invariant that thread never had to satisfy. These are still surfaced by the
+-- non-fatal audit immediately below (they trip its `c."type" <> 'page'` arm).
 DO $$
 DECLARE
   offender_count bigint;
@@ -50,19 +63,27 @@ DECLARE
 BEGIN
   SELECT count(*) INTO offender_count
   FROM (
-    SELECT "conversationId"
-    FROM "chat_messages"
-    GROUP BY "conversationId"
-    HAVING count(DISTINCT "pageId") > 1
+    SELECT cm."conversationId"
+    FROM "chat_messages" cm
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "conversations" c
+       WHERE c."id" = cm."conversationId" AND c."type" = 'client'
+    )
+    GROUP BY cm."conversationId"
+    HAVING count(DISTINCT cm."pageId") > 1
   ) straddling;
 
   IF offender_count > 0 THEN
     SELECT string_agg(c, ', ') INTO offender_sample
     FROM (
-      SELECT "conversationId" AS c
-      FROM "chat_messages"
-      GROUP BY "conversationId"
-      HAVING count(DISTINCT "pageId") > 1
+      SELECT cm."conversationId" AS c
+      FROM "chat_messages" cm
+      WHERE NOT EXISTS (
+        SELECT 1 FROM "conversations" cv
+         WHERE cv."id" = cm."conversationId" AND cv."type" = 'client'
+      )
+      GROUP BY cm."conversationId"
+      HAVING count(DISTINCT cm."pageId") > 1
       ORDER BY 1
       LIMIT 50
     ) sample;

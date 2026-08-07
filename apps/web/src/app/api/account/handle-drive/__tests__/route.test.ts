@@ -16,7 +16,16 @@ vi.mock('@pagespace/db/db', () => ({
     },
     update: vi.fn(),
     delete: vi.fn(),
+    // The drive delete runs in a transaction now — its chat history has to go
+    // with it, and the two must not be able to half-happen. The tx exposes the
+    // same `delete` mock the assertions already inspect.
+    transaction: vi.fn(),
   },
+}));
+// A collaborator with its own live-DB coverage — see
+// `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
+  deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
@@ -128,7 +137,9 @@ describe('POST /api/account/handle-drive', () => {
     return whereMock;
   };
 
-  // Helper to setup delete mock
+  // Helper to setup delete mock. The route deletes inside a transaction, so
+  // the tx handed to the callback carries the same `delete` chain — the
+  // assertions below inspect that one mock either way.
   const setupDeleteMock = () => {
     const whereMock = vi.fn().mockResolvedValue(undefined);
     vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
@@ -137,6 +148,10 @@ describe('POST /api/account/handle-drive', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    vi.mocked(db.transaction).mockImplementation(async (fn) =>
+      fn({ delete: db.delete } as unknown as Parameters<typeof fn>[0]),
+    );
 
     // Setup default auth success
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(

@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { and, eq, sql } from '@pagespace/db/operators'
+import { eq, sql } from '@pagespace/db/operators'
 import { pages, favorites, pageTags } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
-import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { inArray, or } from '@pagespace/db/operators'
+import { deleteConversationsForPages } from '@pagespace/lib/repositories/conversation-cleanup';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -32,25 +31,15 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     // nothing else would do it: `conversations.contextId` has never been a
     // foreign key, `conversations.agentPageId`'s is ON DELETE SET NULL, and
     // the `chat_messages.pageId` cascade that used to cover this went with the
-    // table at PR 15. Without this statement a permanently deleted page's chat
-    // history would outlive it, still readable by conversation id.
+    // table at PR 15. Without this a permanently deleted page's chat history
+    // would outlive it, still readable by conversation id.
     //
-    // The conversation set is exactly `unifiedPageScope`'s two disjuncts: the
-    // page's own `type='page'` threads, plus the `type='client'` API threads
-    // that named it. Collected BEFORE the `pages` delete below, which is what
-    // clears `agentPageId`.
-    const pageConversationIds = await tx
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(or(
-        and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId)),
-        and(eq(conversations.type, 'client'), eq(conversations.agentPageId, pageId)),
-      ));
-    if (pageConversationIds.length > 0) {
-      await tx.delete(messages).where(
-        inArray(messages.conversationId, pageConversationIds.map((c) => c.id)),
-      );
-    }
+    // Called BEFORE the `pages` delete below, which is what clears
+    // `agentPageId`. This statement used to be written inline here, which is
+    // why every OTHER deletion path — the cron purge and all four drive-delete
+    // sites — silently under-deleted; it now lives in one shared helper they
+    // all call. Recursion above means this node's own id is the whole scope.
+    await deleteConversationsForPages(tx, [pageId]);
 
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 

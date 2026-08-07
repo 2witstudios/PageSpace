@@ -101,9 +101,10 @@ describe('drizzle/0252 — drop chat_messages', () => {
     expect(drop.code).toContain('CREATE INDEX IF NOT EXISTS');
     expect(drop.code).toContain('DROP INDEX IF EXISTS');
     expect(drop.code).toContain('DROP COLUMN IF EXISTS');
-    // The sweep and the guard both read a table this same migration drops;
-    // the client page-link backfill reads a COLUMN it drops.
-    expect(drop.code.match(/to_regclass\('public\.chat_messages'\) IS NULL/g)?.length).toBe(2);
+    // The sweep, the stale-twin repair and the guard all read a table this
+    // same migration drops; the client page-link backfill reads a COLUMN it
+    // drops.
+    expect(drop.code.match(/to_regclass\('public\.chat_messages'\) IS NULL/g)?.length).toBe(3);
     expect(drop.code).toMatch(/table_name = 'messages' AND column_name = 'pageId'/);
     expect(drop.code).toContain('ON CONFLICT ("id") DO NOTHING');
   });
@@ -449,6 +450,86 @@ describeLive('0252 against a real Postgres', () => {
       // be worse than one that refused.
       expect(await tableExists(s, 'chat_messages')).toBe(true);
       expect(await columnExists(s, 'messages', 'pageId')).toBe(true);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('REPAIRS a write that landed on the legacy leg alone — the dual-write window loss', async () => {
+    const s = await openScenario('lostwrite');
+    try {
+      await seedFixtures(s);
+      await seedTwinnedCorpus(s);
+
+      // THE SHAPE THE ROW-ONLY GUARD CANNOT SEE. Both of these rows HAVE a
+      // twin (same id, conversation and role), so the completeness guard is
+      // satisfied and the table drops — but the twin is STALE.
+      //
+      // It gets this way during PR 10's dual-write window, not after the PR 14
+      // freeze: an old pod that has not yet picked up the dual-write serves an
+      // edit or a soft-delete and writes it to `chat_messages` ONLY. The
+      // documented `UNIFIED_MESSAGES_DUAL_WRITE=off` kill switch makes that
+      // window operator-controllable and arbitrarily long. Nothing repairs it
+      // afterwards: the backfill only ever INSERTs rows that are missing, and
+      // the 0252 sweep skips any row that already has a twin.
+      //
+      // After the freeze the legacy leg is immutable, so each of these shapes
+      // is positive proof of a lost write rather than normal divergence.
+
+      // (a) an edit that only the legacy leg received.
+      await s.query(`
+        UPDATE "chat_messages" SET "content" = 'EDITED TEXT', "editedAt" = now()
+         WHERE "id" = 'm_page_1'
+      `);
+      // (b) a soft-delete that only the legacy leg received. Dropping the
+      //     table without repairing this RESURRECTS a deleted message as live.
+      await s.query(`
+        UPDATE "chat_messages" SET "isActive" = false WHERE "id" = 'm_page_2'
+      `);
+
+      expect(await s.migrate()).toBeNull();
+      expect(await tableExists(s, 'chat_messages')).toBe(false);
+
+      const rows = await s.query<{
+        id: string; content: string; editedAt: Date | null; isActive: boolean;
+      }>(
+        `SELECT "id", "content", "editedAt", "isActive" FROM "messages"
+          WHERE "id" IN ('m_page_1', 'm_page_2') ORDER BY "id"`,
+      );
+
+      // The edit survived the drop instead of reverting to the original text.
+      expect(rows[0].content).toBe('EDITED TEXT');
+      expect(rows[0].editedAt).not.toBeNull();
+      // The deletion survived the drop instead of the message coming back.
+      expect(rows[1].isActive).toBe(false);
+
+      expect(s.notices.join('\n')).toMatch(/repaired 2 stale unified row\(s\)/);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('is idempotent and SILENT when the unified leg is already the newer truth', async () => {
+    const s = await openScenario('norepair');
+    try {
+      await seedFixtures(s);
+      await seedTwinnedCorpus(s);
+      // The healthy post-freeze direction: `messages` carries the edit and the
+      // soft-delete, `chat_messages` is the frozen original. The repair must
+      // not fire here — running it backwards would undo real edits, which is
+      // the exact failure the row-only guard was trying to avoid.
+      await s.query(`UPDATE "messages" SET "content" = 'newer', "editedAt" = now() WHERE "id" = 'm_page_1'`);
+      await s.query(`UPDATE "messages" SET "isActive" = false WHERE "id" = 'm_page_2'`);
+
+      expect(await s.migrate()).toBeNull();
+
+      const rows = await s.query<{ id: string; content: string; isActive: boolean }>(
+        `SELECT "id", "content", "isActive" FROM "messages"
+          WHERE "id" IN ('m_page_1', 'm_page_2') ORDER BY "id"`,
+      );
+      expect(rows[0].content).toBe('newer');
+      expect(rows[1].isActive).toBe(false);
+      expect(s.notices.join('\n')).toMatch(/no stale unified rows/);
     } finally {
       await s.pool.end();
     }

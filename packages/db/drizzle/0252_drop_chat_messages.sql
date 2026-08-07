@@ -11,19 +11,22 @@
 --
 --   1. `conversations."agentPageId"` — the page link a `type='client'` (API)
 --      thread needs, because its `contextId` is a DRIVE and the transitional
---      `messages."pageId"` it used to answer through is dropped in step 6.
+--      `messages."pageId"` it used to answer through is dropped in step 7.
 --   2. FINAL SWEEP: copy any `chat_messages` row that has no `messages` twin.
 --      This is what protects a tenant/onprem operator who skipped the release
 --      carrying `scripts/backfill-unify-messages.ts` — those deployments have
 --      no operator to run a script, so the migration has to be the backfill.
 --   3. Backfill `agentPageId` from the page the thread's rows named, while
 --      that column still exists.
---   4. COMPLETENESS GUARD: refuse to drop the table if it still holds a row
+--   4. STALE-TWIN REPAIR: carry across an edit or a soft-delete that landed on
+--      the LEGACY leg alone during the dual-write window, before its evidence
+--      is dropped.
+--   5. COMPLETENESS GUARD: refuse to drop the table if it still holds a row
 --      `messages` does not represent.
---   5. `DROP TABLE chat_messages`.
---   6. `ALTER TABLE messages DROP COLUMN "pageId"` and its indexes.
+--   6. `DROP TABLE chat_messages`.
+--   7. `ALTER TABLE messages DROP COLUMN "pageId"` and its indexes.
 --
--- Steps 2–4 exist because the drop must be safe on a database this repository
+-- Steps 2–5 exist because the drop must be safe on a database this repository
 -- has never seen. On cloud they are all no-ops: PR 10's dual-write, the
 -- backfill script and PR 14's `VALIDATE CONSTRAINT` receipt already proved
 -- `messages` is a superset.
@@ -49,7 +52,7 @@ CREATE INDEX IF NOT EXISTS "conversations_agent_page_id_idx" ON "conversations" 
 -- the same column mapping the backfill script used. A row whose conversation
 -- does not exist CANNOT be copied — `messages."conversationId"` carries a
 -- validated, cascading FK — so it is left behind deliberately and named by the
--- guard in step 4 rather than aborting here with an opaque 23503. Migration
+-- guard in step 5 rather than aborting here with an opaque 23503. Migration
 -- 0250 already RAISEs on that shape, so reaching it here means 0250 was
 -- bypassed.
 DO $$
@@ -96,7 +99,7 @@ DECLARE
   ambiguous bigint;
   dead_page bigint;
 BEGIN
-  -- The source column is dropped by step 6, so on a re-run there is nothing
+  -- The source column is dropped by step 7, so on a re-run there is nothing
   -- left to derive FROM — and the stamps this block already wrote are still
   -- there. Returning before the UPDATE also stops PL/pgSQL from ever planning
   -- a statement that names a column that no longer exists.
@@ -151,7 +154,80 @@ BEGIN
   END IF;
 END $$;--> statement-breakpoint
 
--- ── 4. COMPLETENESS GUARD ─────────────────────────────────────────────────
+-- ── 4. STALE-TWIN REPAIR ──────────────────────────────────────────────────
+-- The completeness guard below asks only whether a ROW is represented. That is
+-- the right question after the PR 14 freeze, but it is blind to a row that HAS
+-- a twin whose twin is STALE — and the drop destroys the evidence.
+--
+-- HOW A TWIN GOES STALE. Not after the freeze; DURING PR 10's dual-write
+-- rolling deploy. A pod that has not yet picked up the dual-write serves an
+-- edit or a soft-delete and writes it to `chat_messages` ALONE. The documented
+-- `UNIFIED_MESSAGES_DUAL_WRITE=off` kill switch makes that window
+-- operator-controllable and arbitrarily long. Nothing downstream repairs it:
+-- `scripts/backfill-unify-messages.ts` only INSERTs rows that are missing and
+-- never updates one it already copied, the sweep in step 2 skips any row that
+-- already has a twin, and the retired reconcile cron compared only row counts
+-- and `MAX("createdAt")` — neither of which moves when a row is edited in
+-- place. So the divergence survives all the way to here, and dropping the
+-- table silently REVERTS the edit and RESURRECTS the soft-deleted message.
+--
+-- WHY THESE TWO SHAPES PROVE A LOST WRITE. Since PR 14 the legacy leg is
+-- IMMUTABLE — nothing writes it. So the legacy leg can only be ahead of the
+-- unified leg if the write predates the freeze and never crossed over:
+--   * `chat_messages."editedAt"` set, and the unified row's is NULL or OLDER
+--     → an edit the unified leg never received;
+--   * `chat_messages."isActive" = false` while the unified row is still true
+--     → a soft-delete the unified leg never received. Resurrecting a
+--       tombstoned message is the worse of the two failures.
+-- The REVERSE direction (unified newer) is the normal, healthy state and is
+-- deliberately left alone — see the guard's note below.
+--
+-- REPAIR, NOT RAISE. The direction here is unambiguous: there is exactly one
+-- newer value and it is about to be deleted. A RAISE would block the deploy on
+-- a condition the operator has no way to resolve by hand — the remedy would be
+-- "hand-merge two message tables", with the correct answer already computable
+-- right here. Refusing to deploy is only the right call when a human has to
+-- CHOOSE (that is the guard below, where a row cannot be represented at all).
+--
+-- Each field is repaired only on the condition that proves IT stale, so a row
+-- carrying a legacy soft-delete AND a legitimately newer unified edit keeps
+-- the edit and gains the deletion. Idempotent: after the UPDATE neither
+-- predicate can still hold, so a re-run matches nothing.
+DO $$
+DECLARE
+  repaired bigint;
+BEGIN
+  IF to_regclass('public.chat_messages') IS NULL THEN
+    RAISE NOTICE '0252: chat_messages is already gone — stale-twin repair skipped';
+    RETURN;
+  END IF;
+
+  UPDATE "messages" m
+     SET "content" = CASE
+           WHEN c."editedAt" IS NOT NULL AND (m."editedAt" IS NULL OR c."editedAt" > m."editedAt")
+           THEN c."content" ELSE m."content" END,
+         "editedAt" = CASE
+           WHEN c."editedAt" IS NOT NULL AND (m."editedAt" IS NULL OR c."editedAt" > m."editedAt")
+           THEN c."editedAt" ELSE m."editedAt" END,
+         "isActive" = CASE
+           WHEN c."isActive" = false AND m."isActive" = true
+           THEN false ELSE m."isActive" END
+    FROM "chat_messages" c
+   WHERE m."id" = c."id"
+     AND (
+       (c."editedAt" IS NOT NULL AND (m."editedAt" IS NULL OR c."editedAt" > m."editedAt"))
+       OR (c."isActive" = false AND m."isActive" = true)
+     );
+  GET DIAGNOSTICS repaired = ROW_COUNT;
+
+  IF repaired > 0 THEN
+    RAISE WARNING '0252: repaired % stale unified row(s) whose edit or soft-delete had landed only on chat_messages (dual-write window loss)', repaired;
+  ELSE
+    RAISE NOTICE '0252: no stale unified rows — every legacy edit/soft-delete had already crossed over';
+  END IF;
+END $$;--> statement-breakpoint
+
+-- ── 5. COMPLETENESS GUARD ─────────────────────────────────────────────────
 -- The last chance to notice that dropping the table would lose something.
 --
 -- A "twin" is a `messages` row with the SAME id, in the SAME conversation,
@@ -162,7 +238,9 @@ END $$;--> statement-breakpoint
 -- healthy database — the unified row is the newer truth, and has been the only
 -- row anyone reads since PR 12 — so a content-equality guard would refuse to
 -- deploy on every database that has served an edit. What must not be lost is a
--- ROW, and that is what this checks.
+-- ROW, and that is what this checks. The narrow, PROVABLY-backwards subset of
+-- divergence is not left to this guard at all: step 4 above has already
+-- repaired it.
 DO $$
 DECLARE
   untwinned bigint;
@@ -210,10 +288,10 @@ BEGIN
   RAISE NOTICE '0252: completeness guard passed — every chat_messages row has a messages twin';
 END $$;--> statement-breakpoint
 
--- ── 5. THE DROP ───────────────────────────────────────────────────────────
+-- ── 6. THE DROP ───────────────────────────────────────────────────────────
 DROP TABLE IF EXISTS "chat_messages" CASCADE;--> statement-breakpoint
 
--- ── 6. The transitional column goes with it ───────────────────────────────
+-- ── 7. The transitional column goes with it ───────────────────────────────
 -- A message's page is its CONVERSATION's page now: `contextId` for
 -- `type='page'`, `agentPageId` for `type='client'`
 -- (apps/web/src/lib/repositories/unified-message-scope.ts is the one place

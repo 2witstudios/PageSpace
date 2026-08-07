@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -108,8 +109,16 @@ export async function POST(req: Request) {
     }
 
     if (action === 'delete') {
-      // Delete the drive (CASCADE will handle members and pages)
-      await db.delete(drives).where(eq(drives.id, driveId));
+      // Delete the drive (CASCADE will handle members and pages). Chat history
+      // is NOT part of that cascade — `conversations.contextId` is not a
+      // foreign key — so it goes first, explicitly, while the drive's pages
+      // still exist to be traced through. This route is account-deletion prep,
+      // which makes it an Article 17 path: leaving conversations behind would
+      // strand their messages and `ai_stream_sessions.parts` content.
+      await db.transaction(async (tx) => {
+        await deleteConversationsForDrive(tx, driveId);
+        await tx.delete(drives).where(eq(drives.id, driveId));
+      });
 
       loggers.auth.info(`Drive deleted during account deletion preparation: ${driveId} by ${userId}`);
 
