@@ -335,19 +335,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
   }
 
   /**
-   * Chat messages — read from the UNIFIED `messages` table ONLY (epic
-   * "Agent-Session Single Source of Truth", Phase 4 / D6, PR 13).
-   *
-   * `chat_messages` is deliberately NOT read here, and this is the ONE
-   * compliance leg that drops the legacy table before PR 15 drops the table
-   * itself. Since the dual-write + backfill (PRs 9/10) `messages` is a
-   * SUPERSET of `chat_messages`: every page-chat row is written to both legs
-   * in one transaction under the SAME primary key, and the historical corpus
-   * was carried across by `scripts/backfill-unify-messages.ts`. Reading both
-   * would therefore export every page-chat message TWICE (same id, once as
-   * 'ai_chat' and once as 'conversation') — a duplicate, not extra coverage.
-   * Erasure and retention keep both legs for the opposite reason: rows
-   * physically exist in `chat_messages` and must still be reachable.
+   * Chat messages — one table, every kind of thread (epic "Agent-Session
+   * Single Source of Truth", Phase 4 / D6).
    *
    * ── Why the predicate is not just `messages.userId = :subject` ──────────
    * `userId` is the HUMAN author and is NULL for every agent/system-authored
@@ -388,6 +377,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       status: messages.status,
       conversationType: conversations.type,
       conversationContextId: conversations.contextId,
+      conversationAgentPageId: conversations.agentPageId,
     })
     .from(messages)
     .innerJoin(conversations, eq(messages.conversationId, conversations.id))
@@ -408,14 +398,18 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       source: isGlobal ? 'conversation' : 'ai_chat',
       content: msg.content,
       role: msg.role,
-      // The page comes from the CONVERSATION, never from `messages.pageId`
-      // (transitional, dropped at PR 15) — `conversations.contextId` is the
-      // end-state authority (Phase 4 PR 11's rule). Only `type='page'` has a
-      // page there; a `type='client'` row's contextId is a DRIVE id, so it
-      // reports no pageId rather than a wrong one.
-      ...(msg.conversationType === 'page' && msg.conversationContextId
-        ? { pageId: msg.conversationContextId }
-        : {}),
+      // The page comes from the CONVERSATION — there is no per-row page
+      // column. Each kind names it in its own place: `type='page'` in
+      // `contextId`, `type='client'` in `agentPageId` (its `contextId` is a
+      // DRIVE). Anything else — a global thread, or an API thread that never
+      // ran a completion — reports no pageId rather than a wrong one.
+      ...(() => {
+        const derived =
+          msg.conversationType === 'page' ? msg.conversationContextId
+          : msg.conversationType === 'client' ? msg.conversationAgentPageId
+          : null;
+        return derived ? { pageId: derived } : {};
+      })(),
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
       status: msg.status,

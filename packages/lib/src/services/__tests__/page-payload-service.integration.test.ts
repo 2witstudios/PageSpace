@@ -12,7 +12,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadPagePayload } from '../page-payload-service';
@@ -21,7 +21,6 @@ import { PageType } from '../../utils/enums';
 describe('loadPagePayload (integration)', () => {
   beforeEach(async () => {
     await db.delete(channelMessages);
-    await db.delete(chatMessages);
     await db.delete(connections);
     await db.delete(pagePermissions);
     await db.delete(pages);
@@ -82,12 +81,13 @@ describe('loadPagePayload (integration)', () => {
   });
 
   /**
-   * READER-CUTOVER PARITY (epic "Agent-Session Single Source of Truth",
-   * Phase 4 / D6, PR 11): `fetchChatMessages` now reads the unified `messages`
-   * table, scoped by `conversations.type='page' AND contextId = pageId`
-   * instead of `chat_messages.pageId`. Same corpus, same rows.
+   * `fetchChatMessages` reads the one `messages` table, scoped by
+   * `conversations.type='page' AND contextId = pageId` — the join that
+   * replaced `chat_messages.pageId` (epic "Agent-Session Single Source of
+   * Truth", Phase 4 / D6). What it must return is the page's ACTIVE,
+   * non-streaming rows, oldest-first, each carrying its derived page.
    */
-  it('matches the frozen legacy chat_messages query for an AI_CHAT page', async () => {
+  it('returns the AI_CHAT page\'s active history, oldest first, with the page derived', async () => {
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
     const chat = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'AI parity' });
@@ -97,35 +97,13 @@ describe('loadPagePayload (integration)', () => {
     await factories.createChatMessage(chat.id, { content: 'tombstoned', userId: owner.id, isActive: false, createdAt: new Date('2026-01-01T12:00:00Z') });
     await factories.createChatMessage(chat.id, { content: '', userId: owner.id, status: 'streaming', createdAt: new Date('2026-01-01T13:00:00Z') });
 
-    // The pre-cutover query, frozen here verbatim.
-    const legacy = await db
-      .select({
-        id: chatMessages.id,
-        conversationId: chatMessages.conversationId,
-        role: chatMessages.role,
-        content: chatMessages.content,
-        createdAt: chatMessages.createdAt,
-        isActive: chatMessages.isActive,
-        userId: chatMessages.userId,
-      })
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, chat.id),
-        eq(chatMessages.isActive, true),
-        ne(chatMessages.status, 'streaming'),
-      ))
-      .orderBy(desc(chatMessages.createdAt))
-      .limit(50);
-
     const payload = await loadPagePayload(owner.id, chat.id);
 
-    expect(payload.context.chatMessages?.map((m) => m.id)).toEqual(
-      legacy.map((r) => r.id).reverse(),
-    );
+    // The tombstone and the mid-flight placeholder are excluded; what remains
+    // is oldest-first.
     expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['oldest', 'newest']);
-    // `pageId` is now supplied by the join's own argument rather than the
-    // transitional `messages.pageId` column — same value, no dependency on a
-    // column the contract PR drops.
+    // `pageId` is DERIVED from the conversation now — there is no per-row page
+    // column left to read it from.
     expect(payload.context.chatMessages?.every((m) => m.pageId === chat.id)).toBe(true);
   });
 

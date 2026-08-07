@@ -156,7 +156,7 @@ export const conversationRepository = {
    * conversation — a cheap indexed lookup short-circuits once the row exists.
    *
    * Refuses to claim a caller-supplied conversationId that belongs to someone
-   * else: a legacy conversation (real chat_messages, no conversations row
+   * else: a legacy conversation (real messages, no conversations row
    * yet) must not be "claimable" by a different caller who supplies its ID —
    * ownership-gated actions elsewhere (e.g. conversation deletion) trust
    * conversations.userId. Centralized here (rather than at each call site)
@@ -211,6 +211,45 @@ export const conversationRepository = {
     // poll. Emitted from the repository — routes never decide (SSoT §3).
     emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
     return 'created';
+  },
+
+  /**
+   * Stamp a `type='client'` thread's agent page — the ONLY writer of
+   * `conversations.agentPageId`, and the replacement for the transitional
+   * `messages.pageId` that Phase 4 PR 15 dropped.
+   *
+   * An API-managed conversation (`POST /api/v1/conversations`) is minted
+   * before anyone knows which agent it will talk to: the model — and therefore
+   * the agent page — arrives with the first `POST /api/v1/chat/completions`.
+   * So the page is claimed lazily, by that first completion.
+   *
+   * WRITE-ONCE, enforced by the statement rather than by a check the caller
+   * could skip: `agentPageId IS NULL` in the WHERE means a later request
+   * naming a different agent matches zero rows instead of re-pointing a
+   * thread whose history and edit/delete permissions are already anchored to
+   * the first page. Same shape, and the same reasoning, as
+   * `claimConversation` above.
+   *
+   * `type='client'` in the WHERE too, so a mis-wired caller cannot give a page
+   * or global conversation a second page link — those kinds derive their page
+   * from `contextId`, and `derivedPageId()` would never read this column for
+   * them anyway.
+   *
+   * Deliberately NOT a rev bump or a lifecycle emit: no subscriber renders
+   * this column (API threads have no in-app viewer), and it is idempotent
+   * bookkeeping on the hot completion path, not a content mutation.
+   */
+  async stampClientConversationPage(conversationId: string, pageId: string): Promise<'stamped' | 'noop'> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ agentPageId: pageId })
+      .where(and(
+        eq(conversations.id, conversationId),
+        eq(conversations.type, 'client'),
+        isNull(conversations.agentPageId),
+      ))
+      .returning({ id: conversations.id });
+    return updated ? 'stamped' : 'noop';
   },
 
   /**
@@ -294,8 +333,8 @@ export const conversationRepository = {
     // Reads the UNIFIED `messages` table since the message-table merge (epic
     // "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope is the
     // `unifiedPageScopeSql` fragment — the SQL twin of `unifiedPageScope` in
-    // message-repository.ts, and the same pair of predicates for the same
-    // reasons. `chat_messages` is still dual-written, so a revert is safe.
+    // unified-message-scope.ts, and the same pair of predicates for the same
+    // reasons.
     const result = await db.execute<ConversationStats>(sql`
       WITH page_messages AS (
         SELECT m."conversationId", m.content, m.role, m."createdAt"
@@ -485,12 +524,9 @@ export const conversationRepository = {
       // letting the agents console's reopen affordance resurrect one with
       // no messages left.
       // The ONE message write outside message-repository.ts that a real user
-      // can trigger, so it goes through the same shared page writer. The
-      // mirrored `chat_messages` sweep that used to sit beside it is gone
-      // (Phase 4 PR 14): `messages` is the only table anyone reads OR writes,
-      // and tombstoning a frozen table would be writing history nobody can
-      // see. `agentId` no longer scopes the statement — the conversation id
-      // already names one thread, and the page is `conversations.contextId`.
+      // can trigger, so it goes through the same shared page writer.
+      // `agentId` no longer scopes the statement — the conversation id
+      // already names one thread, and the page is derived from it.
       await deactivateUnifiedMessagesForConversation(tx, conversationId);
       return row ?? null;
     });

@@ -201,12 +201,13 @@ describe('runImport', () => {
       expect(agent.userScopedAccess).toBe(true);
     });
 
-    it('carries the unified messages\' page and agent attribution', async () => {
+    it('carries the unified messages\' agent attribution', async () => {
       // A conversation-scoped agent reply: NULL userId + a sourceAgentId, the
-      // exact shape 0248's attribution rule describes.
+      // exact shape the attribution rule describes. There is no per-row page
+      // column any more — a message's page is its conversation's.
       await db.execute(sql`
-        INSERT INTO messages (id, "conversationId", "userId", role, content, "pageId", "sourceAgentId", "createdAt")
-        VALUES ('test_message_attrib_001', ${FIXTURES.conversations.pageChat.id}, NULL, 'assistant', 'Agent reply', ${FIXTURES.pages.grandchild.id}, ${FIXTURES.pages.grandchild.id}, ${new Date()})
+        INSERT INTO messages (id, "conversationId", "userId", role, content, "sourceAgentId", "createdAt")
+        VALUES ('test_message_attrib_001', ${FIXTURES.conversations.pageChat.id}, NULL, 'assistant', 'Agent reply', ${FIXTURES.pages.grandchild.id}, ${new Date()})
       `);
       await exportData(db as unknown as DbClient, {
         userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -219,13 +220,42 @@ describe('runImport', () => {
       await reimport('messages');
 
       const rows = (await db.execute(sql.raw(
-        `SELECT "userId", "pageId", "sourceAgentId" FROM messages WHERE id = 'test_message_attrib_001'`,
+        `SELECT "userId", "sourceAgentId" FROM messages WHERE id = 'test_message_attrib_001'`,
       ))).rows as Record<string, unknown>[];
 
       expect(rows).toHaveLength(1);
       expect(rows[0].userId).toBeNull();
-      expect(rows[0].pageId).toBe(FIXTURES.pages.grandchild.id);
       expect(rows[0].sourceAgentId).toBe(FIXTURES.pages.grandchild.id);
+    });
+
+    it('carries a type=client thread\'s agent page link', async () => {
+      // The `type='client'` page link Phase 4 PR 15 introduced. It is the ONLY
+      // thing naming an API thread's agent page now that `messages."pageId"`
+      // is gone, so a migration that dropped it would 404 that thread's own
+      // edit/delete route in the tenant.
+      await db.execute(sql`
+        INSERT INTO conversations (id, "userId", title, type, "contextId", "agentPageId", "createdAt", "updatedAt")
+        VALUES ('test_convo_client_001', ${FIXTURES.users.owner.id}, 'API thread', 'client', ${FIXTURES.drives.shared.id}, ${FIXTURES.pages.grandchild.id}, ${new Date()}, ${new Date()})
+      `);
+      await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: bundleDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      await reimport('conversations');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "contextId", "agentPageId" FROM conversations WHERE id = 'test_convo_client_001'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      // `contextId` stays the DRIVE — it is what a drive-scoped MCP token is
+      // authorized against — and the page rides its own column.
+      expect(rows[0].contextId).toBe(FIXTURES.drives.shared.id);
+      expect(rows[0].agentPageId).toBe(FIXTURES.pages.grandchild.id);
     });
   });
 

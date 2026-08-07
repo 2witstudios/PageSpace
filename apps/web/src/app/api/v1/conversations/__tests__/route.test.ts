@@ -51,12 +51,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chatMessages.id',
-    conversationId: 'chatMessages.conversationId',
-    isActive: 'chatMessages.isActive',
-    createdAt: 'chatMessages.createdAt',
-  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -136,7 +130,7 @@ const existingConversation = {
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
   lastMessageAt: null,
 };
 

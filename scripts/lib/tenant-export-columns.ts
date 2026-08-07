@@ -150,14 +150,6 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   page_tags: { columns: ['pageId', 'tagId'] },
 
-  chat_messages: {
-    columns: [
-      'id', 'pageId', 'conversationId', 'role', 'content', 'toolCalls',
-      'toolResults', 'createdAt', 'isActive', 'editedAt', 'userId',
-      'sourceAgentId', 'messageType', 'status',
-    ],
-  },
-
   channel_messages: {
     columns: [
       'id', 'content', 'createdAt', 'pageId', 'userId', 'fileId',
@@ -187,7 +179,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   conversations: {
     columns: [
-      'id', 'userId', 'title', 'type', 'contextId', 'sessionId',
+      'id', 'userId', 'title', 'type', 'contextId', 'agentPageId', 'sessionId',
       'closedInSessionAt', 'rev', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
     ],
@@ -197,7 +189,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     columns: [
       'id', 'conversationId', 'userId', 'role', 'messageType', 'content',
       'toolCalls', 'toolResults', 'createdAt', 'isActive', 'editedAt', 'status',
-      'pageId', 'sourceAgentId',
+      'sourceAgentId',
     ],
   },
 

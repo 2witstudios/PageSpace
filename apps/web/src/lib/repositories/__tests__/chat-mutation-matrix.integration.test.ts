@@ -58,11 +58,12 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { and, eq, inArray, or } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
 
 let dbAvailable = false;
@@ -70,10 +71,9 @@ let dbAvailable = false;
 const triggeredBy = { userId: 'test', displayName: 'Test', browserSessionId: 'test-session' };
 
 /**
- * One page conversation seeded on BOTH tables — the shape the dual-write left
- * behind before Phase 4 PR 14 froze `chat_messages`. Seeding the legacy rows
- * directly (rather than through a writer) is the point: they are HISTORY now,
- * and every case below asserts the mutations no longer reach them.
+ * One page conversation and its messages. Seeded directly rather than through
+ * a writer: these rows are HISTORY, and what each case exercises is a MUTATION
+ * arriving on top of them.
  */
 async function seedPageThread(opts: { contents: Array<{ role: string; content: string }> }) {
   const owner = await factories.createUser();
@@ -96,7 +96,6 @@ async function seedPageThread(opts: { contents: Array<{ role: string; content: s
   for (const [i, m] of opts.contents.entries()) {
     const row = {
       id: createId(),
-      pageId: page.id,
       conversationId,
       userId: m.role === 'user' ? owner.id : null,
       role: m.role,
@@ -105,7 +104,6 @@ async function seedPageThread(opts: { contents: Array<{ role: string; content: s
       status: 'complete' as const,
       createdAt: new Date(base + i * 1000),
     };
-    await db.insert(chatMessages).values(row);
     await db.insert(messages).values(row);
     ids.push(row.id);
   }
@@ -113,13 +111,53 @@ async function seedPageThread(opts: { contents: Array<{ role: string; content: s
   return { ownerId: owner.id, driveId: drive.id, pageId: page.id, conversationId, ids };
 }
 
-/** What the FROZEN legacy table holds for a message — unchanged since the seed. */
-async function legacyRow(messageId: string) {
-  const [row] = await db.select().from(chatMessages).where(eq(chatMessages.id, messageId)).limit(1);
-  return row ?? null;
+/**
+ * An API-managed thread: `type='client'`, `contextId` = the DRIVE (which is
+ * what a drive-scoped MCP token is authorized against), and its agent page in
+ * `agentPageId` — the column that replaced the transitional `messages.pageId`
+ * at Phase 4 PR 15. `stamp: false` seeds the state a thread is in between
+ * `POST /api/v1/conversations` and its first completion.
+ */
+async function seedClientThread(opts?: { stamp?: boolean }) {
+  const owner = await factories.createUser();
+  const drive = await factories.createDrive(owner.id);
+  const page = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'API agent' });
+  const conversationId = createId();
+  const base = Date.now();
+
+  await db.insert(conversations).values({
+    id: conversationId,
+    userId: owner.id,
+    type: 'client',
+    contextId: drive.id,
+    agentPageId: opts?.stamp === false ? null : page.id,
+    isActive: true,
+    updatedAt: new Date(),
+  });
+
+  const ids: string[] = [];
+  for (const [i, m] of [
+    { role: 'user', content: 'api question' },
+    { role: 'assistant', content: 'api answer' },
+  ].entries()) {
+    const id = createId();
+    await db.insert(messages).values({
+      id,
+      conversationId,
+      userId: m.role === 'user' ? owner.id : null,
+      role: m.role,
+      content: m.content,
+      isActive: true,
+      status: 'complete' as const,
+      createdAt: new Date(base + i * 1000),
+    });
+    ids.push(id);
+  }
+
+  return { ownerId: owner.id, driveId: drive.id, pageId: page.id, conversationId, ids };
 }
 
-describe('chat mutation matrix — unified reads and writes, legacy leg frozen', () => {
+describe('chat mutation matrix — one message table', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -164,12 +202,6 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
         thread.conversationId,
       );
       expect(history.map((m) => m.content)).toEqual(['edited question', 'an answer']);
-
-      // 3. the freeze, from the database's own point of view: the legacy row
-      // still holds what it held before the edit. Nothing reads it, so this is
-      // not a staleness bug — it is the invariant the reconcile cron alerts on
-      // if it is ever violated in the other direction (a legacy row CHANGING).
-      expect((await legacyRow(target))?.content).toBe('original question');
     });
   });
 
@@ -178,7 +210,7 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
   // -------------------------------------------------------------------------
 
   describe('message delete', () => {
-    it('disappears from the unified reader while the frozen leg keeps its row', async () => {
+    it('disappears from the history load while the routes can still resolve it', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -203,9 +235,6 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
 
       // The routes read soft-deleted rows too and decide for themselves.
       expect((await messageRepository.getMessageById(target))?.isActive).toBe(false);
-      // Frozen: the tombstone lands on `messages` only. The legacy row is
-      // removed by retention's own legacy sweep, not by this write.
-      expect((await legacyRow(target))?.isActive).toBe(true);
     });
   });
 
@@ -242,15 +271,6 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
         thread.conversationId,
       );
       expect(history.map((m) => m.content)).toEqual(['turn one question', 'turn one answer']);
-
-      // The frozen leg is untouched by the undo — all four seeded rows are
-      // still active there. This used to assert the mirror; since Phase 4
-      // PR 14 it asserts its absence.
-      const legacyActive = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(and(eq(chatMessages.conversationId, thread.conversationId), eq(chatMessages.isActive, true)));
-      expect(legacyActive.map((r) => r.id).sort()).toEqual([...thread.ids].sort());
     });
 
     it('is idempotent on a second run (the message is already inactive)', async () => {
@@ -335,11 +355,6 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
         createdAt: new Date(),
       });
       expect(again).toBe(false);
-
-      // Neither the placeholder nor the materializer wrote the frozen table:
-      // this assistant row exists ONLY in `messages`. That is the whole of
-      // Phase 4 PR 14 stated as one row's worth of database state.
-      expect(await legacyRow(assistantId)).toBeNull();
     });
   });
 
@@ -348,7 +363,7 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
   // -------------------------------------------------------------------------
 
   describe('retention purge', () => {
-    it('sweeps both legs and recomputes lastMessageAt from the surviving unified rows', async () => {
+    it('sweeps the table and recomputes lastMessageAt from the surviving rows', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -361,23 +376,16 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
       // Backdate + tombstone the second message so it falls inside the window.
       const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
       await db.update(messages).set({ isActive: false, createdAt: longAgo }).where(eq(messages.id, doomed));
-      await db
-        .update(chatMessages)
-        .set({ isActive: false, createdAt: longAgo })
-        .where(eq(chatMessages.id, doomed));
 
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const unifiedPurged = await messageRepository.purgeInactiveMessages(cutoff);
-      const legacyPurged = await messageRepository.purgeInactiveLegacyChatMessages(cutoff);
 
       expect(unifiedPurged).toBeGreaterThanOrEqual(1);
-      expect(legacyPurged).toBeGreaterThanOrEqual(1);
-      expect(await legacyRow(doomed)).toBeNull();
       expect(await messageRepository.getMessageById(doomed)).toBeNull();
 
       // The surviving message decides lastMessageAt (#2153) — and for a PAGE
-      // conversation that recompute is new: it had none while page rows lived
-      // in `chat_messages`.
+      // conversation that recompute only became possible once page rows lived
+      // in `messages`.
       const [conv] = await db
         .select({ lastMessageAt: conversations.lastMessageAt })
         .from(conversations)
@@ -398,14 +406,11 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
         ],
       });
       await db.update(messages).set({ isActive: false }).where(eq(messages.id, thread.ids[1]));
-      await db.update(chatMessages).set({ isActive: false }).where(eq(chatMessages.id, thread.ids[1]));
 
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       await messageRepository.purgeInactiveMessages(cutoff);
-      await messageRepository.purgeInactiveLegacyChatMessages(cutoff);
 
-      // Recently tombstoned: still on disk on both legs, just hidden.
-      expect(await legacyRow(thread.ids[1])).not.toBeNull();
+      // Recently tombstoned: still on disk, just hidden.
       expect((await messageRepository.getMessageById(thread.ids[1]))?.isActive).toBe(false);
     });
   });
@@ -432,8 +437,8 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
       const first = createId();
       const second = createId();
       await db.insert(messages).values([
-        { id: first, conversationId, userId: owner.id, role: 'user', content: 'global q', createdAt: new Date(base), isActive: true, status: 'complete', pageId: null, sourceAgentId: null },
-        { id: second, conversationId, userId: owner.id, role: 'assistant', content: 'global a', createdAt: new Date(base + 1000), isActive: true, status: 'complete', pageId: null, sourceAgentId: null },
+        { id: first, conversationId, userId: owner.id, role: 'user', content: 'global q', createdAt: new Date(base), isActive: true, status: 'complete', sourceAgentId: null },
+        { id: second, conversationId, userId: owner.id, role: 'assistant', content: 'global a', createdAt: new Date(base + 1000), isActive: true, status: 'complete', sourceAgentId: null },
       ]);
 
       await messageRepository.editGlobalMessage({
@@ -475,7 +480,7 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
       const globalId = createId();
       await db.insert(messages).values({
         id: globalId, conversationId, userId: owner.id, role: 'user', content: 'global only',
-        isActive: true, status: 'complete', pageId: null, sourceAgentId: null,
+        isActive: true, status: 'complete', sourceAgentId: null,
       });
 
       // It resolves — `messages` holds every kind now — but with `pageId: null`,
@@ -501,28 +506,115 @@ describe('chat mutation matrix — unified reads and writes, legacy leg frozen',
       });
 
       // The trash route's statement, verbatim (it is a route handler with auth
-      // and recursion around it; the DELETE is the part this PR added).
+      // and recursion around it; the DELETE is the part that matters here).
       const pageConversationIds = await db
         .select({ id: conversations.id })
         .from(conversations)
-        .where(and(eq(conversations.type, 'page'), eq(conversations.contextId, thread.pageId)));
+        .where(or(
+          and(eq(conversations.type, 'page'), eq(conversations.contextId, thread.pageId)),
+          and(eq(conversations.type, 'client'), eq(conversations.agentPageId, thread.pageId)),
+        ));
       expect(pageConversationIds).toHaveLength(1);
       await db.delete(messages).where(inArray(messages.conversationId, pageConversationIds.map((c) => c.id)));
 
       expect(await messageRepository.getMessagesByConversationId(thread.conversationId)).toEqual([]);
 
-      // The legacy leg is removed by `chat_messages.pageId`'s ON DELETE
-      // CASCADE when the page row goes. `messages.pageId` deliberately has NO
-      // such FK, and `conversations.contextId` has never had one — so without
-      // the explicit DELETE above, a permanently deleted page's chat history
-      // would outlive it and stay readable by conversation id.
-      const [messagesFk] = await db.execute(
-        `SELECT COUNT(*)::int AS n FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
-         WHERE tc.table_name = 'messages' AND tc.constraint_type = 'FOREIGN KEY'
-           AND kcu.column_name = 'pageId'`,
+      // Nothing else would have done it. `conversations.contextId` has never
+      // been a foreign key, `conversations.agentPageId`'s is ON DELETE SET
+      // NULL, and the `chat_messages.pageId` cascade that used to cover this
+      // went with the table — so without the explicit DELETE above, a
+      // permanently deleted page's chat history would outlive it and stay
+      // readable by conversation id. The absence of any page-carrying column
+      // on `messages` is the other half of that statement.
+      const [pageColumn] = await db.execute(
+        `SELECT COUNT(*)::int AS n FROM information_schema.columns
+          WHERE table_name = 'messages' AND column_name = 'pageId'`,
       ).then((r) => r.rows as Array<{ n: number }>);
-      expect(messagesFk.n).toBe(0);
+      expect(pageColumn.n).toBe(0);
+    });
+
+    it('takes an API thread that named the page with it too', async () => {
+      if (!dbAvailable) return;
+      const t = await seedClientThread();
+
+      const pageConversationIds = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(or(
+          and(eq(conversations.type, 'page'), eq(conversations.contextId, t.pageId)),
+          and(eq(conversations.type, 'client'), eq(conversations.agentPageId, t.pageId)),
+        ));
+      expect(pageConversationIds.map((c) => c.id)).toEqual([t.conversationId]);
+      await db.delete(messages).where(inArray(messages.conversationId, pageConversationIds.map((c) => c.id)));
+
+      expect(await messageRepository.getMessagesByConversationId(t.conversationId)).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // API-MANAGED (`type='client'`) THREADS — the shape that lost its page
+  // column when PR 15 dropped `messages.pageId`.
+  // -------------------------------------------------------------------------
+
+  describe('type=client API threads', () => {
+    it('resolves its page through conversations.agentPageId, for history and for edit/delete', async () => {
+      if (!dbAvailable) return;
+      const t = await seedClientThread();
+
+      // `POST /api/v1/chat/completions` thread mode: the history load is
+      // page-scoped, and this is what keeps it from returning nothing.
+      const history = await messageRepository.getMessagesForPage(t.pageId, t.conversationId);
+      expect(history.map((m) => m.content)).toEqual(['api question', 'api answer']);
+      // Its `contextId` is the DRIVE, and that must stay true — it is what a
+      // drive-scoped MCP token is authorized against.
+      const [conv] = await db
+        .select({ contextId: conversations.contextId, agentPageId: conversations.agentPageId })
+        .from(conversations)
+        .where(eq(conversations.id, t.conversationId));
+      expect(conv.contextId).toBe(t.driveId);
+      expect(conv.agentPageId).toBe(t.pageId);
+
+      // The edit/delete routes' read: a NULL `pageId` here is what they 404
+      // on, so a resolvable one is the whole fix.
+      expect((await messageRepository.getMessageById(t.ids[0]))?.pageId).toBe(t.pageId);
+    });
+
+    it('is invisible to another page, and reads as page-less until its first completion stamps it', async () => {
+      if (!dbAvailable) return;
+      const t = await seedClientThread();
+      const otherPage = await factories.createPage(t.driveId, { type: 'AI_CHAT', title: 'Other agent' });
+      expect(await messageRepository.getMessagesForPage(otherPage.id, t.conversationId)).toEqual([]);
+
+      const unstamped = await seedClientThread({ stamp: false });
+      expect(await messageRepository.getMessagesForPage(unstamped.pageId, unstamped.conversationId)).toEqual([]);
+      expect((await messageRepository.getMessageById(unstamped.ids[0]))?.pageId).toBeNull();
+    });
+
+    it('stamps the page once and never re-points it', async () => {
+      if (!dbAvailable) return;
+      const t = await seedClientThread({ stamp: false });
+      const otherPage = await factories.createPage(t.driveId, { type: 'AI_CHAT', title: 'Second agent' });
+
+      expect(await conversationRepository.stampClientConversationPage(t.conversationId, t.pageId)).toBe('stamped');
+      // A later request naming a different agent must not re-anchor a thread
+      // whose history and edit permissions already follow the first page.
+      expect(await conversationRepository.stampClientConversationPage(t.conversationId, otherPage.id)).toBe('noop');
+      const [conv] = await db
+        .select({ agentPageId: conversations.agentPageId })
+        .from(conversations)
+        .where(eq(conversations.id, t.conversationId));
+      expect(conv.agentPageId).toBe(t.pageId);
+    });
+
+    it('refuses to give a page conversation a second page link', async () => {
+      if (!dbAvailable) return;
+      const thread = await seedPageThread({ contents: [{ role: 'user', content: 'q' }] });
+      expect(await conversationRepository.stampClientConversationPage(thread.conversationId, thread.pageId)).toBe('noop');
+      const [conv] = await db
+        .select({ agentPageId: conversations.agentPageId })
+        .from(conversations)
+        .where(eq(conversations.id, thread.conversationId));
+      expect(conv.agentPageId).toBeNull();
     });
   });
 });

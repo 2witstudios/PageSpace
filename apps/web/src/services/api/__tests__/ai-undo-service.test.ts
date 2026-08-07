@@ -45,7 +45,6 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive', status: 'status' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },

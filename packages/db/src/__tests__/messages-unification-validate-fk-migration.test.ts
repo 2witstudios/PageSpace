@@ -108,6 +108,12 @@ const describeLive = DATABASE_URL ? describe : describe.skip;
 const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR });
 /** Everything BEFORE this PR's migration. */
 const baseMigrations = allMigrations.slice(0, 250);
+/**
+ * Through 0250 and NO FURTHER. Bounded on purpose: 0252 DROPs
+ * `chat_messages`, and every scenario below inspects that table after
+ * migrating.
+ */
+const throughThisPr = allMigrations.slice(0, 251);
 
 /** Every message on an error's cause chain — drizzle wraps driver errors. */
 function errorChain(err: unknown): string {
@@ -160,7 +166,7 @@ async function openScenario(name: string): Promise<Scenario> {
     notices,
     migrate: async () => {
       try {
-        await runMigrations(drizzle(pool), allMigrations, {
+        await runMigrations(drizzle(pool), throughThisPr, {
           migrationsSchema: 'drizzle',
           migrationsTable: '__drizzle_migrations',
         });
@@ -249,7 +255,7 @@ describeLive('0250 against a real Postgres', () => {
   }, 120_000);
 
   it('pins the base: 0250 is the only migration under test here', () => {
-    expect(allMigrations.length - baseMigrations.length).toBe(1);
+    expect(throughThisPr.length - baseMigrations.length).toBe(1);
     expect(journal.entries[250]?.idx).toBe(250);
   });
 

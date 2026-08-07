@@ -102,7 +102,7 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
     where: eq(messages.id, messageId),
     // The conversation carries the two facts this lookup exists to derive:
     // which KIND of thread it is, and (for a page thread) which page.
-    with: { conversation: { columns: { type: true, contextId: true } } },
+    with: { conversation: { columns: { type: true, contextId: true, agentPageId: true } } },
   });
 
   if (!row) {
@@ -113,11 +113,13 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
   const conversationType = row.conversation?.type;
   const source: MessageSource = conversationType === 'global' ? 'global_chat' : 'page_chat';
   // A global thread has no page (and its `contextId` is NULL by CHECK). A page
-  // thread's page IS `contextId`; a `type='client'` thread still carries it in
-  // the transitional column — the same derivation `unifiedPageScope` documents.
+  // thread's page IS `contextId`; a `type='client'` thread's is `agentPageId`
+  // — the same derivation `derivedPageId()` documents.
   const pageId = source === 'global_chat'
     ? null
-    : (conversationType === 'page' ? (row.conversation?.contextId ?? null) : row.pageId);
+    : (conversationType === 'page'
+        ? (row.conversation?.contextId ?? null)
+        : (row.conversation?.agentPageId ?? null));
 
   loggers.api.debug('[AiUndo:Preview] Message found', {
     messageId,

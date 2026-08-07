@@ -231,12 +231,12 @@ describe('cleanupExpiredAiUsageLogs', () => {
 });
 
 describe('runRetentionCleanup', () => {
-  it('given_allCleanupsSucceed_returnsResultsForAll14Tables', async () => {
+  it('given_allCleanupsSucceed_returnsResultsForAll13Tables', async () => {
     const { db } = createMockDb([]);
 
     const results = await runRetentionCleanup(db);
 
-    expect(results).toHaveLength(14);
+    expect(results).toHaveLength(13);
   });
 
   it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
@@ -248,7 +248,6 @@ describe('runRetentionCleanup', () => {
     expect(tableNames).toEqual([
       'ai_usage_logs',
       'api_metrics',
-      'chat_messages',
       'conversations',
       'drive_backups',
       'email_unsubscribe_tokens',

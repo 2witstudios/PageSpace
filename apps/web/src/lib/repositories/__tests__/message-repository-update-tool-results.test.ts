@@ -32,16 +32,6 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'id',
-    pageId: 'pageId',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    editedAt: 'editedAt',
-    toolResults: 'toolResults',
-  },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   messages: {
@@ -85,7 +75,6 @@ vi.mock('@/lib/repositories/conversation-rev', () => ({
 import { messageRepository } from '../message-repository';
 import type { ToolResult } from '@/lib/ai/core/message-utils';
 import { db } from '@pagespace/db/db';
-import { chatMessages } from '@pagespace/db/schema/core';
 import { messages } from '@pagespace/db/schema/conversations';
 
 describe('messageRepository.updateMessageToolResults', () => {
@@ -100,7 +89,7 @@ describe('messageRepository.updateMessageToolResults', () => {
     mockUpdate.mockReturnValue({ set: mockSet });
   });
 
-  it('writes the unified table ONLY — the frozen leg gets no statement', async () => {
+  it('writes the one message table with a single statement', async () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
@@ -108,7 +97,6 @@ describe('messageRepository.updateMessageToolResults', () => {
 
     expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(mockUpdate).toHaveBeenCalledWith(messages);
-    expect(mockUpdate).not.toHaveBeenCalledWith(chatMessages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
   });
 

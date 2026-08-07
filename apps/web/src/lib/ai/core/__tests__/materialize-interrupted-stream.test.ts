@@ -91,10 +91,6 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chat_messages.id',
-    status: 'chat_messages.status',
-  },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
@@ -206,12 +202,13 @@ beforeEach(() => {
 });
 
 describe('materializeInterruptedStream — table routing', () => {
-  it('given a page-chat channelId, writes to messages with pageId = channelId', async () => {
+  it('given a page-chat channelId, writes to messages with no human author', async () => {
     await materializeInterruptedStream(pageRow({ channelId: 'page-abc123' }));
 
-    // Both kinds of channel land in `messages` since Phase 4 PR 14 froze
-    // `chat_messages`. The routing that survives is in the VALUES, not the
-    // table: a page row carries `pageId`, a global one does not.
+    // Both kinds of channel land in `messages` — one table since PR 15
+    // dropped `chat_messages`. The routing that survives is in the VALUES, not
+    // the table: a page row carries no human author, a global one does. The
+    // page itself is the CONVERSATION's, so nothing here writes it.
     assert({
       given: 'a provably-dead page-chat stream row',
       should: 'insert into messages — the one message table',
@@ -222,9 +219,9 @@ describe('materializeInterruptedStream — table routing', () => {
     const values = mockInsertValues.mock.calls[0][0];
     assert({
       given: 'a page-chat row',
-      should: 'set pageId from channelId, userId null, sourceAgentId null (mirrors the placeholder insert contract)',
-      actual: { pageId: values.pageId, userId: values.userId, sourceAgentId: values.sourceAgentId, status: values.status },
-      expected: { pageId: 'page-abc123', userId: null, sourceAgentId: null, status: 'interrupted' },
+      should: 'set userId null and sourceAgentId null (mirrors the placeholder insert contract), and carry no page column',
+      actual: { hasPageId: 'pageId' in values, userId: values.userId, sourceAgentId: values.sourceAgentId, status: values.status },
+      expected: { hasPageId: false, userId: null, sourceAgentId: null, status: 'interrupted' },
     });
   });
 
@@ -262,17 +259,12 @@ describe('materializeInterruptedStream — table routing', () => {
     });
   });
 
-  // NEW INTENDED BEHAVIOUR since the dual-write (Phase 4 PR 10): a page-chat
-  // terminal write is no longer one INSERT. `chat_messages` stays the legacy
-  // leg every reader still uses, and `messages` is written alongside it in the
-  // SAME transaction, or the unified table silently misses every reply that
-  // was recovered rather than finished — a class of row no backfill re-derives,
-  // because materialization IS the terminal write.
-  it('writes the materialized page reply ONCE, to the unified table', async () => {
+  // Materialization IS the terminal write for a recovered reply — a class of
+  // row no backfill re-derives — so a second INSERT appearing here would be a
+  // resurrected legacy writer silently forking the record.
+  it('writes the materialized page reply ONCE, to the one message table', async () => {
     await materializeInterruptedStream(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
 
-    // Was a dual-write through Phase 4 PR 10; PR 14 froze `chat_messages`, so
-    // a SECOND insert appearing here is a resurrected legacy writer.
     assert({
       given: 'a materialized page-chat reply',
       should: 'insert into messages exactly once',
@@ -283,18 +275,18 @@ describe('materializeInterruptedStream — table routing', () => {
     const written = mockInsertValues.mock.calls[0][0];
     assert({
       given: 'the materialized page reply',
-      should: 'carry its id, content, status, conversation and page attribution',
+      should: 'carry its id, status and conversation — the conversation is what names its page',
       actual: {
         id: written.id,
         status: written.status,
         conversationId: written.conversationId,
-        pageId: written.pageId,
+        hasPageId: 'pageId' in written,
       },
       expected: {
         id: 'msg-1',
         status: 'interrupted',
         conversationId: 'conv-1',
-        pageId: 'page-abc123',
+        hasPageId: false,
       },
     });
   });

@@ -19,7 +19,7 @@
  *      databases created and dropped by this file.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -129,17 +129,17 @@ describe('drizzle/0248 messages unification — expand', () => {
     expect(expand.code).toContain(
       'CREATE INDEX IF NOT EXISTS "messages_page_id_is_active_created_at_idx"',
     );
-    // The deferred path must point at a script that actually exists and that
-    // builds the same two indexes concurrently.
+    // The above-the-gate path names a deferred operator script. That script
+    // is GONE as of 0252, and deliberately: both indexes it built are on
+    // `messages."pageId"`, the transitional column 0252 drops, so anything
+    // still holding it would either be redundant (0248 and 0252 apply in the
+    // same batch) or actively broken (`CREATE INDEX CONCURRENTLY` on a column
+    // that no longer exists). The migration text keeps naming it because
+    // applied migrations are never edited.
     expect(expand.code).toContain('0248-messages-unification-indexes.sql');
-    const deferred = readFileSync(
-      path.resolve(__dirname, '../../../../scripts/deferred-migrations/0248-messages-unification-indexes.sql'),
-      'utf8',
-    );
-    expect(deferred).toContain('CREATE INDEX CONCURRENTLY IF NOT EXISTS "messages_page_id_idx"');
-    expect(deferred).toContain(
-      'CREATE INDEX CONCURRENTLY IF NOT EXISTS "messages_page_id_is_active_created_at_idx"',
-    );
+    expect(
+      existsSync(path.resolve(__dirname, '../../../../scripts/deferred-migrations/0248-messages-unification-indexes.sql')),
+    ).toBe(false);
   });
 
   it('should be expand-only — nothing dropped, renamed, or deleted', () => {

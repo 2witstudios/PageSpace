@@ -114,7 +114,6 @@ describe('Schema definitions', () => {
     it('exports tables', () => {
       expect(core.drives).toBeDefined();
       expect(core.pages).toBeDefined();
-      expect(core.chatMessages).toBeDefined();
       expect(core.tags).toBeDefined();
       expect(core.pageTags).toBeDefined();
       expect(core.storageEvents).toBeDefined();
@@ -126,7 +125,6 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(core.drivesRelations).toBeDefined();
       expect(core.pagesRelations).toBeDefined();
-      expect(core.chatMessagesRelations).toBeDefined();
       expect(core.tagsRelations).toBeDefined();
       expect(core.pageTagsRelations).toBeDefined();
       expect(core.favoritesRelations).toBeDefined();

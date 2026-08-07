@@ -121,7 +121,7 @@ const mockConversationRow = (
   isActive: true,
   isShared: false,
   sessionId: null,
-  closedInSessionAt: null, rev: 0,
+  closedInSessionAt: null, agentPageId: null, rev: 0,
   lastMessageAt: null,
   createdAt: new Date('2025-01-01'),
   updatedAt: new Date('2025-01-02'),

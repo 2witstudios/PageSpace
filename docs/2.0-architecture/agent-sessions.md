@@ -215,165 +215,90 @@ The acceptance criterion, one sentence: **if a feature needs a second copy of a 
 derives at read time or it doesn't ship.** Forced copies get drift-guards; dual-writes
 get one shared writer.
 
-### 3a. The two message tables, mid-merge
+### 3a. One message table — COMPLETE
 
-`chat_messages` (page chat) is being merged INTO `messages` (global assistant) so the
-"branch on `agentPageId === null`" that every reader carries can be deleted. It is a
-textbook forced copy, so it runs under the rule above rather than around it:
+`chat_messages` (page chat) was merged INTO `messages` (global assistant) and DROPPED at
+migration **0252**. The "branch on `agentPageId === null`" every reader used to carry is
+gone, and so is the table. This section is now history plus one live rule; the arc is
+closed.
 
-- **Expand — SHIPPED** (epic Phase 4 PR 9, migrations 0248/0249): `messages` gained
-  nullable `userId`, `sourceAgentId`, and a transitional `pageId`; orphan
-  `conversations` rows were synthesised; `chat_messages.conversationId` gained a real
-  (`NOT VALID`) FK, and so did `ai_stream_sessions.conversationId`.
-- **Dual-write — SHIPPED** (Phase 4 PR 10): every page-chat write lands in BOTH tables
-  inside ONE transaction. Being a choke point already is what made this a per-method
-  change rather than a route-by-route migration — **no route changed**. The shared
-  unified-leg writer is `apps/web/src/lib/repositories/unified-message-leg.ts`; the
-  three files permitted to call it are pinned by test. Global rows are untouched:
-  `messages` was always their only table, and they now carry `pageId: null`
-  explicitly so a post-cutover reader can tell them apart.
-  - It had an env kill switch (`…DUAL_WRITE=off`) for the window in which the second
-    write was new on the hot chat path. **PR 14 deleted the switch along with the leg
-    it disabled** — a kill switch for a leg that no longer exists reads as "the legacy
-    write can be turned back on", and nothing would happen.
-  - Historical rows are carried across by `scripts/backfill-unify-messages.ts` —
-    batched, resumable from the target table, idempotent, `--dry-run`. **PR 14 assumes
-    it has run to completion**; that is what the soak gate is gating.
-- **Reader cutover, internal readers — SHIPPED** (Phase 4 PR 11): the session tools'
-  transcript readers, the agent-session conversation listing, the search / page-read /
-  agent-communication tools, memory discovery, both pulse routes, the page-payload
-  service, the admin users route and `GET /api/v1/conversations/[id]` all read
-  `messages` now. Two rules govern the rewrite:
-  - **Page scope comes from the JOIN, not the column.** `chat_messages.pageId = X`
-    became `JOIN conversations ON id = "conversationId" WHERE type = 'page' AND
-    "contextId" = X`. `conversations.contextId` is the end-state authority and is
-    indexed; `messages.pageId` is transitional and is dropped at PR 15, so nothing new
-    is built on it. One consequence is deliberate: a `type='client'` conversation's rows
-    NAME a page but do not BELONG to that page's chat, so they no longer appear in
-    page-scoped reads — they are still reached, as before, by `conversationId`.
-  - **A conversation id already implies its page.** Readers keyed on
-    `(pageId, conversationId)` keep only the conversation key unless the page predicate
-    was an authorization check, in which case it survives as the join.
-  - Parity is pinned by
-    `apps/web/src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`
-    (old query vs new query over one deliberately awkward corpus), which lives until
-    PR 15 deletes `chat_messages`.
-- **Reader cutover, chat routes + mutation surfaces — SHIPPED** (Phase 4 PR 12): both
-  chat routes' history loads, the page-agents conversation/message routes, the consult
-  route, the ask_user resume/dismiss reads, the edit/delete reads, undo, the rollback and
-  redo message executors, the page payload, the retention purge and
-  `POST /api/v1/chat/completions` all read `messages` now. Two repositories died with
-  it: `chat-message-repository.ts` was absorbed WHOLESALE into `message-repository.ts`
-  (which is now the one writer AND the one reader for durable messages), and
-  `global-conversation-repository.ts` gave up its message-table half and kept only
-  `conversations` rows.
-  - **The page scope here is WIDER than PR 11's, deliberately.** These are the paths a
-    user drives, so they keep exact behavioural parity with `chat_messages.pageId = X`:
-    `unifiedPageScope()` (`apps/web/src/lib/repositories/unified-message-scope.ts`) is
-    the conversation join OR the transitional `messages.pageId`. The second disjunct is
-    what keeps a `type='client'` thread — an API-managed conversation whose `contextId`
-    is a DRIVE — reachable from `POST /api/v1/chat/completions`'s history load and from
-    its own edit/delete route. PR 11's internal readers chose the narrower "page
-    conversations only" form; the difference is asserted, not assumed, by the parity
-    suite, and the contract PR that drops `messages.pageId` has to give `type='client'`
-    threads a real page link.
-  - **A page route must still 404 a global message.** `messages` now holds every kind of
-    row, so `getMessageById` resolves ids that had no `chat_messages` row before. It
-    returns a DERIVED `pageId`, and `null` there is what the page edit/delete routes
-    reject on — the global assistant keeps its own route and its own ownership check.
-  - **Permanent page delete had to grow a statement.** `chat_messages.pageId` carries an
-    ON DELETE CASCADE to `pages`; `messages.pageId` deliberately does not, and
-    `conversations.contextId` never had a foreign key. Without the explicit DELETE the
-    trash route now issues, a permanently deleted page's chat history would outlive it.
-  - The matrix is exercised, not asserted: page chat, global chat and worker dispatch by
-    `apps/e2e/tests/15-chat-fixture-smoke.spec.ts` and `16-dispatch-multiplayer.spec.ts`;
-    edit, delete, undo, interrupt/resume, purge and page teardown by
-    `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`
-    against a real Postgres.
-- **Compliance legs — SHIPPED** (Phase 4 PR 13). The three compliance paths are
-  deliberately ASYMMETRIC while both tables exist:
-  - **GDPR export reads the UNIFIED table only.** Since the dual-write + backfill,
-    `messages` is a superset of `chat_messages` under the SAME primary keys, so
-    reading both exported every page-chat row twice. It also stopped keying on
-    `messages.userId` alone: that column is the HUMAN author and is NULL for every
-    agent-authored row, so the old query exported the subject's questions and dropped
-    every answer inside their own page chats — while the same answer in a GLOBAL
-    thread WAS exported, because the global writer stamps the owner's id on assistant
-    rows. The predicate is now "rows the subject authored, plus unattributed rows in a
-    conversation the subject OWNS", which never picks up another human's messages from
-    a shared thread (Art 15(4)).
-  - **Erasure and retention keep BOTH legs** until PR 15 drops `chat_messages`: while
-    rows physically exist there, an Art 17 request and the retention window must still
-    reach them. Pinned by
-    `packages/lib/src/compliance/__tests__/message-unification-compliance-legs.test.ts`.
-  - **The 0248/0249 cascades made both paths delete MORE, deliberately.** A
-    `conversations` delete now takes its `chat_messages` rows (0248) and its
-    `ai_stream_sessions` rows (0249) with it. The latter closed a real leak — `parts`
-    checkpoints are message content and nothing in the codebase had ever deleted one.
-    Retention's conversation sweep is consequently sequenced AFTER the two message-leg
-    sweeps, because a cascading DELETE running concurrently with a direct DELETE over
-    the same rows can deadlock.
-  - **A residual hole the cascade cannot close** got its own erasure step,
-    `purge-stream-state`: a shared conversation accepts streams from any member, so
-    `ai_stream_sessions`/`ai_pending_abort_intents` rows carrying the MEMBER's user_id
-    inside the OWNER's conversation survive the member's erasure. The step is
-    user-scoped and fatal.
-- **Legacy writes STOPPED, FK VALIDATED — SHIPPED** (Phase 4 PR 14, migration 0250).
-  The soak gate. `messages` is now the SOLE write target: no code path anywhere
-  INSERTs or UPDATEs `chat_messages`.
-  - **What stopped, exhaustively** — the three dual-writers plus the two reasoned
-    exemptions the old drift guard's allowlist named: `message-repository.ts` (the
-    scoped upsert, the streaming placeholder, the interrupted materialiser, edit,
-    soft-delete, the tool-result backfill), `conversation-repository.ts` (both
-    History-delete cascades), `ai-undo-service.ts` (the undo tombstone range), and the
-    `POST /api/debug/chat-messages` seeder, which is deleted outright — it had been
-    broken since 0248 anyway, since its self-minted `conversationId` names no
-    `conversations` row and 0248's FK rejects that. The trash route's legacy statement
-    stays, because it is a DELETE.
-  - **DELETEs are still legal, and still owed.** Retention's legacy sweep, GDPR
-    erasure, permanent page delete and the 0248 cascade keep removing rows from
-    `chat_messages` until PR 15 drops it: rows that physically exist are rows a
-    subject can demand the erasure of. "Frozen" means the table stops GAINING and
-    CHANGING rows, not that it stops shrinking.
-  - **The guards inverted with the writes.** The structural scan
-    (`__tests__/unified-message-freeze-guard.test.ts`) now asserts the INSERT/UPDATE
-    list is EMPTY — with no allowlist to add yourself to — while DELETEs match a
-    reasoned list; and the `reconcile-message-unification` cron stopped comparing
-    counts (which now diverge permanently and correctly, as `messages` grows) and
-    instead asserts every legacy row still has an identical `messages` twin. A legacy
-    row without one can only mean a writer is still live, and it pages at error level.
-  - **`ALTER TABLE chat_messages VALIDATE CONSTRAINT` on the 0248 FK**, after an audit
-    that handles what 0248 left behind rather than letting VALIDATE fail opaquely: the
-    orphans 0248 SKIPPED (it could not mint a `conversations` row without a NOT NULL
-    owner) are counted, named and RAISEd on — repair is a human decision, since one
-    option hands someone a chat history and the other destroys one — and the
-    conversations that disagree with their `chat_messages` about the page are counted
-    and reported at WARNING (they satisfy the FK; they are the reader cutover's known
-    blind spot). Both sets are empty on a consistent database: the ownership ladder's
-    last tier is `drives.ownerId`, which is NOT NULL.
-  - **Why validate a table PR 15 drops?** The passing VALIDATE is the receipt. A legacy
-    row whose conversation does not exist is a row `messages` would have REFUSED (its
-    FK is validated and cascading), so proving there are none is proving the copy PR 15
-    keeps can be complete.
-- **Still open:** `chat_messages` and `messages.pageId` are dropped last (Phase 4 PR 15) —
-  now unblocked on the write side: nothing writes the table, and the validated FK says
-  nothing in it is unrepresentable in `messages`. That drop is also when the compliance
-  legs collapse to one and when `type='client'` threads need a real page link (see the
-  wider page scope above), since it removes the `messages.pageId` disjunct they rely on.
+**The live rule.** A message row does not name its page. Its CONVERSATION does, and each
+conversation kind names it in its own column:
 
-Both the reads and the writes now come from `messages` alone. That ends the window in
-which a revert of the reader cutover was safe on its own, and it is deliberate: PR 14 is
-the point of no easy return, which is why it is the soak gate and why PR 15 waits a
-release behind it. Two consequences worth stating plainly:
+| `conversations.type` | Where its page lives | What it is |
+|---|---|---|
+| `page` | `contextId` | The in-app page chat |
+| `client` | `agentPageId` | An API-managed thread (`POST /api/v1/conversations`); its `contextId` is a DRIVE, and that is load-bearing — it is what a drive-scoped MCP token is authorized against |
+| `global`, `drive` | — | No page |
 
-- The unified INSERT paths no longer SKIP when a `conversations` row is missing. Skipping
-  bought safety while a legacy leg still carried the message; with one leg it would lose
-  the user's message instead. The FK refuses the write and the transaction aborts — which
-  is what the legacy statement has done since 0248 gave it the same FK, so the skip had
-  been dead code for two PRs before it was removed.
-- A revert of PR 14 restores the dual-write but NOT the rows written while it was live;
-  re-running `scripts/backfill-unify-messages.ts` is not the recovery path here, because
-  the copy now runs the other way. The recovery path is forward.
+That derivation is written down in exactly one place —
+`unifiedPageScope()` / `derivedPageId()` in
+`apps/web/src/lib/repositories/unified-message-scope.ts` — and every page-scoped reader
+calls it. Getting the translation subtly different at each of the ~8 call sites is the
+failure mode that module exists to prevent.
+
+`conversations.agentPageId` is WRITE-ONCE and stamped lazily: the page is not known when
+`POST /api/v1/conversations` mints the row (the model, and therefore the agent page,
+arrives with the first completion), so the thread's first
+`POST /api/v1/chat/completions` claims it via
+`conversationRepository.stampClientConversationPage` (`WHERE type='client' AND
+"agentPageId" IS NULL`) — the same shape, and the same reasoning, as `claimConversation`.
+A later request naming a different agent never re-points a thread whose history and
+edit/delete permissions are already anchored to the first page.
+
+**How it got here**, briefly, because the sequencing is the reusable part:
+
+- **Expand** (PR 9, migrations 0248/0249): `messages` gained nullable `userId`,
+  `sourceAgentId` and a transitional `pageId`; orphan `conversations` rows were
+  synthesised; `chat_messages.conversationId` and `ai_stream_sessions.conversationId`
+  gained real (`NOT VALID`) FKs.
+- **Dual-write** (PR 10): every page-chat write landed in BOTH tables inside ONE
+  transaction, through one shared writer. Historical rows were carried by
+  `scripts/backfill-unify-messages.ts` (batched, resumable, idempotent).
+- **Reader cutover** (PRs 11–12): internal readers first, then both chat routes and every
+  mutation surface. `chat-message-repository.ts` was absorbed WHOLESALE into
+  `message-repository.ts`, which is now the one writer AND the one reader for durable
+  messages; `global-conversation-repository.ts` kept only its `conversations` half.
+- **Compliance** (PR 13): export cut over to the unified table alone (it was already a
+  superset, so reading both duplicated every page-chat row); erasure and retention kept
+  BOTH legs, because rows that physically exist are rows a subject can demand the erasure
+  of. That asymmetry ended with the table.
+- **Freeze** (PR 14, migration 0250): `messages` became the sole write target, and
+  `ALTER TABLE chat_messages VALIDATE CONSTRAINT` produced the receipt — a legacy row
+  whose conversation does not exist is a row `messages` would have REFUSED, so a passing
+  VALIDATE proves the copy is completable.
+- **Contract** (PR 15, migration 0252 — the only irreversible step in the epic): a final
+  idempotent sweep, a completeness guard, `DROP TABLE chat_messages`, and
+  `messages."pageId"` dropped behind the `type='client'` page link above.
+
+Four things about the contract step are worth keeping, because they are the parts that
+were not obvious:
+
+- **The migration is the backfill.** Tenant/onprem deployments can skip versions and have
+  no operator to run a script, so 0252 re-runs the copy itself before dropping anything.
+  On cloud it is a no-op; that is the point of writing it anyway.
+- **The completeness guard compares ROWS, not CONTENT.** Since PR 14 froze the legacy
+  leg, every edit, soft-delete, undo tombstone and interrupted-stream materialisation
+  landed on `messages` alone — so divergent content is the NORMAL state of a healthy
+  database, and a content-equality guard would have refused to deploy on any database
+  that had ever served an edit. What must not be lost is a row. The guard `RAISE`s with
+  counts and up to 50 ids, and the table survives the refusal.
+- **What the drop cost, once.** A `type='client'` thread whose requests named two
+  different agent pages had its history load silently truncated to the subset matching
+  the request's page. Moving the page to the conversation fixed that; those threads now
+  load whole, anchored to the first agent they spoke to (the migration counts and reports
+  them).
+- **Permanent page delete stays explicit.** `conversations.contextId` has never been a
+  foreign key and `conversations.agentPageId`'s is `ON DELETE SET NULL`, so the trash
+  route issues the DELETE itself — collecting both kinds of conversation before the
+  `pages` row goes. The `chat_messages.pageId` cascade that used to cover this went with
+  the table.
+
+Retired with the merge, in the same PR: the reader-parity suites, the structural freeze
+guard, the `reconcile-message-unification` cron and its route/module, the compliance
+legs' legacy half (`purge-stream-state` and every unified path stay), the debug
+`GET /api/debug/chat-messages`, the backfill script, and the tenant-export registry
+entry. A coexistence window's scaffolding is only honest while the window is open.
 
 ## 4. Vocabulary
 

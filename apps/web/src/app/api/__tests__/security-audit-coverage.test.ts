@@ -51,7 +51,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
 
   // --- Dev/debug endpoints ---
-  ['debug/*', 'Development-only debug endpoints'],
+  // (none: `api/debug/**` went with `GET /api/debug/chat-messages`, the last
+  // one, when Phase 4 PR 15 dropped the table it inspected. Re-add the
+  // `debug/*` wildcard here if a debug endpoint ever comes back.)
 
   // --- Monitoring (read-only system metrics) ---
   ['pulse', 'Internal engagement monitoring'],

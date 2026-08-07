@@ -20,7 +20,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
   drives: { id: 'id', ownerId: 'ownerId' },
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

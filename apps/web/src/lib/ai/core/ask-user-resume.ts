@@ -8,7 +8,7 @@ import {
   convertGlobalAssistantMessageToUIMessage,
 } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
-import { unifiedPageScope } from '@/lib/repositories/unified-message-scope';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 import {
   buildAssistantPersistencePayload,
   type AssistantPersistencePayload,
@@ -212,14 +212,13 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       status,
     });
 
-  // Reads the UNIFIED `messages` table (Phase 4 / D6 reader cutover). The page
-  // predicate is `unifiedPageScope` — the join through `conversations`, which
-  // is what `chat_messages.pageId` became — and the shape is otherwise
-  // unchanged. Writes still go through the repository, which still dual-writes
-  // `chat_messages`.
+  // Reads the one `messages` table (Phase 4 / D6). The page predicate is
+  // `unifiedPageScope` — the join through `conversations`, which is what
+  // `chat_messages.pageId` became — and the page itself is DERIVED from that
+  // same join rather than read off the row.
   const pageRowColumns = {
     id: globalMessages.id,
-    pageId: globalMessages.pageId,
+    pageId: derivedPageId(),
     userId: globalMessages.userId,
     role: globalMessages.role,
     content: globalMessages.content,

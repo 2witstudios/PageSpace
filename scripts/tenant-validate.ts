@@ -157,13 +157,19 @@ export async function validateData(
     drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`),
     pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
     tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIn}))`),
-    chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIn})`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
     // Mirrors the export's rule: the sessions the migrated conversations are
     // bound to, owned by a migrated user.
     agent_sessions: sql.raw(`SELECT id FROM agent_sessions WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "sessionId" FROM conversations WHERE "userId" IN (${userIn}) AND "sessionId" IS NOT NULL)`),
-    conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
+    // Mirrors the export's rule exactly: owned by a migrated user, OR
+    // attached to a migrated page (`type='page'` names it in `contextId`,
+    // `type='client'` in `agentPageId`).
+    conversations: sql.raw(
+      `SELECT id FROM conversations WHERE "userId" IN (${userIn})`
+      + ` OR (type = 'page' AND "contextId" IN (${pageIn}))`
+      + ` OR (type = 'client' AND "agentPageId" IN (${pageIn}))`,
+    ),
     messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
     page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),

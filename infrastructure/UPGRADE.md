@@ -352,3 +352,80 @@ the processor has `AUDIT_CHAINER_ALLOW_GENESIS=true`:
   POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e
   POSTGRES_DB=pagespace_admin postgres:16`) and run both with
   `ADMIN_DATABASE_URL=postgresql://admin:admin@localhost:55432/pagespace_admin`.
+
+## 2026-08 — `chat_messages` dropped, one message table (epic "Agent-Session Single Source of Truth", Phase 4 PR 15)
+
+Migration **0252** DROPs `chat_messages` and `messages."pageId"`. **This is the
+one migration in the epic with no code-level rollback.** Reverting the
+deployment restores the readers, not the rows.
+
+### MINIMUM UPGRADE PATH — you must pass through a release that carries the backfill
+
+`chat_messages` was merged into `messages` across four releases. 0252 assumes
+the copy is complete. A deployment that jumps straight from a pre-merge release
+to this one is handled — 0252 re-runs the copy itself, because tenant/onprem
+deployments can skip versions and have no operator to run a script — but the
+supported path is still to land **at least one release that contains migration
+0250** (`chat_messages VALIDATE CONSTRAINT`, the receipt that the copy is
+completable) before this one, and to let it run.
+
+Concretely: **do not deploy this release in the same step as a release older
+than 0248.** 0248 synthesises the `conversations` rows that legacy page-chat
+messages need; 0250 proves none are missing and RAISEs, naming the rows, if any
+are. Both must have applied — and been looked at — before 0252 drops the table
+they describe. This release must also ship **at least one release after** the
+one containing 0250 (the soak gate), not alongside it.
+
+If 0252 aborts, it is telling you `chat_messages` still holds rows `messages`
+does not represent. It names up to 50 ids. The table is untouched; repair the
+rows and re-run. Repair is a human decision — one option hands someone a chat
+history and the other destroys one — so the migration will not guess.
+
+### 1. TAKE A DATABASE SNAPSHOT FIRST — non-negotiable
+
+There is no `--down`. Verify you have a restorable dump **from after your last
+write and before this deploy**.
+
+Cloud (Fly). The daily dump is produced by the scheduled `pagespace-db-backup`
+machine (`fly/backup/backup.sh` in PageSpace-Deploy: `pg_dump -Fc` → AES-256 →
+Tigris at `s3://$BUCKET_NAME/db-backups/pagespace-<date>.dump.enc`). Confirm
+today's object exists before deploying:
+
+```bash
+aws s3 ls "s3://$BUCKET_NAME/db-backups/" --endpoint-url "$AWS_ENDPOINT_URL_S3"
+```
+
+If the newest object predates recent writes, do not rely on it — take a Fly
+volume snapshot of the `pg_data` volume as well and confirm it lands:
+
+```bash
+flyctl volume snapshots list <pg_data-volume-id>
+```
+
+Restore path, for the record (`fly/FLY.md`, "Database Operations"):
+
+```bash
+fly proxy 5433:5432 -a pagespace-db &
+pg_restore --no-owner --no-privileges -h localhost -p 5433 -U pagespace -d pagespace <dump>
+```
+
+Tenant / self-host: take your own `pg_dump -Fc` of the stack's database before
+pulling the new compose stack. The migrate one-shot runs before the services
+roll, so once it has succeeded the table is gone.
+
+### 2. What changes, operationally
+
+- **A cron job disappears.** `reconcile-message-unification` is removed from
+  `docker/cron/crontab` along with its route. If you monitor cron logs, the
+  `/var/log/cron/reconcile-message-unification.log` file simply stops being
+  written; nothing needs to be un-scheduled by hand, the new image ships the
+  new crontab.
+- **`purge-deleted-messages` reports one fewer field.** `chatMessagesPurged` is
+  gone from that cron's JSON response and audit detail. Anything scraping it
+  should read `globalMessagesPurged`, which now counts every message.
+- **Retention reports 13 tables, not 14.** `chat_messages` leaves the
+  `runRetentionCleanup` result list.
+- **Tenant export bundles no longer carry a `chat_messages` INSERT**, and
+  `messages` no longer carries a `pageId` column. `conversations` gains
+  `agentPageId`. Bundles produced by an OLDER exporter will not import into a
+  0252 database.
