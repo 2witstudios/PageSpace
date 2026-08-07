@@ -59,6 +59,20 @@ export interface ActivePlan {
 }
 
 /**
+ * NOTE FOR EDITORS: the suppression rules below (unbound → trashed → not
+ * visible) are mirrored by `loadPlan` in
+ * `app/api/ai/conversations/[conversationId]/plan/route.ts`, which the PlanChip
+ * reads. Change one and change the other, or the chip and the prompt will
+ * disagree about whether a plan is still live.
+ *
+ * They are deliberately NOT one function: the route additionally enforces
+ * conversation ownership with 404-not-403 semantics and returns `driveId` for
+ * the chip's link, while this one takes an injected principal check. Folding
+ * both into a single helper would add more branching than the ~15 duplicated
+ * lines cost.
+ */
+
+/**
  * Resolve the plan bound to `conversationId`, or null when unbound, trashed,
  * not visible to the caller, or on any error.
  *
