@@ -101,34 +101,44 @@ test.describe('dispatch harness smoke (passing — pins the fixtures)', () => {
     }).toPass({ timeout: 60_000 });
   });
 
-  test('a global-assistant dispatch persists through the front door (messages API)', async ({
-    request,
-  }) => {
-    const user = await seedUser();
-    const conversationId = await createGlobalConversation(user.userId);
+  // Both surfaces, same assertion, same expected transcript — the parity evidence for the
+  // chat route consolidation (epic "Agent-Session Single Source of Truth", Phase 5).
+  //
+  //  - `legacy-global` is `POST /api/ai/global/<id>/messages`, the URL every deployed client
+  //    still calls. It must keep working byte-for-byte; nothing about it may change.
+  //  - `pipeline` is `POST /api/ai/chat` with no `chatId`, which is what
+  //    `dispatchThroughChatPipeline` now sends for EVERY worker. It reaches the same
+  //    global-assistant strategy because the pipeline keys on the conversation, not the URL.
+  for (const surface of ['legacy-global', 'pipeline'] as const) {
+    test(`a global-assistant dispatch persists through the ${surface} surface (messages API)`, async ({
+      request,
+    }) => {
+      const user = await seedUser();
+      const conversationId = await createGlobalConversation(user.userId);
 
-    await dispatchMessage(request, user, conversationId, DISPATCH_TEXT);
+      await dispatchMessage(request, user, conversationId, DISPATCH_TEXT, { surface });
 
-    // API-level readback (the global-assistant pane has no seeded-page helper yet): both
-    // sides of the turn are on the transcript. Poll: the terminal write lands in onFinish.
-    await expect
-      .poll(
-        async () => {
-          const res = await sessionGet(request, `/api/ai/global/${conversationId}/messages`, user);
-          if (!res.ok()) return `HTTP ${res.status()}`;
-          const { messages } = (await res.json()) as {
-            messages: Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>;
-          };
-          const textOf = (m: { parts?: Array<{ text?: string }> }) =>
-            (m.parts ?? []).map((p) => p.text ?? '').join(' ');
-          const hasUser = messages.some((m) => m.role === 'user' && textOf(m).includes(DISPATCH_TEXT));
-          const hasAssistant = messages.some((m) => m.role === 'assistant' && textOf(m).trim().length > 0);
-          return hasUser && hasAssistant ? 'both sides present' : `only: ${messages.map((m) => m.role).join(',')}`;
-        },
-        { timeout: 60_000 },
-      )
-      .toBe('both sides present');
-  });
+      // API-level readback (the global-assistant pane has no seeded-page helper yet): both
+      // sides of the turn are on the transcript. Poll: the terminal write lands in onFinish.
+      await expect
+        .poll(
+          async () => {
+            const res = await sessionGet(request, `/api/ai/global/${conversationId}/messages`, user);
+            if (!res.ok()) return `HTTP ${res.status()}`;
+            const { messages } = (await res.json()) as {
+              messages: Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>;
+            };
+            const textOf = (m: { parts?: Array<{ text?: string }> }) =>
+              (m.parts ?? []).map((p) => p.text ?? '').join(' ');
+            const hasUser = messages.some((m) => m.role === 'user' && textOf(m).includes(DISPATCH_TEXT));
+            const hasAssistant = messages.some((m) => m.role === 'assistant' && textOf(m).trim().length > 0);
+            return hasUser && hasAssistant ? 'both sides present' : `only: ${messages.map((m) => m.role).join(',')}`;
+          },
+          { timeout: 60_000 },
+        )
+        .toBe('both sides present');
+    });
+  }
 });
 
 test.describe('blank-pane repro (the Phase 2 gate — was fixme, now green)', () => {

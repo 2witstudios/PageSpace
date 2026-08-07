@@ -46,11 +46,24 @@ const CHAT_MESSAGE = 'chat-message';
 
 export interface DispatchOptions {
   /**
-   * Target a page-anchored conversation on this AI_CHAT page via `POST /api/ai/chat`
-   * (what `dispatchThroughChatPipeline` does when `agentPageId !== null`). Omit to target a
-   * global-assistant conversation via `POST /api/ai/global/[id]/messages`.
+   * Target a page-anchored conversation on this AI_CHAT page — the request then carries
+   * `chatId`, exactly as `dispatchThroughChatPipeline` does for a worker with an agent page.
+   * Omit to target a global-assistant conversation, which carries no `chatId` and is resolved
+   * from `conversationId`.
    */
   agentPageId?: string;
+  /**
+   * Which public URL to send through. `pipeline` (the default) is what the runtime now does
+   * for EVERY worker since the chat route consolidation (epic "Agent-Session Single Source of
+   * Truth", Phase 5): one internal path, and the pipeline picks the page-agent or
+   * global-assistant strategy from the conversation.
+   *
+   * `legacy-global` is the pre-consolidation URL for a global worker. It is kept — and
+   * exercised — because that URL is still public and still supported: deployed browsers, the
+   * desktop app, mobile and the CLI all address it by name, so a spec proving both surfaces
+   * land on the same transcript is the compat evidence.
+   */
+  surface?: 'pipeline' | 'legacy-global';
 }
 
 /**
@@ -77,7 +90,7 @@ export async function dispatchMessage(
   opts: DispatchOptions = {},
 ): Promise<void> {
   const url =
-    opts.agentPageId === undefined
+    opts.surface === 'legacy-global'
       ? `/api/ai/global/${encodeURIComponent(conversationId)}/messages`
       : '/api/ai/chat';
   const body = {

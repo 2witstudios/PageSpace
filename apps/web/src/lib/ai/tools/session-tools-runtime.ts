@@ -239,14 +239,20 @@ export async function dispatchThroughChatPipeline(input: {
     return { ok: false, reason: 'failed', detail: 'the calling request carries no session credentials to dispatch with' };
   }
 
-  const url =
-    input.agentPageId === null
-      ? `${base}/api/ai/global/${encodeURIComponent(input.conversationId)}/messages`
-      : `${base}/api/ai/chat`;
+  // ONE internal path, whatever the worker is (epic "Agent-Session Single
+  // Source of Truth", Phase 5 — chat route consolidation). This used to branch
+  // on `agentPageId === null` to pick between two URLs, because two message
+  // tables forced two routes. Both URLs still exist and still work for the
+  // clients that address them by name, but they are one implementation now
+  // (`handle-chat-turn.ts`), and that implementation picks the page-agent or
+  // global-assistant strategy from the CONVERSATION — so dispatch names the
+  // pipeline once and lets it decide. A page worker still sends `chatId`; a
+  // global worker sends none, and the entry resolves its conversation.
+  const url = `${base}/api/ai/chat`;
 
   const requestHeaders: Record<string, string> = {
     'content-type': 'application/json',
-    // Required by both routes; a synthetic id marks a server-side dispatch —
+    // Required by the pipeline; a synthetic id marks a server-side dispatch —
     // it identifies this dispatch, not a browser tab.
     'x-browser-session-id': `agent-dispatch-${createId()}`,
     'x-agent-dispatch-depth': String(input.depth),

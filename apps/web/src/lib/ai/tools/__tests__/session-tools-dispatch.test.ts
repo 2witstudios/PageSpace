@@ -213,6 +213,29 @@ describe('dispatchThroughChatPipeline credentials (issue #2333)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('targets ONE internal path whether or not the worker has an agent page', async () => {
+    // The acceptance signal for the chat route consolidation (epic
+    // "Agent-Session Single Source of Truth", Phase 5): this used to branch on
+    // `agentPageId === null` to choose between `/api/ai/chat` and
+    // `/api/ai/global/<id>/messages`, because two message tables forced two
+    // routes. One pipeline now stands behind both public URLs and picks the
+    // page-agent or global-assistant strategy from the CONVERSATION, so
+    // dispatch names the pipeline once. The page worker still carries `chatId`;
+    // the global worker carries none and the entry resolves its conversation.
+    incomingHeaders({ cookie: SESSION_COOKIE });
+    const fetchMock = fetchAdmitted();
+
+    await dispatchThroughChatPipeline(DISPATCH_INPUT);
+    await dispatchThroughChatPipeline({ ...DISPATCH_INPUT, agentPageId: null });
+
+    const [pageCall, globalCall] = fetchMock.mock.calls as Array<[string, { body: string }]>;
+    expect(pageCall[0]).toBe('http://localhost:3000/api/ai/chat');
+    expect(globalCall[0]).toBe('http://localhost:3000/api/ai/chat');
+    expect(JSON.parse(pageCall[1].body).chatId).toBe('agent-page-1');
+    expect(JSON.parse(globalCall[1].body)).not.toHaveProperty('chatId');
+    expect(JSON.parse(globalCall[1].body).conversationId).toBe('worker-conversation-1');
+  });
+
   it('surfaces the chat route\'s error body verbatim on a non-ok answer', async () => {
     incomingHeaders({ cookie: SESSION_COOKIE });
     const fetchMock = vi.fn(async () => ({
