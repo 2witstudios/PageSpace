@@ -21,7 +21,7 @@ export const conversations = pgTable('conversations', {
    * either at creation, or — for a conversation that has never had one — by
    * exactly one guarded claim of the caller's own row
    * (`conversationRepository.claimConversation`, `WHERE workspaceId IS NULL AND
-   * userId = :caller`; see `apps/web/src/lib/agent-workspaces/claim-conversation-in-session.ts`).
+   * userId = :caller`; see `apps/web/src/lib/agent-workspaces/claim-conversation-in-workspace.ts`).
    * It never re-points an already-bound row: a thread's history and its
    * filesystem always agree, so moving a thread to another session is a
    * fork, never a rebind. ON DELETE SET NULL: deleting a session keeps its

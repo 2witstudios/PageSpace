@@ -21,7 +21,7 @@
  */
 
 import type { PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { mostRecentlyActive, type SessionConversationSummary } from './session-conversations';
+import { mostRecentlyActive, type SessionConversationSummary } from './workspace-conversations';
 
 export type { SessionConversationSummary };
 

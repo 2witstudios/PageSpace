@@ -2,7 +2,7 @@ import { reconcileOrphanSprites } from '@pagespace/lib/services/sandbox/sprite-o
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
-import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-workspaces/agent-session-orphan-reconcile-runtime';
+import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-workspaces/workspace-orphan-reconcile-runtime';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**

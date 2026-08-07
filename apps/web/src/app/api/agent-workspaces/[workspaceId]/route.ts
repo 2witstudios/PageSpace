@@ -26,7 +26,7 @@
  *
  * Access decisions live in `decideAgentSessionAccess` (packages/lib) — these
  * handlers map its verdicts onto ONE not-found/denied policy for the whole
- * `[workspaceId]` family (`session-unavailable-response.ts`, review #2261/5):
+ * `[workspaceId]` family (`workspace-unavailable-response.ts`, review #2261/5):
  * an unknown id and a denied one answer IDENTICALLY (the null-session 200 on
  * GET, a uniform 404 on POST/DELETE) — service failure is the only distinct
  * outcome, at 502.
@@ -37,7 +37,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
-import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import {
   checkSessionAccess,
   checkSessionEndAccess,
@@ -46,7 +46,7 @@ import {
   findSessionRecord,
   provisionSessionSandbox,
   toAgentSessionDTO,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -132,7 +132,7 @@ export async function POST(request: Request, context: RouteContext) {
   // start, or resume after an end.
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   const existing = await findSessionRecord(workspaceId);
@@ -185,7 +185,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   const access = await checkSessionEndAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   // Purely informational — never blocks teardown (ending is unconditional by

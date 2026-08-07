@@ -30,7 +30,7 @@ import { StringDecoder } from 'string_decoder';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { auditSessionAccessDenial } from '@/lib/agent-workspaces/session-unavailable-response';
+import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import {
   listMachineDirectory,
@@ -46,8 +46,8 @@ import {
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
-import { checkSessionAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { resolveSessionSandboxHandle } from '@/lib/agent-workspaces/session-sandbox-runtime';
+import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { resolveSessionSandboxHandle } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

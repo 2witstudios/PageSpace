@@ -21,8 +21,8 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkSessionAccess, reopenConversationInSession } from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { checkSessionAccess, reopenConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -38,7 +38,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   let outcome: Awaited<ReturnType<typeof reopenConversationInSession>>;

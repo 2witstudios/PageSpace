@@ -52,7 +52,7 @@ export async function resolveSandboxToolEligibilityForConversation(
   surface: 'page' | 'global',
   userId: string,
 ): Promise<boolean> {
-  const { findSessionForConversation } = await import('@/lib/agent-workspaces/agent-sessions-runtime');
+  const { findSessionForConversation } = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
   const session = conversationId ? await findSessionForConversation(conversationId) : null;
   if (session) {
     return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });

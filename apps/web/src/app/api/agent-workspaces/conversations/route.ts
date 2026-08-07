@@ -4,7 +4,7 @@
  *
  * The Agents surface's default middle-panel view: every conversation the
  * requester owns — session-bound or not, page-agent or global-assistant —
- * newest first, cursor-paginated (see `agent-sessions-conversations-runtime.ts`
+ * newest first, cursor-paginated (see `workspace-conversations-runtime.ts`
  * for why: agent_workspaces rows are never deleted, so history is unbounded).
  * `cursor` always means "older than this" — the only direction the surface's
  * Prev/Next actually needs (Prev replays an already-fetched, SWR-cached page
@@ -25,7 +25,7 @@ import {
   listAllConversationsPaginated,
   encodeCursor,
   type PastConversationRow,
-} from '@/lib/agent-workspaces/agent-sessions-conversations-runtime';
+} from '@/lib/agent-workspaces/workspace-conversations-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 

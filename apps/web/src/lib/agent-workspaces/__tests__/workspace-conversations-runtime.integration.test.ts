@@ -32,7 +32,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
-import { listAllConversationsPaginated, decodeCursor } from '../agent-sessions-conversations-runtime';
+import { listAllConversationsPaginated, decodeCursor } from '../workspace-conversations-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;

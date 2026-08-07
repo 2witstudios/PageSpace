@@ -2,7 +2,7 @@
  * Claim a NEVER-BOUND conversation into a session — the only place
  * `conversations.workspaceId` is ever written, whether for a conversation
  * being created fresh (insert sessionless, then claim —
- * `create-conversation-in-session.ts` composes this) or one that has
+ * `create-conversation-in-workspace.ts` composes this) or one that has
  * existed unbound for years (a page-agent or global-assistant chat opened
  * outside any session, later opened into one from the Agents console).
  *
@@ -22,7 +22,7 @@
  *
  * Pure decision logic over injected deps, per the repo rule that branching
  * which decides lifecycle/access lives in a testable module —
- * `agent-sessions-runtime.ts` only wires the production deps, wrapping the
+ * `agent-workspaces-runtime.ts` only wires the production deps, wrapping the
  * whole decision in the same per-session advisory lock
  * create/close/reopen already use, so a claim can never race those for the
  * session's last cap slot.

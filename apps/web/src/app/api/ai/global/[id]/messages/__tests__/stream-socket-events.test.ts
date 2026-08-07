@@ -53,7 +53,7 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
 // The bound-session lookup for payer-derived sandbox eligibility (review
 // #2326) hits the real DB through the agent-sessions runtime; this suite's
 // conversations are unbound, so the eligibility path takes the userId branch.
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: vi.fn().mockResolvedValue(null),
 }));
 

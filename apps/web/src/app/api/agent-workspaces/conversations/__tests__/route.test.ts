@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   resolveDriveMembership: (...args: unknown[]) => mockResolveDriveMembership(...args),
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-conversations-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-conversations-runtime', () => ({
   listAllConversationsPaginated: (...args: unknown[]) => mockListAllConversationsPaginated(...args),
   encodeCursor: (sortKey: Date | string, id: string) =>
     Buffer.from(JSON.stringify({ sortKey: new Date(sortKey).toISOString(), id })).toString('base64url'),

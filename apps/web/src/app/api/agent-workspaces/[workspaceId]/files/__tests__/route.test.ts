@@ -45,10 +45,10 @@ vi.mock('@pagespace/lib/services/sandbox/machine-fs', () => ({
   deleteMachinePath: (...args: unknown[]) => mockDeleteMachinePath(...args),
   verifyMachinePathsWithinScope: (...args: unknown[]) => mockVerifyPaths(...args),
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
 }));
-vi.mock('@/lib/agent-workspaces/session-sandbox-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-sandbox-runtime', () => ({
   resolveSessionSandboxHandle: (...args: unknown[]) => mockResolveSessionSandboxHandle(...args),
 }));
 

@@ -50,7 +50,7 @@ const { mockSpawnSession, mockCreateConversationInSession, mockEndSession } = vi
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   spawnSession: mockSpawnSession,
   createConversationInSession: mockCreateConversationInSession,
   endSession: mockEndSession,

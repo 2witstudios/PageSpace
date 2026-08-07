@@ -23,9 +23,9 @@ import { authedContext } from '../fixtures/chat.fixture';
  * What nothing asserted is that the key the listener mutates is the key
  * `AgentsSidebar` subscribes to. That held BY CONSTRUCTION only, and by a
  * construction with a real fault line in it: the listener writes through the
- * `isSessionListingKey` / `isAgentSessionsKey` PREDICATES
+ * `isWorkspaceListingKey` / `isAgentWorkspacesKey` PREDICATES
  * (`session-conversations.ts`), while the sidebar builds its key as an inline
- * template string rather than calling the shared `agentSessionsKey()` helper.
+ * template string rather than calling the shared `agentWorkspacesKey()` helper.
  * `AgentsSidebar.test.tsx` cannot see that — it feeds SWR data in directly and
  * contains nothing socket-driven. So the seam could break and the symptom would
  * be a sidebar that still works, just slowly, off the 120s backstop poll. That
@@ -35,14 +35,14 @@ import { authedContext } from '../fixtures/chat.fixture';
  *
  * The obvious spec — block the listing GET outright, spawn, assert the row
  * appears — DOES NOT PASS, and it is right not to. Creation and session-binding
- * are decoupled on purpose (`create-conversation-in-session.ts`: a sessionless
+ * are decoupled on purpose (`create-conversation-in-workspace.ts`: a sessionless
  * conversation is an ordinary state), so the sequence on this path is:
  *
  *   1. `conversation:created` fires for a row that is not yet in any session,
  *      i.e. with `workspaceId: null` — and the listener correctly declines to
  *      insert it into a session listing, because it is not in one yet;
  *   2. the claim lands and `conversation:updated { workspaceId }` fires, which
- *      the listener answers with `revalidateSessionListings` — a REFETCH,
+ *      the listener answers with `revalidateWorkspaceListings` — a REFETCH,
  *      deliberately, because a re-binding moves a row between sessions and the
  *      listing query owns that predicate.
  *
@@ -223,7 +223,7 @@ function countSessionListingFetches(page: Page): () => number {
  * attempts were made.
  *
  * THIS IS THE ASSERTION'S TEETH, so it is worth saying what it must and must
- * not catch. `isSessionListingKey`'s two keys are exactly `/api/agent-workspaces`
+ * not catch. `isWorkspaceListingKey`'s two keys are exactly `/api/agent-workspaces`
  * and `/api/agent-workspaces?...`; `/api/agent-workspaces/<id>` and
  * `/api/agent-workspaces/<id>/shells` are different cache entries (the latter on
  * a 15s poll) that this spec has no business blocking. So the match is an exact
@@ -238,7 +238,7 @@ function countSessionListingFetches(page: Page): () => number {
  * passing run: `conversation:created` is not the only directory event a
  * session-scoped create produces, and the others (`session:*`, a
  * `conversation:updated` carrying a workspace binding) deliberately answer with
- * `revalidateSessionListings` — a REFETCH. That refetch also puts the row on
+ * `revalidateWorkspaceListings` — a REFETCH. That refetch also puts the row on
  * screen, so without this block the spec would go green with the listener's
  * cache write removed entirely. Verified: it did.
  */
@@ -369,7 +369,7 @@ test.describe('session directory — a server-created conversation reaches the s
 
     // …and it was EVENT-driven work, not a coincidence of an idle client: the
     // claim's `conversation:updated { workspaceId }` is answered with
-    // `revalidateSessionListings`, so the spawn must have caused listing
+    // `revalidateWorkspaceListings`, so the spawn must have caused listing
     // traffic that the quiet window did not have. Without this, a spec that
     // somehow rendered the row from nothing would still read as green.
     expect(listingFetches()).toBeGreaterThan(quietFetches);
@@ -379,11 +379,11 @@ test.describe('session directory — a server-created conversation reaches the s
    * The seam at its strongest: a directory event that needs NO request at all.
    *
    * `conversation:closed` is answered by `forgetConversationInCache` — a local
-   * `mutate(isSessionListingKey, updater, { revalidate: false })`. So here the
+   * `mutate(isWorkspaceListingKey, updater, { revalidate: false })`. So here the
    * listing GET can be cut off at the network layer for the whole assertion
    * window, and the list still has to move. Nothing but the listener's write
    * landing on the sidebar's own SWR key can do that; a key that drifted out of
-   * `isSessionListingKey`'s namespace leaves the row on screen forever.
+   * `isWorkspaceListingKey`'s namespace leaves the row on screen forever.
    *
    * This is also the direction the spawn path cannot test, because create and
    * claim are decoupled — see the file header.

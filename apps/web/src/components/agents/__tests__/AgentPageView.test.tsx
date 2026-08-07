@@ -299,10 +299,10 @@ describe('AgentPageView', () => {
 
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
     // Reachable now that a global session can host any accessible agent's
-    // conversation (create-conversation-in-session.ts): this agent page's
+    // conversation (create-conversation-in-workspace.ts): this agent page's
     // most-recent conversation can be bound to a global session. AgentPanes
     // must scope to the session's OWN drive (null), never `page.driveId` —
-    // otherwise `agentSessionsKey`/the picker look in the wrong workspace.
+    // otherwise `agentWorkspacesKey`/the picker look in the wrong workspace.
     // The raw session-record shape `useSessionRecord` resolves to (not a
     // pre-coalesced driveId) — a RESOLVED global session, session.driveId null.
     mockUseSWR.mockReturnValue({ data: { session: { driveId: null } } });

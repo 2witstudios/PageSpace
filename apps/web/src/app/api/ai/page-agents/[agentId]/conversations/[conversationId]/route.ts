@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';

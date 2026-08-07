@@ -37,7 +37,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
-import { createConversationInSession, spawnSession } from '../agent-sessions-runtime';
+import { createConversationInSession, spawnSession } from '../agent-workspaces-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;

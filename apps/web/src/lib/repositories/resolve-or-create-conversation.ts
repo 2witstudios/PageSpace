@@ -95,7 +95,7 @@ export async function resolveOrCreateConversation(
   // Idempotent insert: ON CONFLICT DO NOTHING handles concurrent first-writes.
   // Always session-agnostic — this never writes `workspaceId` (there is no
   // param for it). A conversation that needs a session gets one afterward,
-  // via `claimConversationInSession` (see `claim-conversation-in-session.ts`).
+  // via `claimConversationInSession` (see `claim-conversation-in-workspace.ts`).
   const [created] = await db
     .insert(conversations)
     .values({
@@ -117,7 +117,7 @@ export async function resolveOrCreateConversation(
   if (created) {
     // Authoritative directory event (Agent-Session SSoT epic, Phase 2): this
     // is THE global-conversation creator — lazy first-message creation AND
-    // server-side worker spawn (create-conversation-in-session.ts) both land
+    // server-side worker spawn (create-conversation-in-workspace.ts) both land
     // here, so emitting here is what makes a server-spawned worker appear in
     // the owner's sidebar without a poll. Only the actual-insert branch
     // emits; the race-loser fallback below resolved someone else's insert.

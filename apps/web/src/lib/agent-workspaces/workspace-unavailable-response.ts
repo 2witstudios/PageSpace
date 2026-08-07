@@ -55,7 +55,7 @@ export function auditSessionAccessDenial(
  * which each of those routes still builds itself — see the family doc
  * above). `not_found` and every denial reason land on this SAME 404.
  */
-export function sessionNotFoundOrDenied(
+export function workspaceNotFoundOrDenied(
   request: Request,
   userId: string,
   workspaceId: string,

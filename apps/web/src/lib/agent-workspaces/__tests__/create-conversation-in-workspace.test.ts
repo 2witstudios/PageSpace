@@ -15,7 +15,7 @@ import {
   AgentNotInSessionDriveError,
   SessionFullError,
   type CreateConversationInSessionDeps,
-} from '../create-conversation-in-session';
+} from '../create-conversation-in-workspace';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 
 // What claim's own `findConversation` reads immediately after the creator
@@ -116,7 +116,7 @@ describe('page arm', () => {
     // Now that the binding is a separately guarded, ownership-checked claim
     // rather than something only ever allowed inside an INSERT, a caller's
     // own still-unbound row is exactly what claim exists to bind — see
-    // `claim-conversation-in-session.ts`. Not a security regression (still
+    // `claim-conversation-in-workspace.ts`. Not a security regression (still
     // gated on `userId` matching); every real caller generates a fresh CUID2
     // for this call, so an actual pre-existing collision doesn't arise by
     // accident.

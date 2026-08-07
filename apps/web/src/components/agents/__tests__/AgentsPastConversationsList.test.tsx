@@ -49,7 +49,7 @@ vi.mock('sonner', () => ({ toast: { error: mockToastError, info: mockToastInfo }
 import AgentsPastConversationsList from '../AgentsPastConversationsList';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import { isAgentSessionsKey } from '../panes/session-conversations';
+import { isAgentWorkspacesKey } from '../panes/workspace-conversations';
 
 interface Row {
   conversationId: string;
@@ -175,7 +175,7 @@ describe('AgentsPastConversationsList', () => {
 
     await user.click(await screen.findByText('Page chat'));
 
-    await waitFor(() => expect(mockMutate).toHaveBeenCalledWith(isAgentSessionsKey));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledWith(isAgentWorkspacesKey));
   });
 
   test('a failed claim does NOT invalidate the shared sessions cache', async () => {

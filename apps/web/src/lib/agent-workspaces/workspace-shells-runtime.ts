@@ -23,7 +23,7 @@ import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
-import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
+import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';
 
 let shellStorePromise: ReturnType<typeof createDbSessionShellStore> | null = null;
 

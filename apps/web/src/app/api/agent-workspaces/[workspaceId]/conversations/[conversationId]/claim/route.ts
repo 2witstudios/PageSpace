@@ -7,7 +7,7 @@
  * session (the reopen route's job).
  *
  * POST → 200 { ok: true, alreadyInSession: boolean } — wraps
- * `claimConversationInSession` (`claim-conversation-in-session.ts`), the ONE
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), the ONE
  * place `conversations.workspaceId` is ever written.
  *
  * `checkSessionAccess` below authorizes the SESSION — drive-membership-wide,
@@ -23,8 +23,8 @@ import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } fro
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkSessionAccess, claimConversationInSession } from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { checkSessionAccess, claimConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -40,7 +40,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   // A `type: 'page'` row's agent-view permission can have been revoked since

@@ -14,7 +14,7 @@
  *    plus any number of shells. `conversations.workspaceId` is the binding —
  *    nullable (a plain chat has no session) and write-once: set either at
  *    creation, or later by exactly one guarded claim of the caller's own
- *    still-unbound row (`apps/web/src/lib/agent-workspaces/claim-conversation-in-session.ts`).
+ *    still-unbound row (`apps/web/src/lib/agent-workspaces/claim-conversation-in-workspace.ts`).
  *    It never re-points an already-bound row — a thread moving to another
  *    session is a fork, never a rebind. A conversation-derived id must never
  *    become a session address again: the

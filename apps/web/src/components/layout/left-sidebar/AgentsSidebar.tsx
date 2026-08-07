@@ -28,12 +28,12 @@ import { panesOf, isLastPane, type PaneState } from '@pagespace/lib/agent-worksp
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-workspaces/contract';
 import {
-  isAgentSessionsKey,
-  isSessionListingKey,
-  forgetSessionInCache,
+  isAgentWorkspacesKey,
+  isWorkspaceListingKey,
+  forgetWorkspaceInCache,
   forgetConversationInCache,
-  restoreSessionInCache,
-} from '@/components/agents/panes/session-conversations';
+  restoreWorkspaceInCache,
+} from '@/components/agents/panes/workspace-conversations';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
@@ -656,7 +656,7 @@ function SessionRow({
     forgetWorkspace(session.workspaceId);
     if (wasSelected) selectSession(null);
     setConfirmingEnd(false);
-    forgetSessionInCache(mutate, session.workspaceId);
+    forgetWorkspaceInCache(mutate, session.workspaceId);
     try {
       await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
     } catch (error) {
@@ -679,7 +679,7 @@ function SessionRow({
       // conversation/agent even though nothing else claimed them (review
       // finding — chatgpt-codex-connector on PR #2318).
       if (workspaceSnapshot) hydrateWorkspace(session.workspaceId, workspaceSnapshot);
-      restoreSessionInCache(mutate, session);
+      restoreWorkspaceInCache(mutate, session);
       if (wasSelected && useAgentSurfaceStore.getState().selectedSessionId === null) {
         selectConversation({
           sessionId: session.workspaceId,
@@ -687,7 +687,7 @@ function SessionRow({
           agentId: previousAgentId,
         });
       }
-      void mutate(isSessionListingKey);
+      void mutate(isWorkspaceListingKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
@@ -695,7 +695,7 @@ function SessionRow({
       return;
     }
     // Confirmed — background reconcile only; the grid and sidebar are already right.
-    void mutate(isSessionListingKey);
+    void mutate(isWorkspaceListingKey);
   }, [
     forgetWorkspace,
     hydrateWorkspace,
@@ -735,7 +735,7 @@ function SessionRow({
       // background reconcile still follows, same as every other mutating
       // action here — it just no longer gates what the user sees.
       forgetConversationInCache(mutate, session.workspaceId, conversationId);
-      void mutate(isAgentSessionsKey);
+      void mutate(isAgentWorkspacesKey);
     },
     [mutate, session.workspaceId],
   );
@@ -794,7 +794,7 @@ function SessionRow({
         // other mutating action here — it just no longer gates what the
         // user sees.
         forgetConversationInCache(mutate, session.workspaceId, conversationId);
-        void mutate(isAgentSessionsKey);
+        void mutate(isAgentWorkspacesKey);
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
           setConfirmingEnd(true);
@@ -896,7 +896,7 @@ function SessionRow({
       // Refresh the listing and let it reconcile rather than acting on a
       // grid that doesn't contain what was clicked.
       if (closePane(session.workspaceId, paneId) !== 'closed') {
-        void mutate(isAgentSessionsKey);
+        void mutate(isAgentWorkspacesKey);
         return;
       }
       // Persistence is no longer this callback's business: `closePane` mints
@@ -912,7 +912,7 @@ function SessionRow({
       //
       // Refresh the listing so this row's pane list reflects the close
       // without waiting for the next poll.
-      void mutate(isAgentSessionsKey);
+      void mutate(isAgentWorkspacesKey);
     },
     [ensureLocalWorkspace, closePane, mutate, session.workspaceId],
   );

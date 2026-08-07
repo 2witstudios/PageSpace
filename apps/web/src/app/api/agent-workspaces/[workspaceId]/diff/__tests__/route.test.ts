@@ -31,10 +31,10 @@ vi.mock('@pagespace/lib/services/sandbox/machine-diff', () => ({
   listMachineDiffFiles: (...args: unknown[]) => mockListDiffFiles(...args),
   readMachineDiffPair: (...args: unknown[]) => mockReadDiffPair(...args),
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
 }));
-vi.mock('@/lib/agent-workspaces/session-sandbox-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-sandbox-runtime', () => ({
   resolveSessionSandboxHandle: (...args: unknown[]) => mockResolveHandle(...args),
   resolveSessionActorContext: vi.fn(async () => ({ userId: 'user-1', tenantId: 'user-1', actorEmail: 'a@b.c', tier: 'free' })),
   buildSessionReadActorCtx: vi.fn((scopeKey: string) => ({ conversationId: scopeKey })),

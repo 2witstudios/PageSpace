@@ -28,12 +28,12 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkSessionAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import {
   readWorkspaceLayoutSnapshot,
   workspaceListEntryFromGrid,
 } from '@/lib/agent-workspaces/workspace-layout-runtime';
-import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -68,7 +68,7 @@ export async function PUT(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   return NextResponse.json(

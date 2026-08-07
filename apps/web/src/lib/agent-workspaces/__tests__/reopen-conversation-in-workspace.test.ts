@@ -10,7 +10,7 @@ import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-
 import {
   reopenConversationInSessionWith,
   type ReopenConversationInSessionDeps,
-} from '../reopen-conversation-in-session';
+} from '../reopen-conversation-in-workspace';
 
 let deps: {
   findConversation: ReturnType<typeof vi.fn>;

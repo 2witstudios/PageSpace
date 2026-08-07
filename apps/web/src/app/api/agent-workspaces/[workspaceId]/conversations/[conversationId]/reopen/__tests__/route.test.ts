@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
   reopenConversationInSession: (...args: unknown[]) => mockReopenConversationInSession(...args),
 }));

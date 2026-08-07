@@ -38,7 +38,7 @@ export interface SessionListEntry {
  * local insert from elsewhere) targets the identical key. A hand-recomputed
  * copy that drifts from this would silently target the wrong cache entry.
  */
-export function agentSessionsKey(driveId: string | null): string {
+export function agentWorkspacesKey(driveId: string | null): string {
   return driveId !== null ? `/api/agent-workspaces?driveId=${encodeURIComponent(driveId)}` : '/api/agent-workspaces';
 }
 
@@ -81,25 +81,25 @@ export function findOpenForAgent<T extends { agentPageId: string | null; lastMes
  * fetcher, so a per-session sub-resource cached under this same prefix (the
  * shells listing, the singular session record) refreshes correctly too. It
  * is NOT safe to pair with a `{sessions: [...]}`-shaped updater — see
- * `isSessionListingKey` for that narrower, updater-safe predicate.
+ * `isWorkspaceListingKey` for that narrower, updater-safe predicate.
  */
-export function isAgentSessionsKey(key: unknown): boolean {
+export function isAgentWorkspacesKey(key: unknown): boolean {
   return typeof key === 'string' && key.startsWith('/api/agent-workspaces');
 }
 
 /**
- * The two BULK session-listing keys specifically — `agentSessionsKey(null)`
- * ('/api/agent-workspaces') and any drive-scoped `agentSessionsKey(driveId)`
+ * The two BULK session-listing keys specifically — `agentWorkspacesKey(null)`
+ * ('/api/agent-workspaces') and any drive-scoped `agentWorkspacesKey(driveId)`
  * ('/api/agent-workspaces?driveId=...') — never a per-session sub-resource path
  * like `/api/agent-workspaces/{id}/shells` or the singular session record,
- * which `isAgentSessionsKey`'s broader prefix match also catches. Those
+ * which `isAgentWorkspacesKey`'s broader prefix match also catches. Those
  * cache entries hold no `sessions` array at all, so an updater written
- * against `{sessions: [...]}` (`forgetSessionInCache`,
+ * against `{sessions: [...]}` (`forgetWorkspaceInCache`,
  * `forgetConversationInCache`) must only ever run against keys THIS
  * predicate matches, or it throws on the mismatched shape (review finding —
  * chatgpt-codex-connector on PR #2318).
  */
-export function isSessionListingKey(key: unknown): boolean {
+export function isWorkspaceListingKey(key: unknown): boolean {
   return typeof key === 'string' && (key === '/api/agent-workspaces' || key.startsWith('/api/agent-workspaces?'));
 }
 
@@ -117,9 +117,9 @@ export function isSessionListingKey(key: unknown): boolean {
  * The caller supplies whatever `mutate` is actually bound to its own cache
  * (`useSWRConfig()`'s, or a hook-bound one), so this keeps working regardless.
  */
-export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): void {
+export function forgetWorkspaceInCache(mutate: ScopedMutator, sessionId: string): void {
   void mutate(
-    isSessionListingKey,
+    isWorkspaceListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
       current ? { ...current, sessions: current.sessions.filter((session) => session.workspaceId !== sessionId) } : current,
     { revalidate: false },
@@ -127,9 +127,9 @@ export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): 
 }
 
 /**
- * The mirror of `forgetSessionInCache`: put a previously-removed session row
+ * The mirror of `forgetWorkspaceInCache`: put a previously-removed session row
  * back into every open session-listing SWR entry, locally — the rollback
- * half of the optimistic pair. A real revalidate (`mutate(isSessionListingKey)`
+ * half of the optimistic pair. A real revalidate (`mutate(isWorkspaceListingKey)`
  * with no data) is NOT a substitute for this: if the network is down (the
  * same reason the DELETE that triggered this rollback failed), the
  * revalidate fails too and the row stays missing until a later successful
@@ -139,9 +139,9 @@ export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): 
  * shape (`AgentPanes.tsx`'s minimal one vs. `AgentsSidebar.tsx`'s richer
  * one) — this only ever needs `workspaceId` to place it back correctly.
  */
-export function restoreSessionInCache<T extends { workspaceId: string }>(mutate: ScopedMutator, entry: T): void {
+export function restoreWorkspaceInCache<T extends { workspaceId: string }>(mutate: ScopedMutator, entry: T): void {
   void mutate(
-    isSessionListingKey,
+    isWorkspaceListingKey,
     (current: { sessions: T[] } | undefined) =>
       current && !current.sessions.some((session) => session.workspaceId === entry.workspaceId)
         ? { ...current, sessions: [...current.sessions, entry] }
@@ -165,7 +165,7 @@ export function restoreSessionInCache<T extends { workspaceId: string }>(mutate:
  * there is.
  *
  * Generic over the caller's row shape for the same reason
- * `restoreSessionInCache` is: the pane grid's minimal `{conversationId,
+ * `restoreWorkspaceInCache` is: the pane grid's minimal `{conversationId,
  * agentPageId, lastMessageAt}` and the sidebar's richer row are both valid
  * members of this list, and this only needs `conversationId` to place one.
  */
@@ -175,7 +175,7 @@ export function upsertConversationInCache<T extends { conversationId: string }>(
   conversation: T,
 ): void {
   void mutate(
-    isSessionListingKey,
+    isWorkspaceListingKey,
     (current: { sessions: Array<{ workspaceId: string; conversations: T[] }> } | undefined) => {
       if (!current) return current;
       return {
@@ -215,7 +215,7 @@ export function touchConversationInCache(
   lastMessageAt: string | null,
 ): void {
   void mutate(
-    isSessionListingKey,
+    isWorkspaceListingKey,
     (current: { sessions: Array<{ workspaceId: string; conversations: SessionConversationSummary[] }> } | undefined) => {
       if (!current) return current;
       return {
@@ -247,19 +247,19 @@ export function touchConversationInCache(
  * session lifecycle change, a workspace re-binding. Event-DRIVEN, not periodic:
  * this is what makes the polls below it backstops rather than the mechanism.
  */
-export function revalidateSessionListings(mutate: ScopedMutator): void {
-  void mutate(isAgentSessionsKey);
+export function revalidateWorkspaceListings(mutate: ScopedMutator): void {
+  void mutate(isAgentWorkspacesKey);
 }
 
 /**
  * Drop one conversation listing from `sessionId`'s row, everywhere — the
  * cross-file mirror of `AgentPanes.tsx`'s own `recordClosedConversation`,
  * for a caller (the sidebar) with no local SWR binding of its own. See
- * `forgetSessionInCache` for why `mutate` is a parameter, not an import.
+ * `forgetWorkspaceInCache` for why `mutate` is a parameter, not an import.
  */
 export function forgetConversationInCache(mutate: ScopedMutator, sessionId: string, conversationId: string): void {
   void mutate(
-    isSessionListingKey,
+    isWorkspaceListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
       current
         ? {

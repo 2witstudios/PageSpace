@@ -25,7 +25,7 @@ import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import type { ReconcileOrphanSpritesDeps, SpriteOrphanRow } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
 import { SandboxSpriteReplacedError } from '@pagespace/lib/services/sandbox/sandbox-host';
-import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
+import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**

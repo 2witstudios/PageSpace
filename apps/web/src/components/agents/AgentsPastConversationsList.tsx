@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import EmptyState from './EmptyState';
 import { resolveNavigationTarget, type ConversationKind, type ClaimableFallback } from './resolveNavigationTarget';
 import { classifySpawnRefusal } from './spawn-refusal';
-import { isAgentSessionsKey } from './panes/session-conversations';
+import { isAgentWorkspacesKey } from './panes/workspace-conversations';
 
 const PAGE_SIZE = 20;
 
@@ -151,7 +151,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
           // The sidebar (and any other pane) reads this same shared listing —
           // without this, the freshly claimed session is invisible there until
           // its own 20s poll happens to fire.
-          void mutate(isAgentSessionsKey);
+          void mutate(isAgentWorkspacesKey);
           selectConversation({
             sessionId: created.session.workspaceId,
             conversationId: created.conversationId,

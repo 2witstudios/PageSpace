@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   closeConversationInSessionWith,
   type CloseConversationInSessionDeps,
-} from '../close-conversation-in-session';
+} from '../close-conversation-in-workspace';
 
 let deps: {
   findConversation: ReturnType<typeof vi.fn>;

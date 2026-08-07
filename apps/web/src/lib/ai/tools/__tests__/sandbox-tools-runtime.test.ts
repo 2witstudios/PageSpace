@@ -24,7 +24,7 @@ const {
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   provisionSessionSandbox: mockProvisionSessionSandbox,
   // Opportunistic storage measurement rides this path fire-and-forget. Stubbed
@@ -252,7 +252,7 @@ describe('resolveSandboxActorContext', () => {
   describe('given chatSource type "page" BOUND to a DRIVELESS Global session', () => {
     it("pays as the session's owner, not the agent's drive owner (review #2326)", async () => {
       // A global session may host any accessible agent
-      // (create-conversation-in-session.ts), and provisioning authorizes the
+      // (create-conversation-in-workspace.ts), and provisioning authorizes the
       // SESSION's coordinates — deriving the payer from the agent/location
       // drive here diverged from what provisioning would actually decide.
       const context: ToolExecutionContext = {

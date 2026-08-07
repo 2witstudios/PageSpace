@@ -34,8 +34,8 @@ import {
   reopenConversationInSession,
   ensureGlobalSandboxSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
-} from '../agent-sessions-runtime';
-import { SessionFullError } from '../create-conversation-in-session';
+} from '../agent-workspaces-runtime';
+import { SessionFullError } from '../create-conversation-in-workspace';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
@@ -46,7 +46,7 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
       await db.select().from(pages).limit(1);
       dbAvailable = true;
     } catch (error) {
-      requireDb('agent-sessions-runtime.integration.test.ts', error);
+      requireDb('agent-workspaces-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });
@@ -154,7 +154,7 @@ describe('claim — real concurrency (the guarded UPDATE, not the advisory lock,
       await db.select().from(pages).limit(1);
       dbAvailable = true;
     } catch (error) {
-      requireDb('agent-sessions-runtime.integration.test.ts', error);
+      requireDb('agent-workspaces-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });
@@ -341,7 +341,7 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       await db.select().from(pages).limit(1);
       dbAvailable = true;
     } catch (error) {
-      requireDb('agent-sessions-runtime.integration.test.ts', error);
+      requireDb('agent-workspaces-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });

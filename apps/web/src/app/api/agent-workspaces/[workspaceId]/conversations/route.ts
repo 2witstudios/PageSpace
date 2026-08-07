@@ -29,14 +29,14 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkSessionAccess,
   createConversationInSession,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import {
   AgentNotInSessionDriveError,
   ConversationUnavailableError,
   SessionFullError,
-} from '@/lib/agent-workspaces/create-conversation-in-session';
+} from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -64,7 +64,7 @@ export async function POST(request: Request, context: RouteContext) {
   // found and denied answer THE SAME 404 (family policy, review #2261/5).
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   if (agentPageId !== null) {

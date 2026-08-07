@@ -67,7 +67,7 @@ import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import {
   ensureGlobalSandboxSession,
   spawnSession,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 /** One captured `POST /api/broadcast` body. */
 interface CapturedBroadcast {

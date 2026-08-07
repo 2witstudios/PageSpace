@@ -151,7 +151,7 @@ time. Only running it against a deliberately broken build surfaced that. The rul
 and the only reliable proof is a run that fails.**
 
 Fixing the harness then exposed a product fact worth recording rather than working around:
-creation and session-binding are decoupled (`create-conversation-in-session.ts`), so on the
+creation and session-binding are decoupled (`create-conversation-in-workspace.ts`), so on the
 spawn path `conversation:created` carries `workspaceId: null` and the sidebar is updated by the
 claim's `conversation:updated` — one **event-driven refetch**, not a request-free cache write.
 The guarantee holds (event-driven, not a poll); the stronger "with no request" reading does not,

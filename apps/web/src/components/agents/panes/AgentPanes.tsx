@@ -70,14 +70,14 @@ import { resolvePaneSurface, type PaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
 import { decideClosePane } from './close-pane';
 import {
-  agentSessionsKey,
-  isAgentSessionsKey,
-  isSessionListingKey,
-  forgetSessionInCache,
-  restoreSessionInCache,
+  agentWorkspacesKey,
+  isAgentWorkspacesKey,
+  isWorkspaceListingKey,
+  forgetWorkspaceInCache,
+  restoreWorkspaceInCache,
   type SessionConversationSummary,
   type SessionListEntry,
-} from './session-conversations';
+} from './workspace-conversations';
 import PaneChat from './PaneChat';
 import PagePaneView from './PagePaneView';
 import Shell from '../shell/Shell';
@@ -342,7 +342,7 @@ export default function AgentPanes({
   // This session's open conversation listings — shared by the pane bar
   // selector's SWITCH decision and the pane grid's CLOSE decision.
   const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
-    agentSessionsKey(driveId),
+    agentWorkspacesKey(driveId),
     sessionConversationsFetcher,
     {
       revalidateOnFocus: false,
@@ -647,7 +647,7 @@ export default function AgentPanes({
       recordClosedConversation(conversationId);
       // Instant sidebar freshness — the closed listing's row leaves every
       // open `/api/agent-workspaces**` poll without waiting on its interval.
-      void mutate(isAgentSessionsKey);
+      void mutate(isAgentWorkspacesKey);
     },
     [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, resetPane, onConversationClosed, recordClosedConversation],
   );
@@ -754,7 +754,7 @@ export default function AgentPanes({
     // (confirmed repo-wide), so the bare import already targets the one real
     // cache in practice — this is deferred as a known follow-up, not a
     // regression (review finding — chatgpt-codex-connector on PR #2318).
-    forgetSessionInCache(mutate, sessionId);
+    forgetWorkspaceInCache(mutate, sessionId);
     let hadOtherOpenConversations = false;
     try {
       const ended = await del<{ hadOtherOpenConversations?: boolean }>(
@@ -770,8 +770,8 @@ export default function AgentPanes({
       // chatgpt-codex-connector on PR #2318). A revalidate still follows for
       // eventual reconciliation, but the restore itself doesn't depend on it.
       if (workspaceSnapshot) hydrateWorkspace(sessionId, workspaceSnapshot);
-      if (sessionEntrySnapshot) restoreSessionInCache(mutate, sessionEntrySnapshot);
-      void mutate(isSessionListingKey);
+      if (sessionEntrySnapshot) restoreWorkspaceInCache(mutate, sessionEntrySnapshot);
+      void mutate(isWorkspaceListingKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
@@ -786,7 +786,7 @@ export default function AgentPanes({
     // finding — chatgpt-codex-connector on PR #2318).
     closeTerminalShell(scope);
     // Background reconcile only — the grid and sidebar are already right.
-    void mutate(isSessionListingKey);
+    void mutate(isWorkspaceListingKey);
     if (hadOtherOpenConversations) {
       // Ending is unconditional by design — this can't be prevented client
       // side — but the confirm the user just clicked may have been shown
@@ -895,7 +895,7 @@ export default function AgentPanes({
         onConversationClosed?.({ conversationId: oldConversationId, next: newConversationId, nextAgentPageId: newAgentPageId });
       }
       recordClosedConversation(oldConversationId);
-      void mutate(isAgentSessionsKey);
+      void mutate(isAgentWorkspacesKey);
     },
     [sessionId, isConversationShownSomewhere, closeDecisionListing, onConversationClosed, recordClosedConversation],
   );
@@ -1046,7 +1046,7 @@ export default function AgentPanes({
         // DELETE one, leaving an
         // orphaned conversation that holds a cap slot forever (caught in
         // review).
-        void mutate(isAgentSessionsKey);
+        void mutate(isAgentWorkspacesKey);
         return true;
       } catch (error) {
         settleMint();
@@ -1091,7 +1091,7 @@ export default function AgentPanes({
   /**
    * A pane's own History tab picking a past conversation — assign it to THIS
    * pane, first either reopening it (bound to THIS session, closed) or
-   * claiming it (never bound to ANY session — `claim-conversation-in-session.ts`)
+   * claiming it (never bound to ANY session — `claim-conversation-in-workspace.ts`)
    * into this session's listing, as needed. Only a conversation bound to a
    * DIFFERENT session is never subject to this session's cap/listing at
    * all — no server call, straight to `assignPane` (the same client-only
@@ -1238,7 +1238,7 @@ export default function AgentPanes({
         // Instant-freshness nudge, same as every other listing-changing
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
-        void mutate(isAgentSessionsKey);
+        void mutate(isAgentWorkspacesKey);
       } else if (conversation.sessionId === null && conversation.isOwner) {
         // Genuinely never bound to ANY session, AND this pane's caller owns
         // it — claim it into this one so tool calls actually resolve a
@@ -1343,7 +1343,7 @@ export default function AgentPanes({
         // so calling it again would prepend a second, duplicate row for the
         // same conversationId into the local cache (self-review finding).
         if (!claimResult.alreadyInSession) recordMintedConversation(conversation.id, agentPageId);
-        void mutate(isAgentSessionsKey);
+        void mutate(isAgentWorkspacesKey);
       }
       if (!isCurrent()) return false;
       // Already showing in another pane in THIS grid — focus it rather than
@@ -1418,7 +1418,7 @@ export default function AgentPanes({
       // fallback) trusting a stale row for up to the poll interval —
       // binding a pane to a transcript that already 404s on send (review
       // finding — chatgpt-codex-connector on PR #2299, round 15).
-      void mutate(isAgentSessionsKey);
+      void mutate(isAgentWorkspacesKey);
       // Read fresh at call time, not the `workspace` this callback closed
       // over — this always runs after the DELETE's own async round trip,
       // during which the user could have already reassigned an affected

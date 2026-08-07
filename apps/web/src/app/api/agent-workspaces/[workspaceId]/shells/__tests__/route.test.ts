@@ -29,12 +29,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
 }));
-vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShells: (...args: unknown[]) => mockListShells(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));

@@ -150,7 +150,7 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   driveIdIdx: index('agent_workspaces_drive_id_idx').on(table.driveId),
   ownerIdIdx: index('agent_workspaces_owner_id_idx').on(table.ownerId),
   // The cron scans this exact predicate (`sandbox-storage-billing.ts`,
-  // `agent-session-orphan-reconcile-runtime.ts`): "still believed live". A
+  // `workspace-orphan-reconcile-runtime.ts`): "still believed live". A
   // partial index keeps it to the live slice rather than a seq scan over
   // every ended/never-provisioned row, which is the overwhelming majority at
   // any real scale.

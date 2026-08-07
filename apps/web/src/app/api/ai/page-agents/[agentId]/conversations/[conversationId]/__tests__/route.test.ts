@@ -67,10 +67,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   countOpenConversationsForSession: vi.fn(),
   // Real semantics for the mock: just run `fn` — the route's own tests
-  // aren't about lock contention (that's `agent-sessions-runtime`'s own
+  // aren't about lock contention (that's `agent-workspaces-runtime`'s own
   // test suite), only about the guard-then-delete sequence being atomic
   // AT THE CALL SITE, which a pass-through faithfully exercises.
   withSessionListingLock: vi.fn((_sessionId: string, fn: () => Promise<unknown>) => fn()),
@@ -82,7 +82,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';

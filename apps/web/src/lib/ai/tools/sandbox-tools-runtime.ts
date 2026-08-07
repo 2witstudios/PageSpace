@@ -57,7 +57,7 @@ import {
   ensureGlobalSandboxSession,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
@@ -428,7 +428,7 @@ export function createResolveSandboxActorContext(
     //    `driveId: null`), so this user is the payer-to-be — never the
     //    drive they happen to be visiting.
     //  - A PAGE conversation can be hosted in a driveless Global session
-    //    too (`create-conversation-in-session.ts`: a global session may
+    //    too (`create-conversation-in-workspace.ts`: a global session may
     //    host any accessible agent), where the payer is the SESSION's
     //    owner, not the agent's drive owner. Only an UNBOUND page
     //    conversation falls back to the agent/location drive — and that

@@ -20,11 +20,11 @@ const API_DIR = join(__dirname, '..');
  * Covers: direct securityAudit.* calls, logAuditEvent helper, logAuthEvent
  * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
  * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
- * (`session-unavailable-response.ts`, review #2261/5) — both call
+ * (`workspace-unavailable-response.ts`, review #2261/5) — both call
  * `auditRequest` internally, one hop removed from the route file.
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|sessionNotFoundOrDenied\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.

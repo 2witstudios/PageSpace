@@ -28,7 +28,7 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { findSessionRecord, getSandboxHost } from './agent-sessions-runtime';
+import { findSessionRecord, getSandboxHost } from './agent-workspaces-runtime';
 
 export type ResolveSessionSandboxHandleResult =
   | { ok: true; handle: SandboxHandle }

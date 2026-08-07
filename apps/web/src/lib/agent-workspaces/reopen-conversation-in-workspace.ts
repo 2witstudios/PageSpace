@@ -15,7 +15,7 @@
  *
  * Pure decision logic over injected deps, per the repo rule that
  * branching which decides lifecycle/access lives in a testable module —
- * `agent-sessions-runtime.ts` only wires the production deps, wrapping the
+ * `agent-workspaces-runtime.ts` only wires the production deps, wrapping the
  * whole decision in the same per-session transaction + advisory lock
  * `closeConversationInSessionWith`'s wiring uses, so a reopen can never race
  * a close (or another reopen) of the same session's listings.

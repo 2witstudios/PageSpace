@@ -27,14 +27,14 @@ import {
 } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
-import { checkSessionAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import {
   buildSessionGitDepsForHandle,
   buildSessionReadActorCtx,
   resolveSessionActorContext,
   resolveSessionSandboxHandle,
-} from '@/lib/agent-workspaces/session-sandbox-runtime';
-import { auditSessionAccessDenial } from '@/lib/agent-workspaces/session-unavailable-response';
+} from '@/lib/agent-workspaces/workspace-sandbox-runtime';
+import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 

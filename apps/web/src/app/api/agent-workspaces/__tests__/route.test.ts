@@ -58,7 +58,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   listSessions: (...args: unknown[]) => mockListSessions(...args),
   listSessionConversationsBulk: (...args: unknown[]) => mockListSessionConversationsBulk(...args),
   countActiveSessionsForOwner: (...args: unknown[]) => mockCountActiveSessionsForOwner(...args),
@@ -72,7 +72,7 @@ vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
 }));
-vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));

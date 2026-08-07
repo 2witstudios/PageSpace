@@ -25,10 +25,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionEndAccess: (...args: unknown[]) => mockCheckSessionEndAccess(...args),
 }));
-vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   killShellById: (...args: unknown[]) => mockKillShellById(...args),
   resolveShellById: (...args: unknown[]) => mockResolveShellById(...args),
 }));

@@ -16,9 +16,9 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkSessionEndAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { killShellById, resolveShellById } from '@/lib/agent-workspaces/session-shells-runtime';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { checkSessionEndAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { killShellById, resolveShellById } from '@/lib/agent-workspaces/workspace-shells-runtime';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -44,7 +44,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   // shell" from "not yours".
   const access = await checkSessionEndAccess(auth.userId, resolved.shell.workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE, 'Shell not found');
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE, 'Shell not found');
   }
 
   const killed = await killShellById(shellId);

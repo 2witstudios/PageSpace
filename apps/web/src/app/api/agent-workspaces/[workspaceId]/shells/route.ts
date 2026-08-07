@@ -23,10 +23,10 @@ import {
   checkSessionAccess,
   findSessionRecord,
   provisionSessionSandbox,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { listShells, spawnShell } from '@/lib/agent-workspaces/session-shells-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { listShells, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
-import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -113,7 +113,7 @@ export async function POST(request: Request, context: RouteContext) {
   // route, and a session is born with its first conversation, not a shell).
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   const row = await findSessionRecord(workspaceId);

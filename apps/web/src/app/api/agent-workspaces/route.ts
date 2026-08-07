@@ -43,8 +43,8 @@ import {
   spawnSession,
   toAgentSessionDTO,
   type AgentSessionListFilter,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
-import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/session-shells-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
@@ -175,7 +175,7 @@ export async function GET(request: Request) {
  * `firstThing: 'claim', conversationId` swaps it again for claiming an
  * EXISTING, never-session-bound conversation the caller owns as the
  * session's first thing, instead of minting a brand-new one —
- * `claimConversationInSession` (`claim-conversation-in-session.ts`), the
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), the
  * ONE place `conversations.workspaceId` is ever written. `driveId`/`agentPageId`
  * are derived from the claimed row itself (a `type: 'page'` row's own agent;
  * a `type: 'global'` row takes the caller's `driveId`, same three-shape

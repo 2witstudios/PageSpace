@@ -9,7 +9,7 @@
  * `globalConversationRepository.listConversationsPaginated` exists rather
  * than a single unbounded fetch).
  *
- * Deliberately lives beside (not inside) `agent-sessions-runtime.ts`: that
+ * Deliberately lives beside (not inside) `agent-workspaces-runtime.ts`: that
  * file wires the session STORE abstraction; this is a plain cross-table read
  * with no session-lifecycle decision in it, mirroring how
  * `listSessionConversationsBulk` already queries `conversations` directly

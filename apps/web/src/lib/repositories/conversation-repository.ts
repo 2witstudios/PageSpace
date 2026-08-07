@@ -248,7 +248,7 @@ export const conversationRepository = {
 
     // Always session-agnostic: this never writes `workspaceId` (there is no
     // param for it). A conversation that needs a session gets one afterward,
-    // via `claimConversationInSession` — see `claim-conversation-in-session.ts`.
+    // via `claimConversationInSession` — see `claim-conversation-in-workspace.ts`.
     const [inserted] = await db
       .insert(conversations)
       .values({
@@ -385,7 +385,7 @@ export const conversationRepository = {
    * `userId` rides the WHERE too, so ownership is enforced by the write
    * itself, closing the read-then-write gap that made the H1 rebind finding
    * exploitable in the old create-then-UPDATE shape. See
-   * `claim-conversation-in-session.ts` for the full gate this backs.
+   * `claim-conversation-in-workspace.ts` for the full gate this backs.
    *
    * `closedInWorkspaceAt` is cleared in the same statement: a row whose former
    * session was deleted (FK `ON DELETE SET NULL`) can arrive here
@@ -642,7 +642,7 @@ export const conversationRepository = {
       // Mirrors `globalConversationRepository.softDeleteConversation`'s
       // pattern, and matches `conversations.isActive`'s own doc comment
       // ("history soft-delete"). Every reader that gates on
-      // `conversations.isActive` (agent-sessions-runtime.ts's session
+      // `conversations.isActive` (agent-workspaces-runtime.ts's session
       // listings/caps, the v1/MCP conversations API, the compliance
       // retention purge) previously kept treating a page conversation
       // deleted from History as live forever — including, most concretely,

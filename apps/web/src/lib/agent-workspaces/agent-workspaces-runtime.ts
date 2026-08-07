@@ -75,20 +75,20 @@ import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspac
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
-import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-session';
+import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import {
   closeConversationInSessionWith,
   type CloseConversationOutcome,
-} from '@/lib/agent-workspaces/close-conversation-in-session';
+} from '@/lib/agent-workspaces/close-conversation-in-workspace';
 import {
   reopenConversationInSessionWith,
   type ReopenConversationOutcome,
-} from '@/lib/agent-workspaces/reopen-conversation-in-session';
+} from '@/lib/agent-workspaces/reopen-conversation-in-workspace';
 import {
   claimConversationInSessionWith,
   type ClaimConversationOutcome,
   type ClaimConversationInSessionDeps,
-} from '@/lib/agent-workspaces/claim-conversation-in-session';
+} from '@/lib/agent-workspaces/claim-conversation-in-workspace';
 
 export { isCodeExecutionEnabled };
 
@@ -365,7 +365,7 @@ async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
 
 /**
  * Claim a NEVER-BOUND conversation into a session — the wiring for
- * `claim-conversation-in-session.ts`'s pure decision. Same
+ * `claim-conversation-in-workspace.ts`'s pure decision. Same
  * `withSessionListingLock` key create/close/reopen use, so a claim can never
  * race any of them for the session's last open-listing slot.
  */
@@ -379,7 +379,7 @@ export async function claimConversationInSession(input: {
 
 /**
  * Create a conversation and land it in a session. Decision logic lives in the
- * pure module (`create-conversation-in-session.ts`) — this is only its
+ * pure module (`create-conversation-in-workspace.ts`) — this is only its
  * production wiring: the squat-guarded repository creator for page threads
  * and the ownership-guarded resolver for global ones (both session-agnostic
  * inserts), composed with `buildClaimDeps()` above so the binding itself
@@ -465,7 +465,7 @@ function sessionListingReadDeps() {
 
 /**
  * Close a conversation OUT of its session's listing — the wiring for
- * `close-conversation-in-session.ts`'s pure decision. `withSessionListingLock`
+ * `close-conversation-in-workspace.ts`'s pure decision. `withSessionListingLock`
  * serializes concurrent closes of THIS session's listings, so two racing
  * closes of the last two open conversations cannot both read "more than one
  * open" and both succeed — the second sees the first's write and gets
@@ -493,7 +493,7 @@ export async function closeConversationInSession(input: {
 
 /**
  * Reopen a conversation OUT of "closed" and back into its session's
- * listing — the wiring for `reopen-conversation-in-session.ts`'s pure
+ * listing — the wiring for `reopen-conversation-in-workspace.ts`'s pure
  * decision. Same `withSessionListingLock` key as `closeConversationInSession`,
  * so a reopen can never race a close — or another reopen — of the same
  * session's listings.

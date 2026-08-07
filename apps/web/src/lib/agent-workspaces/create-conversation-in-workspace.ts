@@ -3,7 +3,7 @@
  * independent steps, not one bespoke binding-at-INSERT mechanism: (1) an
  * ordinary idempotent "insert if missing" (a plain, session-agnostic
  * conversation), then (2) `claimConversationInSessionWith` — the ONE place
- * `conversations.workspaceId` is ever written (see `claim-conversation-in-session.ts`
+ * `conversations.workspaceId` is ever written (see `claim-conversation-in-workspace.ts`
  * for the full binding contract; contract invariant 1: the binding is
  * write-once, never re-pointed — a bound thread moving to another session is
  * still a fork, never a rebind).
@@ -21,14 +21,14 @@
  *
  * Pure decision logic over injected creators, per the repo rule that
  * branching which decides lifecycle/addressing lives in a testable module —
- * `agent-sessions-runtime.ts` only wires the production deps.
+ * `agent-workspaces-runtime.ts` only wires the production deps.
  */
 
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   claimConversationInSessionWith,
   type ClaimConversationInSessionDeps,
-} from './claim-conversation-in-session';
+} from './claim-conversation-in-workspace';
 
 export class ConversationUnavailableError extends Error {
   /**
@@ -49,7 +49,7 @@ export class ConversationUnavailableError extends Error {
  * This is the claim primitive's own cap check, surfacing here as a thrown
  * error so this module's callers keep the same `instanceof` mapping they
  * already had — the cap itself now lives in exactly one place
- * (`claim-conversation-in-session.ts`), not duplicated here.
+ * (`claim-conversation-in-workspace.ts`), not duplicated here.
  */
 export class SessionFullError extends Error {
   constructor() {
@@ -133,7 +133,7 @@ export async function createConversationInSessionWith(
   const sessionRow = await deps.findSession(workspaceId);
   if (sessionRow === null) throw new ConversationUnavailableError({ cause: new Error('session_not_found') });
   // No endedAt gate: an ended session is a valid target that REOPENS when a
-  // claim lands in it (see claim-conversation-in-session.ts) — lifecycle
+  // claim lands in it (see claim-conversation-in-workspace.ts) — lifecycle
   // state never refuses a permitted create (issue #2335).
   if ((await deps.countActiveConversations(workspaceId)) >= MAX_SESSION_CONVERSATIONS) {
     // Exempt an idempotent retry of a conversation ALREADY bound HERE — a

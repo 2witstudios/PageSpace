@@ -46,7 +46,7 @@ import {
 import {
   createConversationInSession,
   ensureGlobalSandboxSession,
-} from '../agent-sessions-runtime';
+} from '../agent-workspaces-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;

@@ -46,14 +46,14 @@ import {
   provisionSessionSandbox,
   spawnSession,
   getAgentSessionStore,
-} from '@/lib/agent-workspaces/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
 import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
-} from '@/lib/agent-workspaces/create-conversation-in-session';
+} from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
@@ -61,7 +61,7 @@ import {
   killShellById,
   listShells,
   spawnShell,
-} from '@/lib/agent-workspaces/session-shells-runtime';
+} from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-streams';
 import {
   createSessionTools,

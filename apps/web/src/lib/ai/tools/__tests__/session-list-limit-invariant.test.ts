@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_ACTIVE_SESSIONS_PER_OWNER } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { MAX_ACTIVE_SESSIONS_PER_OWNER } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '@pagespace/lib/agent-workspaces/contract';
 
 /**

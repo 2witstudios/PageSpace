@@ -35,7 +35,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
 }));
@@ -44,7 +44,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 }));
 
 import { POST } from '../route';
-import { AgentNotInSessionDriveError, ConversationUnavailableError } from '@/lib/agent-workspaces/create-conversation-in-session';
+import { AgentNotInSessionDriveError, ConversationUnavailableError } from '@/lib/agent-workspaces/create-conversation-in-workspace';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'ses-1';

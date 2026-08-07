@@ -20,7 +20,7 @@ vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
 }));
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: vi.fn(async () => ({ allowed: true })),
   createConversationInSession: vi.fn(async () => undefined),
 }));
@@ -687,13 +687,13 @@ describe('POST session binding (sessionId in body)', () => {
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
     vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
     vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: true });
     vi.mocked(runtime.createConversationInSession).mockResolvedValue(undefined);
   });
 
   it('binds through the session-gated creator and answers 200', async () => {
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
     const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
     const response = await POST(request, createContext(mockAgentId));
     expect(response.status).toBe(200);
@@ -703,8 +703,8 @@ describe('POST session binding (sessionId in body)', () => {
   });
 
   it('409s an id that cannot be claimed WITH this binding — never adopts or rebinds', async () => {
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
-    const { ConversationUnavailableError } = await import('@/lib/agent-workspaces/create-conversation-in-session');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    const { ConversationUnavailableError } = await import('@/lib/agent-workspaces/create-conversation-in-workspace');
     vi.mocked(runtime.createConversationInSession).mockRejectedValue(new ConversationUnavailableError());
     const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1', conversationId: 'tz4a98xxat96iws9zmbrgj3a' });
     const response = await POST(request, createContext(mockAgentId));
@@ -713,7 +713,7 @@ describe('POST session binding (sessionId in body)', () => {
   });
 
   it('404s an unknown session id — a conversation joins a workspace, never mints one', async () => {
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
     vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'session_not_found' });
     const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
     const response = await POST(request, createContext(mockAgentId));
@@ -722,7 +722,7 @@ describe('POST session binding (sessionId in body)', () => {
   });
 
   it('404s a session the requester cannot reach — SAME as not-found (review #2261/5)', async () => {
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
     vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
     const response = await POST(request, createContext(mockAgentId));
@@ -731,8 +731,8 @@ describe('POST session binding (sessionId in body)', () => {
   });
 
   it('400s an agent from a DIFFERENT drive than the session — a caller mistake, not a service failure (review #2261/6)', async () => {
-    const runtime = await import('@/lib/agent-workspaces/agent-sessions-runtime');
-    const { AgentNotInSessionDriveError } = await import('@/lib/agent-workspaces/create-conversation-in-session');
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    const { AgentNotInSessionDriveError } = await import('@/lib/agent-workspaces/create-conversation-in-workspace');
     vi.mocked(runtime.createConversationInSession).mockRejectedValue(new AgentNotInSessionDriveError());
     const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
     const response = await POST(request, createContext(mockAgentId));

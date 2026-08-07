@@ -36,7 +36,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 - **Binding is write-once.** `conversations.sessionId` is set at creation, or — for a
   conversation that has never had one — by exactly one guarded claim of the caller's own
   row (`conversationRepository.claimConversation`, `WHERE sessionId IS NULL AND userId =
-  :caller`; `apps/web/src/lib/agent-workspaces/claim-conversation-in-session.ts`). No
+  :caller`; `apps/web/src/lib/agent-workspaces/claim-conversation-in-workspace.ts`). No
   UPDATE path re-points a bound row: a thread's history and its filesystem always agree.
   Moving a thread to another session is a **fork** (a new conversation), never a rebind.
 - **History outlives compute.** The FK is ON DELETE SET NULL: deleting a session keeps

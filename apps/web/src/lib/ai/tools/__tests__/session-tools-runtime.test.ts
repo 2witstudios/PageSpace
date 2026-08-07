@@ -46,7 +46,7 @@ const {
   mockGetAiAgent: vi.fn(),
 }));
 
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
   ensureDriveSessionForConversation: mockEnsureDriveSessionForConversation,
@@ -74,7 +74,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation, getAiAgent: mockGetAiAgent },
 }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   getSessionShellStore: vi.fn(),
   killShellById: vi.fn(),
   listShells: vi.fn(),

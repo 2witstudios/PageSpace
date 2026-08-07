@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
-import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import {
   AgentNotInSessionDriveError,
   ConversationUnavailableError,
   SessionFullError,
-} from '@/lib/agent-workspaces/create-conversation-in-session';
+} from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -223,7 +223,7 @@ export async function POST(
         // the identical checkSessionAccess call: a 403-vs-404 split would let
         // a caller learn whether a session id is real even when they can
         // never touch it.
-        return sessionNotFoundOrDenied(request, auth.userId, sessionId, sessionAccess.reason, 'page-agents/conversations');
+        return workspaceNotFoundOrDenied(request, auth.userId, sessionId, sessionAccess.reason, 'page-agents/conversations');
       }
     }
 

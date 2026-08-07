@@ -41,11 +41,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   countOpenConversationsForSession: vi.fn(),
   // Pass-through: these DELETE-route tests are about the guard-then-delete
   // sequence at the call site, not lock contention (that's
-  // `agent-sessions-runtime`'s own test suite).
+  // `agent-workspaces-runtime`'s own test suite).
   withSessionListingLock: vi.fn((_sessionId: string, fn: () => Promise<unknown>) => fn()),
 }));
 
@@ -53,7 +53,7 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';

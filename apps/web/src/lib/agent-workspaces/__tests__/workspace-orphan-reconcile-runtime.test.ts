@@ -23,7 +23,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-vi.mock('./../agent-sessions-runtime', () => ({
+vi.mock('./../agent-workspaces-runtime', () => ({
   getSandboxHost: async () => ({ kill: (...args: unknown[]) => mockKill(...args) }),
   getAgentSessionStore: async () => ({
     stampSpriteTornDown: (...args: unknown[]) => mockStampSpriteTornDown(...args),
@@ -38,7 +38,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const { SandboxSpriteReplacedError } = await import('@pagespace/lib/services/sandbox/sandbox-host');
 const { defaultReconcileAgentSessionOrphanSpritesDeps: deps, MAX_CANDIDATES_PER_TABLE } = await import(
-  '../agent-session-orphan-reconcile-runtime'
+  '../workspace-orphan-reconcile-runtime'
 );
 
 /** A chainable Drizzle-ish select stub resolving to `rows`. */

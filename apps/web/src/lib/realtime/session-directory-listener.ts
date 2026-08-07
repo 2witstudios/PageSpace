@@ -6,10 +6,10 @@ import { useSWRConfig } from 'swr';
 import { useSocket } from '@/hooks/useSocket';
 import {
   forgetConversationInCache,
-  revalidateSessionListings,
+  revalidateWorkspaceListings,
   touchConversationInCache,
   upsertConversationInCache,
-} from '@/components/agents/panes/session-conversations';
+} from '@/components/agents/panes/workspace-conversations';
 import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-events';
 
 /**
@@ -66,7 +66,7 @@ export function useSessionDirectoryListener(): void {
       // to insert it into. (Its own surfaces learn about it through their own
       // paths; this listener owns session listings only.)
       if (!workspaceId || !conversation) {
-        if (workspaceId) revalidateSessionListings(mutate);
+        if (workspaceId) revalidateWorkspaceListings(mutate);
         return;
       }
       upsertConversationInCache(mutate, workspaceId, {
@@ -88,13 +88,13 @@ export function useSessionDirectoryListener(): void {
       // A workspace re-binding moves the row between sessions — which row lives
       // where is exactly what this cache holds, so re-read rather than guess.
       if (changes.workspaceId !== undefined) {
-        revalidateSessionListings(mutate);
+        revalidateWorkspaceListings(mutate);
         return;
       }
       // `closedInWorkspaceAt` moving is a listing membership change in either
       // direction; the listing query owns that predicate, so re-read.
       if (changes.closedInWorkspaceAt !== undefined) {
-        revalidateSessionListings(mutate);
+        revalidateWorkspaceListings(mutate);
         return;
       }
       if (changes.lastMessageAt !== undefined) {
@@ -114,7 +114,7 @@ export function useSessionDirectoryListener(): void {
       // listing rows carry those fields — but only for a row already present,
       // so a plain re-read is both correct and cheap enough at this frequency.
       if (changes.title !== undefined || changes.isShared !== undefined) {
-        revalidateSessionListings(mutate);
+        revalidateWorkspaceListings(mutate);
       }
     };
 
@@ -125,8 +125,8 @@ export function useSessionDirectoryListener(): void {
 
     // Reopen restores a row this cache dropped, and the event is id-level — the
     // conversation body has to come from the server.
-    const handleReopened = () => revalidateSessionListings(mutate);
-    const handleSessionLifecycle = () => revalidateSessionListings(mutate);
+    const handleReopened = () => revalidateWorkspaceListings(mutate);
+    const handleSessionLifecycle = () => revalidateWorkspaceListings(mutate);
 
     socket.on(CONVERSATION_EVENTS.created, handleCreated);
     socket.on(CONVERSATION_EVENTS.updated, handleUpdated);

@@ -6,7 +6,7 @@ import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/a
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';

@@ -22,7 +22,7 @@
  * not preserved anywhere.
  */
 
-import { findOpenForAgent, type SessionConversationSummary } from './session-conversations';
+import { findOpenForAgent, type SessionConversationSummary } from './workspace-conversations';
 
 export type { SessionConversationSummary };
 

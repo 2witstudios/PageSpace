@@ -12,7 +12,7 @@ import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-
 import {
   claimConversationInSessionWith,
   type ClaimConversationInSessionDeps,
-} from '../claim-conversation-in-session';
+} from '../claim-conversation-in-workspace';
 
 const UNBOUND_PAGE_ROW = {
   userId: 'user-1',

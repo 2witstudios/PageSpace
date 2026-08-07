@@ -50,7 +50,7 @@ export const SESSION_QUOTA_MESSAGE =
 export const SESSION_CONVERSATION_LIMIT_MESSAGE =
   'This session already holds the maximum number of conversations — continue in an existing one, or start a new session, before adding another.';
 
-/** The 429 for `SessionFullError` (`create-conversation-in-session.ts`) — kept beside its message so the two cannot drift. */
+/** The 429 for `SessionFullError` (`create-conversation-in-workspace.ts`) — kept beside its message so the two cannot drift. */
 export function sessionConversationLimitExceeded(
   request: Request,
   userId: string,

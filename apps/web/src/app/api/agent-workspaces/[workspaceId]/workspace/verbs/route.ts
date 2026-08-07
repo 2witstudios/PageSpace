@@ -14,7 +14,7 @@
  *
  * Gated by the same session-access check the blob PUT uses, with the same
  * family policy: an unknown session and a denied session answer the SAME 404
- * (`sessionNotFoundOrDenied`) so a probe learns nothing from the difference.
+ * (`workspaceNotFoundOrDenied`) so a probe learns nothing from the difference.
  *
  * SESSION ACCESS IS NOT TARGET ACCESS (security review HIGH 1, attack B).
  * Reaching a workspace says nothing about the `scope.targetId` a verb wants to
@@ -36,10 +36,10 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { workspaceLayoutVerbSchema } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { checkSessionAccess } from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { applyWorkspaceLayoutVerb } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import { authorizeVerbScopes } from '@/lib/agent-workspaces/authorize-pane-scope';
-import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -62,7 +62,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, workspaceId);
   if (!access.allowed) {
-    return sessionNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   let body: unknown;
