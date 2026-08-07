@@ -22,6 +22,8 @@ import {
   type RollbackContext,
 } from './rollback-service';
 import type { ActivityActionPreview } from '@/types/activity-actions';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import type { BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 
 /**
  * Preview of what will be undone
@@ -61,6 +63,18 @@ export interface AiUndoResult {
   messagesDeleted: number;
   activitiesRolledBack: number;
   errors: string[];
+  /**
+   * The conversation row as it stood AFTER the write transaction bumped its
+   * rev — the post-write rev the undo's own event must carry (spec §3 clause
+   * 2). Absent when nothing was written (a failed or idempotent no-op undo),
+   * which is also the caller's signal that there is nothing to announce.
+   *
+   * Handed to the caller rather than emitted here because the emission needs
+   * request-scoped facts this layer does not have (the acting browser session,
+   * the legacy broadcast channel). The caller's only job is to pass it to
+   * `messageRepository.emitUndoApplied` — it must never bump a rev itself.
+   */
+  bumpedConversation?: BumpedConversationRow | null;
 }
 
 /**
@@ -462,6 +476,7 @@ export async function executeAiUndo(
     loggers.api.debug('[AiUndo:Execute] Starting transaction');
 
     const deferredTriggers: Array<() => void> = [];
+    let bumpedConversation: BumpedConversationRow | null = null;
 
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
@@ -534,23 +549,22 @@ export async function executeAiUndo(
         fromTimestamp: createdAt.toISOString(),
       });
 
-      // `messages` — the one table every reader consults and, since Phase 4
-      // PR 14, the only one anything writes. The mirrored `chat_messages`
-      // tombstone that used to follow this statement is gone with the rest of
-      // the legacy leg. Excludes 'streaming' rows: see the SAFE DEFAULT note
-      // on previewAiUndo's affectedMessages query above; the same exclusion
-      // must apply to the actual mutation, not just its preview count.
-      await tx
-        .update(messages)
-        .set({ isActive: false })
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            gte(messages.createdAt, createdAt),
-            eq(messages.isActive, true),
-            ne(messages.status, 'streaming')
-          )
-        );
+      // Through the repository choke point, on THIS transaction: the
+      // soft-delete and `conversations.rev = rev + 1` are one atomic pair, so
+      // a rollback above takes the bump with it and a commit here can never
+      // leave the counter behind (spec §3 clause 2).
+      //
+      // This was a bare `tx.update(messages)` until the rev-bump audit. The
+      // bump then arrived later, post-commit, in its own transaction, from a
+      // fire-and-forget block in the route — so any hiccup there committed the
+      // deletion with an unmoved rev, and every open pane stayed stale with no
+      // way to notice (`syncWatchedConversationRevs` compares revs and nothing
+      // else). The emission still happens after commit, below; only the
+      // counter moved inside.
+      bumpedConversation = await messageRepository.softDeleteUndoRange(tx, {
+        conversationId,
+        fromCreatedAt: createdAt,
+      });
 
       loggers.api.debug('[AiUndo:Execute] Transaction committing');
     });
@@ -593,6 +607,7 @@ export async function executeAiUndo(
       messagesDeleted,
       activitiesRolledBack,
       errors,
+      bumpedConversation,
     };
   } catch (error) {
     loggers.api.error('[AiUndoService] Error executing undo', {

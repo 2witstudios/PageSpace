@@ -112,7 +112,7 @@ async function gatherRecentConversations(
         gte(messages.createdAt, lookbackDate)
       )
     )
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(150);
 
   allMessages.push(
@@ -155,7 +155,7 @@ async function gatherRecentConversations(
           gte(messages.createdAt, lookbackDate)
         )
       )
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(100);
 
     allMessages.push(

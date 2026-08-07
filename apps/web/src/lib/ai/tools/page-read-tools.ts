@@ -1029,7 +1029,7 @@ export const pageReadTools = {
                 eq(messages.conversationId, conv.conversationId),
                 eq(messages.isActive, true)
               ))
-              .orderBy(asc(messages.createdAt))
+              .orderBy(asc(messages.createdAt), asc(messages.id))
               .limit(1);
 
             // Get unique participants
@@ -1181,7 +1181,7 @@ export const pageReadTools = {
             eq(messages.isActive, true),
             ne(messages.status, 'streaming')
           ))
-          .orderBy(asc(messages.createdAt));
+          .orderBy(asc(messages.createdAt), asc(messages.id));
 
         if (conversationMessages.length === 0) {
           return {
