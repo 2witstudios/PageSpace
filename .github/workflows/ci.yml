@@ -99,6 +99,14 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: cd scripts && bunx vitest run
 
+      # The evidence manifest cites tests as proof of the epic's user-facing guarantees.
+      # This is the gate that keeps those citations honest — it fails on a cited file that
+      # moved, a cited test that was renamed or skipped, and a cited test living in a suite
+      # no CI job runs. Runs after the suites above so a citation and its target are checked
+      # against the same tree. See docs/2.0-architecture/agent-sessions-evidence.md.
+      - name: Check evidence manifest
+        run: bun run scripts/check-evidence-manifest.ts
+
       - name: Coverage report
         if: always()
         run: node scripts/coverage-report.mjs
@@ -112,6 +120,169 @@ jobs:
             apps/*/coverage/coverage-summary.json
             packages/*/coverage/coverage-summary.json
           retention-days: 30
+
+  # The epic's headline user stories — "a server dispatch renders live in an open pane",
+  # "two windows both see both sides", "the pane grid converges across two devices" — are
+  # proved by Playwright specs that, until this job, ran only when a human remembered to run
+  # them. The specs' own headers said so ("There is no e2e job in CI, so these run locally").
+  #
+  # SCOPE: specs 15/16/17 only, not the whole e2e suite. These three are the epic's gate; the
+  # metering and storage specs (09-14, 08) need Stripe and real S3 credentials and cost far
+  # more runner time than their regression risk here justifies. Widening the list means
+  # widening `E2E_SPECS` below AND the citations in the evidence manifest.
+  #
+  # The topology is reproduced deliberately and every piece of it is load-bearing — see the
+  # comments on each step. Getting it wrong does not fail loudly; it makes the live-delivery
+  # specs pass for the wrong reason.
+  e2e:
+    name: E2E (agent-session user stories)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pagespace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+      # Secrets the app validates for length at boot (packages/lib/src/config/env-validation.ts).
+      # Fixed test values — nothing here is a real credential.
+      CSRF_SECRET: e2e-csrf-secret-at-least-32-characters-long
+      ENCRYPTION_KEY: e2e-encryption-key-at-least-32-characters-long
+      REALTIME_BROADCAST_SECRET: e2e-realtime-broadcast-secret-at-least-32-chars
+      CRON_SECRET: e2e-cron-secret-at-least-32-characters-long
+      STRIPE_WEBHOOK_SECRET: whsec_e2e_placeholder_not_a_real_secret
+      SENTRY_DSN: local-dev-placeholder-not-a-real-dsn
+      # The AI provider is Playwright's own mock, started by playwright.config.ts's `webServer`
+      # on :4998. The app must be pointed at it at RUNTIME, so it is set for build and start.
+      OPENROUTER_DEFAULT_API_KEY: sk-e2e
+      OPENROUTER_BASE_URL: http://127.0.0.1:4998/api/v1
+      # One origin for the browser: the proxy. The app and the seeder derive cookie domain and
+      # absolute URLs from these, so they must name the proxy, not the backend port.
+      WEB_APP_URL: http://127.0.0.1:3000
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      E2E_BASE_URL: http://127.0.0.1:3000
+      # Server-to-server broadcast hop. Not the browser's path — this one may be cross-origin.
+      INTERNAL_REALTIME_URL: http://127.0.0.1:3001
+      # NEXT_PUBLIC_REALTIME_URL is deliberately UNSET. See the proxy step.
+      E2E_WEB_TARGET: http://127.0.0.1:3100
+      E2E_REALTIME_TARGET: http://127.0.0.1:3001
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Setup Node.js (24 — the web/realtime runtime)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: bun run build --filter='@pagespace/db' --filter='@pagespace/lib'
+
+      # Must run from the package: drizzle.config.ts resolves its migrations folder relative
+      # to the package directory, so a repo-root invocation finds no migrations and silently
+      # migrates nothing.
+      - name: Migrate test database
+        run: bun run --filter '@pagespace/db' db:migrate
+
+      # PRODUCTION BUILD, NOT `next dev`. The app's own CSP has no `unsafe-eval` in script-src
+      # (apps/web/src/middleware/security-headers.ts), and the dev bundler needs eval to
+      # hydrate — so under `next dev` the page renders but never becomes interactive and every
+      # spec fails in a way that looks like an app bug. `next build && next start` is the only
+      # configuration these specs are meaningful in.
+      - name: Build web (production)
+        run: bun run build --filter=web
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
+
+      - name: Start realtime server
+        run: nohup bun run start > /tmp/realtime.log 2>&1 &
+        working-directory: apps/realtime
+        env:
+          PORT: '3001'
+          LOG_LEVEL: debug
+
+      # Web listens on 3100, NOT the origin the browser uses. The browser only ever talks to
+      # the proxy on 3000.
+      - name: Start web (production server)
+        run: nohup bun run start --port 3100 > /tmp/web.log 2>&1 &
+        working-directory: apps/web
+
+      # THE PIECE THAT IS EASY TO GET WRONG AND FAILS SILENTLY.
+      # The shipped CSP is `connect-src 'self' ws: wss:` and Socket.IO opens with an XHR
+      # POLLING handshake before upgrading. Point the browser at a realtime server on another
+      # origin and CSP blocks that handshake, NO socket connects, zero rooms are joined — and
+      # the live-delivery specs still go green off the mount-time refetch. They would then be
+      # testing nothing, permanently.
+      # Production avoids this because Traefik path-routes /socket.io to realtime on the app's
+      # own host (infrastructure/docker-compose.tenant.yml), which `'self'` covers. This proxy
+      # is that rule: one origin on :3000, /socket.io (with upgrade) to realtime, the rest to
+      # web, and NEXT_PUBLIC_REALTIME_URL left unset so the socket store falls back to
+      # same-origin. Do not "simplify" this by relaxing the CSP or setting bypassCSP — both
+      # stop the run testing the shipped policy.
+      - name: Start same-origin proxy (/socket.io -> realtime, rest -> web)
+        run: nohup bun run support/e2e-proxy.ts > /tmp/proxy.log 2>&1 &
+        working-directory: apps/e2e
+        env:
+          E2E_PROXY_PORT: '3000'
+
+      # Both probes go through the PROXY on purpose. The socket.io one is the important half:
+      # a 200 with a session id on the polling handshake proves web, proxy and realtime are all
+      # up AND that the /socket.io route really reaches realtime. Probing realtime directly on
+      # :3001 would pass even with the proxy rule broken — the exact silent misconfiguration
+      # this job exists to rule out. (realtime serves no health route; unknown paths 404.)
+      - name: Wait for the stack
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/api/health > /dev/null \
+               && curl -sf "http://127.0.0.1:3000/socket.io/?EIO=4&transport=polling" | grep -q '"sid"'; then
+              echo "stack up: web + same-origin socket.io handshake"; exit 0
+            fi
+            sleep 2
+          done
+          echo "stack did not come up"; tail -50 /tmp/web.log /tmp/realtime.log /tmp/proxy.log; exit 1
+
+      # Playwright starts the OpenRouter mock itself on :4998 via its `webServer` config.
+      - name: Run agent-session e2e specs
+        run: bunx playwright test $E2E_SPECS
+        working-directory: apps/e2e
+
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
+          retention-days: 14
+
+      # A silent socket is the failure mode that makes these specs meaningless, so surface the
+      # server logs whenever the job fails: realtime at LOG_LEVEL=debug logs
+      # "User joined conversation room" per room join, and zero of those means the proxy or
+      # the CSP path broke rather than the feature.
+      - name: Server logs (on failure)
+        if: failure()
+        run: tail -200 /tmp/web.log /tmp/realtime.log /tmp/proxy.log
 
   lint:
     name: Lint & TypeScript Check
