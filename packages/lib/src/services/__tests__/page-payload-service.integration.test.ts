@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
@@ -79,6 +79,54 @@ describe('loadPagePayload (integration)', () => {
 
     expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['kept']);
     expect(payload.context.chatMessages?.[0].role).toBeDefined();
+  });
+
+  /**
+   * READER-CUTOVER PARITY (epic "Agent-Session Single Source of Truth",
+   * Phase 4 / D6, PR 11): `fetchChatMessages` now reads the unified `messages`
+   * table, scoped by `conversations.type='page' AND contextId = pageId`
+   * instead of `chat_messages.pageId`. Same corpus, same rows.
+   */
+  it('matches the frozen legacy chat_messages query for an AI_CHAT page', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const chat = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'AI parity' });
+
+    await factories.createChatMessage(chat.id, { content: 'oldest', userId: owner.id, createdAt: new Date('2026-01-01T10:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'newest', userId: owner.id, createdAt: new Date('2026-01-01T11:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'tombstoned', userId: owner.id, isActive: false, createdAt: new Date('2026-01-01T12:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: '', userId: owner.id, status: 'streaming', createdAt: new Date('2026-01-01T13:00:00Z') });
+
+    // The pre-cutover query, frozen here verbatim.
+    const legacy = await db
+      .select({
+        id: chatMessages.id,
+        conversationId: chatMessages.conversationId,
+        role: chatMessages.role,
+        content: chatMessages.content,
+        createdAt: chatMessages.createdAt,
+        isActive: chatMessages.isActive,
+        userId: chatMessages.userId,
+      })
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, chat.id),
+        eq(chatMessages.isActive, true),
+        ne(chatMessages.status, 'streaming'),
+      ))
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(50);
+
+    const payload = await loadPagePayload(owner.id, chat.id);
+
+    expect(payload.context.chatMessages?.map((m) => m.id)).toEqual(
+      legacy.map((r) => r.id).reverse(),
+    );
+    expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['oldest', 'newest']);
+    // `pageId` is now supplied by the join's own argument rather than the
+    // transitional `messages.pageId` column — same value, no dependency on a
+    // column the contract PR drops.
+    expect(payload.context.chatMessages?.every((m) => m.pageId === chat.id)).toBe(true);
   });
 
   it('returns FILE context with metadata for FILE pages', async () => {
