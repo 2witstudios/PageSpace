@@ -60,7 +60,7 @@
           "suite": "e2e-playwright"
         }
       ],
-      "notes": "The epic's canonical bug written as an executable spec. The second citation is the harness pin: it proves the dispatch really wrote through the pipeline, so a green live-delivery assertion cannot be an artefact of a dispatch that did nothing. This spec only means what it says when realtime is same-origin — see the CSP note in the .md. STATUS WARNING: 'proven' here means cited, executing and gated by CI — NOT currently green. The live-delivery citation fails in every local run and in CI run 3, but passed on retry in CI run 4, so it is FLAKY rather than deterministic; the harness-pin citation passes everywhere. See the RED GATE table in the .md."
+      "notes": "The epic's canonical bug written as an executable spec. The second citation is the harness pin: it proves the dispatch really wrote through the pipeline, so a green live-delivery assertion cannot be an artefact of a dispatch that did nothing. This spec only means what it says when realtime is same-origin — see the CSP note in the .md. Both citations pass in CI as of run 5, the first run carrying #2363's socket-churn fix; the live-delivery one failed in every run before it. See the RED GATE table in the .md for the full history — 'proven' still means cited, executing and gated, not green, and the CI job remains the thing that reports green."
     },
     {
       "id": "two-windows-see-both-sides-live",
@@ -73,7 +73,7 @@
           "suite": "e2e-playwright"
         }
       ],
-      "notes": "STATUS WARNING: cited, executing and gated — and FAILING in all four recorded runs, local and CI. This is the one assertion that fails everywhere; see the RED GATE table in the .md."
+      "notes": "This was the last assertion still failing everywhere — all four runs, local and CI — and it passes as of CI run 5 with #2363's socket-churn fix. See the RED GATE table in the .md."
     },
     {
       "id": "server-created-conversation-reaches-sidebar",
@@ -125,7 +125,7 @@
           "suite": "e2e-playwright"
         }
       ],
-      "notes": "The durability citation is what separates 'the grid is server-authoritative' from 'both tabs happened to receive one message' — a fresh window reads the rows, not a broadcast. STATUS WARNING: all three citations FAILED locally (the durability one flakily) but all three PASS in both CI runs of the gate on the merged tree. The environment gap is unexplained, so treat these as unsettled rather than green — see the RED GATE table in the .md."
+      "notes": "The durability citation is what separates 'the grid is server-authoritative' from 'both tabs happened to receive one message' — a fresh window reads the rows, not a broadcast. All three citations failed locally (the durability one flakily) and passed in CI even before the fix — the reconnect storm made delivery a race a faster machine often won, which is why the CI passes were not accepted as evidence at the time. All three pass as of CI run 5 with #2363's socket-churn fix. See the RED GATE table in the .md."
     },
     {
       "id": "adversarial-delivery-converges-to-db-truth",
