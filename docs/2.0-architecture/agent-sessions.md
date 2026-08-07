@@ -74,7 +74,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   store re-exports, each applied verb broadcasting rev-carrying
   `workspace:updated` to the `session:<id>` room. The three-way membership
   duplication is gone: the `agent_workspaces.workspaceState` jsonb blob was
-  dropped at the contract step (migration 0250, guarded by a pre-drop
+  dropped at the contract step (migration 0252, guarded by a pre-drop
   RAISE-EXCEPTION check that no blob described a pane binding the rows
   lacked), the localStorage grid copy and its hydration latches died with the
   client rewrite, and the debounced blob `PUT` is retired — it answers 410 and
@@ -223,7 +223,7 @@ get one shared writer.
 ### 3a. One message table — COMPLETE
 
 `chat_messages` (page chat) was merged INTO `messages` (global assistant) and DROPPED at
-migration **0252**. The "branch on `agentPageId === null`" every reader used to carry is
+migration **0253**. The "branch on `agentPageId === null`" every reader used to carry is
 gone, and so is the table. This section is now history plus one live rule; the arc is
 closed.
 
@@ -253,7 +253,7 @@ edit/delete permissions are already anchored to the first page.
 
 **How it got here**, briefly, because the sequencing is the reusable part:
 
-- **Expand** (PR 9, migrations 0248/0249): `messages` gained nullable `userId`,
+- **Expand** (PR 9, migrations 0249/0250): `messages` gained nullable `userId`,
   `sourceAgentId` and a transitional `pageId`; orphan `conversations` rows were
   synthesised; `chat_messages.conversationId` and `ai_stream_sessions.conversationId`
   gained real (`NOT VALID`) FKs.
@@ -268,11 +268,11 @@ edit/delete permissions are already anchored to the first page.
   superset, so reading both duplicated every page-chat row); erasure and retention kept
   BOTH legs, because rows that physically exist are rows a subject can demand the erasure
   of. That asymmetry ended with the table.
-- **Freeze** (PR 14, migration 0250): `messages` became the sole write target, and
+- **Freeze** (PR 14, migration 0251): `messages` became the sole write target, and
   `ALTER TABLE chat_messages VALIDATE CONSTRAINT` produced the receipt — a legacy row
   whose conversation does not exist is a row `messages` would have REFUSED, so a passing
   VALIDATE proves the copy is completable.
-- **Contract** (PR 15, migration 0252 — the only irreversible step in the epic): a final
+- **Contract** (PR 15, migration 0253 — the only irreversible step in the epic): a final
   idempotent sweep, a completeness guard, `DROP TABLE chat_messages`, and
   `messages."pageId"` dropped behind the `type='client'` page link above.
 
@@ -280,7 +280,7 @@ Four things about the contract step are worth keeping, because they are the part
 were not obvious:
 
 - **The migration is the backfill.** Tenant/onprem deployments can skip versions and have
-  no operator to run a script, so 0252 re-runs the copy itself before dropping anything.
+  no operator to run a script, so 0253 re-runs the copy itself before dropping anything.
   On cloud it is a no-op; that is the point of writing it anyway.
 - **The completeness guard compares ROWS, not CONTENT.** Since PR 14 froze the legacy
   leg, every edit, soft-delete, undo tombstone and interrupted-stream materialisation

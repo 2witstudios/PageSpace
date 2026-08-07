@@ -97,13 +97,13 @@ evidence row is retained.
 
 `ai_stream_sessions` rows hold `parts` — a checkpoint of the generated message
 buffer, i.e. message CONTENT — plus the streamer's id and display name.
-Migration 0249 gave the table an `ON DELETE CASCADE` to `conversations`, so
+Migration 0250 gave the table an `ON DELETE CASCADE` to `conversations`, so
 erasing a user now takes the stream state inside THEIR OWN conversations with
 them. This step covers what that cascade cannot reach: a **shared** conversation
 accepts streams from any member with access, so rows carrying the subject's
 `user_id` inside SOMEONE ELSE's conversation survive the cascade, as do all
 `ai_pending_abort_intents` rows (that table has no foreign keys at all) and any
-row left dangling before 0249's `NOT VALID` constraint landed.
+row left dangling before 0250's `NOT VALID` constraint landed.
 
 The step is **fatal**: it is the only eraser these rows have — no TTL, no
 retention sweep — so a swallowed failure would report a completed erasure with
