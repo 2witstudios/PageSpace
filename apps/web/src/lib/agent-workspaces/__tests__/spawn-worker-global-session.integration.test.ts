@@ -38,7 +38,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { factories } from '@pagespace/db/test/factories';
-import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import {
   buildSessionToolsDeps,
   resolveCallerSessionForWorker,

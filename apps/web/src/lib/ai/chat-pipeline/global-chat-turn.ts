@@ -118,7 +118,7 @@ import {
   resolveOrCreateConversation,
   ConversationOwnershipError,
   ConversationHistoryDeletedError,
-} from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+} from '@/lib/repositories/resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 

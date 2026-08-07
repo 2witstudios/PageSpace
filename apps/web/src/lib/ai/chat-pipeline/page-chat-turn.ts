@@ -43,7 +43,7 @@ import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
-import { makeOnStepFinishHandler } from '@/app/api/ai/chat/step-finish-handler';
+import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -57,18 +57,18 @@ import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
 /**
- * The conversation was still active at the ownership check far above, but a
- * concurrent History-delete committed sometime in the (long, I/O-heavy) gap
- * between that check and the user-message persist below. Thrown from inside
- * the short, tightly-scoped transaction that re-verifies immediately
- * adjacent to the write — see that call site's own comment.
+ * Thrown when the conversation was still active at the ownership check far
+ * above, but a concurrent History-delete committed sometime in the (long,
+ * I/O-heavy) gap before the user-message persist below. Raised from inside the
+ * short, tightly-scoped transaction that re-verifies immediately adjacent to
+ * the write — see that call site's own comment.
+ *
+ * Shared with the global surface rather than redeclared: this file used to
+ * carry its own class of the same name, so `instanceof` silently did not cross
+ * between the two chat strategies and a caller catching one would miss the
+ * other.
  */
-class ConversationHistoryDeletedError extends Error {
-  constructor() {
-    super('Conversation has been deleted from history');
-    this.name = 'ConversationHistoryDeletedError';
-  }
-}
+import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
 // canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
 // (other users), not the requesting principal.
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';

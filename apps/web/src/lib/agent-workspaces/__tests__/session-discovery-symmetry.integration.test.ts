@@ -35,7 +35,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
-import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import { createConversationInSession, spawnSession } from '../agent-sessions-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';

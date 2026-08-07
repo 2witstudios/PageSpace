@@ -73,7 +73,7 @@ import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
 import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-session-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-session';
 import {

@@ -62,7 +62,7 @@ import { userSessionsRoom, pageRoom } from '@pagespace/lib/realtime/rooms';
 import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import {
   ensureGlobalSandboxSession,

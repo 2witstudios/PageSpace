@@ -276,7 +276,7 @@ vi.mock('@/lib/repositories/message-repository', async () => {
 
 // resolveOrCreateConversation is tested in its own file; here we stub it so
 // the route tests don't have to wire up the conversations db mock for it.
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
@@ -771,7 +771,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
 
   describe('global conversation-added broadcast', () => {
     it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
@@ -787,7 +787,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
 
     it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest(), makeContext());
@@ -854,7 +854,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
 
     it('broadcasts the new-conversation sidebar event when isNew=true (previously an acknowledged gap)', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 
