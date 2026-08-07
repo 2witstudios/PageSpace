@@ -193,6 +193,34 @@ export default function AgentPanes({
   // place their layout can come from at all.
   useWorkspaceLayoutSync(sessionId);
 
+  // Say something when the layout queue throws the user's work away.
+  //
+  // The store abandons `pending` on a non-409 4xx (most often the pane-scope
+  // gate refusing a target) and after the transport fails its attempt budget,
+  // then refetches the durable grid. That is the right behaviour — but done
+  // silently it reads as the app ignoring a split or a resize the user just
+  // made. Keyed on `at` so each transition toasts exactly once rather than on
+  // every render.
+  const queueError = useAgentWorkspaceStore((state) => state.queueErrors[sessionId]);
+  const toastedQueueErrorAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (!queueError || toastedQueueErrorAt.current === queueError.at) return;
+    toastedQueueErrorAt.current = queueError.at;
+    if (queueError.reason === 'refused') {
+      toast.error("That can't be shown in this workspace.", {
+        description: 'The layout has been put back to what the server has.',
+      });
+    } else if (queueError.reason === 'abandoned') {
+      toast.error('Your layout change could not be saved.', {
+        description: 'Showing the last version the server has.',
+      });
+    } else {
+      toast.error('This layout may be out of date.', {
+        description: 'It could not be re-read — reload to be sure of it.',
+      });
+    }
+  }, [queueError]);
+
   // The latest "assign this pane to conversation X" request per pane —
   // bumped by every such request (a History pick, an agent mint) so an
   // OLDER one's async completion (a slow reopen, a slow mint) can detect

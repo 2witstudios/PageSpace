@@ -54,7 +54,7 @@ const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
 beforeEach(() => {
   mockFetchWithAuth.mockReset();
   __resetWorkspaceQueuesForTests();
-  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
 });
 
 describe('optimistic apply + eager POST', () => {
@@ -385,6 +385,93 @@ describe('give-up', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * ABANDONING THE QUEUE IS VISIBLE.
+ *
+ * Every path here throws away work the user already saw applied. That is the
+ * right call — the durable truth beats a local edit that will evaporate — but
+ * none of it was reported, and no test covered any 4xx at all. A silently
+ * reverted split reads as the app ignoring the user.
+ */
+describe('a dropped queue reports why', () => {
+  const queueError = (id = 'ses-1') => store().queueErrors[id];
+
+  it('a 403 from the scope gate refuses the verb and says so', async () => {
+    mockFetchWithAuth.mockImplementation((_url: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? Promise.resolve(reply(403, { error: 'forbidden' }))
+        : Promise.resolve(reply(200, { rev: 3, grid: wireGrid('pane-truth', scope()) })),
+    );
+
+    store().hydrateFromServer('ses-1', { rev: 0, grid: wireGrid('pane-a', scope()) });
+    store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+    await settled();
+
+    expect(queueError()?.reason).toBe('refused');
+    expect(sync().pending).toHaveLength(0);
+    // And it did go and read the durable truth.
+    expect(panesOf(grid())[0].id).toBe('pane-truth');
+  });
+
+  it('escalates to stale-display when the resync after a refusal also fails', async () => {
+    mockFetchWithAuth.mockImplementation((_url: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? Promise.resolve(reply(403, { error: 'forbidden' }))
+        : Promise.reject(new Error('offline')),
+    );
+
+    store().hydrateFromServer('ses-1', { rev: 0, grid: wireGrid('pane-a', scope()) });
+    store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+    await settled();
+
+    // Neither the user's edit nor the server's truth is on screen now, and
+    // that is exactly the case the old bare `catch {}` swallowed.
+    expect(queueError()?.reason).toBe('stale-display');
+  });
+
+  it('reports the spent attempt budget as abandoned', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetchWithAuth.mockImplementation((_url: string, init?: RequestInit) =>
+        init?.method === 'POST'
+          ? Promise.reject(new Error('offline'))
+          : Promise.resolve(reply(200, { rev: 3, grid: wireGrid('pane-truth', scope()) })),
+      );
+
+      store().hydrateFromServer('ses-1', { rev: 0, grid: wireGrid('pane-a', scope()) });
+      store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+      for (let i = 0; i < 8; i += 1) await vi.advanceTimersByTimeAsync(6000);
+
+      expect(queueError()?.reason).toBe('abandoned');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears once the queue is moving again', async () => {
+    let reject = true;
+    mockFetchWithAuth.mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') {
+        return Promise.resolve(reply(200, { rev: 3, grid: wireGrid('pane-truth', scope()) }));
+      }
+      return reject
+        ? Promise.resolve(reply(403, { error: 'forbidden' }))
+        : Promise.resolve(reply(200, { rev: 4, grid: wireGrid('pane-truth', scope()), applied: true }));
+    });
+
+    store().hydrateFromServer('ses-1', { rev: 0, grid: wireGrid('pane-a', scope()) });
+    store().assignPane('ses-1', 'pane-a', scope('Mine', 'conv-mine'));
+    await settled();
+    expect(queueError()?.reason).toBe('refused');
+
+    reject = false;
+    store().assignPane('ses-1', 'pane-truth', scope('Second', 'conv-second'));
+    await settled();
+
+    expect(queueError()).toBeNull();
   });
 });
 

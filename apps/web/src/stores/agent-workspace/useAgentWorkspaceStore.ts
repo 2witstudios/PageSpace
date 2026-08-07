@@ -110,6 +110,30 @@ interface WorkspaceSync {
   attempts: number;
 }
 
+/**
+ * Why a session's pending layout work was thrown away.
+ *
+ * The store's own reasoning is that showing the user the durable truth beats
+ * showing them a local edit that will silently evaporate — but it never showed
+ * them anything. Every abandon path (a 403 from the scope gate, a rejected
+ * payload, a spent attempt budget) reset `pending` to `[]` and refetched, so
+ * the split or resize the user just made vanished with no toast, no log, and no
+ * flag anything could render. This is the flag; `AgentPanes` renders it.
+ *
+ *   refused       a 4xx that is not a 409 — the server will never accept this
+ *                 verb. Most often the pane-scope gate saying the target is not
+ *                 the caller's to show.
+ *   abandoned     the transport failed MAX_TRANSPORT_ATTEMPTS times running.
+ *   stale-display the abandon happened AND the resync that was supposed to
+ *                 replace it also failed, so what is on screen is neither the
+ *                 user's edit nor the server's truth.
+ */
+export interface WorkspaceQueueError {
+  reason: 'refused' | 'abandoned' | 'stale-display';
+  /** Set once per transition, so a renderer can fire a toast without repeating it. */
+  at: number;
+}
+
 interface AgentWorkspaceState {
   /** sessionId → what to render. Derived: `replayPending(base, pending)` plus the focus overlay. */
   workspaces: Record<string, WorkspaceState>;
@@ -117,6 +141,8 @@ interface AgentWorkspaceState {
   sync: Record<string, WorkspaceSync>;
   /** sessionId → client-local focus. The ONLY thing this store persists. */
   focus: Record<string, WorkspaceFocus>;
+  /** sessionId → why its queue was dropped, or null once anything settles cleanly. */
+  queueErrors: Record<string, WorkspaceQueueError | null>;
 
   /** Give a session its opening grid, once. Idempotent. */
   ensureWorkspace(sessionId: string, scope: PaneScope): void;
@@ -218,7 +244,8 @@ interface AgentWorkspaceState {
   /** Apply a `workspace:updated` broadcast. See the module doc for the three-way rule. */
   applyRemoteUpdate(payload: WorkspaceUpdatedEvent): void;
   /** Re-read the server's snapshot for a session (mount, socket reconnect, or a give-up). */
-  refreshWorkspaceSnapshot(sessionId: string): Promise<void>;
+  /** Re-read the access-checked snapshot. Resolves false when it could not be read. */
+  refreshWorkspaceSnapshot(sessionId: string): Promise<boolean>;
 }
 
 /** The layout GET's body, and what a verb response carries back. */
@@ -306,7 +333,7 @@ export function __resetWorkspaceQueuesForTests(): void {
   registeredEditing.clear();
   for (const timeout of retryTimers.values()) clearTimeout(timeout);
   retryTimers.clear();
-  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
 }
 
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -408,7 +435,8 @@ function drop(sessionId: string): void {
     const { [sessionId]: _grid, ...workspaces } = state.workspaces;
     const { [sessionId]: _focus, ...focus } = state.focus;
     const { [sessionId]: _sync, ...sync } = state.sync;
-    return { workspaces, focus, sync };
+    const { [sessionId]: _err, ...queueErrors } = state.queueErrors;
+    return { workspaces, focus, sync, queueErrors };
   });
 }
 
@@ -513,9 +541,11 @@ async function settle(
   if (!response.ok) {
     // A 4xx that is not a 409 (a rejected payload, a session that is gone or
     // no longer ours) will never succeed on retry. Abandon the queue and go
-    // read what is actually durable.
+    // read what is actually durable — and SAY SO: the user's split or resize is
+    // being discarded, and silently reverting it reads as the app ignoring them.
     commit(sessionId, { ...sync, pending: [], inFlight: null, attempts: 0 }, 'preserve');
-    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+    setQueueError(sessionId, 'refused');
+    void resyncAfterAbandon(sessionId);
     return;
   }
 
@@ -550,6 +580,16 @@ async function settle(
     },
     'preserve',
   );
+  // The queue is moving again, so whatever went wrong before is over.
+  clearQueueError(sessionId);
+}
+
+/** Forget a session's queue error — anything settling cleanly supersedes it. */
+function clearQueueError(sessionId: string): void {
+  if (!useAgentWorkspaceStore.getState().queueErrors[sessionId]) return;
+  useAgentWorkspaceStore.setState((state) => ({
+    queueErrors: { ...state.queueErrors, [sessionId]: null },
+  }));
 }
 
 /**
@@ -583,8 +623,30 @@ function scheduleRetry(sessionId: string, sync: WorkspaceSync): void {
 function giveUp(sessionId: string, sync: WorkspaceSync): boolean {
   if (sync.attempts < MAX_TRANSPORT_ATTEMPTS) return false;
   commit(sessionId, { ...sync, pending: [], attempts: 0 }, 'preserve');
-  void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+  setQueueError(sessionId, 'abandoned');
+  void resyncAfterAbandon(sessionId);
   return true;
+}
+
+/** Record why a session's queue was dropped. `at` makes each transition distinct. */
+function setQueueError(sessionId: string, reason: WorkspaceQueueError['reason']): void {
+  useAgentWorkspaceStore.setState((state) => ({
+    queueErrors: { ...state.queueErrors, [sessionId]: { reason, at: Date.now() } },
+  }));
+}
+
+/**
+ * Refetch after abandoning the queue, and escalate if that fails too.
+ *
+ * Abandoning is only defensible because the refetch replaces the discarded work
+ * with the server's truth. When the refetch ALSO fails, the rendered grid is
+ * neither — it is whatever `base` happened to be, indefinitely, with nothing
+ * saying so. That case used to disappear into `refreshWorkspaceSnapshot`'s
+ * best-effort `catch {}`.
+ */
+async function resyncAfterAbandon(sessionId: string): Promise<void> {
+  const ok = await useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+  if (!ok) setQueueError(sessionId, 'stale-display');
 }
 
 /**
@@ -693,6 +755,7 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       workspaces: {},
       sync: {},
       focus: {},
+      queueErrors: {},
 
       ensureWorkspace: (sessionId, scope) =>
         enqueueVerb(sessionId, { type: 'ensure', columnId: mintId('col'), paneId: mintId('pane'), scope }),
@@ -850,13 +913,18 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       refreshWorkspaceSnapshot: async (sessionId) => {
         try {
           const response = await fetchWithAuth(workspaceUrl(sessionId));
-          if (!response.ok) return;
+          if (!response.ok) return false;
           const parsed = snapshotSchema.safeParse(await response.json());
-          if (!parsed.success) return;
+          if (!parsed.success) return false;
           get().hydrateFromServer(sessionId, parsed.data);
+          return true;
         } catch {
-          // Best-effort: the socket's own reconnect, or the next mutation's
-          // 409, will bring the truth along.
+          // Still best-effort for its own sake — the socket's own reconnect, or
+          // the next mutation's 409, will bring the truth along. But the caller
+          // now learns it failed, because a refetch that was covering for a
+          // DISCARDED queue leaves the user looking at neither their edit nor
+          // the server's state, and that is worth saying out loud.
+          return false;
         }
       },
     }),
