@@ -208,7 +208,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hi there!',
           conversationUserId: 'other_user',
           isShared: false,
-          sessionId: null,
+          workspaceId: null,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
@@ -244,6 +244,33 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         totalPages: 1,
         hasMore: false,
       });
+    });
+
+    // The repository speaks the post-rename name; the wire field a pre-rename
+    // browser bundle reads is still `sessionId`. Pin the mapping in both
+    // directions so neither half can be renamed without the other.
+    it('should surface the repository workspaceId as the wire sessionId', async () => {
+      vi.mocked(conversationRepository.listConversations).mockResolvedValue([
+        {
+          conversationId: 'conv_in_workspace',
+          firstMessageTime: new Date('2025-01-01'),
+          lastMessageTime: new Date('2025-01-02'),
+          messageCount: 1,
+          firstUserMessage: JSON.stringify([{ text: 'In a workspace' }]),
+          lastMessageRole: 'user',
+          lastMessageContent: 'In a workspace',
+          conversationUserId: mockUserId,
+          isShared: false,
+          workspaceId: 'ws_abc',
+        },
+      ]);
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(1);
+
+      const response = await GET(createRequest(mockAgentId, 'GET'), createContext(mockAgentId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversations[0].sessionId).toBe('ws_abc');
     });
 
     it('should return empty array when no conversations exist', async () => {
@@ -315,7 +342,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hello',
           conversationUserId: mockUserId,
           isShared: false,
-          sessionId: null,
+          workspaceId: null,
         },
         {
           conversationId: 'conv_shared',
@@ -327,7 +354,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hi',
           conversationUserId: 'other_user',
           isShared: true,
-          sessionId: null,
+          workspaceId: null,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
