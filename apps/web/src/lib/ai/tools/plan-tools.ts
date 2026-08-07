@@ -23,6 +23,7 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { canActorViewPage } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
 
@@ -100,10 +101,10 @@ export const planTools = {
           };
         }
 
-        await db
-          .update(conversations)
-          .set({ planPageId: pageId, updatedAt: new Date() })
-          .where(eq(conversations.id, conversationId));
+        // Through the repository, never an open-coded UPDATE: that is what
+        // bumps `rev` and emits `conversation:updated`, so a second pane on
+        // this conversation actually renders the chip.
+        await conversationRepository.setConversationPlan(conversationId, userId, pageId);
 
         planLogger.info('plan bound to conversation', { conversationId, pageId });
 
@@ -139,10 +140,10 @@ export const planTools = {
         const conversation = await loadOwnedConversation(conversationId, userId);
         if (!conversation) return { success: false, error: 'This conversation cannot hold a plan binding.' };
 
-        await db
-          .update(conversations)
-          .set({ planPageId: null, updatedAt: new Date() })
-          .where(eq(conversations.id, conversationId));
+        // Same single writer as `set_plan` — the clear is just as much a
+        // lifecycle change, and a pane left showing a stale chip after an
+        // unemitted clear is the worse of the two failures.
+        await conversationRepository.setConversationPlan(conversationId, userId, null);
 
         planLogger.info('plan unbound from conversation', { conversationId });
 

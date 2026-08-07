@@ -134,41 +134,46 @@ const createdFor = (conversationId: string) => (b: CapturedBroadcast) =>
 const updatedFor = (conversationId: string) => (b: CapturedBroadcast) =>
   b.event === 'conversation:updated' && b.payload.conversationId === conversationId;
 
-describe('conversation:created is genuinely EMITTED by every creation path (real DB, real emitter, transport captured)', () => {
-  beforeAll(async () => {
-    if (!process.env.DATABASE_URL) {
-      throw new Error(
-        'DATABASE_URL is required: this suite proves a lifecycle EMIT happens, and a silent skip would re-open the exact coverage hole it closes.',
-      );
+// FILE-LEVEL, not per-describe: the transport swap has to outlive the first
+// suite. When it lived in that suite's own `beforeAll`/`afterAll`, its
+// `afterAll` restored the real `fetch` before any later describe ran, so a
+// second suite's emits went to the (unroutable) real host and every wait timed
+// out — a failure that looks exactly like "the code forgot to emit".
+beforeAll(async () => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      'DATABASE_URL is required: this suite proves a lifecycle EMIT happens, and a silent skip would re-open the exact coverage hole it closes.',
+    );
+  }
+  // Fails loudly (rather than skipping) when the database is unreachable.
+  await db.select({ id: pages.id }).from(pages).limit(1);
+
+  process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
+  process.env.REALTIME_BROADCAST_SECRET =
+    process.env.REALTIME_BROADCAST_SECRET ?? 'conversation-created-emit-test-secret-0123456789';
+
+  originalFetch = globalThis.fetch;
+  const captureFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (isRealtimeRequest(url)) {
+      const body = typeof init?.body === 'string' ? init.body : '';
+      broadcasts.push(JSON.parse(body) as CapturedBroadcast);
+      return { ok: true, status: 200 } as unknown as Response;
     }
-    // Fails loudly (rather than skipping) when the database is unreachable.
-    await db.select({ id: pages.id }).from(pages).limit(1);
+    return originalFetch(input, init);
+  };
+  globalThis.fetch = captureFetch as typeof globalThis.fetch;
+});
 
-    process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
-    process.env.REALTIME_BROADCAST_SECRET =
-      process.env.REALTIME_BROADCAST_SECRET ?? 'conversation-created-emit-test-secret-0123456789';
+afterAll(() => {
+  if (originalFetch) globalThis.fetch = originalFetch;
+});
 
-    originalFetch = globalThis.fetch;
-    const captureFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = urlOf(input);
-      if (isRealtimeRequest(url)) {
-        const body = typeof init?.body === 'string' ? init.body : '';
-        broadcasts.push(JSON.parse(body) as CapturedBroadcast);
-        return { ok: true, status: 200 } as unknown as Response;
-      }
-      return originalFetch(input, init);
-    };
-    globalThis.fetch = captureFetch as typeof globalThis.fetch;
-  });
+beforeEach(() => {
+  broadcasts.length = 0;
+});
 
-  afterAll(() => {
-    if (originalFetch) globalThis.fetch = originalFetch;
-  });
-
-  beforeEach(() => {
-    broadcasts.length = 0;
-  });
-
+describe('conversation:created is genuinely EMITTED by every creation path (real DB, real emitter, transport captured)', () => {
   it('path 1 — conversationRepository.createConversation: emits to the owner directory room with the page scope and a numeric rev', async () => {
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
@@ -468,5 +473,120 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     });
     expect(bound.payload.rev).toBe(captured.payload.rev + 1);
     expect(row.workspaceId).toBe(session.session.id);
+  });
+});
+
+/**
+ * THE PLAN BINDING is a lifecycle mutation and has to converge like one.
+ *
+ * `set_plan` / `clear_plan` / the plan DELETE route used to each run their own
+ * `UPDATE conversations SET planPageId`, none of which bumped `rev` or emitted
+ * anything, and `planPageId` had no wire representation at all. `PlanChip`
+ * renders this column, so a second pane on the same conversation saw an
+ * unchanged rev — which it cannot distinguish from "nothing happened" — and
+ * showed no chip, or a stale one after a clear, until a reload. Two panes on
+ * one conversation is the epic's headline story.
+ *
+ * Same seam as the suite above: nothing above the transport is stubbed.
+ */
+describe('the plan binding bumps rev and emits (real DB, real emitter, transport captured)', () => {
+  const seedThread = async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Agent' });
+    const planPage = await factories.createPage(drive.id, { type: 'DOCUMENT', title: 'Migrate billing' });
+    const conversationId = createId();
+    await conversationRepository.createConversation(conversationId, owner.id, agentPage.id);
+    return { owner, agentPage, planPage, conversationId };
+  };
+
+  const revOf = async (conversationId: string): Promise<number> => {
+    const [row] = await db
+      .select({ rev: conversations.rev, planPageId: conversations.planPageId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    return Number(row.rev);
+  };
+
+  it('binding a plan bumps rev and puts planPageId on the wire', async () => {
+    const { owner, planPage, conversationId } = await seedThread();
+    const before = await revOf(conversationId);
+    broadcasts.length = 0;
+
+    const outcome = await conversationRepository.setConversationPlan(conversationId, owner.id, planPage.id);
+    expect(outcome).toBe('set');
+
+    const [event] = await waitForBroadcasts(updatedFor(conversationId), 1, 'plan bound');
+    expect(event.channelId).toBe(userSessionsRoom(owner.id));
+    // The changed-field bag is what a second pane reads to update its chip
+    // without refetching the conversation.
+    expect(event.payload.changes).toEqual({ planPageId: planPage.id });
+    expect(typeof event.payload.rev).toBe('number');
+    expect(event.payload.rev).toBe(before + 1);
+    expect(await revOf(conversationId)).toBe(before + 1);
+  });
+
+  it('clearing a plan bumps rev again and emits an explicit null', async () => {
+    const { owner, planPage, conversationId } = await seedThread();
+    await conversationRepository.setConversationPlan(conversationId, owner.id, planPage.id);
+    const bound = await revOf(conversationId);
+    broadcasts.length = 0;
+
+    expect(await conversationRepository.setConversationPlan(conversationId, owner.id, null)).toBe('set');
+
+    const [event] = await waitForBroadcasts(updatedFor(conversationId), 1, 'plan cleared');
+    // An explicit null, not an absent key: a pane holding a stale chip needs to
+    // be TOLD the binding is gone. This is the direction that failed worse.
+    expect(event.payload.changes).toEqual({ planPageId: null });
+    expect(event.payload.rev).toBe(bound + 1);
+  });
+
+  it('a redundant re-bind writes nothing, bumps nothing, and emits nothing', async () => {
+    const { owner, planPage, conversationId } = await seedThread();
+    await conversationRepository.setConversationPlan(conversationId, owner.id, planPage.id);
+    const bound = await revOf(conversationId);
+    broadcasts.length = 0;
+
+    // `isDistinctFrom` in the WHERE — a no-op write must not announce a change
+    // that did not happen, or every pane refetches for nothing.
+    expect(await conversationRepository.setConversationPlan(conversationId, owner.id, planPage.id)).toBe('noop');
+    await settle();
+
+    expect(broadcasts.filter(updatedFor(conversationId))).toEqual([]);
+    expect(await revOf(conversationId)).toBe(bound);
+  });
+
+  it('a redundant CLEAR of an already-unbound conversation is likewise a no-op', async () => {
+    // The null→null case is the one a plain `ne` gets wrong: `NOT (col = NULL)`
+    // is NULL, so the guard has to be null-safe in both directions.
+    const { owner, conversationId } = await seedThread();
+    const before = await revOf(conversationId);
+    broadcasts.length = 0;
+
+    expect(await conversationRepository.setConversationPlan(conversationId, owner.id, null)).toBe('noop');
+    await settle();
+
+    expect(broadcasts.filter(updatedFor(conversationId))).toEqual([]);
+    expect(await revOf(conversationId)).toBe(before);
+  });
+
+  it('a NON-owner cannot bind a plan: the write itself refuses, not just the caller\'s earlier read', async () => {
+    const { planPage, conversationId } = await seedThread();
+    const mallory = await factories.createUser();
+    const before = await revOf(conversationId);
+    broadcasts.length = 0;
+
+    expect(await conversationRepository.setConversationPlan(conversationId, mallory.id, planPage.id)).toBe('noop');
+    await settle();
+
+    expect(broadcasts.filter(updatedFor(conversationId))).toEqual([]);
+    expect(await revOf(conversationId)).toBe(before);
+    const [row] = await db
+      .select({ planPageId: conversations.planPageId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    expect(row.planPageId).toBeNull();
   });
 });

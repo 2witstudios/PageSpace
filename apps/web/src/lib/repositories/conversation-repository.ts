@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { eq, and, ne, sql, inArray, isNull, isNotNull, isDistinctFrom } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
@@ -250,6 +250,71 @@ export const conversationRepository = {
       ))
       .returning({ id: conversations.id });
     return updated ? 'stamped' : 'noop';
+  },
+
+  /**
+   * Bind (or unbind, with `planPageId: null`) this conversation's plan page —
+   * the ONE writer of `conversations.planPageId`, and therefore the one place
+   * the rev bump and the directory emit can be guaranteed.
+   *
+   * It was three open-coded `UPDATE conversations SET planPageId` statements
+   * (`set_plan`, `clear_plan`, and the plan DELETE route), none of which
+   * bumped `rev` or emitted anything, while `planPageId` had no wire
+   * representation at all. `PlanChip` renders this column, so the same
+   * conversation open in a second pane saw an unchanged rev — indistinguishable
+   * from "nothing happened" — and showed no chip, or a stale one after a
+   * clear, until a reload. Two panes on one conversation is the epic's
+   * headline story, so a lifecycle write that only the acting pane observes is
+   * the exact failure this choke point exists to prevent.
+   *
+   * `userId` rides the WHERE (same shape as `claimConversation`), so ownership
+   * is enforced by the write itself rather than by a caller's earlier read —
+   * no read-then-write gap.
+   *
+   * ONLY A REAL CHANGE WRITES, the same discipline `setConversationShared`
+   * applies: `isDistinctFrom` is the null-safe inequality, so re-binding the
+   * plan a conversation already has (or clearing one that is already clear)
+   * matches zero rows and cannot bump `rev` or emit for a change that did not
+   * happen. A plain `ne` would be wrong here — `NOT (col = value)` is NULL
+   * when the column is NULL, which would skip the null→page transition this
+   * guard most needs to allow.
+   *
+   * `'noop'` therefore means one of: no such row, not the caller's, or already
+   * in the requested state. All three are the same answer to the callers,
+   * which map it onto their own refusal.
+   */
+  async setConversationPlan(
+    conversationId: string,
+    userId: string,
+    planPageId: string | null,
+    // Optional, and usually absent: the agent tools that drive this have no
+    // browser session to echo-suppress against, so every pane — including the
+    // one whose turn set the plan — hears it and converges on the same row.
+    triggeredBy?: ConversationEventTriggeredBy,
+  ): Promise<'set' | 'noop'> {
+    const [updated] = await db
+      .update(conversations)
+      .set({
+        planPageId,
+        updatedAt: new Date(),
+        // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
+        rev: sql`${conversations.rev} + 1`,
+      })
+      .where(and(
+        eq(conversations.id, conversationId),
+        eq(conversations.userId, userId),
+        isDistinctFrom(conversations.planPageId, planPageId),
+      ))
+      .returning();
+
+    if (!updated) return 'noop';
+    emitConversationLifecycle(
+      'updated',
+      { ...updated, rev: Number(updated.rev) },
+      triggeredBy,
+      { planPageId },
+    );
+    return 'set';
   },
 
   /**

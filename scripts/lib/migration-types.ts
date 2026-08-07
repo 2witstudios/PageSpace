@@ -98,7 +98,24 @@ export interface ValidationResult {
   extraIds: string[];
 }
 
-/** The ordered list of tables for import (FK dependency order) */
+/**
+ * THE SET OF TABLES A TENANT BUNDLE CARRIES.
+ *
+ * Despite the name, this is consumed as a SET, not as a sequence: the column
+ * registry (`tenant-export-columns.ts`) keys off it, the drift guard enumerates
+ * it, and `tenant-validate` iterates it to decide what to compare. Nothing
+ * emits SQL in this order.
+ *
+ * THE ACTUAL INSERT ORDER IS `tenant-export.ts`'s sequence of `buildInsert`
+ * calls, and it differs: the exporter emits `agent_workspaces` →
+ * `agent_workspace_shells` → `conversations` → `messages` BEFORE the
+ * `channel_*` tables, while this list has the channel tables first. Both orders
+ * satisfy the FKs, so nothing is broken today — but the ordering comments below
+ * describe FK dependencies rather than the emitted sequence, and a future
+ * reader who trusts this list as insert order will be wrong. Change the
+ * exporter to change insert order; changing this list changes only what is
+ * carried and checked.
+ */
 export const TABLE_IMPORT_ORDER = [
   'users',
   'user_profiles',

@@ -13,7 +13,15 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 const authenticateMock = vi.fn();
 const isAuthErrorMock = vi.fn();
 const canUserViewPageMock = vi.fn();
-const updateSetWhere = vi.fn();
+/**
+ * The plan write goes through `conversationRepository.setConversationPlan`,
+ * never an open-coded UPDATE — that repository method is what bumps `rev` and
+ * emits `conversation:updated`, which is the only reason a second pane on the
+ * same conversation ever drops its stale chip. Asserting on the raw
+ * `db.update()` (as this file used to) would pass just as happily against a
+ * write that converged nowhere.
+ */
+const setConversationPlan = vi.fn();
 
 /**
  * One queue of rows per `db.select()` call, in the order the route makes them:
@@ -31,12 +39,14 @@ const makeChain = () => {
 };
 
 vi.mock('@pagespace/db/db', () => ({
-  db: {
-    select: () => makeChain(),
-    update: () => ({ set: () => ({ where: updateSetWhere }) }),
-  },
+  db: { select: () => makeChain() },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(() => ({})) }));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    setConversationPlan: (...a: unknown[]) => setConversationPlan(...a),
+  },
+}));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', userId: 'userId', planPageId: 'planPageId' },
 }));
@@ -74,7 +84,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
     authenticateMock.mockReset();
     isAuthErrorMock.mockReset();
     canUserViewPageMock.mockReset().mockResolvedValue(true);
-    updateSetWhere.mockReset().mockResolvedValue(undefined);
+    setConversationPlan.mockReset().mockResolvedValue('set');
     selectResults = [];
   });
 
@@ -155,7 +165,7 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
     authenticateMock.mockReset();
     isAuthErrorMock.mockReset();
     canUserViewPageMock.mockReset().mockResolvedValue(true);
-    updateSetWhere.mockReset().mockResolvedValue(undefined);
+    setConversationPlan.mockReset().mockResolvedValue('set');
     selectResults = [];
   });
 
@@ -182,8 +192,11 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
     const response = await DELETE(request(), context);
     expect(response.status).toBe(200);
     expect((await response.json()).plan).toBeNull();
-    // Clears the binding only — the page itself is never touched.
-    expect(updateSetWhere).toHaveBeenCalledTimes(1);
+    // Clears the binding only — the page itself is never touched — and does it
+    // through the choke point, with the caller's id so the write can re-check
+    // ownership in its own WHERE rather than trusting the read above.
+    expect(setConversationPlan).toHaveBeenCalledTimes(1);
+    expect(setConversationPlan).toHaveBeenCalledWith('conv-1', OWNER, null);
   });
 
   it('404s another user\'s conversation and writes nothing', async () => {
@@ -191,13 +204,13 @@ describe('DELETE /api/ai/conversations/[conversationId]/plan', () => {
     selectResults = [[ownedConversation('pg_plan')]];
 
     expect((await DELETE(request(), context)).status).toBe(404);
-    expect(updateSetWhere).not.toHaveBeenCalled();
+    expect(setConversationPlan).not.toHaveBeenCalled();
   });
 
   it('500s without leaking internals when the update throws', async () => {
     authAs(OWNER);
     selectResults = [[ownedConversation('pg_plan')]];
-    updateSetWhere.mockRejectedValue(new Error('boom'));
+    setConversationPlan.mockRejectedValue(new Error('boom'));
 
     const response = await DELETE(request(), context);
     expect(response.status).toBe(500);

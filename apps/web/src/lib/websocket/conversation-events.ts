@@ -120,6 +120,14 @@ export interface ConversationChangedFields {
   isShared?: boolean;
   workspaceId?: string | null;
   closedInWorkspaceAt?: string | null;
+  /**
+   * The bound plan page, or null when unbound. On the wire because `PlanChip`
+   * renders it: without a field here (and the matching rev bump) a second pane
+   * on the same conversation sees an unchanged rev, which it cannot tell apart
+   * from "nothing happened", and shows no chip — or a stale one after
+   * `clear_plan` — until a reload.
+   */
+  planPageId?: string | null;
 }
 
 export interface ConversationDirectoryPayload extends ConversationEventBase {

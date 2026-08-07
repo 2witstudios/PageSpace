@@ -33,6 +33,7 @@ import {
   writeManifest,
   toSqlInList,
   validateIds,
+  conversationSelectionWhere,
 } from './lib/migration-utils';
 import {
   exportColumns as cols,
@@ -189,11 +190,13 @@ export async function exportData(
    * `agentPageId`. It used to be derived from `chat_messages.pageId` — asking
    * the conversation directly is both narrower and correct now that a
    * message's page IS its conversation's page.
+   *
+   * The rule lives in `conversationSelectionSql` (shared with `tenant-validate`)
+   * so the validator cannot drift into asking a narrower question than the
+   * export answered and then print PASS for rows it never compared.
    */
   const conversationsData = await queryRows(db, sql.raw(
-    `SELECT * FROM conversations WHERE "userId" IN (${userIn})`
-    + ` OR (type = 'page' AND "contextId" IN (${pageIn}))`
-    + ` OR (type = 'client' AND "agentPageId" IN (${pageIn}))`,
+    `SELECT * FROM conversations WHERE ${conversationSelectionWhere(userIn, pageIn)}`,
   ));
   const conversationIds = conversationsData.map((r) => r.id as string);
 

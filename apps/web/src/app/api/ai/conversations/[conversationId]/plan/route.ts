@@ -20,6 +20,7 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -92,10 +93,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ conv
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    await db
-      .update(conversations)
-      .set({ planPageId: null, updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
+    // Through the repository, which bumps `rev` and emits — the ownership
+    // read above stays as the 404 gate, but the write itself re-checks it in
+    // the WHERE, so there is no read-then-write window either.
+    await conversationRepository.setConversationPlan(conversationId, userId, null);
 
     auditRequest(request, {
       eventType: 'data.write',
