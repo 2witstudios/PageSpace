@@ -9,15 +9,37 @@ import {
 } from '../fixtures/dispatch.fixture';
 
 /**
- * Dispatch + multiplayer harness specs — Phase 0 of the Agent-Session Single Source of Truth
- * epic. Full rationale and the phase → spec mapping live in the header of
+ * Dispatch + multiplayer harness specs — Agent-Session Single Source of Truth epic.
+ * Full rationale and the phase → spec mapping live in the header of
  * `fixtures/dispatch.fixture.ts`.
  *
  * Two tiers:
- *  - the smokes PASS today and pin the harness (dispatch really writes through the pipeline);
- *  - the `test.fixme` specs are the epic's canonical bug, written as the executable spec
- *    Phase 2 (plan PR 3) must flip green: delete the `.fixme`s in that PR. PRs 7 and 12
- *    re-verify them.
+ *  - the smokes pin the harness (dispatch really writes through the pipeline);
+ *  - the live-delivery specs below WERE `test.fixme` — the epic's canonical bug written as
+ *    an executable spec. Phase 2 (plan PR 3) flipped them: the fixmes are deleted and these
+ *    are now the gate. PRs 7 and 12 re-verify them.
+ *
+ * They assert LIVE delivery, so they need the realtime server running and wired to the web
+ * process (`INTERNAL_REALTIME_URL` + a shared `REALTIME_BROADCAST_SECRET`) — unlike the
+ * smokes, which are satisfiable without it.
+ *
+ * RUN REALTIME ON THE SAME ORIGIN AS THE APP. This is the one piece of local setup that
+ * fails silently rather than loudly. The production CSP is `connect-src 'self' ws: wss:`
+ * (`apps/web/src/middleware/security-headers.ts`), and Socket.IO opens with an XHR POLLING
+ * handshake before it upgrades to a websocket — so pointing `NEXT_PUBLIC_REALTIME_URL` at a
+ * different origin (the obvious `http://127.0.0.1:3001` while the app serves :3000) gets that
+ * handshake blocked by CSP and NO socket connects at all. Production does not hit this because
+ * Traefik path-routes `/socket.io` to the realtime service on the app's own host
+ * (`infrastructure/docker-compose.tenant.yml`), which `'self'` covers. Mirror that locally:
+ * put a reverse proxy on one port that forwards `/socket.io` (including the upgrade) to the
+ * realtime server and everything else to the web server, and leave `NEXT_PUBLIC_REALTIME_URL`
+ * UNSET so the socket store falls back to same-origin. Do not "fix" it by relaxing the CSP or
+ * by setting `bypassCSP` on the context — both make the run stop testing the shipped policy.
+ *
+ * VERIFY THE SOCKET IS REALLY CARRYING THESE ASSERTIONS, because a dead socket can still let a
+ * spec pass off the mount-time load. Two checks: realtime at `LOG_LEVEL=debug` must log
+ * `User joined conversation room` for `conv:<id>`, and the specs must FAIL with the realtime
+ * server stopped.
  */
 
 // Seed our own openrouter-provider users (the shared storageState user is provider 'openai'
@@ -109,12 +131,15 @@ test.describe('dispatch harness smoke (passing — pins the fixtures)', () => {
   });
 });
 
-test.describe('blank-pane repro (fixme until epic Phase 2 / plan PR 3)', () => {
-  // KNOWN RED TODAY — this is the epic's canonical bug, kept as an executable spec: nothing
-  // broadcasts on message persistence, `chat:user_message` is gated on `isShared`, and cache
-  // handlers early-return for unloaded conversations. PR 3 deletes the `.fixme` and this
-  // becomes the gate.
-  test.fixme('a server dispatch into an open pane renders live without reload', async ({
+test.describe('blank-pane repro (the Phase 2 gate — was fixme, now green)', () => {
+  // This was the epic's canonical bug: nothing broadcast on message persistence,
+  // `chat:user_message` was gated on `isShared`, the client dropped
+  // `startedBySomeoneElse && !isShared`, and every cache handler early-returned for a
+  // conversation it had not already loaded. Phase 2 closed all four — every durable write
+  // emits a rev-carrying `conversation:*` event to `conv:<id>`, the pane subscribes to that
+  // room on open, and `useConversationSubscription` ensures a cache entry BEFORE joining, so
+  // the `hasEntry` gate is unnecessary rather than merely removed.
+  test('a server dispatch into an open pane renders live without reload', async ({
     browser,
     baseURL,
     request,
@@ -139,7 +164,7 @@ test.describe('blank-pane repro (fixme until epic Phase 2 / plan PR 3)', () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test.fixme('two windows on one conversation both see both sides of a dispatched turn live', async ({
+  test('two windows on one conversation both see both sides of a dispatched turn live', async ({
     browser,
     baseURL,
     request,

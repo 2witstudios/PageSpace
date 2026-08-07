@@ -31,6 +31,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const channelId = searchParams.get('channelId');
     const scope = searchParams.get('scope');
+    // Optional narrowing of the channel form to one conversation — see where it is
+    // applied below. Never widens: it filters an already-authorized row set.
+    const conversationId = searchParams.get('conversationId');
 
     // scope=user: cross-channel discovery of the CALLER's own in-flight streams — what the
     // history tab (leaf 5.2) badges as "still streaming", regardless of which page/global
@@ -147,7 +150,19 @@ export async function GET(request: Request) {
     // an unauthorized-to-that-conversation poller can't even trigger a reap side effect for a
     // conversation whose content it will never see returned.
     const authorized = await filterSubscribableStreams({ userId, rows });
-    const streams = authorized.filter((r) => isStreamRowLive(r, now));
+    // Conversation-scoped bootstrap (Agent-Session SSoT epic, Phase 2): a pane
+    // subscribes to ONE conversation, so `?conversationId=` narrows the answer to
+    // that conversation's streams. Purely a NARROWING of an already-authorized set —
+    // it is applied after `filterSubscribableStreams`, never instead of it, so it can
+    // only ever return fewer rows than the channel form and grants nothing. The
+    // channel form (no `conversationId`) is unchanged: `GlobalChatContext` still
+    // bootstraps the user's whole global channel, which is what keeps a stream alive
+    // in the store for a conversation no pane is currently showing.
+    const conversationScoped =
+      conversationId === null
+        ? authorized
+        : authorized.filter((r) => r.conversationId === conversationId);
+    const streams = conversationScoped.filter((r) => isStreamRowLive(r, now));
 
     // Lazy reap: this query already reads every 'streaming' row on the channel, so any
     // authorized-to-view row that is not live and is PROVABLY dead (never mere staleness — see

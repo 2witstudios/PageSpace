@@ -33,6 +33,16 @@ export interface WorkspaceUpdatedPayload {
   rev: number;
   /** The verb type that caused the change (`'legacy_replace'` for a blob PUT). */
   verb: string;
+  /**
+   * The client-minted idempotency key of the verb that caused the change —
+   * how a subscriber recognizes its OWN echo. A client whose POST is still
+   * unanswered must NOT adopt this event: its own 200/409 is the
+   * authoritative answer and is already on the wire, and adopting the echo
+   * would replay a still-queued verb onto a grid that already contains it
+   * (a `split_right` replayed that way re-inserts its own minted column id).
+   * `null` for a change no verb caused — the legacy blob PUT.
+   */
+  opId: string | null;
   /** The full post-write grid — small enough to always ship whole. */
   grid: WorkspaceLayoutGridDTO;
 }

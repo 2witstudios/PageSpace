@@ -1,7 +1,7 @@
-import { eq, inArray, or, and, ne } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -313,33 +313,6 @@ export async function collectUserPages(
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
   const result: UserMessageExport[] = [];
 
-  // AI chat messages (chatMessages table)
-  const aiChats = await database
-    .select({
-      id: chatMessages.id,
-      content: chatMessages.content,
-      role: chatMessages.role,
-      pageId: chatMessages.pageId,
-      conversationId: chatMessages.conversationId,
-      createdAt: chatMessages.createdAt,
-      status: chatMessages.status,
-    })
-    .from(chatMessages)
-    .where(eq(chatMessages.userId, userId));
-
-  for (const msg of aiChats) {
-    result.push({
-      id: msg.id,
-      source: 'ai_chat',
-      content: msg.content,
-      role: msg.role,
-      pageId: msg.pageId,
-      conversationId: msg.conversationId,
-      createdAt: msg.createdAt,
-      status: msg.status,
-    });
-  }
-
   // Channel messages
   const channelMsgs = await database
     .select({
@@ -361,10 +334,50 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     });
   }
 
-  // Conversation messages (unified conversations table). Global assistant rows store the
-  // conversation OWNER's userId (not null, unlike chatMessages), so this query — unlike
-  // aiChats above — does surface assistant placeholders for the requesting user's own
-  // conversations; `status` is what makes an empty row explainable rather than data loss.
+  /**
+   * Chat messages — read from the UNIFIED `messages` table ONLY (epic
+   * "Agent-Session Single Source of Truth", Phase 4 / D6, PR 13).
+   *
+   * `chat_messages` is deliberately NOT read here, and this is the ONE
+   * compliance leg that drops the legacy table before PR 15 drops the table
+   * itself. Since the dual-write + backfill (PRs 9/10) `messages` is a
+   * SUPERSET of `chat_messages`: every page-chat row is written to both legs
+   * in one transaction under the SAME primary key, and the historical corpus
+   * was carried across by `scripts/backfill-unify-messages.ts`. Reading both
+   * would therefore export every page-chat message TWICE (same id, once as
+   * 'ai_chat' and once as 'conversation') — a duplicate, not extra coverage.
+   * Erasure and retention keep both legs for the opposite reason: rows
+   * physically exist in `chat_messages` and must still be reachable.
+   *
+   * ── Why the predicate is not just `messages.userId = :subject` ──────────
+   * `userId` is the HUMAN author and is NULL for every agent/system-authored
+   * row (page-chat assistant replies, `/help` answers, consult and worker
+   * dispatches; `sourceAgentId` names the agent when known). Filtering on
+   * `userId` alone exported the subject's questions and dropped every answer
+   * inside their own page chats — while the same answer in a GLOBAL
+   * conversation WAS exported, because the global writer stamps the owner's
+   * id on assistant rows. That asymmetry is an Art 15 completeness gap, and
+   * unification made it uniform rather than creating it.
+   *
+   * So the export is the union of:
+   *   1. rows the subject AUTHORED (`messages.userId = :subject`) — wherever
+   *      they live, including a conversation someone else owns (a shared
+   *      page conversation accepts messages from any member who can access
+   *      it), and
+   *   2. rows with NO human author that sit in a conversation the subject
+   *      OWNS — the agent/system side of the subject's own threads.
+   *
+   * It deliberately stops there. Rows authored by ANOTHER human inside the
+   * subject's shared conversation stay out: they are that person's data, and
+   * Art 15(4) says a subject's access right must not adversely affect the
+   * rights of others. `conversations.userId` alone would have swept them in
+   * (multi-author legacy conversations exist — 0248's orphan synthesis logs
+   * how many it found, "earliest human author wins").
+   *
+   * The join is INNER by design: `messages.conversationId` carries a real,
+   * VALIDATED FK to `conversations`, so a message with no conversation row
+   * cannot exist and the join cannot silently drop one.
+   */
   const convMsgs = await database
     .select({
       id: messages.id,
@@ -373,16 +386,36 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       conversationId: messages.conversationId,
       createdAt: messages.createdAt,
       status: messages.status,
+      conversationType: conversations.type,
+      conversationContextId: conversations.contextId,
     })
     .from(messages)
-    .where(eq(messages.userId, userId));
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(
+      or(
+        eq(messages.userId, userId),
+        and(isNull(messages.userId), eq(conversations.userId, userId)),
+      )
+    );
 
   for (const msg of convMsgs) {
+    const isGlobal = msg.conversationType === 'global';
     result.push({
       id: msg.id,
-      source: 'conversation',
+      // The export vocabulary predates the merge and is kept: a page/client
+      // thread is still reported as 'ai_chat', a global thread as
+      // 'conversation'. One physical table, two documented sources.
+      source: isGlobal ? 'conversation' : 'ai_chat',
       content: msg.content,
       role: msg.role,
+      // The page comes from the CONVERSATION, never from `messages.pageId`
+      // (transitional, dropped at PR 15) — `conversations.contextId` is the
+      // end-state authority (Phase 4 PR 11's rule). Only `type='page'` has a
+      // page there; a `type='client'` row's contextId is a DRIVE id, so it
+      // reports no pageId rather than a wrong one.
+      ...(msg.conversationType === 'page' && msg.conversationContextId
+        ? { pageId: msg.conversationContextId }
+        : {}),
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
       status: msg.status,

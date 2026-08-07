@@ -48,7 +48,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
-import { useWorkspaceServerSync } from '@/stores/agent-workspace/useWorkspaceServerSync';
+import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
 import { panesOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
@@ -183,11 +183,15 @@ export default function AgentPanes({
   const { data: sessionRecordData } = useSessionRecord(sessionId);
   const canRunSandbox = sessionRecordData?.sandboxEligible ?? true;
 
-  // Layout AND tabs are server-persisted now — debounced, not per-transition
-  // (see the hook's own file header for why that distinction matters).
-  // Read-only viewers never mutate the grid, so there is nothing for them to
-  // sync back.
-  useWorkspaceServerSync(sessionId, { enabled: !isReadOnly });
+  // The grid is SERVER-AUTHORITATIVE: the store posts each mutation as its
+  // own verb, and this hook supplies the other direction — the mount-time
+  // snapshot and the `session:<id>` room that keeps it live (another device,
+  // or an agent placing a pane server-side). Unconditional, unlike the
+  // debounced PUT it replaces: that hook was disabled for read-only viewers
+  // because they have nothing to WRITE, but reading is exactly what they do,
+  // and with the localStorage grid copy gone the server snapshot is the only
+  // place their layout can come from at all.
+  useWorkspaceLayoutSync(sessionId);
 
   // The latest "assign this pane to conversation X" request per pane —
   // bumped by every such request (a History pick, an agent mint) so an
@@ -312,7 +316,17 @@ export default function AgentPanes({
   const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
     agentSessionsKey(driveId),
     sessionConversationsFetcher,
-    { revalidateOnFocus: false, refreshInterval: 20_000 },
+    {
+      revalidateOnFocus: false,
+      // BACKSTOP, not the mechanism (Agent-Session SSoT epic, Phase 2 / plan PR 4).
+      // `session-directory-listener.ts` now applies `conversation:created/updated/
+      // closed/reopened/deleted` and `session:*` to this exact cache the moment they
+      // happen, so the poll no longer carries the freshness of the listing — it only
+      // catches the case where a broadcast was lost entirely. Demoted from 20s to
+      // 120s; SLATED FOR DELETION at the epic's final contract PR, once the legacy
+      // `chat:*` emissions are gone and the directory plane is the only path.
+      refreshInterval: 120_000,
+    },
   );
   // THIS session's own entry, looked up once and reused for both the
   // conversation list and the readiness check below — a session that

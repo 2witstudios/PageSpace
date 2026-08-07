@@ -196,7 +196,7 @@ import { commandTools } from '../../tools/command-tools';
 import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
-import { pagePaneTools } from '../../tools/page-pane-tools';
+import { pagePaneTools } from '../../tools/page-pane-tools-runtime';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {

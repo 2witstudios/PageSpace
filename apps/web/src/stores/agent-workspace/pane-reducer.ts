@@ -13,6 +13,7 @@
 
 export {
   newWorkspace,
+  applyVerbLocal,
   assignPane,
   assignPaneShowing,
   dismissPicker,
@@ -27,4 +28,5 @@ export {
   type PaneState,
   type ColumnState,
   type WorkspaceState,
+  type WorkspaceLayoutVerb,
 } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';

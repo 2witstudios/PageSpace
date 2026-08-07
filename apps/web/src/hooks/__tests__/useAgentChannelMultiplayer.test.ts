@@ -13,6 +13,11 @@ const {
   mockUseStreamingRegistration,
   mockAbortByMessageId,
   mockSocketStatus,
+  mockSocket,
+  mockRegisterConversationWatch,
+  mockUnregisterConversationWatch,
+  mockSyncWatchedConversationRevs,
+  mockHealConversationToRev,
   pendingStreams,
 } = vi.hoisted(() => {
   const ref: { channelId: string | undefined; options: UseChannelStreamSocketOptions | undefined } = {
@@ -26,6 +31,11 @@ const {
     mockUseStreamingRegistration: vi.fn(),
     mockAbortByMessageId: vi.fn(),
     mockSocketStatus: { current: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error' },
+    mockSocket: { current: null as { on: (e: string, h: () => void) => void; off: (e: string, h: () => void) => void; emit: (e: string, p?: unknown) => void } | null },
+    mockRegisterConversationWatch: vi.fn(),
+    mockUnregisterConversationWatch: vi.fn(),
+    mockSyncWatchedConversationRevs: vi.fn().mockResolvedValue(undefined),
+    mockHealConversationToRev: vi.fn().mockResolvedValue(undefined),
     pendingStreams: { current: new Map<string, { messageId: string; pageId: string; conversationId: string; triggeredBy: { userId: string; displayName: string }; parts: UIMessage['parts']; isOwn: boolean }>() },
   };
 });
@@ -41,6 +51,21 @@ vi.mock('@/hooks/useChannelStreamSocket', () => ({
 
 vi.mock('@/hooks/usePageSocketRoom', () => ({
   usePageSocketRoom: mockUsePageSocketRoom,
+}));
+
+// The wrapper now delegates to useConversationSubscription, which joins the
+// conversation's own room and registers for the batched reconnect rev check. Neither
+// is what THIS suite is about (see useConversationSubscription.test.ts for both), but
+// both need to exist for the wrapper to render.
+vi.mock('@/hooks/useSocket', () => ({
+  useSocket: () => mockSocket.current,
+}));
+
+vi.mock('@/lib/realtime/conversation-rev-sync', () => ({
+  registerConversationWatch: mockRegisterConversationWatch,
+  unregisterConversationWatch: mockUnregisterConversationWatch,
+  syncWatchedConversationRevs: mockSyncWatchedConversationRevs,
+  healConversationToRev: mockHealConversationToRev,
 }));
 
 vi.mock('@/stores/useSocketStore', () => ({
@@ -63,12 +88,18 @@ vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStreamByMessageId: mockAbortByMessageId,
 }));
 
-const { mockLoadAgentConversationMessages, mockRefreshConversationSnapshot } = vi.hoisted(() => ({
+const {
+  mockLoadAgentConversationMessages,
+  mockLoadGlobalConversationMessages,
+  mockRefreshConversationSnapshot,
+} = vi.hoisted(() => ({
   mockLoadAgentConversationMessages: vi.fn().mockResolvedValue(undefined),
+  mockLoadGlobalConversationMessages: vi.fn().mockResolvedValue(undefined),
   mockRefreshConversationSnapshot: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/hooks/conversationMessagesLoaders', () => ({
   loadAgentConversationMessages: mockLoadAgentConversationMessages,
+  loadGlobalConversationMessages: mockLoadGlobalConversationMessages,
   refreshConversationSnapshot: mockRefreshConversationSnapshot,
 }));
 
@@ -103,6 +134,7 @@ describe('useAgentChannelMultiplayer', () => {
     capturedChannel.channelId = undefined;
     capturedChannel.options = undefined;
     mockSocketStatus.current = 'disconnected';
+    mockSocket.current = null;
     pendingStreams.current = new Map();
     useConversationMessagesStore.setState({ byConversationId: {} });
   });
@@ -138,9 +170,10 @@ describe('useAgentChannelMultiplayer', () => {
       ...overrides,
     });
 
-    // Dispatch is entry-gated (hasEntry): a rendering surface always loads or
-    // seeds its conversation on mount, so the tests seed what a mounted pane
-    // would have.
+    // Dispatch is by the event's own conversation, with NO entry gate (the
+    // `hasEntry` early-returns were deleted in the SSoT epic's Phase 2 —
+    // subscribe-on-open makes them unnecessary). The seed here is simply what a
+    // mounted pane would have.
     beforeEach(() => {
       useConversationMessagesStore.getState().seedConversation('conv-active');
     });
@@ -213,7 +246,16 @@ describe('useAgentChannelMultiplayer', () => {
       ]);
     });
 
-    it('given a stream finalizes for an UNCACHED conversation, nothing should be committed anywhere (no surface renders it; its eventual loader fetches the DB truth)', () => {
+    // GATE DELETED (SSoT epic Phase 2 / plan PR 3). This used to assert that a
+    // completion for an UNCACHED conversation committed nowhere, on the reasoning
+    // "nothing renders it, so its eventual loader will fetch the DB truth". The
+    // reasoning had a hole the size of the epic's canonical bug: the entry is
+    // created by an ASYNCHRONOUS load, so a pane that had mounted but not yet
+    // committed its first fetch looked exactly like "nobody is watching" and its
+    // reply was dropped with nothing to re-deliver it. The write now lands, and
+    // the conversation it lands in is the event's own — the active conversation is
+    // untouched either way.
+    it('given a stream finalizes for an UNCACHED conversation, it should still commit into THAT conversation (no hasEntry gate)', () => {
       pendingStreams.current = new Map([[ 'msg-stale', streamFixture({
         messageId: 'msg-stale',
         conversationId: 'conv-uncached',
@@ -226,7 +268,9 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([]);
-      expect(cacheMessages('conv-uncached')).toEqual([]);
+      expect(cacheMessages('conv-uncached')).toEqual([
+        { id: 'msg-stale', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }], status: 'complete' },
+      ]);
     });
 
     // THE pane multiplayer fix: dispatch is by the EVENT's conversation, so a
@@ -411,7 +455,11 @@ describe('useAgentChannelMultiplayer', () => {
       expect(cacheMessages('conv-active')).toEqual([remoteUser]);
     });
 
-    it('given onUserMessage fires for an UNCACHED conversationId, should write nothing anywhere', () => {
+    // GATE DELETED (SSoT epic Phase 2 / plan PR 3) — same reasoning as the
+    // uncached-completion case above: "uncached" and "mounted but still loading"
+    // are indistinguishable, and dropping the second is the blank-pane bug. The
+    // append lands in the event's OWN conversation and nowhere else.
+    it('given onUserMessage fires for an UNCACHED conversationId, should still append to THAT conversation', () => {
       renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
 
       act(() => {
@@ -419,7 +467,7 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([]);
-      expect(cacheMessages('conv-uncached')).toEqual([]);
+      expect(cacheMessages('conv-uncached')).toEqual([remoteUser]);
     });
 
     // The pane multiplayer gap this PR closes for non-completion events too: a

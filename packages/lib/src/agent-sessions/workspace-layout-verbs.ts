@@ -40,11 +40,15 @@
  *
  * **Server-side divergences from the client store (deliberate, documented):**
  *  - `open_conversation`'s replaceable-pane policy is the pure structural
- *    subset only (unbound, or bound to a resolved non-terminal target). The
- *    client additionally protects dirty page panes (`useEditingStore`) and
- *    non-live conversations (issue #2295) — both are client-side predicates
- *    the server cannot evaluate; the client rewrite PR carries them into the
- *    verb payloads if server placement ever needs them.
+ *    subset, narrowed only by what a caller can state on the wire
+ *    (`preferSplit`, `excludeTargetId`). The client additionally protects
+ *    dirty page panes (`useEditingStore`) and non-live conversations (issue
+ *    #2295) — both are client-side predicates the server cannot evaluate,
+ *    which is why the browser store never emits this verb at all: it runs
+ *    the policy itself against those guards and posts the RESULT
+ *    (`assign_pane`, or `split_right` + `assign_pane`). `open_conversation`
+ *    is the SERVER's placement verb — the AI tool paths, where no browser is
+ *    in the loop to consult.
  *  - `close_pane` on the LAST pane is a structural no-op here exactly as in
  *    the reducer: emptying a session ends it, which is a session-lifecycle
  *    act (the end route), never a layout verb.
@@ -308,8 +312,29 @@ export const workspaceLayoutVerbSchema = z.discriminatedUnion('type', [
    * showing it, else fill the first replaceable pane, else split right from
    * the active pane using the minted `newColumnId`/`newPaneId`. On a session
    * with no grid at all, behaves as `ensure` with the minted ids.
+   *
+   * The two optional narrowings exist for SERVER-DRIVEN placement (the AI
+   * tool paths), which is `open_conversation`'s only in-repo emitter — the
+   * browser store resolves this policy itself against its client-only guards
+   * and posts the resulting primitive (`assign_pane`, or `split_right` +
+   * `assign_pane`) instead. Both mirror, exactly, the options the client
+   * store's own `openPage` has carried since the `open_page_pane` tool
+   * landed:
+   *  - `preferSplit`: an agent ADDS a surface beside what the user is doing,
+   *    it never navigates the user's panes — so only an unbound picker pane
+   *    may be filled and anything bound gets a split instead.
+   *  - `excludeTargetId`: never replace the pane showing THIS target — the
+   *    invoking conversation's own pane, which must not be evicted by its
+   *    own tool call.
    */
-  z.object({ type: z.literal('open_conversation'), scope: paneScopeSchema, newColumnId: id, newPaneId: id }),
+  z.object({
+    type: z.literal('open_conversation'),
+    scope: paneScopeSchema,
+    newColumnId: id,
+    newPaneId: id,
+    preferSplit: z.boolean().optional(),
+    excludeTargetId: z.string().min(1).optional(),
+  }),
   /** Repoint every pane showing `oldTargetId` at `scope` (delete-and-remint flows). */
   z.object({ type: z.literal('replace_conversation'), oldTargetId: id, scope: paneScopeSchema }),
 ]);
@@ -405,8 +430,14 @@ export function applyVerbLocal(
         }
       }
       const panes = panesOf(state);
+      // The structural policy, narrowed by whatever the caller asked for —
+      // see the verb's own doc for why server-driven placement needs both.
+      const canReplace = (pane: PaneState): boolean =>
+        isReplaceable(pane) &&
+        (verb.preferSplit !== true || pane.scope === null) &&
+        (verb.excludeTargetId === undefined || pane.scope?.targetId !== verb.excludeTargetId);
       const active = panes.find((pane) => pane.id === state.activePaneId);
-      const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
+      const replaceable = active && canReplace(active) ? active : panes.find(canReplace);
       if (replaceable) {
         return { state: assignPane(state, replaceable.id, verb.scope), applied: true };
       }

@@ -263,8 +263,37 @@ textbook forced copy, so it runs under the rule above rather than around it:
     edit, delete, undo, interrupt/resume, purge and page teardown by
     `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`
     against a real Postgres.
-- **Still open:** compliance keeps both tables until the contract PR (PR 13/15), and
-  `chat_messages` + `messages.pageId` are dropped last (PR 15).
+- **Compliance legs — SHIPPED** (Phase 4 PR 13). The three compliance paths are
+  deliberately ASYMMETRIC while both tables exist:
+  - **GDPR export reads the UNIFIED table only.** Since the dual-write + backfill,
+    `messages` is a superset of `chat_messages` under the SAME primary keys, so
+    reading both exported every page-chat row twice. It also stopped keying on
+    `messages.userId` alone: that column is the HUMAN author and is NULL for every
+    agent-authored row, so the old query exported the subject's questions and dropped
+    every answer inside their own page chats — while the same answer in a GLOBAL
+    thread WAS exported, because the global writer stamps the owner's id on assistant
+    rows. The predicate is now "rows the subject authored, plus unattributed rows in a
+    conversation the subject OWNS", which never picks up another human's messages from
+    a shared thread (Art 15(4)).
+  - **Erasure and retention keep BOTH legs** until PR 15 drops `chat_messages`: while
+    rows physically exist there, an Art 17 request and the retention window must still
+    reach them. Pinned by
+    `packages/lib/src/compliance/__tests__/message-unification-compliance-legs.test.ts`.
+  - **The 0248/0249 cascades made both paths delete MORE, deliberately.** A
+    `conversations` delete now takes its `chat_messages` rows (0248) and its
+    `ai_stream_sessions` rows (0249) with it. The latter closed a real leak — `parts`
+    checkpoints are message content and nothing in the codebase had ever deleted one.
+    Retention's conversation sweep is consequently sequenced AFTER the two message-leg
+    sweeps, because a cascading DELETE running concurrently with a direct DELETE over
+    the same rows can deadlock.
+  - **A residual hole the cascade cannot close** got its own erasure step,
+    `purge-stream-state`: a shared conversation accepts streams from any member, so
+    `ai_stream_sessions`/`ai_pending_abort_intents` rows carrying the MEMBER's user_id
+    inside the OWNER's conversation survive the member's erasure. The step is
+    user-scoped and fatal.
+- **Still open:** `chat_messages` and `messages.pageId` are dropped last (Phase 4 PR 15),
+  which is also when the compliance legs collapse to one and `type='client'` threads need
+  a real page link (see the wider page scope above).
 
 Reads come from `messages` while the dual-write still populates BOTH legs: every save,
 the History-delete cascade, undo, the rollback/redo executors and page teardown all still

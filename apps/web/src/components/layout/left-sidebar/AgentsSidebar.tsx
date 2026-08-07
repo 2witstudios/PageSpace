@@ -24,9 +24,7 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { adoptServerWorkspaceAsHydrated } from '@/stores/agent-workspace/useWorkspaceServerSync';
 import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import {
@@ -50,7 +48,8 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  * old sidebar's `WorkspaceLeaves` pattern was deliberately not restored, back
  * when a pane was purely local, ephemeral browser state with nothing
  * server-durable to show). Panes are now server-persisted
- * (`agent_sessions.workspaceState`, synced by `useWorkspaceServerSync`), so a
+ * (`agent_workspace_panes` rows behind a rev, mirrored into the legacy
+ * `agent_sessions.workspaceState` blob during the dual-write window), so a
  * session's expansion shows one row per PANE, labelled by its own
  * conversation — this is what actually fixes "switching a pane's agent
  * spawns a new sidebar item instead of updating the one I was looking at":
@@ -103,9 +102,15 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     mutate: retrySessions,
   } = useSWR<{ sessions: SessionListEntry[] }>(sessionsKey, sessionsFetcher, {
     revalidateOnFocus: false,
-    // Modest poll: session/conversation rows change on spawn and end, which
-    // other tabs and agents can do. The pane grid itself never lives here.
-    refreshInterval: 20_000,
+    // BACKSTOP, not the mechanism (Agent-Session SSoT epic, Phase 2 / plan PR 4).
+    // Session/conversation rows change on spawn and end, which other tabs and
+    // agents can do — and those changes now ARRIVE, as
+    // `conversation:created/updated/closed/reopened/deleted` and `session:*` on the
+    // owner's `user:<id>:sessions` room, applied to this cache by
+    // `session-directory-listener.ts`. The poll only catches a broadcast lost
+    // outright. Demoted from 20s to 120s; SLATED FOR DELETION at the epic's final
+    // contract PR.
+    refreshInterval: 120_000,
   });
 
   // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a
@@ -176,7 +181,7 @@ interface SessionListEntry {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
   shells: Array<{ shellId: string; name: string }>;
-  /** The saved pane grid — `null` for a session never opened under `useWorkspaceServerSync`. */
+  /** The saved pane grid — `null` for a session with no grid persisted yet. */
   workspace: PersistedWorkspaceState | null;
 }
 
@@ -547,23 +552,20 @@ function SessionRow({
   );
 
   // A row action can target a session that is NOT currently displayed — for
-  // it, `AgentPanes` (and the `useWorkspaceServerSync` it mounts) is not
-  // rendered, so the local store may have never seen its grid. Seat this
-  // row's own server-listing snapshot first. Never overwrite a grid the
-  // store already holds: it isn't necessarily fresher (zustand `persist`
-  // rehydrates every session's grid from localStorage at page load, which
-  // another tab or device may have since moved past — see `closePagePane`'s
-  // stale-row guard), but clobbering it here could just as easily destroy a
-  // NEWER local grid. Returns whatever the store holds afterwards.
+  // it, `AgentPanes` (and the layout sync it mounts) is not rendered, so the
+  // local store may have never seen its grid. Seat this row's own
+  // server-listing snapshot first, at an unknown rev. Never overwrite a grid
+  // the store already holds: it isn't necessarily fresher, and clobbering it
+  // could just as easily destroy a NEWER one.
+  //
+  // Seating at an unknown rev needs no latch any more (the deleted
+  // `adoptServerWorkspaceAsHydrated` call was exactly that latch): the first
+  // verb this click posts rebases on the server's truth via a single 409 and
+  // replays itself on top, so a stale seed self-corrects instead of having to
+  // be protected from a racing fetch.
   const ensureLocalWorkspace = useCallback(() => {
     if (!useAgentWorkspaceStore.getState().workspaces[session.sessionId] && session.workspace) {
       hydrateWorkspace(session.sessionId, session.workspace);
-      // The snapshot IS server state (this row was rendered from the
-      // listing), so it counts as this page load's hydration — without
-      // this, the sync hook's own mount-time GET lands server-wins one
-      // round-trip after the click and silently drops the very mutation
-      // the click makes (the pane focus, a freshly opened shell pane).
-      adoptServerWorkspaceAsHydrated(session.sessionId);
     }
     return useAgentWorkspaceStore.getState().workspaces[session.sessionId];
   }, [hydrateWorkspace, session.sessionId, session.workspace]);
@@ -874,7 +876,7 @@ function SessionRow({
   );
 
   const closePagePane = useCallback(
-    async (paneId: string) => {
+    (paneId: string) => {
       const workspace = ensureLocalWorkspace();
       if (!workspace) return;
       // Closing the LAST pane empties the session, which ends it — route
@@ -885,55 +887,29 @@ function SessionRow({
         return;
       }
       // Anything but 'closed' means the LOCAL grid didn't know this pane —
-      // the row (rendered from the server listing) and the store (possibly
-      // a stale localStorage rehydrate another tab has moved past) diverge.
-      // PUTting the local grid wholesale from here would clobber the
-      // server's newer layout with an unrelated one AND leave the clicked
-      // pane alive; refresh the listing instead and let it reconcile.
+      // the row (rendered from the server listing) and the store diverge.
+      // Refresh the listing and let it reconcile rather than acting on a
+      // grid that doesn't contain what was clicked.
       if (closePane(session.sessionId, paneId) !== 'closed') {
         void mutate(isAgentSessionsKey);
         return;
       }
-      const updated = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
-      if (!updated) return;
-      // Persist the close directly: `useWorkspaceServerSync` only observes
-      // the session AgentPanes is displaying, so a close on any OTHER row
-      // would otherwise reach Zustand/localStorage only and be resurrected
-      // by server-wins hydration the next time that session opens. When the
-      // session IS the displayed one, the sync hook debounce-PUTs the same
-      // grid — an idempotent duplicate, not a conflict. Registered with
-      // `useEditingStore` for the PUT's duration, same as the sync hook's
-      // own `performSave` — the repo's refresh-protection rule.
-      const editingId = `sidebar-pane-close:${session.sessionId}:${paneId}`;
-      useEditingStore.getState().startEditing(editingId, 'other', { componentName: 'sidebar-pane-close' });
-      try {
-        const response = await fetchWithAuth(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/workspace`,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workspace: updated }),
-          },
-        );
-        if (!response.ok) throw new Error(`Failed to save the session layout (${response.status})`);
-        // Refresh the listing so this row's pane list reflects the close
-        // without waiting for the next poll.
-        void mutate(isAgentSessionsKey);
-      } catch (error) {
-        // The close already landed locally; a failed PUT leaves the pane
-        // alive on the server (and every other device), silently diverging
-        // until hydration resurrects it. Restore the row's own snapshot so
-        // what the user sees matches what is actually durable, then say so.
-        if (session.workspace) hydrateWorkspace(session.sessionId, session.workspace);
-        console.error('Failed to close this pane:', error);
-        toast.error('Could not close this pane', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-      } finally {
-        useEditingStore.getState().endEditing(editingId);
-      }
+      // Persistence is no longer this callback's business: `closePane` mints
+      // a `close_pane` verb and the store posts it, for ANY session — which
+      // is what retires the hand-rolled PUT that used to live here (the old
+      // debounced sync only observed the session `AgentPanes` was
+      // displaying, so a close on any other row reached localStorage only
+      // and got resurrected by the next hydration). The rollback-on-failure,
+      // the `useEditingStore` registration and the error toast go with it:
+      // the queue owns retry, the store owns the editing registration for as
+      // long as anything is unacked, and a give-up re-reads the server's own
+      // truth instead of guessing at a snapshot to restore.
+      //
+      // Refresh the listing so this row's pane list reflects the close
+      // without waiting for the next poll.
+      void mutate(isAgentSessionsKey);
     },
-    [ensureLocalWorkspace, closePane, hydrateWorkspace, mutate, session.sessionId, session.workspace],
+    [ensureLocalWorkspace, closePane, mutate, session.sessionId],
   );
 
   return (

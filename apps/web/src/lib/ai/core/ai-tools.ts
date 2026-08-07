@@ -21,7 +21,7 @@ import { commandTools } from '../tools/command-tools';
 import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
-import { pagePaneTools } from '../tools/page-pane-tools';
+import { pagePaneTools } from '../tools/page-pane-tools-runtime';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { buildSessionTools } from '../tools/session-tools-runtime';
