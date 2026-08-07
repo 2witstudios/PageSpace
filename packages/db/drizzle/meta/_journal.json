@@ -1765,6 +1765,13 @@
       "when": 1786070470583,
       "tag": "0251_mighty_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 252,
+      "version": "7",
+      "when": 1786075440521,
+      "tag": "0252_drop_chat_messages",
+      "breakpoints": true
     }
   ]
 }
