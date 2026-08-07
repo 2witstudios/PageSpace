@@ -31,6 +31,15 @@ vi.mock('@pagespace/db/operators', () => ({
     { placeholder: vi.fn() }
   ),
 }));
+// A collaborator, not this unit's job. Every drive delete here must take the
+// drive's chat history with it (the `chat_messages.pageId` cascade that used
+// to do that automatically went with the table in migration 0252), but WHAT
+// that cleanup selects is pinned against a real database in
+// `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+// Here we only assert that it is called, and called BEFORE the drive row goes.
+vi.mock('../conversation-cleanup', () => ({
+  deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
+}));
 
 // ---------------------------------------------------------------------------
 // Imports after mocks
@@ -38,6 +47,7 @@ vi.mock('@pagespace/db/operators', () => ({
 
 import { accountRepository } from '../account-repository';
 import { db } from '@pagespace/db/db';
+import { deleteConversationsForDrive } from '../conversation-cleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -134,15 +144,37 @@ describe('accountRepository.getDriveMemberCount', () => {
 describe('accountRepository.deleteDrive', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
+  /** Runs the callback with a tx whose `delete` chain resolves as given. */
+  function setupTransaction(deleteResult: Promise<unknown>) {
+    const whereFn = vi.fn().mockReturnValue(deleteResult);
+    const deleteFn = vi.fn().mockReturnValue({ where: whereFn });
+    vi.mocked(db.transaction).mockImplementation(async (fn) =>
+      fn({ delete: deleteFn } as unknown as Parameters<typeof fn>[0]),
+    );
+    return { deleteFn, whereFn };
+  }
+
   it('resolves without error when DB succeeds', async () => {
-    setupDeleteChain();
+    setupTransaction(Promise.resolve(undefined));
 
     await expect(accountRepository.deleteDrive('drive-1')).resolves.toBeUndefined();
   });
 
+  it('takes the drive chat history with it, before the drive row', async () => {
+    const { deleteFn } = setupTransaction(Promise.resolve(undefined));
+
+    await accountRepository.deleteDrive('drive-1');
+
+    // Ordering is load-bearing: `pages.driveId` cascades, so once the drive is
+    // gone its pages are gone and the page-scoped conversations can no longer
+    // be traced. Cleanup must therefore precede the drive DELETE.
+    expect(deleteConversationsForDrive).toHaveBeenCalledWith(expect.anything(), 'drive-1');
+    const cleanupOrder = vi.mocked(deleteConversationsForDrive).mock.invocationCallOrder[0];
+    expect(cleanupOrder).toBeLessThan(deleteFn.mock.invocationCallOrder[0]);
+  });
+
   it('propagates DB errors', async () => {
-    const whereFn = vi.fn().mockRejectedValue(new Error('FK constraint'));
-    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
+    setupTransaction(Promise.reject(new Error('FK constraint')));
 
     await expect(accountRepository.deleteDrive('drive-1')).rejects.toThrow('FK constraint');
   });

@@ -58,10 +58,16 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, or } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
+import { eq, inArray } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { factories } from '@pagespace/db/test/factories';
+import {
+  deleteConversationsForDrive,
+  deleteConversationsForPages,
+} from '@pagespace/lib/repositories/conversation-cleanup';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
@@ -496,7 +502,38 @@ describe('chat mutation matrix — one message table', () => {
   // -------------------------------------------------------------------------
 
   describe('permanent page delete', () => {
-    it('takes the unified rows with it — nothing else would', async () => {
+    /**
+     * Everything that must be gone once a page or drive is permanently
+     * deleted. `chat_messages.pageId REFERENCES pages ON DELETE CASCADE` was
+     * the physical net under all of this until migration 0252 dropped the
+     * table; what replaced it reaches none of it, because
+     * `conversations.contextId` is not a foreign key and `agentPageId`'s is
+     * ON DELETE SET NULL. Verified against a migrated database: before this
+     * fix, `DELETE FROM pages` left every one of these counts non-zero.
+     */
+    async function survivorsOf(conversationId: string) {
+      const [row] = await db.execute(
+        `SELECT
+           (SELECT count(*)::int FROM conversations WHERE id = '${conversationId}') AS conversations,
+           (SELECT count(*)::int FROM messages WHERE "conversationId" = '${conversationId}') AS messages,
+           (SELECT count(*)::int FROM ai_stream_sessions WHERE conversation_id = '${conversationId}') AS streams`,
+      ).then((r) => r.rows as Array<{ conversations: number; messages: number; streams: number }>);
+      return row;
+    }
+
+    /** A stream checkpoint — `parts` is message content, and it cascades from
+     *  `conversations` and from nothing else. The reason the shell must go. */
+    async function seedStreamCheckpoint(conversationId: string, userId: string) {
+      await db.insert(aiStreamSessions).values({
+        messageId: createId(),
+        channelId: `conversation:${conversationId}`,
+        conversationId,
+        userId,
+        parts: [{ type: 'text', text: 'half-streamed secret' }],
+      });
+    }
+
+    it('takes the unified rows AND the conversation shell with it — nothing else would', async () => {
       if (!dbAvailable) return;
       const thread = await seedPageThread({
         contents: [
@@ -504,50 +541,137 @@ describe('chat mutation matrix — one message table', () => {
           { role: 'assistant', content: 'also purged' },
         ],
       });
+      await seedStreamCheckpoint(thread.conversationId, thread.ownerId);
 
-      // The trash route's statement, verbatim (it is a route handler with auth
-      // and recursion around it; the DELETE is the part that matters here).
-      const pageConversationIds = await db
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(or(
-          and(eq(conversations.type, 'page'), eq(conversations.contextId, thread.pageId)),
-          and(eq(conversations.type, 'client'), eq(conversations.agentPageId, thread.pageId)),
-        ));
-      expect(pageConversationIds).toHaveLength(1);
-      await db.delete(messages).where(inArray(messages.conversationId, pageConversationIds.map((c) => c.id)));
+      // The SHARED helper the trash route now calls — not a re-implementation
+      // of its statement. This test used to inline the route's DELETE, which
+      // is precisely why the cron purge and the drive-delete paths could drift
+      // away from it unnoticed.
+      await db.transaction(async (tx) => {
+        await deleteConversationsForPages(tx, [thread.pageId]);
+        await tx.delete(pages).where(eq(pages.id, thread.pageId));
+      });
 
       expect(await messageRepository.getMessagesByConversationId(thread.conversationId)).toEqual([]);
-
-      // Nothing else would have done it. `conversations.contextId` has never
-      // been a foreign key, `conversations.agentPageId`'s is ON DELETE SET
-      // NULL, and the `chat_messages.pageId` cascade that used to cover this
-      // went with the table — so without the explicit DELETE above, a
-      // permanently deleted page's chat history would outlive it and stay
-      // readable by conversation id. The absence of any page-carrying column
-      // on `messages` is the other half of that statement.
-      const [pageColumn] = await db.execute(
-        `SELECT COUNT(*)::int AS n FROM information_schema.columns
-          WHERE table_name = 'messages' AND column_name = 'pageId'`,
-      ).then((r) => r.rows as Array<{ n: number }>);
-      expect(pageColumn.n).toBe(0);
+      expect(await survivorsOf(thread.conversationId)).toEqual({
+        conversations: 0, messages: 0, streams: 0,
+      });
     });
 
     it('takes an API thread that named the page with it too', async () => {
       if (!dbAvailable) return;
       const t = await seedClientThread();
+      await seedStreamCheckpoint(t.conversationId, t.ownerId);
 
-      const pageConversationIds = await db
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(or(
-          and(eq(conversations.type, 'page'), eq(conversations.contextId, t.pageId)),
-          and(eq(conversations.type, 'client'), eq(conversations.agentPageId, t.pageId)),
-        ));
-      expect(pageConversationIds.map((c) => c.id)).toEqual([t.conversationId]);
-      await db.delete(messages).where(inArray(messages.conversationId, pageConversationIds.map((c) => c.id)));
+      await db.transaction(async (tx) => {
+        await deleteConversationsForPages(tx, [t.pageId]);
+        await tx.delete(pages).where(eq(pages.id, t.pageId));
+      });
 
       expect(await messageRepository.getMessagesByConversationId(t.conversationId)).toEqual([]);
+      expect(await survivorsOf(t.conversationId)).toEqual({
+        conversations: 0, messages: 0, streams: 0,
+      });
+    });
+
+    it('DELETING THE DRIVE takes its pages\' chat history too, not just the drive', async () => {
+      if (!dbAvailable) return;
+      // A drive delete cascades `pages`, and page-scoped conversations were
+      // stranded by exactly that: once the pages are gone nothing can trace
+      // them. Both a page thread and a drive-scoped API thread must go.
+      const thread = await seedPageThread({ contents: [{ role: 'user', content: 'drive-scoped secret' }] });
+      await seedStreamCheckpoint(thread.conversationId, thread.ownerId);
+      const clientConversationId = createId();
+      await db.insert(conversations).values({
+        id: clientConversationId,
+        userId: thread.ownerId,
+        type: 'client',
+        contextId: thread.driveId,
+        isActive: true,
+        updatedAt: new Date(),
+      });
+      await db.insert(messages).values({
+        id: createId(),
+        conversationId: clientConversationId,
+        userId: thread.ownerId,
+        role: 'user',
+        content: 'api secret',
+        isActive: true,
+        status: 'complete' as const,
+        createdAt: new Date(),
+      });
+
+      await db.transaction(async (tx) => {
+        await deleteConversationsForDrive(tx, thread.driveId);
+        await tx.delete(drives).where(eq(drives.id, thread.driveId));
+      });
+
+      expect(await survivorsOf(thread.conversationId)).toEqual({
+        conversations: 0, messages: 0, streams: 0,
+      });
+      expect(await survivorsOf(clientConversationId)).toEqual({
+        conversations: 0, messages: 0, streams: 0,
+      });
+    });
+
+    it('the CRON purge cleans up the pages it deletes — and ONLY those', async () => {
+      if (!dbAvailable) return;
+      // `purgeExpiredTrashedPages` was a bare `DELETE FROM pages` — an
+      // automatic Article 17 path that cleaned up nothing at all.
+      //
+      // The child page pins the OTHER boundary. `pages.parentId` carries no
+      // foreign key, so purging a trashed parent orphans its children rather
+      // than cascading to them, and trashing marks only the page named. A fix
+      // that "helpfully" expanded to the subtree would delete the chat history
+      // of a page that still exists — an over-deletion strictly worse than the
+      // bug it replaced. The child's history must SURVIVE.
+      const parent = await seedPageThread({ contents: [{ role: 'user', content: 'parent secret' }] });
+      const childPage = await factories.createPage(parent.driveId, {
+        type: 'AI_CHAT', title: 'Child', parentId: parent.pageId,
+      });
+      const childConversationId = createId();
+      await db.insert(conversations).values({
+        id: childConversationId,
+        userId: parent.ownerId,
+        type: 'page',
+        contextId: childPage.id,
+        isActive: true,
+        updatedAt: new Date(),
+      });
+      await db.insert(messages).values({
+        id: createId(),
+        conversationId: childConversationId,
+        userId: parent.ownerId,
+        role: 'user',
+        content: 'child secret',
+        isActive: true,
+        status: 'complete' as const,
+        createdAt: new Date(),
+      });
+      await seedStreamCheckpoint(childConversationId, parent.ownerId);
+
+      // Trashed 31 days ago — past the cron's 30-day cutoff.
+      const longAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      await db.update(pages).set({ isTrashed: true, trashedAt: longAgo })
+        .where(eq(pages.id, parent.pageId));
+
+      const purged = await pageRepository.purgeExpiredTrashedPages(
+        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      );
+      expect(purged).toBeGreaterThanOrEqual(1);
+
+      // The purged page is gone, and so is everything that referred to it.
+      const remaining = await db.select({ id: pages.id }).from(pages)
+        .where(inArray(pages.id, [parent.pageId, childPage.id]));
+      expect(remaining.map((p) => p.id)).toEqual([childPage.id]);
+      expect(await survivorsOf(parent.conversationId)).toEqual({
+        conversations: 0, messages: 0, streams: 0,
+      });
+      // The surviving child keeps its history — cleanup is scoped to the rows
+      // actually deleted.
+      expect(await survivorsOf(childConversationId)).toEqual({
+        conversations: 1, messages: 1, streams: 1,
+      });
     });
   });
 
