@@ -196,7 +196,7 @@ export const searchTools = {
                 eq(messages.isActive, true),
                 sql`${messages.content} ~ ${pgPattern}`
               ))
-              .orderBy(asc(messages.createdAt))
+              .orderBy(asc(messages.createdAt), asc(messages.id))
               .limit(maxResults);
 
             // Group by conversation and build results
@@ -220,7 +220,7 @@ export const searchTools = {
                     id: messages.id,
                     pageId: sql<string>`${conversations.contextId}`,
                     conversationId: messages.conversationId,
-                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.contextId}, ${messages.conversationId} ORDER BY ${messages.createdAt})`.as('line_number'),
+                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.contextId}, ${messages.conversationId} ORDER BY ${messages.createdAt}, ${messages.id})`.as('line_number'),
                   })
                   .from(messages)
                   .innerJoin(conversations, eq(conversations.id, messages.conversationId))

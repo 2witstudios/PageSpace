@@ -161,6 +161,62 @@
       "notes": "The property test is the load-bearing one — it drives seeded adversarial schedules (drops, reorders, duplicates, truncation, stale snapshots) rather than a handful of chosen cases. The rest pin the individual clauses it depends on."
     },
     {
+      "id": "every-message-write-bumps-the-rev",
+      "guarantee": "A pane the user is looking at never sits silently stale after a message write: every write bumps the conversation's rev in the same transaction, so the client's next rev sync notices even when the live event never arrives.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "executeAiUndo bumps the conversation rev in the same transaction as the soft-delete",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "a throwing emit does not cost the rev bump — the client can still detect staleness",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "an aborted undo takes the rev bump with it (no event for an uncommitted write)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/messages-write-site-classification.test.ts",
+          "name": "every `messages` write site is the repository choke point or a classified exemption",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/messages-write-site-classification.test.ts",
+          "name": "no exemption is stale (every classified file still writes `messages`)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The write-side counterpart to adversarial-delivery-converges-to-db-truth, and the reason that guarantee is worth anything: syncWatchedConversationRevs compares revs and nothing else, so a missed bump is worse than a missed emit — a missed emit self-heals on the next sync, a missed bump leaves server and client agreeing on a rev that no longer describes the data, stale until a manual reload. Added by #2366, which moved the undo write into messageRepository.softDeleteUndoRange; it previously bumped from a fire-and-forget block in the route, after commit, in a separate transaction, under a swallowing catch. The classification citations are what make this a claim about EVERY write rather than about undo: they enumerate every write site against the repository choke point and require each exemption to state a reason and still be real. Unlike the dbAvailable suites noted on gdpr-export-agent-authored-messages, the integration citations THROW when DATABASE_URL is absent rather than passing green with no assertions."
+    },
+    {
+      "id": "transcript-order-is-stable-across-reads",
+      "guarantee": "A conversation reads back in the same order every time — the last two turns cannot swap between reloads, and the model is not replayed a differently-ordered transcript.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "getMessagesByConversationId breaks createdAt ties deterministically",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "getRecentPageMessages selects a deterministic WINDOW, not just a deterministic order",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "repeated reads of the same tied rows agree with each other",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window citation is the non-obvious one: a DESC reader must tiebreak DESC or LIMIT n selects a deterministic ordering of a nondeterministic set of rows."
+    },
+    {
       "id": "no-wider-audience-than-pre-epic",
       "guarantee": "No event reaches a wider audience than pre-epic behaviour, except the owner's own devices.",
       "status": "proven",

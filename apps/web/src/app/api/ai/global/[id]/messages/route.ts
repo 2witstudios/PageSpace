@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
+import { eq, and, desc, ne, sql } from '@pagespace/db/operators'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -75,33 +75,46 @@ export async function GET(
       ...(includeStreaming ? [] : [ne(messages.status, 'streaming')])
     ];
 
-    // Add cursor condition if provided
+    // Add cursor condition if provided - compound cursor (createdAt + id), the
+    // same keyset the page-agents messages route uses. A createdAt-only cursor
+    // is not just unstable but LOSSY: `createdAt` is a millisecond timestamp,
+    // so a burst of same-tick rows straddling a page boundary is either
+    // skipped entirely (strict `<`/`>` on a tie) or served twice. Paginating
+    // on the same total order the ORDER BY uses is what makes each row appear
+    // exactly once.
     if (cursor) {
-      // First, get the timestamp of the cursor message
+      // First, get the timestamp and id of the cursor message
       const [cursorMessage] = await db
-        .select({ createdAt: messages.createdAt })
+        .select({ createdAt: messages.createdAt, id: messages.id })
         .from(messages)
         .where(eq(messages.id, cursor))
         .limit(1);
 
       if (cursorMessage) {
         if (direction === 'before') {
-          // Get messages created before the cursor (older messages)
-          conditions.push(lt(messages.createdAt, cursorMessage.createdAt));
+          // Older: earlier timestamp, or same timestamp and a smaller id.
+          conditions.push(
+            sql`(${messages.createdAt} < ${cursorMessage.createdAt} OR (${messages.createdAt} = ${cursorMessage.createdAt} AND ${messages.id} < ${cursorMessage.id}))`
+          );
         } else {
-          // Get messages created after the cursor (newer messages)
-          conditions.push(gt(messages.createdAt, cursorMessage.createdAt));
+          // Newer: later timestamp, or same timestamp and a larger id.
+          conditions.push(
+            sql`(${messages.createdAt} > ${cursorMessage.createdAt} OR (${messages.createdAt} = ${cursorMessage.createdAt} AND ${messages.id} > ${cursorMessage.id}))`
+          );
         }
       }
     }
 
     // Get messages with pagination
-    // Order by createdAt DESC to get newest first, then reverse for chronological display
+    // Order by (createdAt DESC, id DESC) for a total order, then reverse for
+    // chronological display. Without the id tiebreak, WHICH same-tick rows
+    // survive the LIMIT is arbitrary and can differ between two identical
+    // requests.
     const conversationMessages = await db
       .select()
       .from(messages)
       .where(and(...conditions))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(limit + 1); // Get one extra to check if there are more
 
     // Check if there are more messages

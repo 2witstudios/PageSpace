@@ -330,21 +330,37 @@ jobs:
           FLY_NO_UPDATE_CHECK: "true"
           ADMIN_DATABASE_URL_MIGRATE: ${{ secrets.ADMIN_DATABASE_URL_MIGRATE }}
 
-      - name: Deploy web
-        run: |
-          docker pull ghcr.io/2witstudios/pagespace-web:latest
-          docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
-          docker push registry.fly.io/pagespace-web:latest
-          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
+      # REALTIME BEFORE WEB — order is load-bearing, do not swap.
+      #
+      # apps/realtime owns the socket room grammar and the event handlers
+      # (`join_conversation`, `join_session`) that apps/web's client code emits
+      # into, so the dependency runs one way: new web needs new realtime.
+      #
+      # Getting it backwards fails SILENTLY. Socket.IO drops an event with no
+      # registered listener — no error, no ack, no disconnect — so a new web
+      # client emitting `join_conversation` at an old realtime believes it
+      # joined, never enters the room, and receives none of the rev-carrying
+      # `conversation:*` events fanned out to it. Live delivery degrades to
+      # nothing for the whole deploy window with no signal to retry on.
+      #
+      # This way round, the stale case is benign: an old web client simply
+      # never emits the new joins, and the new handlers idle until it reloads.
+      # Pinned by apps/realtime/src/__tests__/deploy-order.guard.test.ts.
       - name: Deploy realtime
         run: |
           docker pull ghcr.io/2witstudios/pagespace-realtime:latest
           docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
           docker push registry.fly.io/pagespace-realtime:latest
           flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy web
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-web:latest
+          docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
+          docker push registry.fly.io/pagespace-web:latest
+          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

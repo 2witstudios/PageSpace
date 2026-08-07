@@ -345,6 +345,69 @@ stream lifecycle and the `'streaming'` placeholder under a per-conversation advi
 — is shared outright in `start-chat-generation.ts`, because a lock protocol maintained
 twice is a lock protocol that drifts into double generation and double billing.
 
+### 3c. The choke point has a guard again
+
+Clause 1 is a property of the whole tree, not of one module: it holds only while NO
+other file writes `messages`. The coexistence window had a structural writer-classification
+test enforcing exactly that (`unified-message-dual-write-drift.test.ts`, later the freeze
+guard), and it was retired with the window at the contract PR. Three bypasses shipped in
+the gap — the undo service, and the two deletion paths below — and a
+requirements-traceability audit, not CI, is what found them.
+
+The guard is reinstated as
+`apps/web/src/lib/repositories/__tests__/messages-write-site-classification.test.ts`:
+it scans the shipped source for every `messages` INSERT / UPDATE / DELETE and fails
+unless the file is the repository choke point or a **classified exemption carrying a
+written reason**. Two exemptions stand, and the reasoning is the point:
+
+- **`conversation-cleanup.ts` (permanent page/drive delete) — EXEMPT.** It destroys the
+  `conversations` row in the same transaction as its messages. There is no surviving
+  row to bump a rev on and no room to emit into that outlives the statement; the
+  conversation *is* the thing being deleted. Panes heal on the page/drive deletion
+  events this path already fans out, which say strictly more than a rev bump would.
+- **`retention-engine.ts` (nightly retention sweep) — EXEMPT.** It hard-deletes rows
+  that are ALREADY `isActive: false` and past the cutoff. Every one of them was hidden
+  from every reader — and had its rev bumped and its event emitted — at soft-delete
+  time, by the choke point. The hard delete changes nothing any client can observe, so
+  a per-row bump would emit pure noise. Exempt because the user-visible transition
+  already emitted, not because bulk deletion is beneath the contract.
+- **Undo — NOT EXEMPT, and now fixed.** It soft-deletes a range of messages in response
+  to a user's own click, in a pane that user is by definition watching: not bulk, not
+  administrative, not invisible. Its write goes through
+  `messageRepository.softDeleteUndoRange`, which bumps the rev on the caller's
+  transaction; the route only emits.
+
+That last one is worth stating as a general rule, because it is the trap the original
+code fell into. **The bump is the fallback FOR the emit, not a companion to it.** An emit
+that fails is survivable: the rev moved, the client notices the mismatch on its next
+sync (clause 3) and refetches. A BUMP that fails is not: server and client agree on a rev
+that no longer describes the data, so there is nothing for the client to notice, and the
+pane is stale until a manual reload. A rev bump therefore belongs in the write's
+transaction and nowhere else — never in a post-commit block, never in a second
+transaction, and never under a `catch` that swallows.
+
+### 3d. Deploy order: realtime BEFORE web
+
+`apps/realtime` owns the room grammar and the socket handlers (`join_conversation`,
+`join_session`) that `apps/web`'s client code emits into, so the dependency is one-way:
+**new web needs new realtime**. `.github/workflows/docker-images.yml` deploys them in
+that order, and `apps/realtime/src/__tests__/deploy-order.guard.test.ts` pins it.
+
+It shipped the other way round for the whole epic while several PR bodies and a source
+comment (`apps/realtime/src/terminal/shell-activity.ts`) asserted this ordering as
+already-true. The failure mode of getting it backwards is why the claim mattered and why
+nobody noticed it was false: Socket.IO **silently drops** an event with no registered
+listener — no error, no ack, no disconnect. A new web client emitting `join_conversation`
+at an old realtime therefore believes it joined, never enters the room, and receives none
+of the rev-carrying `conversation:*` events fanned out to it. Live delivery degrades to
+nothing for the length of the deploy, invisibly, with no signal the client could retry
+on.
+
+Realtime-first inverts that into the benign case: an old web client simply never emits
+the new joins, and the new handlers idle until it reloads. Nothing depends on web-first —
+realtime makes no outbound HTTP calls to web at all (`WEB_APP_URL` is a CORS origin),
+and both services deploy after the migration step they share.
+
 ## 4. Vocabulary
 
 "sessionId" carried five meanings. **The epic's final phase (Phase 5) landed the renames,
