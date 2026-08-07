@@ -143,6 +143,7 @@ const mockConversationRow = (overrides: Partial<{ userId: string; isShared: bool
   isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
   lastMessageAt: null,
   createdAt: new Date('2025-01-01'),
   updatedAt: new Date('2025-01-02'),

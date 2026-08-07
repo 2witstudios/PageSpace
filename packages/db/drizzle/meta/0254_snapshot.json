@@ -1,6 +1,6 @@
 {
-  "id": "42c8cf28-f4cc-46df-8cf8-7c2005602b60",
-  "prevId": "cb5d053b-96b8-49e4-be88-527d67c7e558",
+  "id": "5d6b0703-1fe5-4a8a-b507-850d0f7942c6",
+  "prevId": "3d16aaa0-5133-4aba-abb8-bb8be34e2187",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1367,241 +1367,6 @@
           ]
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.chat_messages": {
-      "name": "chat_messages",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "pageId": {
-          "name": "pageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role": {
-          "name": "role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "toolCalls": {
-          "name": "toolCalls",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "toolResults": {
-          "name": "toolResults",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "isActive": {
-          "name": "isActive",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "editedAt": {
-          "name": "editedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sourceAgentId": {
-          "name": "sourceAgentId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "messageType": {
-          "name": "messageType",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'standard'"
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'complete'"
-        }
-      },
-      "indexes": {
-        "chat_messages_page_id_idx": {
-          "name": "chat_messages_page_id_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "chat_messages_user_id_idx": {
-          "name": "chat_messages_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "chat_messages_conversation_id_idx": {
-          "name": "chat_messages_conversation_id_idx",
-          "columns": [
-            {
-              "expression": "conversationId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "chat_messages_page_id_conversation_id_idx": {
-          "name": "chat_messages_page_id_conversation_id_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "conversationId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "chat_messages_page_id_is_active_created_at_idx": {
-          "name": "chat_messages_page_id_is_active_created_at_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "isActive",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "chat_messages_pageId_pages_id_fk": {
-          "name": "chat_messages_pageId_pages_id_fk",
-          "tableFrom": "chat_messages",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "pageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "chat_messages_userId_users_id_fk": {
-          "name": "chat_messages_userId_users_id_fk",
-          "tableFrom": "chat_messages",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "chat_messages_sourceAgentId_pages_id_fk": {
-          "name": "chat_messages_sourceAgentId_pages_id_fk",
-          "tableFrom": "chat_messages",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "sourceAgentId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -4587,14 +4352,20 @@
           "primaryKey": false,
           "notNull": false
         },
-        "sessionId": {
-          "name": "sessionId",
+        "workspaceId": {
+          "name": "workspaceId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "closedInSessionAt": {
-          "name": "closedInSessionAt",
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closedInWorkspaceAt": {
+          "name": "closedInWorkspaceAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -4719,11 +4490,26 @@
           "method": "btree",
           "with": {}
         },
-        "conversations_session_id_idx": {
-          "name": "conversations_session_id_idx",
+        "conversations_workspace_id_idx": {
+          "name": "conversations_workspace_id_idx",
           "columns": [
             {
-              "expression": "sessionId",
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "conversations_agent_page_id_idx": {
+          "name": "conversations_agent_page_id_idx",
+          "columns": [
+            {
+              "expression": "agentPageId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4764,12 +4550,25 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "conversations_sessionId_agent_sessions_id_fk": {
-          "name": "conversations_sessionId_agent_sessions_id_fk",
+        "conversations_workspaceId_agent_workspaces_id_fk": {
+          "name": "conversations_workspaceId_agent_workspaces_id_fk",
           "tableFrom": "conversations",
-          "tableTo": "agent_sessions",
+          "tableTo": "agent_workspaces",
           "columnsFrom": [
-            "sessionId"
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "conversations_agentPageId_pages_id_fk": {
+          "name": "conversations_agentPageId_pages_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
           ],
           "columnsTo": [
             "id"
@@ -4794,7 +4593,20 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "conversations_global_context_null_chk": {
+          "name": "conversations_global_context_null_chk",
+          "value": "\"conversations\".\"type\" <> 'global' OR \"conversations\".\"contextId\" IS NULL"
+        },
+        "conversations_page_context_present_chk": {
+          "name": "conversations_page_context_present_chk",
+          "value": "\"conversations\".\"type\" <> 'page' OR \"conversations\".\"contextId\" IS NOT NULL"
+        },
+        "conversations_drive_context_present_chk": {
+          "name": "conversations_drive_context_present_chk",
+          "value": "\"conversations\".\"type\" <> 'drive' OR \"conversations\".\"contextId\" IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.messages": {
@@ -4817,7 +4629,7 @@
           "name": "userId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "role": {
           "name": "role",
@@ -4876,6 +4688,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'complete'"
+        },
+        "sourceAgentId": {
+          "name": "sourceAgentId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4956,6 +4774,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "messages_sourceAgentId_pages_id_fk": {
+          "name": "messages_sourceAgentId_pages_id_fk",
+          "tableFrom": "messages",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "sourceAgentId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -15812,7 +15643,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "ai_stream_sessions_conversation_id_conversations_id_fk": {
+          "name": "ai_stream_sessions_conversation_id_conversations_id_fk",
+          "tableFrom": "ai_stream_sessions",
+          "tableTo": "conversations",
+          "columnsFrom": [
+            "conversation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -20108,8 +19953,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_session_shells": {
-      "name": "agent_session_shells",
+    "public.agent_workspace_shells": {
+      "name": "agent_workspace_shells",
       "schema": "",
       "columns": {
         "id": {
@@ -20118,8 +19963,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "sessionId": {
-          "name": "sessionId",
+        "workspaceId": {
+          "name": "workspaceId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -20148,8 +19993,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "streamSessionId": {
-          "name": "streamSessionId",
+        "spriteExecId": {
+          "name": "spriteExecId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -20188,11 +20033,11 @@
         }
       },
       "indexes": {
-        "agent_session_shells_session_id_idx": {
-          "name": "agent_session_shells_session_id_idx",
+        "agent_workspace_shells_workspace_id_idx": {
+          "name": "agent_workspace_shells_workspace_id_idx",
           "columns": [
             {
-              "expression": "sessionId",
+              "expression": "workspaceId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20203,11 +20048,11 @@
           "method": "btree",
           "with": {}
         },
-        "agent_session_shells_session_name_idx": {
-          "name": "agent_session_shells_session_name_idx",
+        "agent_workspace_shells_workspace_name_idx": {
+          "name": "agent_workspace_shells_workspace_name_idx",
           "columns": [
             {
-              "expression": "sessionId",
+              "expression": "workspaceId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20226,12 +20071,12 @@
         }
       },
       "foreignKeys": {
-        "agent_session_shells_sessionId_agent_sessions_id_fk": {
-          "name": "agent_session_shells_sessionId_agent_sessions_id_fk",
-          "tableFrom": "agent_session_shells",
-          "tableTo": "agent_sessions",
+        "agent_workspace_shells_workspaceId_agent_workspaces_id_fk": {
+          "name": "agent_workspace_shells_workspaceId_agent_workspaces_id_fk",
+          "tableFrom": "agent_workspace_shells",
+          "tableTo": "agent_workspaces",
           "columnsFrom": [
-            "sessionId"
+            "workspaceId"
           ],
           "columnsTo": [
             "id"
@@ -20239,9 +20084,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_session_shells_ownerId_users_id_fk": {
-          "name": "agent_session_shells_ownerId_users_id_fk",
-          "tableFrom": "agent_session_shells",
+        "agent_workspace_shells_ownerId_users_id_fk": {
+          "name": "agent_workspace_shells_ownerId_users_id_fk",
+          "tableFrom": "agent_workspace_shells",
           "tableTo": "users",
           "columnsFrom": [
             "ownerId"
@@ -20259,8 +20104,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_sessions": {
-      "name": "agent_sessions",
+    "public.agent_workspaces": {
+      "name": "agent_workspaces",
       "schema": "",
       "columns": {
         "id": {
@@ -20287,14 +20132,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "workspaceState": {
-          "name": "workspaceState",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sessionKey": {
-          "name": "sessionKey",
+        "spriteKey": {
+          "name": "spriteKey",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -20375,8 +20214,8 @@
         }
       },
       "indexes": {
-        "agent_sessions_drive_id_idx": {
-          "name": "agent_sessions_drive_id_idx",
+        "agent_workspaces_drive_id_idx": {
+          "name": "agent_workspaces_drive_id_idx",
           "columns": [
             {
               "expression": "driveId",
@@ -20390,8 +20229,8 @@
           "method": "btree",
           "with": {}
         },
-        "agent_sessions_owner_id_idx": {
-          "name": "agent_sessions_owner_id_idx",
+        "agent_workspaces_owner_id_idx": {
+          "name": "agent_workspaces_owner_id_idx",
           "columns": [
             {
               "expression": "ownerId",
@@ -20405,8 +20244,8 @@
           "method": "btree",
           "with": {}
         },
-        "agent_sessions_live_sprite_idx": {
-          "name": "agent_sessions_live_sprite_idx",
+        "agent_workspaces_live_sprite_idx": {
+          "name": "agent_workspaces_live_sprite_idx",
           "columns": [
             {
               "expression": "sandboxId",
@@ -20422,16 +20261,16 @@
             }
           ],
           "isUnique": false,
-          "where": "\"agent_sessions\".\"sandboxId\" IS NOT NULL AND \"agent_sessions\".\"spriteTornDownAt\" IS NULL",
+          "where": "\"agent_workspaces\".\"sandboxId\" IS NOT NULL AND \"agent_workspaces\".\"spriteTornDownAt\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "agent_sessions_driveId_drives_id_fk": {
-          "name": "agent_sessions_driveId_drives_id_fk",
-          "tableFrom": "agent_sessions",
+        "agent_workspaces_driveId_drives_id_fk": {
+          "name": "agent_workspaces_driveId_drives_id_fk",
+          "tableFrom": "agent_workspaces",
           "tableTo": "drives",
           "columnsFrom": [
             "driveId"
@@ -20442,9 +20281,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_sessions_ownerId_users_id_fk": {
-          "name": "agent_sessions_ownerId_users_id_fk",
-          "tableFrom": "agent_sessions",
+        "agent_workspaces_ownerId_users_id_fk": {
+          "name": "agent_workspaces_ownerId_users_id_fk",
+          "tableFrom": "agent_workspaces",
           "tableTo": "users",
           "columnsFrom": [
             "ownerId"
@@ -20500,10 +20339,10 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_workspace_layout_ops_workspaceId_agent_sessions_id_fk": {
-          "name": "agent_workspace_layout_ops_workspaceId_agent_sessions_id_fk",
+        "agent_workspace_layout_ops_workspaceId_agent_workspaces_id_fk": {
+          "name": "agent_workspace_layout_ops_workspaceId_agent_workspaces_id_fk",
           "tableFrom": "agent_workspace_layout_ops",
-          "tableTo": "agent_sessions",
+          "tableTo": "agent_workspaces",
           "columnsFrom": [
             "workspaceId"
           ],
@@ -20548,10 +20387,10 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_workspace_layout_revs_workspaceId_agent_sessions_id_fk": {
-          "name": "agent_workspace_layout_revs_workspaceId_agent_sessions_id_fk",
+        "agent_workspace_layout_revs_workspaceId_agent_workspaces_id_fk": {
+          "name": "agent_workspace_layout_revs_workspaceId_agent_workspaces_id_fk",
           "tableFrom": "agent_workspace_layout_revs",
-          "tableTo": "agent_sessions",
+          "tableTo": "agent_workspaces",
           "columnsFrom": [
             "workspaceId"
           ],
@@ -20628,10 +20467,10 @@
         }
       },
       "foreignKeys": {
-        "agent_workspace_pane_columns_workspaceId_agent_sessions_id_fk": {
-          "name": "agent_workspace_pane_columns_workspaceId_agent_sessions_id_fk",
+        "agent_workspace_pane_columns_workspaceId_agent_workspaces_id_fk": {
+          "name": "agent_workspace_pane_columns_workspaceId_agent_workspaces_id_fk",
           "tableFrom": "agent_workspace_pane_columns",
-          "tableTo": "agent_sessions",
+          "tableTo": "agent_workspaces",
           "columnsFrom": [
             "workspaceId"
           ],

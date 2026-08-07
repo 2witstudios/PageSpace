@@ -7,7 +7,7 @@ import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
-import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown, PlanChip } from '@/components/ai/shared';
 import { UndoAiChangesDialog, VirtualizedMessageList } from '@/components/ai/shared/chat';
 import {
   Conversation,
@@ -1014,6 +1014,7 @@ const SidebarChatTab: React.FC = () => {
                 compact
               />
             )}
+            <PlanChip conversationId={currentConversationId} messages={displayMessages} />
             <TasksDropdown messages={displayMessages} driveId={locationContext?.currentDrive?.id} />
           </div>
         )}

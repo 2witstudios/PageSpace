@@ -77,6 +77,16 @@ export const users = pgTable('users', {
   suspendedReason: text('suspendedReason'),
   // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
   timezone: text('timezone'),
+  /**
+   * Stamped once the starter skills (see packages/lib/src/commands/starter-skills.ts)
+   * have been installed into this user's Home drive. NULL = never installed.
+   *
+   * This is a high-water mark, not a mirror of the commands table: the installer
+   * must never resurrect a starter the user deliberately deleted, and the
+   * backfill script must be safely re-runnable after a partial failure. Checking
+   * "does a command with this trigger exist?" alone would fail both.
+   */
+  starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({

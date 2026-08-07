@@ -27,6 +27,16 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./commands/starter-skills": {
+      "types": "./dist/commands/starter-skills.d.ts",
+      "import": "./dist/commands/starter-skills.js",
+      "require": "./dist/commands/starter-skills.js"
+    },
+    "./commands/starter-skill-installer": {
+      "types": "./dist/commands/starter-skill-installer.d.ts",
+      "import": "./dist/commands/starter-skill-installer.js",
+      "require": "./dist/commands/starter-skill-installer.js"
+    },
     "./db/bounded-query": {
       "types": "./dist/db/bounded-query.d.ts",
       "import": "./dist/db/bounded-query.js",

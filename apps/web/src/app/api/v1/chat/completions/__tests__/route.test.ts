@@ -840,6 +840,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'client',
       lastMessageAt: null,
     });
@@ -878,6 +879,7 @@ describe('POST /api/v1/chat/completions', () => {
         isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -926,6 +928,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -966,6 +969,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -994,6 +998,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1026,6 +1031,7 @@ describe('POST /api/v1/chat/completions', () => {
         isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1355,6 +1361,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1383,6 +1390,7 @@ describe('POST /api/v1/chat/completions', () => {
       isShared: true,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });

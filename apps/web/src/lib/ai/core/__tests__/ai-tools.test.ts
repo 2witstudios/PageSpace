@@ -197,6 +197,7 @@ import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
 import { pagePaneTools } from '../../tools/page-pane-tools-runtime';
+import { planTools } from '../../tools/plan-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -247,6 +248,7 @@ describe('ai-tools', () => {
         ...formTools,
         ...imageGenerationTools,
         ...pagePaneTools,
+        ...planTools,
       });
     });
 
@@ -273,6 +275,7 @@ describe('ai-tools', () => {
         Object.keys(formTools),
         Object.keys(imageGenerationTools),
         Object.keys(pagePaneTools),
+        Object.keys(planTools),
       ];
 
       const allKeys = moduleKeysets.flat();

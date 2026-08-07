@@ -22,6 +22,7 @@ import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
 import { pagePaneTools } from '../tools/page-pane-tools-runtime';
+import { planTools } from '../tools/plan-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { buildSessionTools } from '../tools/session-tools-runtime';
@@ -63,6 +64,7 @@ const TOOL_MODULES = {
   forms: formTools,
   imageGeneration: imageGenerationTools,
   pagePane: pagePaneTools,
+  plan: planTools,
 } as const;
 
 // Flatten the module map into one ToolSet. No key collisions across modules — the

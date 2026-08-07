@@ -1,6 +1,6 @@
 {
-  "id": "42c8cf28-f4cc-46df-8cf8-7c2005602b60",
-  "prevId": "cb5d053b-96b8-49e4-be88-527d67c7e558",
+  "id": "cb5d053b-96b8-49e4-be88-527d67c7e558",
+  "prevId": "d97387e3-8eaa-4f00-8705-2f0a99092dd0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -937,6 +937,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "starterSkillsInstalledAt": {
+          "name": "starterSkillsInstalledAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4593,13 +4599,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "rev": {
-          "name": "rev",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "lastMessageAt": {
           "name": "lastMessageAt",
           "type": "timestamp",
@@ -4632,6 +4631,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "planPageId": {
+          "name": "planPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4721,6 +4726,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "conversations_plan_page_id_idx": {
+          "name": "conversations_plan_page_id_idx",
+          "columns": [
+            {
+              "expression": "planPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -4743,6 +4763,19 @@
           "tableTo": "agent_sessions",
           "columnsFrom": [
             "sessionId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "conversations_planPageId_pages_id_fk": {
+          "name": "conversations_planPageId_pages_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "planPageId"
           ],
           "columnsTo": [
             "id"

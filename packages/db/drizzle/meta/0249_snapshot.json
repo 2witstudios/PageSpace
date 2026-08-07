@@ -1,6 +1,6 @@
 {
-  "id": "53de50fa-d426-439c-ace6-ab663dd6d023",
-  "prevId": "3886b007-1177-45ff-b37e-fec04f65fda4",
+  "id": "3886b007-1177-45ff-b37e-fec04f65fda4",
+  "prevId": "42c8cf28-f4cc-46df-8cf8-7c2005602b60",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -937,6 +937,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "starterSkillsInstalledAt": {
+          "name": "starterSkillsInstalledAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4632,6 +4638,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "planPageId": {
+          "name": "planPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4721,6 +4733,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "conversations_plan_page_id_idx": {
+          "name": "conversations_plan_page_id_idx",
+          "columns": [
+            {
+              "expression": "planPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -4749,25 +4776,25 @@
           ],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "conversations_planPageId_pages_id_fk": {
+          "name": "conversations_planPageId_pages_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "planPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "conversations_global_context_null_chk": {
-          "name": "conversations_global_context_null_chk",
-          "value": "\"conversations\".\"type\" <> 'global' OR \"conversations\".\"contextId\" IS NULL"
-        },
-        "conversations_page_context_present_chk": {
-          "name": "conversations_page_context_present_chk",
-          "value": "\"conversations\".\"type\" <> 'page' OR \"conversations\".\"contextId\" IS NOT NULL"
-        },
-        "conversations_drive_context_present_chk": {
-          "name": "conversations_drive_context_present_chk",
-          "value": "\"conversations\".\"type\" <> 'drive' OR \"conversations\".\"contextId\" IS NOT NULL"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.messages": {
@@ -15852,21 +15879,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "ai_stream_sessions_conversation_id_conversations_id_fk": {
-          "name": "ai_stream_sessions_conversation_id_conversations_id_fk",
-          "tableFrom": "ai_stream_sessions",
-          "tableTo": "conversations",
-          "columnsFrom": [
-            "conversation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

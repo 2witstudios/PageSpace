@@ -12,10 +12,15 @@
 
 export interface LocationPromptInput {
   currentPage?: {
+    /**
+     * The page's id. Rendered so the model can address this page directly in
+     * tool calls instead of only by title — titles are ambiguous across
+     * drives and change under the model's feet when a page is renamed.
+     */
+    id?: string;
     title: string;
     type: string;
     path: string;
-    isTaskLinked?: boolean;
   } | null;
   currentDrive?: {
     name: string;
@@ -23,24 +28,34 @@ export interface LocationPromptInput {
     id?: string;
   } | null;
   breadcrumbs?: string[];
+  /**
+   * The sender's Home drive id, rendered only in the no-location branch.
+   * list_drives returns neither drive kind nor a Home marker, so without this
+   * an agent standing nowhere has no way to name Home — which the /plan skill
+   * needs as the destination for a personal plan artifact. Exposed as data
+   * only: the "do NOT assume the Home drive" rule below still governs general
+   * content creation, and a skill that wants Home must say so explicitly.
+   */
+  homeDriveId?: string | null;
 }
 
 export function buildLocationTurnPrompt(input: LocationPromptInput | undefined): string {
   if (!input || (!input.currentPage && !input.currentDrive)) {
+    const homeLine = input?.homeDriveId
+      ? `\n• Your Home drive (private to this user) is driveId: ${input.homeDriveId} — use it only when a skill or the user explicitly calls for it`
+      : '';
     return `LOCATION (current, this turn):
 • Operating from the dashboard — no specific workspace or page is currently in view
 • Use list_drives to discover available workspaces before suggesting new drive creation
 • When the user says "here" or "this", ask which workspace/page they mean, or use list_drives/list_pages to find out
-• Do NOT assume the Home drive — ask which workspace, or use list_drives`;
+• Do NOT assume the Home drive — ask which workspace, or use list_drives${homeLine}`;
   }
 
   const lines: string[] = ['LOCATION (current, this turn):'];
 
   if (input.currentPage) {
-    lines.push(`• Current page: "${input.currentPage.title}" [${input.currentPage.type}] at ${input.currentPage.path}`);
-    if (input.currentPage.isTaskLinked) {
-      lines.push(`• This page is linked to a task — use task management tools to update task status`);
-    }
+    const idPart = input.currentPage.id ? ` — pageId: ${input.currentPage.id}` : '';
+    lines.push(`• Current page: "${input.currentPage.title}" [${input.currentPage.type}] at ${input.currentPage.path}${idPart}`);
   }
 
   if (input.currentDrive) {

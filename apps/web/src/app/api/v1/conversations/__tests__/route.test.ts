@@ -131,6 +131,7 @@ const existingConversation = {
   isShared: false,
   workspaceId: null,
   closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
   lastMessageAt: null,
 };
 

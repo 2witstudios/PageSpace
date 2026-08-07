@@ -22,6 +22,8 @@ import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
+import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
+import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
@@ -788,11 +790,15 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       isCodeExecutionEnabled()
     );
 
+    const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation);
+
     const locationPrompt = buildLocationTurnPrompt(locationContext ? {
       currentPage: locationContext.currentPage,
       currentDrive: locationContext.currentDrive,
       breadcrumbs: locationContext.breadcrumbs,
-    } : undefined);
+      homeDriveId: locationHomeDriveId,
+    } : { homeDriveId: locationHomeDriveId });
 
     // Build timestamp system prompt for temporal awareness (using user's timezone)
     const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
@@ -960,13 +966,21 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     );
     const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 
+    // Active plan pointer. Same volatility class as the skill catalog: it
+    // changes only when the agent calls set_plan/clear_plan, never on
+    // navigation, so it is cache-stable per conversation. It has to be here
+    // rather than in the volatile block — the compaction summary is lossy, and
+    // this pointer is precisely what the agent needs after a summary.
+    const activePlanPrompt = buildActivePlanPrompt(await getActivePlan(conversationId, userId));
+
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
       + '\n' + buildGlobalAssistantInstructions(availableToolNames)
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt
       + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
-      + skillCatalogPrompt;
+      + skillCatalogPrompt
+      + activePlanPrompt;
 
     let finalTools: ToolSet = {
       ...coreTools,

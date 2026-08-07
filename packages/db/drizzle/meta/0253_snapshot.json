@@ -1,6 +1,6 @@
 {
-  "id": "5d6b0703-1fe5-4a8a-b507-850d0f7942c6",
-  "prevId": "3d16aaa0-5133-4aba-abb8-bb8be34e2187",
+  "id": "3d16aaa0-5133-4aba-abb8-bb8be34e2187",
+  "prevId": "553421ba-a15f-4387-ab0f-2ee7fb0f43e9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -937,6 +937,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "starterSkillsInstalledAt": {
+          "name": "starterSkillsInstalledAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4346,8 +4352,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "workspaceId": {
-          "name": "workspaceId",
+        "sessionId": {
+          "name": "sessionId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -4358,8 +4364,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "closedInWorkspaceAt": {
-          "name": "closedInWorkspaceAt",
+        "closedInSessionAt": {
+          "name": "closedInSessionAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -4403,6 +4409,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "planPageId": {
+          "name": "planPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4478,11 +4490,11 @@
           "method": "btree",
           "with": {}
         },
-        "conversations_workspace_id_idx": {
-          "name": "conversations_workspace_id_idx",
+        "conversations_session_id_idx": {
+          "name": "conversations_session_id_idx",
           "columns": [
             {
-              "expression": "workspaceId",
+              "expression": "sessionId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4498,6 +4510,21 @@
           "columns": [
             {
               "expression": "agentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "conversations_plan_page_id_idx": {
+          "name": "conversations_plan_page_id_idx",
+          "columns": [
+            {
+              "expression": "planPageId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4523,12 +4550,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "conversations_workspaceId_agent_workspaces_id_fk": {
-          "name": "conversations_workspaceId_agent_workspaces_id_fk",
+        "conversations_sessionId_agent_sessions_id_fk": {
+          "name": "conversations_sessionId_agent_sessions_id_fk",
           "tableFrom": "conversations",
-          "tableTo": "agent_workspaces",
+          "tableTo": "agent_sessions",
           "columnsFrom": [
-            "workspaceId"
+            "sessionId"
           ],
           "columnsTo": [
             "id"
@@ -4542,6 +4569,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "conversations_planPageId_pages_id_fk": {
+          "name": "conversations_planPageId_pages_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "planPageId"
           ],
           "columnsTo": [
             "id"
@@ -19913,8 +19953,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_workspace_shells": {
-      "name": "agent_workspace_shells",
+    "public.agent_session_shells": {
+      "name": "agent_session_shells",
       "schema": "",
       "columns": {
         "id": {
@@ -19923,8 +19963,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "workspaceId": {
-          "name": "workspaceId",
+        "sessionId": {
+          "name": "sessionId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -19953,8 +19993,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "spriteExecId": {
-          "name": "spriteExecId",
+        "streamSessionId": {
+          "name": "streamSessionId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -19993,11 +20033,11 @@
         }
       },
       "indexes": {
-        "agent_workspace_shells_workspace_id_idx": {
-          "name": "agent_workspace_shells_workspace_id_idx",
+        "agent_session_shells_session_id_idx": {
+          "name": "agent_session_shells_session_id_idx",
           "columns": [
             {
-              "expression": "workspaceId",
+              "expression": "sessionId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20008,11 +20048,11 @@
           "method": "btree",
           "with": {}
         },
-        "agent_workspace_shells_workspace_name_idx": {
-          "name": "agent_workspace_shells_workspace_name_idx",
+        "agent_session_shells_session_name_idx": {
+          "name": "agent_session_shells_session_name_idx",
           "columns": [
             {
-              "expression": "workspaceId",
+              "expression": "sessionId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20031,12 +20071,12 @@
         }
       },
       "foreignKeys": {
-        "agent_workspace_shells_workspaceId_agent_workspaces_id_fk": {
-          "name": "agent_workspace_shells_workspaceId_agent_workspaces_id_fk",
-          "tableFrom": "agent_workspace_shells",
-          "tableTo": "agent_workspaces",
+        "agent_session_shells_sessionId_agent_sessions_id_fk": {
+          "name": "agent_session_shells_sessionId_agent_sessions_id_fk",
+          "tableFrom": "agent_session_shells",
+          "tableTo": "agent_sessions",
           "columnsFrom": [
-            "workspaceId"
+            "sessionId"
           ],
           "columnsTo": [
             "id"
@@ -20044,9 +20084,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_workspace_shells_ownerId_users_id_fk": {
-          "name": "agent_workspace_shells_ownerId_users_id_fk",
-          "tableFrom": "agent_workspace_shells",
+        "agent_session_shells_ownerId_users_id_fk": {
+          "name": "agent_session_shells_ownerId_users_id_fk",
+          "tableFrom": "agent_session_shells",
           "tableTo": "users",
           "columnsFrom": [
             "ownerId"
@@ -20064,8 +20104,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_workspaces": {
-      "name": "agent_workspaces",
+    "public.agent_sessions": {
+      "name": "agent_sessions",
       "schema": "",
       "columns": {
         "id": {
@@ -20092,8 +20132,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "spriteKey": {
-          "name": "spriteKey",
+        "sessionKey": {
+          "name": "sessionKey",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -20174,8 +20214,8 @@
         }
       },
       "indexes": {
-        "agent_workspaces_drive_id_idx": {
-          "name": "agent_workspaces_drive_id_idx",
+        "agent_sessions_drive_id_idx": {
+          "name": "agent_sessions_drive_id_idx",
           "columns": [
             {
               "expression": "driveId",
@@ -20189,8 +20229,8 @@
           "method": "btree",
           "with": {}
         },
-        "agent_workspaces_owner_id_idx": {
-          "name": "agent_workspaces_owner_id_idx",
+        "agent_sessions_owner_id_idx": {
+          "name": "agent_sessions_owner_id_idx",
           "columns": [
             {
               "expression": "ownerId",
@@ -20204,8 +20244,8 @@
           "method": "btree",
           "with": {}
         },
-        "agent_workspaces_live_sprite_idx": {
-          "name": "agent_workspaces_live_sprite_idx",
+        "agent_sessions_live_sprite_idx": {
+          "name": "agent_sessions_live_sprite_idx",
           "columns": [
             {
               "expression": "sandboxId",
@@ -20221,16 +20261,16 @@
             }
           ],
           "isUnique": false,
-          "where": "\"agent_workspaces\".\"sandboxId\" IS NOT NULL AND \"agent_workspaces\".\"spriteTornDownAt\" IS NULL",
+          "where": "\"agent_sessions\".\"sandboxId\" IS NOT NULL AND \"agent_sessions\".\"spriteTornDownAt\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "agent_workspaces_driveId_drives_id_fk": {
-          "name": "agent_workspaces_driveId_drives_id_fk",
-          "tableFrom": "agent_workspaces",
+        "agent_sessions_driveId_drives_id_fk": {
+          "name": "agent_sessions_driveId_drives_id_fk",
+          "tableFrom": "agent_sessions",
           "tableTo": "drives",
           "columnsFrom": [
             "driveId"
@@ -20241,9 +20281,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_workspaces_ownerId_users_id_fk": {
-          "name": "agent_workspaces_ownerId_users_id_fk",
-          "tableFrom": "agent_workspaces",
+        "agent_sessions_ownerId_users_id_fk": {
+          "name": "agent_sessions_ownerId_users_id_fk",
+          "tableFrom": "agent_sessions",
           "tableTo": "users",
           "columnsFrom": [
             "ownerId"
@@ -20299,10 +20339,10 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_workspace_layout_ops_workspaceId_agent_workspaces_id_fk": {
-          "name": "agent_workspace_layout_ops_workspaceId_agent_workspaces_id_fk",
+        "agent_workspace_layout_ops_workspaceId_agent_sessions_id_fk": {
+          "name": "agent_workspace_layout_ops_workspaceId_agent_sessions_id_fk",
           "tableFrom": "agent_workspace_layout_ops",
-          "tableTo": "agent_workspaces",
+          "tableTo": "agent_sessions",
           "columnsFrom": [
             "workspaceId"
           ],
@@ -20347,10 +20387,10 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_workspace_layout_revs_workspaceId_agent_workspaces_id_fk": {
-          "name": "agent_workspace_layout_revs_workspaceId_agent_workspaces_id_fk",
+        "agent_workspace_layout_revs_workspaceId_agent_sessions_id_fk": {
+          "name": "agent_workspace_layout_revs_workspaceId_agent_sessions_id_fk",
           "tableFrom": "agent_workspace_layout_revs",
-          "tableTo": "agent_workspaces",
+          "tableTo": "agent_sessions",
           "columnsFrom": [
             "workspaceId"
           ],
@@ -20427,10 +20467,10 @@
         }
       },
       "foreignKeys": {
-        "agent_workspace_pane_columns_workspaceId_agent_workspaces_id_fk": {
-          "name": "agent_workspace_pane_columns_workspaceId_agent_workspaces_id_fk",
+        "agent_workspace_pane_columns_workspaceId_agent_sessions_id_fk": {
+          "name": "agent_workspace_pane_columns_workspaceId_agent_sessions_id_fk",
           "tableFrom": "agent_workspace_pane_columns",
-          "tableTo": "agent_workspaces",
+          "tableTo": "agent_sessions",
           "columnsFrom": [
             "workspaceId"
           ],

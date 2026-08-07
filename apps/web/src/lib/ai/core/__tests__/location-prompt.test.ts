@@ -65,18 +65,18 @@ describe('buildLocationTurnPrompt — page context', () => {
     expect(result).toContain('/drive/Q3 Roadmap');
   });
 
-  it('flags task-linked pages', () => {
+  it('renders the page id so the model can address the page directly', () => {
     const result = buildLocationTurnPrompt({
-      currentPage: { title: 'Fix login bug', type: 'TASK_LIST', path: '/drive/tasks/Fix login bug', isTaskLinked: true },
+      currentPage: { id: 'pg_abc123', title: 'Q3 Roadmap', type: 'DOCUMENT', path: '/drive/Q3 Roadmap' },
     });
-    expect(result).toContain('linked to a task');
+    expect(result).toContain('pageId: pg_abc123');
   });
 
-  it('does not mention task-linking for a normal page', () => {
+  it('omits the page id marker when no id is supplied', () => {
     const result = buildLocationTurnPrompt({
       currentPage: { title: 'Notes', type: 'DOCUMENT', path: '/drive/Notes' },
     });
-    expect(result).not.toContain('linked to a task');
+    expect(result).not.toContain('pageId:');
   });
 
   it('includes breadcrumbs when present', () => {

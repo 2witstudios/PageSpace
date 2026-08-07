@@ -100,6 +100,23 @@ export const conversations = pgTable('conversations', {
    * overflow, and the counter is per-row.
    */
   rev: bigint('rev', { mode: 'number' }).default(0).notNull(),
+  /**
+   * The DOCUMENT page holding the plan this thread is working against, or NULL
+   * when unbound. Set/cleared by the `set_plan` / `clear_plan` tools.
+   *
+   * This exists because compaction is lossy: the summary at ModelMessages[0]
+   * only *mostly* remembers a plan, while a re-read of the page is exact. A
+   * pointer living in the message stream would be summarized away with
+   * everything else (that is precisely why TasksDropdown's message-derived
+   * task binding empties on truncation), so this one is persisted and rendered
+   * into the CACHE-STABLE system prompt instead. That placement is only sound
+   * because the value changes on explicit tool call and never on navigation —
+   * one prefix invalidation per plan change, the same trade Agent Memory makes.
+   *
+   * ON DELETE SET NULL: deleting the plan page unbinds the thread rather than
+   * leaving it pointing at a tombstone.
+   */
+  planPageId: text('planPageId').references(() => pages.id, { onDelete: 'set null' }),
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -111,6 +128,7 @@ export const conversations = pgTable('conversations', {
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
   workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
+  planPageIdx: index('conversations_plan_page_id_idx').on(table.planPageId),
   /**
    * The `type='client'` half of `unifiedPageScope()`. Page-scoped reads join
    * `conversations` and filter on `contextId` OR this column, so the second
@@ -237,6 +255,10 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   workspace: one(agentWorkspaces, {
     fields: [conversations.workspaceId],
     references: [agentWorkspaces.id],
+  }),
+  planPage: one(pages, {
+    fields: [conversations.planPageId],
+    references: [pages.id],
   }),
   messages: many(messages),
 }));
