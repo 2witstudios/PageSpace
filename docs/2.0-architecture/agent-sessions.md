@@ -215,6 +215,41 @@ The acceptance criterion, one sentence: **if a feature needs a second copy of a 
 derives at read time or it doesn't ship.** Forced copies get drift-guards; dual-writes
 get one shared writer.
 
+### 3a. The two message tables, mid-merge
+
+`chat_messages` (page chat) is being merged INTO `messages` (global assistant) so the
+"branch on `agentPageId === null`" that every reader carries can be deleted. It is a
+textbook forced copy, so it runs under the rule above rather than around it:
+
+- **Expand — SHIPPED** (epic Phase 4 PR 9, migrations 0248/0249): `messages` gained
+  nullable `userId`, `sourceAgentId`, and a transitional `pageId`; orphan
+  `conversations` rows were synthesised; `chat_messages.conversationId` gained a real
+  (`NOT VALID`) FK, and so did `ai_stream_sessions.conversationId`.
+- **Dual-write — SHIPPED** (Phase 4 PR 10): every page-chat write lands in BOTH tables
+  inside ONE transaction. Being a choke point already is what made this a per-method
+  change rather than a route-by-route migration — **no route changed**. The shared
+  unified-leg writer is `apps/web/src/lib/repositories/unified-message-leg.ts`; the
+  three files permitted to call it are pinned by test. Global rows are untouched:
+  `messages` was always their only table, and they now carry `pageId: null`
+  explicitly so a post-cutover reader can tell them apart.
+  - Kill switch `UNIFIED_MESSAGES_DUAL_WRITE=off` disables the unified leg without a
+    deploy (default on; only the exact value `off` disables).
+  - Historical rows are carried across by `scripts/backfill-unify-messages.ts` —
+    batched, resumable from the target table, idempotent, `--dry-run`.
+  - **Drift guards, both layers:** a vitest suite asserting every write path touches
+    both legs (and that nothing outside the allowlist writes `chat_messages` at all),
+    plus the `reconcile-message-unification` cron comparing per-conversation counts and
+    `MAX(createdAt)` for recently-active page conversations, logging at error level on
+    divergence.
+- **Still open:** readers still read the legacy leg (Phase 4 PRs 11/12), compliance
+  keeps both tables until the contract PR (PR 13/15), and `chat_messages` +
+  `messages.pageId` are dropped last (PR 15).
+
+Until the readers cut over, the legacy leg is authoritative and the unified leg must
+never be able to break a write that works today — which is why the unified INSERT paths
+skip (loudly, at error level) rather than abort when a `conversations` row is genuinely
+missing.
+
 ## 4. Vocabulary
 
 "sessionId" has carried five meanings. The canonical names:

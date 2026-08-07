@@ -26,6 +26,20 @@
  * `chat:stream_*` emissions stay at their existing sites (old clients depend
  * on them; deleted in a later PR). The legacy edit/delete/undo broadcasts
  * moved INTO this module alongside the writes they describe.
+ *
+ * ── DUAL-WRITE (Phase 4 PR 10, D6) ────────────────────────────────────────
+ * Every PAGE write below now lands in both `chat_messages` (legacy leg) and
+ * `messages` (unified leg) inside the SAME transaction, via the shared
+ * unified-leg writer (`unified-message-leg.ts`). Being the choke point is
+ * what makes that a per-method two-liner instead of ~10 route edits — no
+ * route changed for the dual-write. GLOBAL writes were always `messages`
+ * writes; they gained nothing but explicit `pageId: null` / `sourceAgentId:
+ * null` so a global row reads as "not a page row" after the cutover.
+ * The rev bump and the event emission are untouched by all of this.
+ *
+ * Kill switch: `UNIFIED_MESSAGES_DUAL_WRITE=off` disables the unified leg
+ * alone (apps/web/src/lib/config/unified-messages-env.ts). Nothing here reads
+ * `process.env` directly.
  */
 
 import type { UIMessage } from 'ai';
@@ -64,6 +78,13 @@ import {
   type BumpedConversationRow,
   type DbExecutor,
 } from '@/lib/repositories/conversation-rev';
+import {
+  upsertUnifiedPageMessage,
+  insertUnifiedPageMessage,
+  materializeUnifiedPageMessage,
+  mutateUnifiedMessageById,
+  serializeJsonColumn,
+} from '@/lib/repositories/unified-message-leg';
 
 // ---------------------------------------------------------------------------
 // Private raw savers — moved verbatim from message-utils.ts (where they were
@@ -106,6 +127,15 @@ async function saveChatMessageRow({
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
 
+  // Serialized (and timestamped) ONCE, then handed to both legs: the two
+  // tables must hold byte-identical values, and an identical `createdAt` in
+  // particular — the drift reconciler compares `MAX("createdAt")` per
+  // conversation, so two `new Date()` calls a millisecond apart would show up
+  // as permanent, meaningless divergence.
+  const toolCallsJson = serializeJsonColumn(toolCalls);
+  const toolResultsJson = serializeJsonColumn(toolResults);
+  const createdAt = new Date();
+
   // Scoped upsert: the `where` gates ON CONFLICT DO UPDATE to a row already
   // in the CALLER's own conversation AND under the same role. A
   // client-supplied messageId can collide with a row in a DIFFERENT
@@ -124,9 +154,9 @@ async function saveChatMessageRow({
       userId,
       role,
       content: structuredContent,
-      toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-      toolResults: toolResults ? JSON.stringify(toolResults) : null,
-      createdAt: new Date(),
+      toolCalls: toolCallsJson,
+      toolResults: toolResultsJson,
+      createdAt,
       isActive: true,
       sourceAgentId: sourceAgentId ?? null,
       status,
@@ -135,8 +165,8 @@ async function saveChatMessageRow({
       target: chatMessages.id,
       set: {
         content: structuredContent,
-        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-        toolResults: toolResults ? JSON.stringify(toolResults) : null,
+        toolCalls: toolCallsJson,
+        toolResults: toolResultsJson,
         sourceAgentId: sourceAgentId ?? null,
         // Terminal write: flips a 'streaming' placeholder to
         // 'complete'/'interrupted', never back to 'streaming'.
@@ -145,6 +175,28 @@ async function saveChatMessageRow({
       where: and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.role, role)),
     })
     .returning({ id: chatMessages.id });
+
+  // UNIFIED LEG (Phase 4 PR 10) — same transaction, same statement shape.
+  // Gated on the legacy leg having actually written: a zero-row result means
+  // the scoped-upsert gate REJECTED this write (colliding id from another
+  // conversation, or a role spoof) and the throw below aborts the whole
+  // transaction. Mirroring a rejected write onto the unified leg would be
+  // creating exactly the cross-conversation row the gate exists to refuse.
+  if (result.length > 0) {
+    await upsertUnifiedPageMessage(dbClient, {
+      messageId,
+      pageId,
+      conversationId,
+      userId,
+      role,
+      content: structuredContent,
+      toolCallsJson,
+      toolResultsJson,
+      sourceAgentId: sourceAgentId ?? null,
+      status,
+      createdAt,
+    });
+  }
 
   if (result.length === 0) {
     loggers.ai.warn(
@@ -197,8 +249,17 @@ async function saveGlobalMessageRow({
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
 
+  const toolCallsJson = serializeJsonColumn(toolCalls);
+  const toolResultsJson = serializeJsonColumn(toolResults);
+
   // Scoped upsert — see saveChatMessageRow's comment; same collision and
   // role-spoofing gates, mirrored for the global assistant table.
+  //
+  // NOT dual-written: `messages` IS the global leg. It is the same table the
+  // page leg is being merged into, which is why the two new columns from
+  // migration 0248 are spelled out explicitly below rather than left to the
+  // column defaults — a global row must read as "not a page row" to the
+  // post-cutover readers, and `pageId: null` is what says so.
   const result = await dbClient
     .insert(messages)
     .values({
@@ -207,18 +268,25 @@ async function saveGlobalMessageRow({
       userId,
       role,
       content: structuredContent,
-      toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-      toolResults: toolResults ? JSON.stringify(toolResults) : null,
+      toolCalls: toolCallsJson,
+      toolResults: toolResultsJson,
       createdAt: new Date(),
       isActive: true,
       status,
+      // A global-assistant thread has no page: `conversations.type='global'`
+      // and (per 0249's CHECK) a NULL `contextId`. Never a page id.
+      pageId: null,
+      // The global assistant is not an agent PAGE, so there is no agent page
+      // id to attribute: NULL means "platform-authored, source not recorded",
+      // which is exactly the attribution rule's second clause.
+      sourceAgentId: null,
     })
     .onConflictDoUpdate({
       target: messages.id,
       set: {
         content: structuredContent,
-        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-        toolResults: toolResults ? JSON.stringify(toolResults) : null,
+        toolCalls: toolCallsJson,
+        toolResults: toolResultsJson,
         status,
       },
       where: and(eq(messages.conversationId, conversationId), eq(messages.role, role)),
@@ -566,6 +634,27 @@ export const messageRepository = {
         sourceAgentId: null,
         status: 'streaming',
       });
+      // UNIFIED LEG. `row` is the SELECT ... FOR UPDATE result a few lines up,
+      // so it already answers "does a conversations row exist" for the exact
+      // version this transaction locked — no second probe, no stale answer.
+      // An absent row is tolerated on the legacy leg (documented above) and
+      // therefore skipped, loudly, on the unified one.
+      await insertUnifiedPageMessage(
+        tx,
+        {
+          messageId: args.messageId,
+          pageId: args.pageId,
+          conversationId: args.conversationId,
+          userId: null,
+          role: 'assistant',
+          content: '',
+          toolCallsJson: null,
+          toolResultsJson: null,
+          sourceAgentId: null,
+          status: 'streaming',
+        },
+        row !== undefined,
+      );
       // No lastMessageAt touch: 'streaming' rows are excluded from listings.
       const bumped = await bumpConversationRev(tx, args.conversationId);
       return { bumped };
@@ -600,6 +689,9 @@ export const messageRepository = {
         toolResults: null,
         isActive: true,
         status: 'streaming',
+        // Global leg — see saveGlobalMessageRow for why these are explicit.
+        pageId: null,
+        sourceAgentId: null,
       });
       const bumped = await bumpConversationRev(tx, args.conversationId);
       return { bumped };
@@ -657,6 +749,21 @@ export const messageRepository = {
         })
         .returning({ id: chatMessages.id });
       if (written.length === 0) return null;
+      // UNIFIED LEG — mirrors the CAS (`setWhere status = 'streaming'`), so a
+      // row already terminal on the unified leg is left alone there too.
+      await materializeUnifiedPageMessage(tx, {
+        messageId: args.messageId,
+        pageId: args.pageId,
+        conversationId: args.conversationId,
+        userId: null,
+        role: 'assistant',
+        content: args.structuredContent,
+        toolCallsJson: args.toolCallsJson,
+        toolResultsJson: args.toolResultsJson,
+        sourceAgentId: null,
+        status: 'interrupted',
+        createdAt: args.createdAt,
+      });
       const row = await bumpConversationRev(tx, args.conversationId, {
         touchLastMessageAt: new Date(),
       });
@@ -692,6 +799,9 @@ export const messageRepository = {
           createdAt: args.createdAt,
           isActive: true,
           status: 'interrupted',
+          // Global leg — see saveGlobalMessageRow for why these are explicit.
+          pageId: null,
+          sourceAgentId: null,
         })
         .onConflictDoUpdate({
           target: messages.id,
@@ -732,10 +842,15 @@ export const messageRepository = {
     legacyTriggeredBy: TriggeredBy;
   }): Promise<void> {
     const row = await db.transaction(async (tx) => {
+      const editedAt = new Date();
       await tx
         .update(chatMessages)
-        .set({ content: args.updatedContent, editedAt: new Date() })
+        .set({ content: args.updatedContent, editedAt })
         .where(eq(chatMessages.id, args.messageId));
+      // UNIFIED LEG. Zero matched rows is normal pre-backfill (the message
+      // predates the copy) and stays silent — the backfill will bring the
+      // already-edited legacy row across verbatim.
+      await mutateUnifiedMessageById(tx, args.messageId, { content: args.updatedContent, editedAt });
       return bumpConversationRev(tx, args.conversationId);
     });
 
@@ -777,6 +892,10 @@ export const messageRepository = {
         .update(chatMessages)
         .set({ isActive: false })
         .where(eq(chatMessages.id, args.messageId));
+      // UNIFIED LEG — a delete that only lands on one leg would be resurrected
+      // by the post-cutover reader, so it is mirrored even though zero matched
+      // rows is normal pre-backfill.
+      await mutateUnifiedMessageById(tx, args.messageId, { isActive: false });
       return bumpConversationRev(tx, args.conversationId);
     });
 
