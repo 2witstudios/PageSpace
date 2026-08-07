@@ -145,14 +145,16 @@ describe('createMcpServer — call_tool round trips', () => {
     expect(JSON.stringify(result.content)).toContain('drive:admin');
   });
 
-  it('authentication failure surfaces as a distinct, actionable error result', async () => {
+  it('authentication failure surfaces as a distinct error result carrying the provider message', async () => {
     const client = await connectedClient(registryOf(echoOp), async () => {
-      throw new AuthenticationError('nope', 'test.echo');
+      throw new AuthenticationError('name a key with --key or PAGESPACE_KEY', 'test.echo');
     });
 
     const result = await client.callTool({ name: 'test.echo', arguments: { message: 'hi' } });
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toMatch(/login|token/i);
+    const text = (result.content as Array<{ text?: string }>)[0]?.text ?? '';
+    expect(text).toContain('Authentication failed for "test.echo"');
+    expect(text).toContain('name a key with --key or PAGESPACE_KEY');
   });
 
   it('not-found surfaces distinctly from permission-denied', async () => {

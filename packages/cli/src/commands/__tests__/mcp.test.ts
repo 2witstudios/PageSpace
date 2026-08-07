@@ -65,47 +65,76 @@ describe('createMcpHandler — thin stdio wiring over ctx.sdk', () => {
   });
 });
 
-describe('createMcpHandler — fails closed with no explicit credential (Phase 8 task 4)', () => {
-  it('no --token, no PAGESPACE_TOKEN, no --key, no PAGESPACE_KEY -> refuses to start, transport never touched', async () => {
-    let createTransportCalls = 0;
-    const handler = createMcpHandler({
-      createTransport: () => {
-        createTransportCalls += 1;
-        throw new Error('should never be reached');
-      },
-    });
+describe('createMcpHandler — serves degraded with no explicit credential (Phase 8 task 4 invariant, warn-and-serve failure mode)', () => {
+  it('no --token, no PAGESPACE_TOKEN, no --key, no PAGESPACE_KEY -> serves, but every tool call fails with the actionable message and ctx.sdk is never consulted', async () => {
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handler = createMcpHandler({ createTransport: () => serverTransport });
 
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stdout, stderr, env: {} });
+    let sdkInvokeCalls = 0;
+    const ctx = createFakeContext({
+      stdout,
+      stderr,
+      env: {},
+      // A pre-transport exit is indistinguishable from a hung server to the
+      // MCP client on the far side of the pipe, so the credential-less case
+      // must connect and fail per-call — but strictly through the stub sdk:
+      // this recording ctx.sdk proves the ambient client is never touched.
+      sdk: {
+        invoke: async () => {
+          sdkInvokeCalls += 1;
+          throw new Error('ctx.sdk must never be consulted without an explicit credential');
+        },
+      } as never,
+    });
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
 
-    const code = await handler(ctx, commandIntent(['mcp']));
+    const [code] = await Promise.all([handler(ctx, commandIntent(['mcp'])), client.connect(clientTransport)]);
 
-    expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(createTransportCalls).toBe(0);
+    expect(code).toBe(EXIT_SUCCESS);
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(60);
+
+    const result = await client.callTool({ name: 'drives.list', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/never falls back to your personal login/i);
+    expect(JSON.stringify(result.content)).toContain('keys create');
+
+    expect(sdkInvokeCalls).toBe(0);
     expect(stdout.lines).toEqual([]);
     expect(stderr.lines.join('')).toMatch(/never falls back to your personal login/i);
-    expect(stderr.lines.join('')).toContain('keys create');
-    expect(stderr.lines.join('')).not.toContain('serving');
+    expect(stderr.lines.join('')).toContain('serving');
   });
 
   it('does not silently fall back to a stored default login credential just because one exists', async () => {
-    let createTransportCalls = 0;
-    const handler = createMcpHandler({
-      createTransport: () => {
-        createTransportCalls += 1;
-        throw new Error('should never be reached');
-      },
-    });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handler = createMcpHandler({ createTransport: () => serverTransport });
 
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr, env: {} });
+    let sdkInvokeCalls = 0;
     // A stored personal credential existing in ctx.sdk/credentialStore must not matter —
-    // the gate only looks at this invocation's own flags/env.
-    const code = await handler(ctx, commandIntent(['mcp']));
+    // the credential check only looks at this invocation's own flags/env, and
+    // the served-but-degraded server must fail calls through the stub, never
+    // reach for whatever run.ts happened to wire into ctx.sdk.
+    const ctx = createFakeContext({
+      stderr,
+      env: {},
+      sdk: {
+        invoke: async () => {
+          sdkInvokeCalls += 1;
+          return { drives: [] };
+        },
+      } as never,
+    });
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
 
-    expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(createTransportCalls).toBe(0);
+    const [code] = await Promise.all([handler(ctx, commandIntent(['mcp'])), client.connect(clientTransport)]);
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const result = await client.callTool({ name: 'drives.list', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(sdkInvokeCalls).toBe(0);
   });
 
   it('--key alone (no --token, no env) is sufficient to start', async () => {

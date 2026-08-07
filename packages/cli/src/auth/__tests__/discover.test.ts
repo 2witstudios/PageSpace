@@ -94,4 +94,31 @@ describe('createDiscoverMetadata', () => {
 
     await expect(createDiscoverMetadata(fetchImpl)('https://pagespace.ai')).rejects.toThrow(DiscoveryError);
   });
+
+  it('aborts a never-settling fetch after timeoutMs instead of hanging (the pre-initialize mcp hang)', async () => {
+    // A black-holed host (dead tunnel, unroutable address) makes fetch hang
+    // indefinitely; without the abort this promise would never settle and a
+    // `pagespace mcp` tool call would hang exactly like startup used to.
+    const fetchImpl = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as unknown as typeof fetch;
+
+    const discover = createDiscoverMetadata(fetchImpl, { timeoutMs: 10 });
+    await expect(discover('https://pagespace.ai')).rejects.toThrow(/Timed out reaching .* after 10ms/);
+  });
+
+  it('passes its abort signal to fetch so the timeout can actually cancel the request', async () => {
+    let sawSignal = false;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return { ok: true, json: async () => ({
+        authorization_endpoint: 'https://pagespace.ai/api/oauth/authorize',
+        token_endpoint: 'https://pagespace.ai/api/oauth/token',
+      }) };
+    }) as unknown as typeof fetch;
+
+    await createDiscoverMetadata(fetchImpl)('https://pagespace.ai');
+    expect(sawSignal).toBe(true);
+  });
 });
