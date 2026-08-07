@@ -2,13 +2,11 @@
  * Workspace layout store contract tests (fake-backed — see
  * `fake-workspace-layout-store.ts`; the same contract the DB-backed
  * implementation honors): rev monotonicity, the idempotent-retry no-bump,
- * per-workspace rev isolation, the dual-write blob leg riding only APPLIED
- * writes, and the op-memory first-write-wins semantics.
+ * per-workspace rev isolation, and the op-memory first-write-wins semantics.
  */
 import { describe, it, expect } from 'vitest';
 import { createFakeWorkspaceLayoutStore } from './fake-workspace-layout-store';
 import type { LayoutGridColumn } from '../../../agent-sessions/workspace-layout-verbs';
-import type { PersistedWorkspaceState } from '../../../agent-sessions/contract';
 
 const WORKSPACE_ID = 'ses-1';
 
@@ -42,19 +40,6 @@ const GRID_A_SIZED: LayoutGridColumn[] = [
     ],
   },
 ];
-
-const blobFor = (grid: LayoutGridColumn[]): PersistedWorkspaceState => ({
-  id: WORKSPACE_ID,
-  columns: grid.map((column) => ({
-    id: column.id,
-    panes: column.panes.map((pane) => ({
-      id: pane.id,
-      scope: pane.kind === null ? null : { kind: pane.kind, name: '', targetId: pane.targetId, agentPageId: null },
-    })),
-  })),
-  activePaneId: grid[0].panes[0].id,
-  pendingPickerPaneId: null,
-});
 
 describe('workspace-layout-store: rev counter', () => {
   it('starts at 0 for a workspace with no prior verbs', async () => {
@@ -96,19 +81,6 @@ describe('workspace-layout-store: replaceWorkspaceGrid', () => {
     expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual(GRID_B);
   });
 
-  it('writes the dual-write blob leg only when the grid write applies', async () => {
-    const store = createFakeWorkspaceLayoutStore();
-    const blobA = blobFor(GRID_A);
-    await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A, workspaceState: blobA });
-    expect(await store.getWorkspaceBlob(WORKSPACE_ID)).toEqual(blobA);
-
-    // A retried (content-identical) write must not touch the blob either.
-    const blobStale = { ...blobA, activePaneId: 'pane-2' };
-    const retry = await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A, workspaceState: blobStale });
-    expect(retry.applied).toBe(false);
-    expect(await store.getWorkspaceBlob(WORKSPACE_ID)).toEqual(blobA);
-  });
-
   it('treats a SIZE-only change as a real change — a resize bumps rev like any other verb', async () => {
     const store = createFakeWorkspaceLayoutStore();
     await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A });
@@ -124,12 +96,16 @@ describe('workspace-layout-store: replaceWorkspaceGrid', () => {
     expect(replay).toEqual({ rev: 2, applied: false });
   });
 
-  it('saveWorkspaceBlob writes the blob unconditionally (the legacy PUT leg)', async () => {
+  it('reads MANY workspaces\' grids in one call, skipping the gridless', async () => {
     const store = createFakeWorkspaceLayoutStore();
-    const blob = blobFor(GRID_A);
-    await store.saveWorkspaceBlob(WORKSPACE_ID, blob);
-    expect(await store.getWorkspaceBlob(WORKSPACE_ID)).toEqual(blob);
-    expect(await store.currentRev(WORKSPACE_ID)).toBe(0);
+    await store.replaceWorkspaceGrid({ workspaceId: WORKSPACE_ID, grid: GRID_A });
+    await store.replaceWorkspaceGrid({ workspaceId: 'ses-2', grid: GRID_B });
+    // The sessions-list GET's shape. A session with no rows has NO entry —
+    // callers read that as `null`, never as an empty grid.
+    const grids = await store.getWorkspaceGridsBulk([WORKSPACE_ID, 'ses-2', 'ses-never-opened']);
+    expect([...grids.keys()].sort()).toEqual(['ses-1', 'ses-2']);
+    expect(grids.get(WORKSPACE_ID)).toEqual(GRID_A);
+    expect(grids.get('ses-2')).toEqual(GRID_B);
   });
 });
 

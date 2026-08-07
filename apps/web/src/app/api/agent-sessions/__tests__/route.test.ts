@@ -7,7 +7,7 @@ const {
   mockListSessions,
   mockListShellsBulk,
   mockListSessionConversationsBulk,
-  mockGetSessionWorkspacesBulk,
+  mockReadWorkspaceGridsBulk,
   mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
@@ -26,7 +26,7 @@ const {
   mockListSessions: vi.fn(),
   mockListShellsBulk: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
-  mockGetSessionWorkspacesBulk: vi.fn(),
+  mockReadWorkspaceGridsBulk: vi.fn(),
   mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
@@ -76,8 +76,12 @@ vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));
-vi.mock('@/lib/agent-sessions/session-workspace-runtime', () => ({
-  getSessionWorkspacesBulk: (...args: unknown[]) => mockGetSessionWorkspacesBulk(...args),
+// `workspaceListEntryFromGrid` stays REAL — the point of the list's
+// `workspace` field now is that it is derived from the pane rows, so mocking
+// the derivation would test nothing.
+vi.mock('@/lib/agent-sessions/workspace-layout-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent-sessions/workspace-layout-runtime')>()),
+  readWorkspaceGridsBulk: (...args: unknown[]) => mockReadWorkspaceGridsBulk(...args),
 }));
 
 import { GET, POST } from '../route';
@@ -119,7 +123,7 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
-  mockGetSessionWorkspacesBulk.mockResolvedValue(new Map());
+  mockReadWorkspaceGridsBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
 
@@ -135,20 +139,22 @@ describe('GET /api/agent-sessions', () => {
     expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
     expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
-    expect(mockGetSessionWorkspacesBulk).toHaveBeenCalledWith(['ses-1']);
+    expect(mockReadWorkspaceGridsBulk).toHaveBeenCalledWith(['ses-1']);
   });
 
-  it("given a session with a saved pane grid, should attach it as `workspace`", async () => {
-    const workspace = {
-      id: 'ses-1',
-      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null, tabs: [] }] }],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    };
-    mockGetSessionWorkspacesBulk.mockResolvedValue(new Map([['ses-1', workspace]]));
+  it('given a session with pane rows, should attach the grid as `workspace` in the whole-state shape', async () => {
+    const columns = [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }];
+    mockReadWorkspaceGridsBulk.mockResolvedValue(new Map([['ses-1', columns]]));
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
     const body = await response.json();
-    expect(body.sessions[0].workspace).toEqual(workspace);
+    // The wire shape a pre-verbs client still expects, rebuilt from rows: the
+    // two view-state fields carry defaults, because no column stores them.
+    expect(body.sessions[0].workspace).toEqual({
+      id: 'ses-1',
+      columns,
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    });
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {

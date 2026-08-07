@@ -2,11 +2,11 @@
  * Agent Workspace Layout store (IO, dependency-injected).
  *
  * DB-backed CRUD for `agent_workspace_pane_columns`/`agent_workspace_panes`
- * (a session's relational pane grid, promoted from
- * `agent_sessions.workspaceState` — epic Phase 3, the #2202 machine-panes
- * pattern), `agent_workspace_layout_revs` (the per-workspace monotonic verb
- * counter), and `agent_workspace_layout_ops` (the verb route's idempotency
- * memory). Kept separate from the pure verb engine
+ * (a session's relational pane grid — THE source of truth since the
+ * `agent_sessions.workspaceState` blob was dropped at Phase 3's contract
+ * step; the #2202 machine-panes pattern), `agent_workspace_layout_revs` (the
+ * per-workspace monotonic verb counter), and `agent_workspace_layout_ops`
+ * (the verb route's idempotency memory). Kept separate from the pure engine
  * (`../../agent-sessions/workspace-layout-verbs.ts`) so the engine is
  * testable against an in-memory fake without a database — same split as
  * `agent-sessions-store.ts`.
@@ -17,10 +17,7 @@
  * never observably disagree. A write whose grid is deep-equal to the current
  * one (a retried already-applied verb, or a verb that only moved client-local
  * view state) does NOT bump rev and reports `applied: false` — the caller
- * uses this to skip broadcasting. When the write applies and the caller
- * passed `workspaceState`, the legacy blob column is re-serialized in the
- * SAME transaction (the dual-write window's rows→blob leg; the blob dies in
- * a later contract PR): either both representations commit, or neither does.
+ * uses this to skip broadcasting.
  *
  * The rev mint (`INSERT ... ON CONFLICT ("workspaceId") DO UPDATE SET
  * rev = rev + 1 RETURNING rev`) doubles as a serializing row lock per the
@@ -40,11 +37,7 @@
  */
 
 import type { db as DbType } from '@pagespace/db/db';
-import {
-  persistedWorkspaceStateSchema,
-  type PaneKind,
-  type PersistedWorkspaceState,
-} from '../../agent-sessions/contract';
+import type { PaneKind } from '../../agent-sessions/contract';
 import { quantizeFraction, type LayoutGridColumn } from '../../agent-sessions/workspace-layout-verbs';
 
 type DbTransactionCallback = Parameters<typeof DbType.transaction>[0];
@@ -63,23 +56,19 @@ export interface WorkspaceLayoutOpRecord {
 }
 
 export interface WorkspaceLayoutStore {
-  /** `[]` for a workspace with no rows (never promoted, or truly gridless). Column/pane order = `orderIndex` asc. */
+  /** `[]` for a workspace with no rows (truly gridless). Column/pane order = `orderIndex` asc. */
   getWorkspaceGrid(workspaceId: string): Promise<LayoutGridColumn[]>;
-  /** The rolling-deploy blob, parsed tolerantly (`persistedWorkspaceStateSchema`); `null` when absent or malformed. */
-  getWorkspaceBlob(workspaceId: string): Promise<PersistedWorkspaceState | null>;
   /**
-   * Replace one workspace's whole grid and, iff the grid actually changed,
-   * advance the workspace's rev — also re-serializing `workspaceState` when
-   * `workspaceState` is passed (the verb path's dual-write; the legacy PUT
-   * writes the blob itself via `saveWorkspaceBlob` and omits it here).
+   * MANY workspaces' grids in two queries — the sessions-list GET's shape
+   * (one poll per open sidebar; a per-session read would be 2N queries).
+   * A workspace with no rows simply has no entry.
    */
+  getWorkspaceGridsBulk(workspaceIds: string[]): Promise<Map<string, LayoutGridColumn[]>>;
+  /** Replace one workspace's whole grid and, iff the grid actually changed, advance the workspace's rev. */
   replaceWorkspaceGrid(input: {
     workspaceId: string;
     grid: LayoutGridColumn[];
-    workspaceState?: PersistedWorkspaceState;
   }): Promise<{ rev: number; applied: boolean }>;
-  /** Unconditional legacy-blob write — the PUT shim's own leg of the dual-write. */
-  saveWorkspaceBlob(workspaceId: string, workspaceState: PersistedWorkspaceState): Promise<void>;
   /** The workspace's current rev, `0` if no verb has ever applied. */
   currentRev(workspaceId: string): Promise<number>;
   /** The memory row for a recently processed op, or `null` — the idempotent-retry short-circuit. */
@@ -143,11 +132,10 @@ export async function withWorkspaceLayoutLock<T>(
  * required for any caller doing a read-reduce-write cycle under the lock.
  */
 export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promise<WorkspaceLayoutStore> {
-  const [{ db }, { eq, and, asc, lt, sql }, layout, { agentSessions }] = await Promise.all([
+  const [{ db }, { eq, and, asc, inArray, lt, sql }, layout] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/agent-workspace-layout'),
-    import('@pagespace/db/schema/agent-sessions'),
   ]);
   const { agentWorkspacePaneColumns, agentWorkspacePanes, agentWorkspaceLayoutRevs, agentWorkspaceLayoutOps } = layout;
   const client = executor ?? db;
@@ -211,18 +199,51 @@ export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promi
       return readGrid(client, workspaceId);
     },
 
-    async getWorkspaceBlob(workspaceId) {
-      const [row] = await client
-        .select({ workspaceState: agentSessions.workspaceState })
-        .from(agentSessions)
-        .where(eq(agentSessions.id, workspaceId))
-        .limit(1);
-      if (!row?.workspaceState) return null;
-      const parsed = persistedWorkspaceStateSchema.safeParse(row.workspaceState);
-      return parsed.success ? parsed.data : null;
+    async getWorkspaceGridsBulk(workspaceIds) {
+      const grids = new Map<string, LayoutGridColumn[]>();
+      if (workspaceIds.length === 0) return grids;
+      const [columnRows, paneRows] = await Promise.all([
+        client
+          .select()
+          .from(agentWorkspacePaneColumns)
+          .where(inArray(agentWorkspacePaneColumns.workspaceId, workspaceIds))
+          .orderBy(asc(agentWorkspacePaneColumns.orderIndex)),
+        client
+          .select()
+          .from(agentWorkspacePanes)
+          .where(inArray(agentWorkspacePanes.workspaceId, workspaceIds))
+          .orderBy(asc(agentWorkspacePanes.orderIndex)),
+      ]);
+
+      // Panes key on (workspaceId, columnId) — column ids are client-minted,
+      // so they are only unique WITHIN a workspace and a bare columnId key
+      // would cross-contaminate two sessions' grids.
+      const panesByColumn = new Map<string, LayoutGridColumn['panes']>();
+      for (const pane of paneRows) {
+        const key = `${pane.workspaceId} ${pane.columnId}`;
+        const list = panesByColumn.get(key) ?? [];
+        list.push({
+          id: pane.id,
+          kind: (pane.kind as PaneKind | null) ?? null,
+          targetId: pane.targetId,
+          heightFraction: readStoredFraction(pane.heightFraction),
+        });
+        panesByColumn.set(key, list);
+      }
+
+      for (const col of columnRows) {
+        const list = grids.get(col.workspaceId) ?? [];
+        list.push({
+          id: col.id,
+          widthFraction: readStoredFraction(col.widthFraction),
+          panes: panesByColumn.get(`${col.workspaceId} ${col.id}`) ?? [],
+        });
+        grids.set(col.workspaceId, list);
+      }
+      return grids;
     },
 
-    async replaceWorkspaceGrid({ workspaceId, grid, workspaceState }) {
+    async replaceWorkspaceGrid({ workspaceId, grid }) {
       // Nested (SAVEPOINT-based) when `client` is already a transaction —
       // e.g. inside `withWorkspaceLayoutLock` — so this still commits/rolls
       // back atomically with the caller's outer critical section.
@@ -262,22 +283,8 @@ export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promi
           }
         }
 
-        if (workspaceState) {
-          await tx
-            .update(agentSessions)
-            .set({ workspaceState })
-            .where(eq(agentSessions.id, workspaceId));
-        }
-
         return { rev: await mintRev(tx, workspaceId), applied: true };
       });
-    },
-
-    async saveWorkspaceBlob(workspaceId, workspaceState) {
-      await client
-        .update(agentSessions)
-        .set({ workspaceState })
-        .where(eq(agentSessions.id, workspaceId));
     },
 
     async currentRev(workspaceId) {

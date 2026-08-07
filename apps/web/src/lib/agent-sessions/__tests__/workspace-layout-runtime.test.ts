@@ -1,16 +1,16 @@
 // @vitest-environment node
 /**
- * `applyWorkspaceLayoutVerb` / `saveWorkspaceBlobReconciled` — the locked
- * read-reduce-write orchestration over the shared reducer. What matters
- * here: the opId replay short-circuit (a retried split must never re-insert
- * its pane id), the stale-baseRev truth-to-rebase answer, the content-diff
- * deciding `applied` and the broadcast, and the legacy PUT reconciling rows
- * through the same projection. The reducer itself and the store contract are
- * pinned in packages/lib; this suite runs both against the lib FAKE store to
- * test exactly the wiring in between.
+ * `applyWorkspaceLayoutVerb` — the locked read-reduce-write orchestration
+ * over the shared reducer. What matters here: the opId replay short-circuit
+ * (a retried split must never re-insert its pane id), the stale-baseRev
+ * truth-to-rebase answer, the content-diff deciding `applied` and the
+ * broadcast, and — since the `workspaceState` blob was dropped — that every
+ * pane LABEL on the way out is JOINED from the live target rather than
+ * carried by a stored copy. The reducer itself and the store contract are
+ * pinned in packages/lib; this suite runs both against a fake store to test
+ * exactly the wiring in between.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import type { LayoutGridColumn } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
 import type { WorkspaceLayoutStore } from '@pagespace/lib/services/agent-sessions/workspace-layout-store';
 
@@ -19,33 +19,31 @@ import type { WorkspaceLayoutStore } from '@pagespace/lib/services/agent-session
  * own fake-backed suite (the lib fake lives under `__tests__/`, which never
  * ships in dist — hence this local twin rather than an import).
  */
-function createFakeWorkspaceLayoutStore(): WorkspaceLayoutStore & { blobs: Map<string, PersistedWorkspaceState> } {
+function createFakeWorkspaceLayoutStore(): WorkspaceLayoutStore {
   const grids = new Map<string, LayoutGridColumn[]>();
   const revs = new Map<string, number>();
-  const blobs = new Map<string, PersistedWorkspaceState>();
   const ops = new Map<string, { rev: number; applied: boolean }>();
   return {
-    blobs,
     async getWorkspaceGrid(workspaceId) {
       return structuredClone(grids.get(workspaceId) ?? []);
     },
-    async getWorkspaceBlob(workspaceId) {
-      const blob = blobs.get(workspaceId);
-      return blob ? structuredClone(blob) : null;
+    async getWorkspaceGridsBulk(workspaceIds) {
+      const out = new Map<string, LayoutGridColumn[]>();
+      for (const id of workspaceIds) {
+        const grid = grids.get(id);
+        if (grid && grid.length > 0) out.set(id, structuredClone(grid));
+      }
+      return out;
     },
-    async replaceWorkspaceGrid({ workspaceId, grid, workspaceState }) {
+    async replaceWorkspaceGrid({ workspaceId, grid }) {
       const current = grids.get(workspaceId) ?? [];
       if (JSON.stringify(current) === JSON.stringify(grid)) {
         return { rev: revs.get(workspaceId) ?? 0, applied: false };
       }
       grids.set(workspaceId, structuredClone(grid));
-      if (workspaceState) blobs.set(workspaceId, structuredClone(workspaceState));
       const next = (revs.get(workspaceId) ?? 0) + 1;
       revs.set(workspaceId, next);
       return { rev: next, applied: true };
-    },
-    async saveWorkspaceBlob(workspaceId, workspaceState) {
-      blobs.set(workspaceId, structuredClone(workspaceState));
     },
     async currentRev(workspaceId) {
       return revs.get(workspaceId) ?? 0;
@@ -60,9 +58,11 @@ function createFakeWorkspaceLayoutStore(): WorkspaceLayoutStore & { blobs: Map<s
   };
 }
 
-const { mockBroadcast, storeRef } = vi.hoisted(() => ({
+const { mockBroadcast, storeRef, labelRows } = vi.hoisted(() => ({
   mockBroadcast: vi.fn(),
   storeRef: { current: null as unknown },
+  /** What the label JOIN finds, per table — the live titles the rows do not store. */
+  labelRows: { conversations: [] as unknown[], shells: [] as unknown[], pages: [] as unknown[] },
 }));
 
 vi.mock('@pagespace/lib/services/agent-sessions/workspace-layout-store', () => ({
@@ -74,19 +74,29 @@ vi.mock('@pagespace/lib/services/agent-sessions/workspace-layout-store', () => (
 vi.mock('@/lib/websocket/agent-workspace-events', () => ({
   broadcastWorkspaceUpdated: (...args: unknown[]) => mockBroadcast(...args),
 }));
-// The snapshot read's label joins pull the db module graph; this suite never
-// exercises them (readWorkspaceLayoutSnapshot has its own callers/tests via
-// the route), so stub the graph out entirely.
-vi.mock('@pagespace/db/db', () => ({ db: {} }));
+// The label join is now on EVERY path out of this module, so the db graph is
+// stubbed as a working query chain rather than stubbed away: `.from(table)`
+// picks the row list that table's lookup should find.
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: (table: { __name: 'conversations' | 'shells' | 'pages' }) => ({
+        where: async () => labelRows[table.__name],
+      }),
+    }),
+  },
+}));
 vi.mock('@pagespace/db/operators', () => ({ inArray: vi.fn() }));
-vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: {} }));
-vi.mock('@pagespace/db/schema/agent-sessions', () => ({ agentSessionShells: {} }));
-vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
+vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { __name: 'conversations' } }));
+vi.mock('@pagespace/db/schema/agent-sessions', () => ({ agentSessionShells: { __name: 'shells' } }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
 
-import { applyWorkspaceLayoutVerb, saveWorkspaceBlobReconciled } from '../workspace-layout-runtime';
+import { applyWorkspaceLayoutVerb } from '../workspace-layout-runtime';
 
 const WORKSPACE_ID = 'ses-1';
 const scope = { kind: 'chat' as const, name: 'Conversation', targetId: 'conv-1', agentPageId: null };
+/** What the pane comes back as: the name is JOINED, never echoed from the verb. */
+const joinedScope = { ...scope, name: 'Live title' };
 
 let store: ReturnType<typeof createFakeWorkspaceLayoutStore>;
 
@@ -94,6 +104,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   store = createFakeWorkspaceLayoutStore();
   storeRef.current = store;
+  labelRows.conversations = [{ id: 'conv-1', title: 'Live title', type: 'global', contextId: null }];
+  labelRows.shells = [];
+  labelRows.pages = [];
 });
 
 const ensure = (opId = 'op-ensure', baseRev = 0) =>
@@ -105,13 +118,13 @@ const ensure = (opId = 'op-ensure', baseRev = 0) =>
   });
 
 describe('applyWorkspaceLayoutVerb', () => {
-  it('applies a verb, dual-writes rows + blob, and broadcasts the post-write rev', async () => {
+  it('applies a verb, persists rows, and broadcasts the post-write rev with JOINED labels', async () => {
     const result = await ensure();
     expect(result).toEqual({
       status: 'ok',
       rev: 1,
       applied: true,
-      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
+      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: joinedScope }] }],
     });
     // Row projection carries CANONICAL null fractions on an unsized grid
     // (issue #2208) — the store's content diff is a JSON.stringify compare,
@@ -119,7 +132,6 @@ describe('applyWorkspaceLayoutVerb', () => {
     expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual([
       { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
     ]);
-    expect(store.blobs.get(WORKSPACE_ID)?.activePaneId).toBe('pane-1');
     expect(mockBroadcast).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       rev: 1,
@@ -127,8 +139,28 @@ describe('applyWorkspaceLayoutVerb', () => {
       // The causing op's key rides along so a subscriber can recognize its
       // OWN echo and leave its still-queued verb alone.
       opId: 'op-ensure',
-      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
+      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: joinedScope }] }],
     });
+  });
+
+  it('reflects a RENAME on the next verb without any write to the pane row', async () => {
+    await ensure('op-1');
+    // The conversation is renamed elsewhere. Nothing rewrites the pane row —
+    // and nothing needs to, which is the entire point of not storing names.
+    labelRows.conversations = [{ id: 'conv-1', title: 'Renamed', type: 'global', contextId: null }];
+    const next = await applyWorkspaceLayoutVerb({
+      workspaceId: WORKSPACE_ID,
+      opId: 'op-2',
+      baseRev: 1,
+      verb: { type: 'split_down', fromPaneId: 'pane-1', newPaneId: 'pane-2' },
+    });
+    expect(next.status === 'ok' && next.grid[0].panes[0].scope?.name).toBe('Renamed');
+  });
+
+  it('leaves a pane whose target no longer exists with an empty label, not a crash', async () => {
+    labelRows.conversations = [];
+    const result = await ensure();
+    expect(result.status === 'ok' && result.grid[0].panes[0].scope).toEqual({ ...scope, name: '' });
   });
 
   it('replays an already-processed opId as a no-op with current truth — never re-applying', async () => {
@@ -165,7 +197,7 @@ describe('applyWorkspaceLayoutVerb', () => {
     expect(result).toEqual({
       status: 'stale',
       rev: 1,
-      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
+      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: joinedScope }] }],
     });
     expect(mockBroadcast).not.toHaveBeenCalled();
   });
@@ -191,46 +223,5 @@ describe('applyWorkspaceLayoutVerb', () => {
       verb: { type: 'close_pane', paneId: 'ghost' },
     });
     expect(replay.status).toBe('ok');
-  });
-});
-
-describe('saveWorkspaceBlobReconciled (legacy PUT shim)', () => {
-  it('always writes the blob, reconciles rows through the shared projection, and broadcasts when rows changed', async () => {
-    const workspace = {
-      id: WORKSPACE_ID,
-      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    };
-    await saveWorkspaceBlobReconciled({ workspaceId: WORKSPACE_ID, workspace });
-    expect(store.blobs.get(WORKSPACE_ID)).toEqual(workspace);
-    // Row projection carries CANONICAL null fractions on an unsized grid
-    // (issue #2208) — the store's content diff is a JSON.stringify compare,
-    // where an absent key and an explicit null are not the same bytes.
-    expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual([
-      { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
-    ]);
-    expect(mockBroadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WORKSPACE_ID, rev: 1, verb: 'legacy_replace' }),
-    );
-  });
-
-  it('a blob differing only in client-local view state still saves but neither bumps rev nor broadcasts', async () => {
-    const workspace = {
-      id: WORKSPACE_ID,
-      columns: [
-        { id: 'col-1', panes: [{ id: 'pane-1', scope }, { id: 'pane-2', scope: null }] },
-      ],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    };
-    await saveWorkspaceBlobReconciled({ workspaceId: WORKSPACE_ID, workspace });
-    mockBroadcast.mockClear();
-
-    const refocused = { ...workspace, activePaneId: 'pane-2' };
-    await saveWorkspaceBlobReconciled({ workspaceId: WORKSPACE_ID, workspace: refocused });
-    expect(store.blobs.get(WORKSPACE_ID)?.activePaneId).toBe('pane-2');
-    expect(await store.currentRev(WORKSPACE_ID)).toBe(1);
-    expect(mockBroadcast).not.toHaveBeenCalled();
   });
 });

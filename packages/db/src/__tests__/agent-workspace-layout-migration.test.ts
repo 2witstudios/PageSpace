@@ -102,7 +102,7 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
     expect(code).not.toContain(`'tabs'`);
   });
 
-  it('should be strictly additive — workspaceState survives as the rolling-deploy shim', () => {
+  it('should be strictly additive — 0246 EXPANDS only; the blob is dropped later, by 0250', () => {
     expect(code).not.toContain('DROP COLUMN');
     expect(code).not.toContain('DROP TABLE');
     expect(code).not.toMatch(/\bRENAME\b/);

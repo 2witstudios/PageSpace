@@ -47,18 +47,17 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  * PANES ARE listed here now — a reversal of this file's earlier stance (the
  * old sidebar's `WorkspaceLeaves` pattern was deliberately not restored, back
  * when a pane was purely local, ephemeral browser state with nothing
- * server-durable to show). Panes are now server-persisted
- * (`agent_workspace_panes` rows behind a rev, mirrored into the legacy
- * `agent_sessions.workspaceState` blob during the dual-write window), so a
- * session's expansion shows one row per PANE, labelled by its own
- * conversation — this is what actually fixes "switching a pane's agent
- * spawns a new sidebar item instead of updating the one I was looking at":
- * the pane's OWN row now updates in place.
+ * server-durable to show). Panes are now server-persisted as
+ * `agent_workspace_panes` rows behind a rev — the only representation there
+ * is — so a session's expansion shows one row per PANE, labelled by its own
+ * conversation. This is what actually fixes "switching a pane's agent spawns
+ * a new sidebar item instead of updating the one I was looking at": the
+ * pane's OWN row now updates in place.
  *
- * `session.workspace` is `null` for a session never opened under this
- * feature (or opened only by an older client) — that session's expansion
- * falls back to the flat `session.conversations` list this sidebar always
- * rendered, unchanged.
+ * `session.workspace` arrives from the list GET as those rows projected into
+ * the whole-state shape (labels joined at read time). It is `null` for a
+ * session with no grid — that session's expansion falls back to the flat
+ * `session.conversations` list this sidebar always rendered, unchanged.
  *
  * Two modes, one component:
  * - **Drive-scoped** (`driveId` present): that drive's sessions.
