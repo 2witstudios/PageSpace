@@ -1,6 +1,6 @@
 {
-  "id": "8876f931-ea2b-4735-8987-02c521c4a95d",
-  "prevId": "0338e72c-5807-4633-8a0a-9a8ef38b7ae2",
+  "id": "3d16aaa0-5133-4aba-abb8-bb8be34e2187",
+  "prevId": "553421ba-a15f-4387-ab0f-2ee7fb0f43e9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -20089,12 +20089,6 @@
         "name": {
           "name": "name",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "workspaceState": {
-          "name": "workspaceState",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

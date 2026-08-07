@@ -113,9 +113,9 @@ const baseMigrations = allMigrations.slice(0, 250);
  * the sibling expand suite's `throughThisPr`. Later migrations are entitled
  * to reject corpora these scenarios deliberately construct (0251's pre-drop
  * guard aborts on a pane grid that exists only in the legacy blob, which is
- * exactly its job), and 0252 DROPs `chat_messages`, which every scenario
- * below inspects after migrating. This suite is about what 0250 does to a
- * database, not about the head of the journal.
+ * exactly its job), and 0252 DROPs `chat_messages` outright while every
+ * scenario below inspects that table after migrating. This suite is about
+ * what 0250 does to a database, not about the head of the journal.
  */
 const throughThisPr = allMigrations.slice(0, 251);
 
