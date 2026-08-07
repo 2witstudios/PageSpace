@@ -93,8 +93,14 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'lastStorageCalculated',
       'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
-      'timezone', 'createdAt', 'updatedAt',
+      'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
     ],
+    // `starterSkillsInstalledAt` is the starter-skill install stamp (PR #2359).
+    // It MUST travel: the skills themselves are ordinary pages and personal
+    // `commands` rows, which the bundle already carries, so a tenant arriving
+    // with the stamp cleared would have Home provisioning seed a second copy of
+    // every starter skill on top of the user's own edited ones.
+    //
     // NOTE: `suspendedAt`/`suspendedReason` are carried but ZEROED by the
     // exporter — they may hold the migration's own read-only lock. That is a
     // value transform, not an exclusion: the columns still travel.
@@ -218,9 +224,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   conversations: {
     columns: [
       'id', 'userId', 'title', 'type', 'contextId', 'agentPageId', 'workspaceId',
-      'closedInWorkspaceAt', 'rev', 'lastMessageAt',
+      'closedInWorkspaceAt', 'rev', 'planPageId', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
     ],
+    // `planPageId` travels, but like `agentPageId` it is nulled by the exporter
+    // when the plan page is outside the bundle (tenant-export.ts) — a binding
+    // may point into a drive the migration does not carry.
   },
 
   messages: {

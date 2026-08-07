@@ -321,6 +321,14 @@ export async function exportData(
   // which reads, correctly, as an API thread that has not been used yet.
   nullifyOrphanedPageRefs(conversationsData, pageIdSet, 'agentPageId');
 
+  // `conversations.planPageId` (the durable plan binding, PR #2359) FKs `pages`
+  // the same way and for the same reason gets the same treatment — with one
+  // extra motive: a plan binding may legitimately point at a page in ANOTHER
+  // drive, so it is the reference most likely to fall outside a scoped bundle.
+  // Nulling it unbinds the thread, which is exactly what its `ON DELETE SET
+  // NULL` means, rather than failing the import on a dangling FK.
+  nullifyOrphanedPageRefs(conversationsData, pageIdSet, 'planPageId');
+
   // Messages from exported users, plus the agent/system-authored rows.
   // `messages.userId` was relaxed to NULLABLE in 0248 (the attribution rule:
   // NULL userId = agent- or system-authored), so an `IN (…)` filter alone now
