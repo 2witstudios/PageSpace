@@ -145,6 +145,9 @@ export async function GET(
       return NextResponse.json({
         messages: [],
         pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 50, direction: 'before' },
+        // No row means no rev to hold a watermark against — the subscriber treats
+        // `null` as "no proven baseline" and refetches on any versioned event.
+        rev: null,
       });
     }
 
@@ -243,7 +246,13 @@ export async function GET(
         prevCursor,
         limit,
         direction
-      }
+      },
+      // The rev watermark this snapshot was read at (Agent-Session SSoT epic,
+      // Phase 2). The client holds it per cache entry and proves currency
+      // against every `conversation:*` event — see
+      // `apps/web/src/lib/realtime/conversation-apply.ts`. Read from the same
+      // row the ownership check above already fetched, so it costs no query.
+      rev: conversation.rev,
     });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);

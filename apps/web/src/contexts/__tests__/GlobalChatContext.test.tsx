@@ -850,21 +850,39 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     await waitFor(() => expect(messagesFetchCount(CONV_ID)).toBeGreaterThan(loadsBefore));
   });
 
-  // cross-tab user_message — a TARGETED cache write, not a whole-conversation refetch
-  it('given chat:user_message from another browser session for the active conversation, should append it to the conversation cache directly', async () => {
+  // cross-surface message delivery — a TARGETED cache write, not a whole-conversation refetch.
+  //
+  // The event is `conversation:message_created`, not the legacy `chat:user_message`
+  // (Agent-Session SSoT epic, Phase 2 / plan PR 3): this provider no longer wires the
+  // `chat:*` message fan-out at all. The MESSAGE plane belongs to
+  // `useConversationSubscription`, which the provider mounts for whichever global
+  // conversation is current, and every write goes through the rev watermark — so a
+  // contiguous rev is what makes the write happen, and it is what a redelivery is
+  // then measured against.
+  const revEnvelopeFetch = (rev: number) => (url: string) =>
+    url.includes('/messages')
+      ? okResponse({ messages: [], pagination: { hasMore: false, nextCursor: null }, rev })
+      : defaultFetch(url);
+
+  it('given conversation:message_created at the next rev for the active conversation, should append it to the conversation cache directly and advance the watermark', async () => {
+    mockFetchWithAuth.mockImplementation(revEnvelopeFetch(7));
+
     const { result } = renderProvider();
 
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
-    await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
+    // The load has to have COMMITTED its rev before the event lands — an event
+    // against a `null` watermark is a refetch by design, not a direct write.
+    await waitFor(() => expect(cacheEntry(CONV_ID).rev).toBe(7));
+    await waitFor(() => expect(mockSocket._handlerCount('conversation:message_created')).toBeGreaterThan(0));
 
     const loadsBefore = messagesFetchCount(CONV_ID);
     const remoteUser = { id: 'msg-remote-user', role: 'user', parts: [{ type: 'text', text: 'remote prompt' }] };
 
     act(() => {
-      mockSocket._trigger('chat:user_message', {
-        message: remoteUser,
-        pageId: GLOBAL_CHANNEL_ID,
+      mockSocket._trigger('conversation:message_created', {
         conversationId: CONV_ID,
+        message: remoteUser,
+        rev: 8,
         triggeredBy: { userId: USER_ID, displayName: 'Me-otherTab', browserSessionId: SESSION_ID_REMOTE },
       });
     });
@@ -872,21 +890,24 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     await waitFor(() => expect(cacheEntry(CONV_ID).messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 'msg-remote-user' })]),
     ));
+    expect(cacheEntry(CONV_ID).rev).toBe(8);
     // Direct write — no refetch round-trip.
     expect(messagesFetchCount(CONV_ID)).toBe(loadsBefore);
   });
 
-  it('given chat:user_message for a different conversation, should NOT write the active conversation cache', async () => {
+  it('given conversation:message_created for a different conversation, should NOT write the active conversation cache', async () => {
+    mockFetchWithAuth.mockImplementation(revEnvelopeFetch(7));
+
     const { result } = renderProvider();
 
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
-    await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
+    await waitFor(() => expect(mockSocket._handlerCount('conversation:message_created')).toBeGreaterThan(0));
 
     act(() => {
-      mockSocket._trigger('chat:user_message', {
-        message: { id: 'msg-stale', role: 'user', parts: [{ type: 'text', text: 'wrong conv' }] },
-        pageId: GLOBAL_CHANNEL_ID,
+      mockSocket._trigger('conversation:message_created', {
         conversationId: 'conv-different',
+        message: { id: 'msg-stale', role: 'user', parts: [{ type: 'text', text: 'wrong conv' }] },
+        rev: 8,
         triggeredBy: { userId: USER_ID, displayName: 'Me-otherTab', browserSessionId: SESSION_ID_REMOTE },
       });
     });

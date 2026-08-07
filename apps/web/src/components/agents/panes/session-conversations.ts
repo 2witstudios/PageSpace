@@ -145,6 +145,107 @@ export function restoreSessionInCache<T extends { sessionId: string }>(mutate: S
 }
 
 /**
+ * Insert (or merge into) one conversation listing on `sessionId`'s row,
+ * everywhere — the event-driven twin of `AgentPanes.tsx`'s optimistic
+ * `recordMintedConversation`, for a `conversation:created` that this client did
+ * not originate (a worker spawned by an agent, a mint in another window).
+ *
+ * IDEMPOTENT BY ID, which is the whole point: the same conversation can reach a
+ * client twice — once through this listener and once through the originating
+ * surface's own optimistic write, or through the legacy
+ * `chat:global_conversation_added` path — and a second delivery must merge, never
+ * prepend a duplicate row. New rows go to the FRONT because the listings are
+ * most-recent-first and a just-created conversation is the most recent thing
+ * there is.
+ *
+ * Generic over the caller's row shape for the same reason
+ * `restoreSessionInCache` is: the pane grid's minimal `{conversationId,
+ * agentPageId, lastMessageAt}` and the sidebar's richer row are both valid
+ * members of this list, and this only needs `conversationId` to place one.
+ */
+export function upsertConversationInCache<T extends { conversationId: string }>(
+  mutate: ScopedMutator,
+  sessionId: string,
+  conversation: T,
+): void {
+  void mutate(
+    isSessionListingKey,
+    (current: { sessions: Array<{ sessionId: string; conversations: T[] }> } | undefined) => {
+      if (!current) return current;
+      return {
+        ...current,
+        sessions: current.sessions.map((session) => {
+          if (session.sessionId !== sessionId) return session;
+          const existing = session.conversations.find((c) => c.conversationId === conversation.conversationId);
+          return {
+            ...session,
+            conversations: existing
+              ? session.conversations.map((c) =>
+                  c.conversationId === conversation.conversationId ? { ...c, ...conversation } : c,
+                )
+              : [conversation, ...session.conversations],
+          };
+        }),
+      };
+    },
+    { revalidate: false },
+  );
+}
+
+/**
+ * Patch one conversation's `lastMessageAt` wherever it appears and re-sort its
+ * session's listing — what a `conversation:updated {lastMessageAt}` directory
+ * bump means for a most-recent-first list.
+ *
+ * Searched across every session rather than targeted at one, because the bump
+ * event carries the conversation's workspace but a client's cache may hold the
+ * row under a session it was claimed into since. A row that isn't there is
+ * simply not patched; nothing is invented (an unknown conversation belongs to
+ * the server's next listing, not to a guess made here).
+ */
+export function touchConversationInCache(
+  mutate: ScopedMutator,
+  conversationId: string,
+  lastMessageAt: string | null,
+): void {
+  void mutate(
+    isSessionListingKey,
+    (current: { sessions: Array<{ sessionId: string; conversations: SessionConversationSummary[] }> } | undefined) => {
+      if (!current) return current;
+      return {
+        ...current,
+        sessions: current.sessions.map((session) => {
+          if (!session.conversations.some((c) => c.conversationId === conversationId)) return session;
+          const patched = session.conversations.map((c) =>
+            c.conversationId === conversationId ? { ...c, lastMessageAt } : c,
+          );
+          return {
+            ...session,
+            conversations: [...patched].sort((a, b) => {
+              const aAt = a.lastMessageAt ? Date.parse(a.lastMessageAt) : -Infinity;
+              const bAt = b.lastMessageAt ? Date.parse(b.lastMessageAt) : -Infinity;
+              return bAt - aAt;
+            }),
+          };
+        }),
+      };
+    },
+    { revalidate: false },
+  );
+}
+
+/**
+ * Re-read every session listing from the server. The escape hatch for directory
+ * events whose payload cannot reconstruct a listing row — a reopen (the row left
+ * the cache when it closed, and the event carries no conversation body), a
+ * session lifecycle change, a workspace re-binding. Event-DRIVEN, not periodic:
+ * this is what makes the polls below it backstops rather than the mechanism.
+ */
+export function revalidateSessionListings(mutate: ScopedMutator): void {
+  void mutate(isAgentSessionsKey);
+}
+
+/**
  * Drop one conversation listing from `sessionId`'s row, everywhere — the
  * cross-file mirror of `AgentPanes.tsx`'s own `recordClosedConversation`,
  * for a caller (the sidebar) with no local SWR binding of its own. See

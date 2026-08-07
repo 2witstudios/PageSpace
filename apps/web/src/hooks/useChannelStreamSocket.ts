@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useSocket } from './useSocket';
-import { useAuth } from './useAuth';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { consumeStreamJoin, StreamJoinError } from '@/lib/ai/core/stream-join-client';
@@ -171,18 +170,28 @@ export interface UseChannelStreamSocketOptions {
   onGlobalConversationAdded?: (payload: ChatGlobalConversationAddedPayload) => void;
 }
 
-/** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
+/**
+ * Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live
+ * socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op.
+ *
+ * `bootstrapConversationId` (Agent-Session SSoT epic, Phase 2) narrows the DB replay to ONE
+ * conversation on the channel — what a pane wants, since a pane shows exactly one. Only the
+ * bootstrap is re-keyed; the live socket handlers stay channel-wide, because a
+ * `chat:stream_start` for a sibling conversation still has to reach whichever co-mounted
+ * instance is subscribed to it (claim-gated, so exactly one attaches). Omit it to keep the
+ * whole-channel form — which is what `GlobalChatContext` uses so a stream stays in the store
+ * for a conversation no surface is currently showing.
+ */
 export function useChannelStreamSocket(
   channelId: string | undefined,
   options?: UseChannelStreamSocketOptions,
+  bootstrapConversationId?: string | null,
 ): { rejoinActiveStreams: () => void } {
   const socket = useSocket();
-  // The signed-in user's id, so handleStreamStart can tell "my stream in another tab"
-  // from "another member's private conversation". Kept in a ref so it never re-registers
-  // the socket handlers.
-  const { user } = useAuth();
-  const localUserIdRef = useRef<string | null>(user?.id ?? null);
-  localUserIdRef.current = user?.id ?? null;
+  // No local-user ref any more: the `startedBySomeoneElse && !isShared` drop it existed
+  // for is deleted (see handleStreamStart). Identity questions are the server's —
+  // /stream-join re-authorizes with `canAccessConversation`.
+  //
   // Holds the latest runBootstrap closure so rejoinActiveStreams can call it without
   // needing to be in the effect's dep array (the effect re-creates this on every run).
   const bootstrapRef = useRef<(() => void) | null>(null);
@@ -444,8 +453,11 @@ export function useChannelStreamSocket(
     const runBootstrap = async () => {
       const generation = (bootstrapGeneration += 1);
       try {
+        const conversationScope = bootstrapConversationId
+          ? `&conversationId=${encodeURIComponent(bootstrapConversationId)}`
+          : '';
         const res = await fetchWithAuth(
-          `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
+          `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}${conversationScope}`,
           { credentials: 'include' },
         );
         if (cancelled) return;
@@ -532,30 +544,24 @@ export function useChannelStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      // Not ours to watch. A page room holds every member of the page, but conversations
-      // are private by default (`listConversations` shows you only `userId = you OR
-      // isShared`), so most streams on this channel are somebody else's private chat.
-      // The server refuses those joins anyway — this just avoids making the request:
-      // otherwise every member's client fires a doomed /stream-join per assistant
-      // message, each one an authz denial in the audit log.
+      // GATE DELETED (Agent-Session SSoT epic, Phase 2 / plan PR 3). This used to
+      // drop `startedBySomeoneElse && payload.isShared === false` as a
+      // request-saving heuristic: "a private conversation started by someone else
+      // can't be mine to watch, so don't fire a doomed /stream-join".
       //
-      // Skip ONLY on certainty, in both directions:
+      // The heuristic was wrong about "someone else". `triggeredBy.userId` is the
+      // ACTOR, and a server-side dispatch (`send_session`, a workflow, the /help
+      // short-circuit) acts as whoever it acts as — so the user's OWN private
+      // conversation, written on their behalf from another surface, read as
+      // "somebody else's private chat" and every pane showing it went dark. That is
+      // the epic's canonical blank-pane bug in its stream-plane half.
       //
-      //   - `isShared` must be an explicit `false`. During a rolling deploy an
-      //     originator on the previous build sends no such field, and dropping on
-      //     `undefined` would black out multiplayer for shared conversations.
-      //   - we must actually KNOW who we are. `useAuth()` returns `user: null` until
-      //     auth resolves, and treating "unknown" as "not me" would drop the user's OWN
-      //     private stream in that window — the precise failure this whole PR exists to
-      //     fix.
-      //
-      // When in doubt, attach and let the server decide: an unauthorized join is a quiet
-      // 404 that the client already handles benignly. The server is the authority here;
-      // this check exists only to avoid firing a request that is certain to be refused.
-      const localUserId = localUserIdRef.current;
-      const startedBySomeoneElse = localUserId !== null && payload.triggeredBy.userId !== localUserId;
-      if (startedBySomeoneElse && payload.isShared === false) return;
-
+      // Nothing is widened by removing it: /stream-join re-authorizes every join
+      // with `canAccessConversation` server-side (the same predicate the
+      // `join_conversation` room handler and /active-streams enforce), and a refused
+      // join is a quiet 404 this hook already handles benignly. The only cost is the
+      // request the heuristic was avoiding — which the conversation-scoped bootstrap
+      // in `useConversationSubscription` avoids far more precisely anyway.
       const isOwn = isOwnStream(payload.triggeredBy, localBrowserSessionId);
       // The ONLY reason to decline a live stream: this browser context is already
       // reading THIS CONVERSATION's tokens off the POST body, so joining the multicast
@@ -762,7 +768,11 @@ export function useChannelStreamSocket(
         notifyRemainingChannelSubscribers(channelId);
       }
     };
-  }, [socket, channelId]);
+    // `bootstrapConversationId` is in the deps because it changes which streams the
+    // DB replay attaches: a pane switching conversations must re-bootstrap, and the
+    // teardown/rebuild is exactly the same shape as a channel switch (claims released,
+    // sibling subscribers nudged to reclaim).
+  }, [socket, channelId, bootstrapConversationId]);
 
   // Stable callback; the ref always points at the latest runBootstrap closure.
   const rejoinActiveStreams = useCallback(() => { bootstrapRef.current?.(); }, []);
