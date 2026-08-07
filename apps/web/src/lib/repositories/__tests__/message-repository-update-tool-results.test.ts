@@ -25,6 +25,11 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ type: 'or', conditions })),
+  ne: vi.fn((field, value) => ({ type: 'ne', field, value })),
+  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+  desc: vi.fn((field) => ({ type: 'desc', field })),
+  sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: {
@@ -39,20 +44,51 @@ vi.mock('@pagespace/db/schema/core', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  messages: { id: 'id', conversationId: 'conversationId', isActive: 'isActive', toolResults: 'toolResults' },
-  conversations: { id: 'id', isActive: 'isActive' },
+  messages: {
+    id: 'id',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    toolResults: 'toolResults',
+    pageId: 'pageId',
+  },
+  conversations: { id: 'id', isActive: 'isActive', type: 'type', contextId: 'contextId' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', name: 'name', image: 'image' } }));
+vi.mock('@pagespace/lib/encryption/field-crypto', () => ({ decryptField: vi.fn(async (v) => v) }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+  loggers: {
+    ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
+}));
+vi.mock('@pagespace/lib/ai/global-channel-id', () => ({ globalChannelId: (id: string) => `user:${id}:global` }));
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({ notifyMentionedUsers: vi.fn() }));
+vi.mock('@/lib/ai/core/message-utils', () => ({
+  extractStructuredContentFromParts: vi.fn(async (_p: unknown, c: string) => c),
+  convertDbMessageToUIMessage: vi.fn(async () => ({ id: 'm', role: 'assistant', parts: [] })),
+  MessageConversationConflictError: class extends Error {},
+}));
+vi.mock('@/lib/websocket/conversation-events', () => ({
+  SERVER_TRIGGERED_BROWSER_SESSION: 'server',
+  conversationEvents: {
+    messageCreated: vi.fn(), messageUpdated: vi.fn(), messageDeleted: vi.fn(),
+    undoApplied: vi.fn(), created: vi.fn(),
+  },
+}));
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAiMessageEdited: vi.fn(), broadcastAiMessageDeleted: vi.fn(), broadcastAiUndoApplied: vi.fn(),
+}));
+vi.mock('@/lib/repositories/conversation-rev', () => ({
+  bumpConversationRev: vi.fn().mockResolvedValue(null), emitContextFromRow: vi.fn(),
 }));
 
-import { chatMessageRepository, type ToolResult } from '../chat-message-repository';
+import { messageRepository } from '../message-repository';
+import type { ToolResult } from '@/lib/ai/core/message-utils';
 import { db } from '@pagespace/db/db';
 import { chatMessages } from '@pagespace/db/schema/core';
 import { messages } from '@pagespace/db/schema/conversations';
 
-describe('chatMessageRepository.updateMessageToolResults', () => {
+describe('messageRepository.updateMessageToolResults', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReturning.mockResolvedValue([{ id: 'msg-abc' }]);
@@ -68,7 +104,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
+    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(mockUpdate).toHaveBeenCalledWith(chatMessages);
@@ -84,7 +120,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
+    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
     // Two WHEREs, one per leg, both carrying the id AND the conversation.
     expect(mockWhere).toHaveBeenCalledTimes(2);
@@ -105,7 +141,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
       { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
     ];
 
-    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
+    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
     expect(mockUpdate).toHaveBeenCalledWith(chatMessages);
     expect(mockUpdate).not.toHaveBeenCalledWith(messages);
@@ -116,7 +152,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
+    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
     expect(db.update).toHaveBeenCalledWith(chatMessages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
@@ -132,7 +168,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
   });
 
   it('should no-op when toolResults array is empty', async () => {
-    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', []);
+    await messageRepository.updateMessageToolResults('msg-abc', 'conv-123', []);
 
     expect(db.update).not.toHaveBeenCalled();
   });
@@ -142,7 +178,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
       { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
       { toolCallId: 'tc-2', toolName: 'Bash', output: 'exit 0', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-xyz', 'conv-456', results);
+    await messageRepository.updateMessageToolResults('msg-xyz', 'conv-456', results);
 
     expect(db.update).toHaveBeenCalledWith(chatMessages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
@@ -160,7 +196,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Bash', output: null, state: 'output-error', errorText: 'command not found' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-err', 'conv-789', results);
+    await messageRepository.updateMessageToolResults('msg-err', 'conv-789', results);
 
     expect(db.update).toHaveBeenCalledWith(chatMessages);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });

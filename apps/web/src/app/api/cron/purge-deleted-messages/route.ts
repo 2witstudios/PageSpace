@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
 
@@ -24,8 +24,15 @@ export async function GET(request: Request) {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const chatMessagesPurged = await chatMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
-    const globalMessagesPurged = await globalConversationRepository.purgeInactiveMessages(thirtyDaysAgo);
+    // `chatMessagesPurged` is the LEGACY `chat_messages` leg — still written by
+    // the dual-write, read by nobody since the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6), and swept here
+    // until PR 15 drops the table. `globalMessagesPurged` is the UNIFIED
+    // `messages` table, which now holds page rows as well; the field name is
+    // kept so the audit-detail and response shapes stay stable for anything
+    // consuming them, and the merge is described here instead.
+    const chatMessagesPurged = await messageRepository.purgeInactiveLegacyChatMessages(thirtyDaysAgo);
+    const globalMessagesPurged = await messageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const directMessagesPurged = await dmMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const conversationsPurged = await globalConversationRepository.purgeInactiveConversations(thirtyDaysAgo);
 

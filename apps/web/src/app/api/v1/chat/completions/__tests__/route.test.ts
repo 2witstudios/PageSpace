@@ -94,6 +94,12 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 }));
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
+    // Absorbed from `chat-message-repository` by the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — one
+    // module now serves both the history reads and the durable writes.
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
     savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
   },
 }));
@@ -152,14 +158,6 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
-    getMessagesForPage: vi.fn().mockResolvedValue([]),
-    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
-    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn().mockResolvedValue(undefined),
@@ -202,7 +200,7 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+
 import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
@@ -257,7 +255,7 @@ describe('POST /api/v1/chat/completions', () => {
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
     } as unknown as ReturnType<typeof db.select>);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
     vi.mocked(hasFileParts).mockReturnValue(false);
     vi.mocked(hasVisionCapability).mockReturnValue(true);
@@ -641,9 +639,9 @@ describe('POST /api/v1/chat/completions', () => {
       { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
       { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
-    const calls = vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls;
+    const calls = vi.mocked(messageRepository.getMessagesForPage).mock.calls;
     assert({
       given: 'a request with a valid conversation_id',
       should: 'call getMessagesForPage with the pageId and conversationId and return 200',
@@ -661,7 +659,7 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('thread mode: empty history is allowed (first message in thread)', async () => {
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce([]);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-new' }));
     assert({
       given: 'a thread mode request where no prior messages exist',
@@ -676,7 +674,7 @@ describe('POST /api/v1/chat/completions', () => {
       { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
       { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     const sanitizeCalls = vi.mocked(sanitizeMessagesForModel).mock.calls;
     assert({
@@ -716,7 +714,7 @@ describe('POST /api/v1/chat/completions', () => {
     assert({
       given: 'a request without a conversation_id',
       should: 'not call getMessagesForPage',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });
@@ -726,7 +724,7 @@ describe('POST /api/v1/chat/completions', () => {
     assert({
       given: 'a conversation_id containing only whitespace',
       should: 'not call getMessagesForPage',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });
@@ -952,8 +950,8 @@ describe('POST /api/v1/chat/completions', () => {
     });
     assert({
       given: 'client_manages_history=true',
-      should: 'not call chatMessageRepository.getMessagesForPage (no DB history load)',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      should: 'not call messageRepository.getMessagesForPage (no DB history load)',
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });

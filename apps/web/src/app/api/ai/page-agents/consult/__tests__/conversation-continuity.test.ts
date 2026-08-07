@@ -170,10 +170,20 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 const saveMessageToDatabase = vi.fn().mockResolvedValue(undefined);
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT:
+// the reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
+// D6, PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessages`,
+// which read the unified `messages` table. The fixtures below are unchanged —
+// what they stand in for moved one layer up.
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
     savePageMessage: (...args: unknown[]) =>
       saveMessageToDatabase(...args).then(() => ({ saved: true, rev: 1 })),
+    getPageConversationMessages: vi.fn(async (_pageId: string, conversationId: string) =>
+      ALL_MESSAGES.filter((m) => m.conversationId === conversationId)),
+    getRecentPageMessages: vi.fn(async (_pageId: string, limit: number) =>
+      ALL_MESSAGES.slice(-limit)),
   },
 }));
 

@@ -9,11 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { ChatMessage } from '@/lib/repositories/chat-message-repository';
+import type { UnifiedPageMessageWithAuthor } from '@/lib/repositories/message-repository';
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesForPage: vi.fn(),
   },
 }));
@@ -46,14 +46,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 // Mock message converter (boundary)
 vi.mock('@/lib/ai/core/message-utils', () => ({
-  convertDbMessageToUIMessage: vi.fn((msg: ChatMessage) => ({
+  convertDbMessageToUIMessage: vi.fn((msg: UnifiedPageMessageWithAuthor) => ({
     id: msg.id,
     role: msg.role,
     content: msg.content,
   })),
 }));
 
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -76,7 +76,7 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-const mockChatMessage = (overrides: Partial<{
+const mockUnifiedPageMessageWithAuthor = (overrides: Partial<{
   id: string;
   pageId: string;
   conversationId: string;
@@ -124,7 +124,7 @@ describe('GET /api/ai/chat/messages', () => {
     vi.mocked(canUserViewPage).mockResolvedValue(true);
 
     // Default: empty messages
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
   });
 
   describe('authentication', () => {
@@ -177,10 +177,10 @@ describe('GET /api/ai/chat/messages', () => {
   describe('successful message retrieval', () => {
     it('should return messages for a page', async () => {
       const messages = [
-        mockChatMessage({ id: 'msg_1', role: 'user', content: 'Hello' }),
-        mockChatMessage({ id: 'msg_2', role: 'assistant', content: 'Hi there!' }),
+        mockUnifiedPageMessageWithAuthor({ id: 'msg_1', role: 'user', content: 'Hello' }),
+        mockUnifiedPageMessageWithAuthor({ id: 'msg_2', role: 'assistant', content: 'Hi there!' }),
       ];
-      vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue(messages);
+      vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue(messages);
 
       const request = createRequest(mockPageId);
 
@@ -209,7 +209,7 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
         conversationId,
         false
@@ -221,7 +221,7 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
         undefined,
         false
@@ -236,7 +236,7 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
         undefined,
         true
@@ -248,7 +248,7 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
         undefined,
         false
@@ -258,7 +258,7 @@ describe('GET /api/ai/chat/messages', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.getMessagesForPage).mockRejectedValue(
+      vi.mocked(messageRepository.getMessagesForPage).mockRejectedValue(
         new Error('Database error')
       );
 

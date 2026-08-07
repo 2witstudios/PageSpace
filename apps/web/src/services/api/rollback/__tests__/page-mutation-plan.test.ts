@@ -293,15 +293,33 @@ describe('pickConversationTable', () => {
     });
   });
 
-  it('routes a page conversation to the chat-messages table', () => {
+  it('routes a page conversation to the UNIFIED messages table, with chat_messages as its legacy leg', () => {
     assert({
       given: 'no conversationType but a pageId present',
-      should: 'select chatMessages as a page conversation',
+      should: 'select the unified `messages` table for reads and rollback writes, and name `chat_messages` as the leg a write must also mirror until the contract PR drops it (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12)',
       actual: (() => {
         const r = pickConversationTable({ conversationType: undefined, hasPageId: true });
-        return { isChannel: r.isChannel, isGlobal: r.isGlobal, label: r.label, isChatTable: r.table === chatMessages };
+        return {
+          isChannel: r.isChannel,
+          isGlobal: r.isGlobal,
+          label: r.label,
+          isUnifiedTable: r.table === messages,
+          legacyIsChatMessages: r.legacyTable === chatMessages,
+        };
       })(),
-      expected: { isChannel: false, isGlobal: false, label: 'page', isChatTable: true },
+      expected: { isChannel: false, isGlobal: false, label: 'page', isUnifiedTable: true, legacyIsChatMessages: true },
+    });
+  });
+
+  it('gives a global conversation no legacy leg', () => {
+    assert({
+      given: 'a global conversation',
+      should: 'select the unified table and report no legacy leg — `messages` was always the global assistant\'s only table, so there is nothing to mirror',
+      actual: (() => {
+        const r = pickConversationTable({ conversationType: 'global', hasPageId: false });
+        return { label: r.label, isUnifiedTable: r.table === messages, legacyTable: r.legacyTable };
+      })(),
+      expected: { label: 'global', isUnifiedTable: true, legacyTable: null },
     });
   });
 });

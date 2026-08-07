@@ -1,14 +1,14 @@
 import type { UIMessage } from 'ai';
 import { eq, and, ne, desc } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { chatMessages } from '@pagespace/db/schema/core';
-import { messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   convertDbMessageToUIMessage,
   convertGlobalAssistantMessageToUIMessage,
 } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { unifiedPageScope } from '@/lib/repositories/unified-message-scope';
 import {
   buildAssistantPersistencePayload,
   type AssistantPersistencePayload,
@@ -174,7 +174,7 @@ async function dismissPendingAskUser(adapter: AssistantMessageAdapter): Promise<
 function pageAdapter(args: { pageId: string; conversationId: string }): AssistantMessageAdapter {
   const toUIMessage = (row: {
     id: string;
-    pageId: string;
+    pageId: string | null;
     userId: string | null;
     role: string;
     content: string;
@@ -212,6 +212,26 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       status,
     });
 
+  // Reads the UNIFIED `messages` table (Phase 4 / D6 reader cutover). The page
+  // predicate is `unifiedPageScope` — the join through `conversations`, which
+  // is what `chat_messages.pageId` became — and the shape is otherwise
+  // unchanged. Writes still go through the repository, which still dual-writes
+  // `chat_messages`.
+  const pageRowColumns = {
+    id: globalMessages.id,
+    pageId: globalMessages.pageId,
+    userId: globalMessages.userId,
+    role: globalMessages.role,
+    content: globalMessages.content,
+    toolCalls: globalMessages.toolCalls,
+    toolResults: globalMessages.toolResults,
+    createdAt: globalMessages.createdAt,
+    isActive: globalMessages.isActive,
+    editedAt: globalMessages.editedAt,
+    messageType: globalMessages.messageType,
+    status: globalMessages.status,
+  } as const;
+
   return {
     // Both fetchers skip 'streaming' placeholders: a still-empty, mid-flight row is never
     // the message an ask_user resume should target — fetchLastAssistant in particular would
@@ -219,15 +239,16 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     // message" and merge results into the wrong row. See Server Stream Durability epic PR 2.
     async fetchById(messageId) {
       const [row] = await db
-        .select()
-        .from(chatMessages)
+        .select(pageRowColumns)
+        .from(globalMessages)
+        .innerJoin(conversations, eq(conversations.id, globalMessages.conversationId))
         .where(
           and(
-            eq(chatMessages.id, messageId),
-            eq(chatMessages.pageId, args.pageId),
-            eq(chatMessages.conversationId, args.conversationId),
-            eq(chatMessages.isActive, true),
-            ne(chatMessages.status, 'streaming')
+            eq(globalMessages.id, messageId),
+            unifiedPageScope(args.pageId),
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true),
+            ne(globalMessages.status, 'streaming')
           )
         )
         .limit(1);
@@ -240,18 +261,19 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     },
     async fetchLastAssistant() {
       const [row] = await db
-        .select()
-        .from(chatMessages)
+        .select(pageRowColumns)
+        .from(globalMessages)
+        .innerJoin(conversations, eq(conversations.id, globalMessages.conversationId))
         .where(
           and(
-            eq(chatMessages.pageId, args.pageId),
-            eq(chatMessages.conversationId, args.conversationId),
-            eq(chatMessages.isActive, true),
-            eq(chatMessages.role, 'assistant'),
-            ne(chatMessages.status, 'streaming')
+            unifiedPageScope(args.pageId),
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true),
+            eq(globalMessages.role, 'assistant'),
+            ne(globalMessages.status, 'streaming')
           )
         )
-        .orderBy(desc(chatMessages.createdAt))
+        .orderBy(desc(globalMessages.createdAt))
         .limit(1);
       if (!row) return null;
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };

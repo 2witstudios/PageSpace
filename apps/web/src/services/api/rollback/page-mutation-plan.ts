@@ -183,7 +183,15 @@ export function restoreFields(
 
 /** Message table plus the derived flags for a conversation. */
 export interface ConversationTableSelection {
-  table: typeof channelMessages | typeof messages | typeof chatMessages;
+  /** The authoritative table — the one every reader consults. */
+  table: typeof channelMessages | typeof messages;
+  /**
+   * The legacy `chat_messages` leg, for a PAGE conversation only; null
+   * otherwise. Transitional (Phase 4 / D6): reads come from `table`, but a
+   * write must still land on both legs until PR 15 drops `chat_messages`, or a
+   * revert of the reader cutover would find un-rolled-back rows there.
+   */
+  legacyTable: typeof chatMessages | null;
   isChannel: boolean;
   isGlobal: boolean;
   label: 'channel' | 'global' | 'page';
@@ -191,9 +199,15 @@ export interface ConversationTableSelection {
 
 /**
  * Route a message activity to its backing table. Channel conversations use
- * channelMessages; a global conversation (or one with no page) uses messages;
- * everything else is a page conversation on chatMessages. Single replacement
- * for the three duplicated conversationType ternaries.
+ * channelMessages; everything else — global AND page — is on the unified
+ * `messages` table since the message-table merge (epic "Agent-Session Single
+ * Source of Truth", Phase 4 / D6). Single replacement for the three duplicated
+ * conversationType ternaries.
+ *
+ * `isGlobal` keeps its old meaning (a global-assistant thread, or one with no
+ * page) because `planMessageRollback`/`planMessageRedo` still branch on it for
+ * channel-vs-chat field shapes and callers log it; it no longer selects a
+ * table.
  */
 export function pickConversationTable(params: {
   conversationType?: string;
@@ -201,7 +215,8 @@ export function pickConversationTable(params: {
 }): ConversationTableSelection {
   const isChannel = params.conversationType === 'channel';
   const isGlobal = !isChannel && (!params.hasPageId || params.conversationType === 'global');
-  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
+  const table = isChannel ? channelMessages : messages;
   const label = isChannel ? 'channel' : isGlobal ? 'global' : 'page';
-  return { table, isChannel, isGlobal, label };
+  const legacyTable = label === 'page' ? chatMessages : null;
+  return { table, legacyTable, isChannel, isGlobal, label };
 }

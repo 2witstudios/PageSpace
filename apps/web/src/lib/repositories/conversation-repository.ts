@@ -8,7 +8,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
-import { conversations } from '@pagespace/db/schema/conversations';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { isClickHouseEnabled } from '@pagespace/lib/observability/clickhouse-client';
 import { insertUserActivity } from '@pagespace/lib/observability/analytics-inserts';
 import { kickUserFromRooms } from '@pagespace/lib/realtime/kick-client';
@@ -17,6 +17,7 @@ import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/com
 import { type ConversationEventTriggeredBy } from '@/lib/websocket/conversation-events';
 import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 import { deactivateUnifiedMessagesForConversation } from '@/lib/repositories/unified-message-leg';
+import { unifiedPageScope, unifiedPageScopeSql } from '@/lib/repositories/unified-message-scope';
 
 // Types for repository operations
 export interface AiAgent {
@@ -132,12 +133,15 @@ async function hasConflictingMessageOwner(
   conversationId: string,
   userId: string,
 ): Promise<boolean> {
+  // Unified `messages` (Phase 4 / D6). Scoped by conversationId alone, exactly
+  // as before — the point of the check is "does this id already hold someone
+  // else's messages", which is a question about the id, not about a page.
   const priorMessages = await db
-    .select({ userId: chatMessages.userId })
-    .from(chatMessages)
+    .select({ userId: messages.userId })
+    .from(messages)
     .where(and(
-      eq(chatMessages.conversationId, conversationId),
-      eq(chatMessages.isActive, true),
+      eq(messages.conversationId, conversationId),
+      eq(messages.isActive, true),
     ));
   return priorMessages.some((m) => m.userId !== null && m.userId !== userId);
 }
@@ -286,8 +290,22 @@ export const conversationRepository = {
     // 'streaming' rows are excluded from both CTEs — an in-flight placeholder must never
     // become a conversation's last-message preview (it's empty) or inflate its message
     // count. See Server Stream Durability epic PR 2.
+    //
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope is the
+    // `unifiedPageScopeSql` fragment — the SQL twin of `unifiedPageScope` in
+    // message-repository.ts, and the same pair of predicates for the same
+    // reasons. `chat_messages` is still dual-written, so a revert is safe.
     const result = await db.execute<ConversationStats>(sql`
-      WITH ranked_messages AS (
+      WITH page_messages AS (
+        SELECT m."conversationId", m.content, m.role, m."createdAt"
+        FROM messages m
+        JOIN conversations pc ON pc.id = m."conversationId"
+        WHERE ${unifiedPageScopeSql(agentId)}
+          AND m."isActive" = true
+          AND m.status != 'streaming'
+      ),
+      ranked_messages AS (
         SELECT
           "conversationId",
           content,
@@ -301,10 +319,7 @@ export const conversationRepository = {
             PARTITION BY "conversationId"
             ORDER BY "createdAt" DESC
           ) as last_msg_rank
-        FROM chat_messages
-        WHERE "pageId" = ${agentId}
-          AND "isActive" = true
-          AND status != 'streaming'
+        FROM page_messages
       ),
       conversation_stats AS (
         SELECT
@@ -312,10 +327,7 @@ export const conversationRepository = {
           MIN("createdAt") as first_message_time,
           MAX("createdAt") as last_message_time,
           COUNT(*) as message_count
-        FROM chat_messages
-        WHERE "pageId" = ${agentId}
-          AND "isActive" = true
-          AND status != 'streaming'
+        FROM page_messages
         GROUP BY "conversationId"
       ),
       first_user_messages AS (
@@ -363,15 +375,19 @@ export const conversationRepository = {
    * Mirrors the privacy filter in listConversations.
    */
   async countConversations(agentId: string, userId: string): Promise<number> {
+    // Unified `messages` + `unifiedPageScopeSql` — see listConversations above.
+    // The conversation join is now an INNER join because it also carries the
+    // page scope; every `messages` row has a conversation (validated FK), so
+    // no row is lost by the change.
     const result = await db.execute<{ count: string }>(sql`
-      SELECT COUNT(DISTINCT cm."conversationId") as count
-      FROM chat_messages cm
-      LEFT JOIN conversations conv ON cm."conversationId" = conv.id
-      WHERE cm."pageId" = ${agentId}
-        AND cm."isActive" = true
+      SELECT COUNT(DISTINCT m."conversationId") as count
+      FROM messages m
+      JOIN conversations pc ON pc.id = m."conversationId"
+      WHERE ${unifiedPageScopeSql(agentId)}
+        AND m."isActive" = true
         AND (
-          conv."userId" = ${userId}
-          OR conv."isShared" = true
+          pc."userId" = ${userId}
+          OR pc."isShared" = true
         )
     `);
 
@@ -382,13 +398,15 @@ export const conversationRepository = {
    * Check if a conversation exists (has at least one active message)
    */
   async conversationExists(agentId: string, conversationId: string): Promise<boolean> {
+    // Unified `messages` (Phase 4 / D6) with the shared page scope.
     const result = await db
-      .select({ id: chatMessages.id })
-      .from(chatMessages)
+      .select({ id: messages.id })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
       .where(and(
-        eq(chatMessages.pageId, agentId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
+        unifiedPageScope(agentId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
       ))
       .limit(1);
 
@@ -402,17 +420,21 @@ export const conversationRepository = {
     agentId: string,
     conversationId: string
   ): Promise<ConversationMetadata | null> {
+    // Unified `messages` (Phase 4 / D6). The aggregate columns are qualified
+    // now that a second table is in the FROM list — bare `"createdAt"` would be
+    // ambiguous against `conversations."createdAt"`.
     const result = await db
       .select({
         messageCount: sql<number>`COUNT(*)`.as('messageCount'),
-        firstMessageTime: sql<Date>`MIN("createdAt")`.as('firstMessageTime'),
-        lastMessageTime: sql<Date>`MAX("createdAt")`.as('lastMessageTime'),
+        firstMessageTime: sql<Date>`MIN(${messages.createdAt})`.as('firstMessageTime'),
+        lastMessageTime: sql<Date>`MAX(${messages.createdAt})`.as('lastMessageTime'),
       })
-      .from(chatMessages)
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
       .where(and(
-        eq(chatMessages.pageId, agentId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
+        unifiedPageScope(agentId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
       ));
 
     return result[0] || null;

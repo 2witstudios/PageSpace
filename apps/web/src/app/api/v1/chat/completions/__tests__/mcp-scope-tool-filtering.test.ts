@@ -93,6 +93,12 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 }));
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
+    // Absorbed from `chat-message-repository` by the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — one
+    // module now serves both the history reads and the durable writes.
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
     savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
     saveGlobalMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
     insertPageStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
@@ -142,14 +148,6 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
-    getMessagesForPage: vi.fn().mockResolvedValue([]),
-    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
-    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn().mockResolvedValue(undefined),
@@ -185,9 +183,10 @@ vi.mock('ai', async (importOriginal) => {
 import { POST } from '../route';
 import { authenticateRequestWithOptions, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const agentPage = {
   id: 'page-123',
@@ -222,7 +221,7 @@ describe('POST /api/v1/chat/completions - account-level-only tool listing', () =
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
     } as unknown as ReturnType<typeof db.select>);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
   });
 

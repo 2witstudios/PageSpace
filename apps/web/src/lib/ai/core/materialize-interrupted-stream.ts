@@ -9,7 +9,6 @@ import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
 import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
@@ -166,7 +165,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
       // exactly like a failed write, leaving the row `'streaming'` for the
       // next sweep to retry, not a half-materialized row whose session gets
       // settled anyway.
-      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
+      await messageRepository.recomputeLastMessageAt(row.conversationId);
     } else {
       // Repository-owned CAS terminal write; returns whether the CAS landed.
       // When false, the row already left 'streaming' via one of the route's

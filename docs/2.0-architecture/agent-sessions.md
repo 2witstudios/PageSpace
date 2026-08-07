@@ -231,15 +231,48 @@ textbook forced copy, so it runs under the rule above rather than around it:
     `apps/web/src/lib/repositories/__tests__/unified-reader-parity.integration.test.ts`
     (old query vs new query over one deliberately awkward corpus), which lives until
     PR 15 deletes `chat_messages`.
-- **Still open:** the chat routes, page-agents routes, consult, undo/edit and trash
-  still read the legacy leg (Phase 4 PR 12), compliance keeps both tables until the
-  contract PR (PR 13/15), and `chat_messages` + `messages.pageId` are dropped last
-  (PR 15).
+- **Reader cutover, chat routes + mutation surfaces — SHIPPED** (Phase 4 PR 12): both
+  chat routes' history loads, the page-agents conversation/message routes, the consult
+  route, the ask_user resume/dismiss reads, the edit/delete reads, undo, the rollback and
+  redo message executors, the page payload, the retention purge and
+  `POST /api/v1/chat/completions` all read `messages` now. Two repositories died with
+  it: `chat-message-repository.ts` was absorbed WHOLESALE into `message-repository.ts`
+  (which is now the one writer AND the one reader for durable messages), and
+  `global-conversation-repository.ts` gave up its message-table half and kept only
+  `conversations` rows.
+  - **The page scope here is WIDER than PR 11's, deliberately.** These are the paths a
+    user drives, so they keep exact behavioural parity with `chat_messages.pageId = X`:
+    `unifiedPageScope()` (`apps/web/src/lib/repositories/unified-message-scope.ts`) is
+    the conversation join OR the transitional `messages.pageId`. The second disjunct is
+    what keeps a `type='client'` thread — an API-managed conversation whose `contextId`
+    is a DRIVE — reachable from `POST /api/v1/chat/completions`'s history load and from
+    its own edit/delete route. PR 11's internal readers chose the narrower "page
+    conversations only" form; the difference is asserted, not assumed, by the parity
+    suite, and the contract PR that drops `messages.pageId` has to give `type='client'`
+    threads a real page link.
+  - **A page route must still 404 a global message.** `messages` now holds every kind of
+    row, so `getMessageById` resolves ids that had no `chat_messages` row before. It
+    returns a DERIVED `pageId`, and `null` there is what the page edit/delete routes
+    reject on — the global assistant keeps its own route and its own ownership check.
+  - **Permanent page delete had to grow a statement.** `chat_messages.pageId` carries an
+    ON DELETE CASCADE to `pages`; `messages.pageId` deliberately does not, and
+    `conversations.contextId` never had a foreign key. Without the explicit DELETE the
+    trash route now issues, a permanently deleted page's chat history would outlive it.
+  - The matrix is exercised, not asserted: page chat, global chat and worker dispatch by
+    `apps/e2e/tests/15-chat-fixture-smoke.spec.ts` and `16-dispatch-multiplayer.spec.ts`;
+    edit, delete, undo, interrupt/resume, purge and page teardown by
+    `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`
+    against a real Postgres.
+- **Still open:** compliance keeps both tables until the contract PR (PR 13/15), and
+  `chat_messages` + `messages.pageId` are dropped last (PR 15).
 
-Until every reader cuts over, the legacy leg is authoritative and the unified leg must
-never be able to break a write that works today — which is why the unified INSERT paths
-skip (loudly, at error level) rather than abort when a `conversations` row is genuinely
-missing.
+Reads come from `messages` while the dual-write still populates BOTH legs: every save,
+the History-delete cascade, undo, the rollback/redo executors and page teardown all still
+write `chat_messages`, and the retention cron still sweeps it. That is what makes a revert
+of the reader cutover safe on its own — the legacy leg it would fall back to never stopped
+being correct. It is also why the unified INSERT paths skip (loudly, at error level)
+rather than abort when a `conversations` row is genuinely missing: the unified leg must
+never be able to break a write that works today.
 
 ## 4. Vocabulary
 
