@@ -3,7 +3,7 @@ ALTER TABLE "messages" ADD COLUMN "pageId" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "sourceAgentId" text;--> statement-breakpoint
 ALTER TABLE "messages" ADD CONSTRAINT "messages_sourceAgentId_pages_id_fk" FOREIGN KEY ("sourceAgentId") REFERENCES "public"."pages"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 -- ══════════════════════════════════════════════════════════════════════════
--- Hand-appended below (repo convention — precedent 0246_vengeful_veda.sql,
+-- Hand-appended below (repo convention — precedent 0247_vengeful_veda.sql,
 -- 0225_blushing_tattoo.sql, 0222_wooden_puck.sql, 0116_colossal_tattoo.sql:
 -- idempotent DO $$ blocks appended to a freshly generated migration; applied
 -- migrations are never edited).
@@ -49,7 +49,7 @@ ALTER TABLE "messages" ADD CONSTRAINT "messages_sourceAgentId_pages_id_fk" FOREI
 -- drive id, so the "contextId must represent the page" premise above simply
 -- does not apply to it. Addressing more than one agent page over a thread's
 -- life is a DOCUMENTED, SUPPORTED shape (docs/2.0-architecture/
--- agent-sessions.md), and 0252 already handles it gracefully downstream —
+-- agent-sessions.md), and 0253 already handles it gracefully downstream —
 -- it derives `conversations."agentPageId"` from the EARLIEST naming row and
 -- merely warns ('% client conversation(s) named more than one agent page;
 -- anchored to the earliest'). Aborting here would make the upgrade impossible
@@ -88,7 +88,7 @@ BEGIN
       LIMIT 50
     ) sample;
 
-    RAISE EXCEPTION 'messages unification (0248) pre-audit failed: % chat_messages conversationId(s) span more than one pageId, so conversations.contextId cannot represent them. Split them deliberately, then re-run. First (up to 50): %',
+    RAISE EXCEPTION 'messages unification (0249) pre-audit failed: % chat_messages conversationId(s) span more than one pageId, so conversations.contextId cannot represent them. Split them deliberately, then re-run. First (up to 50): %',
       offender_count, offender_sample;
   END IF;
 
@@ -107,7 +107,7 @@ BEGIN
   ) mismatched;
 
   IF offender_count > 0 THEN
-    RAISE NOTICE 'messages unification (0248): % existing conversations row(s) disagree with their chat_messages about the page (type <> page, or contextId <> pageId). Not repaired here — the reader cutover derives the page from contextId, so these need a follow-up data repair.', offender_count;
+    RAISE NOTICE 'messages unification (0249): % existing conversations row(s) disagree with their chat_messages about the page (type <> page, or contextId <> pageId). Not repaired here — the reader cutover derives the page from contextId, so these need a follow-up data repair.', offender_count;
   END IF;
 END $$;--> statement-breakpoint
 
@@ -171,7 +171,7 @@ DECLARE
   skipped bigint := 0;
   contested bigint := 0;
 BEGIN
-  CREATE TEMP TABLE "_0248_orphans" ON COMMIT DROP AS
+  CREATE TEMP TABLE "_0249_orphans" ON COMMIT DROP AS
   WITH orphan AS (
     SELECT
       cm."conversationId"      AS conversation_id,
@@ -227,7 +227,7 @@ BEGIN
       NULL, o.last_at, o.first_at,
       CASE WHEN o.has_active_message THEN o.last_at ELSE now() END,
       o.has_active_message, false
-    FROM "_0248_orphans" o
+    FROM "_0249_orphans" o
     WHERE o.owner_id IS NOT NULL
     ON CONFLICT ("id") DO NOTHING
     RETURNING "isActive" AS active
@@ -246,7 +246,7 @@ BEGIN
   -- restored or repaired corpus — which is exactly the situation in which a
   -- migration must neither invent an owner nor abort.
   SELECT count(*) INTO skipped
-  FROM "_0248_orphans" o
+  FROM "_0249_orphans" o
   WHERE o.owner_id IS NULL;
 
   -- Ownership contested by the data itself: more than one human spoke in a
@@ -257,17 +257,17 @@ BEGIN
   FROM (
     SELECT cm."conversationId"
     FROM "chat_messages" cm
-    JOIN "_0248_orphans" o ON o.conversation_id = cm."conversationId"
+    JOIN "_0249_orphans" o ON o.conversation_id = cm."conversationId"
     WHERE cm."role" = 'user' AND cm."userId" IS NOT NULL
     GROUP BY cm."conversationId"
     HAVING count(DISTINCT cm."userId") > 1
   ) multi;
 
-  RAISE NOTICE 'messages unification (0248) orphan synthesis: % minted live, % QUARANTINED (isActive=false, unclaimable — every message already tombstoned), % SKIPPED (no owner resolvable — these will fail the later VALIDATE CONSTRAINT), % conversation(s) had more than one human author (earliest wins).',
+  RAISE NOTICE 'messages unification (0249) orphan synthesis: % minted live, % QUARANTINED (isActive=false, unclaimable — every message already tombstoned), % SKIPPED (no owner resolvable — these will fail the later VALIDATE CONSTRAINT), % conversation(s) had more than one human author (earliest wins).',
     minted_active, minted_quarantined, skipped, contested;
 
   IF skipped > 0 THEN
-    RAISE WARNING 'messages unification (0248): % orphan conversation(s) were skipped and still have no conversations row. Repair them before Phase 4 PR 14 runs VALIDATE CONSTRAINT on chat_messages_conversationId_conversations_id_fk.', skipped;
+    RAISE WARNING 'messages unification (0249): % orphan conversation(s) were skipped and still have no conversations row. Repair them before Phase 4 PR 14 runs VALIDATE CONSTRAINT on chat_messages_conversationId_conversations_id_fk.', skipped;
   END IF;
 END $$;--> statement-breakpoint
 
@@ -315,12 +315,16 @@ END $$;--> statement-breakpoint
 --   below the gate → build them here, inline. Instant on a small table, and it
 --                    is the ONLY path that runs on tenant/onprem, where no
 --                    operator exists to run anything by hand.
---   above the gate → skip and point at
---                    scripts/deferred-migrations/0248-messages-unification-indexes.sql,
---                    which is the same two indexes as CREATE INDEX
---                    CONCURRENTLY (impossible inside a migration: concurrent
---                    builds cannot run in a transaction block). It must be run
---                    before PR 10's backfill starts writing.
+--   above the gate → skip them, and say so. This path once pointed at
+--                    scripts/deferred-migrations/0248-messages-unification-indexes.sql
+--                    (the same two indexes as CREATE INDEX CONCURRENTLY, which
+--                    cannot run inside a migration's transaction block). That
+--                    script has since been REMOVED on purpose: both indexes are
+--                    on `messages."pageId"`, the transitional column 0253 drops,
+--                    so running it either duplicates work 0253 is about to undo
+--                    or — after 0253 — builds an index on a column that is gone.
+--                    So the NOTICE states the skip rather than naming a path an
+--                    operator cannot follow.
 --
 -- `reltuples` is an estimate and is -1 on a table that has never been analyzed
 -- (PG >= 14), so the unknown case falls back to a bounded probe rather than
@@ -339,14 +343,14 @@ BEGIN
   IF approx_rows IS NULL OR approx_rows < 0 THEN
     SELECT count(*) INTO probed FROM (SELECT 1 FROM "chat_messages" LIMIT gate + 1) bounded;
     approx_rows := probed;
-    RAISE NOTICE 'messages unification (0248): chat_messages has no analyze statistics; bounded probe counted % row(s) (capped at %).', approx_rows, gate + 1;
+    RAISE NOTICE 'messages unification (0249): chat_messages has no analyze statistics; bounded probe counted % row(s) (capped at %).', approx_rows, gate + 1;
   END IF;
 
   IF approx_rows <= gate THEN
     CREATE INDEX IF NOT EXISTS "messages_page_id_idx" ON "messages" USING btree ("pageId");
     CREATE INDEX IF NOT EXISTS "messages_page_id_is_active_created_at_idx" ON "messages" USING btree ("pageId", "isActive", "createdAt");
-    RAISE NOTICE 'messages unification (0248): parity indexes built inline (chat_messages ~% rows, gate %).', approx_rows, gate;
+    RAISE NOTICE 'messages unification (0249): parity indexes built inline (chat_messages ~% rows, gate %).', approx_rows, gate;
   ELSE
-    RAISE NOTICE 'messages unification (0248): parity indexes DEFERRED (chat_messages ~% rows exceeds the % gate). Run scripts/deferred-migrations/0248-messages-unification-indexes.sql (CREATE INDEX CONCURRENTLY) BEFORE the Phase 4 PR 10 backfill.', approx_rows, gate;
+    RAISE NOTICE 'messages unification (0249): parity indexes SKIPPED, deliberately (chat_messages ~% rows exceeds the % gate). There is nothing to run by hand: both indexes are on messages."pageId", the transitional column 0253 drops later in this same upgrade. Build them manually ONLY if you intend to sit on this schema without applying 0253.', approx_rows, gate;
   END IF;
 END $$;

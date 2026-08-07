@@ -64,9 +64,9 @@ CREATE INDEX "agent_workspace_panes_workspace_idx" ON "agent_workspace_panes" US
 -- ids, but the relational tables are keyed by the compound `(workspaceId, id)`.
 -- A blob that repeats one pane id in two columns therefore produces two rows
 -- that collide, and a bare `ON CONFLICT DO NOTHING` would SILENTLY DISCARD the
--- second — leaving 0251's drop guard staring at a blob pane the rows lack, and
+-- second — leaving 0252's drop guard staring at a blob pane the rows lack, and
 -- refusing to drop the column over a pane THIS statement had just eaten.
--- (0251's documented remedy, "delete the rows and let the sweep re-promote",
+-- (0252's documented remedy, "delete the rows and let the sweep re-promote",
 -- re-ran the identical losing insert: an unrecoverable loop.)
 --
 -- Collapsing to the FIRST occurrence — ordered by column position, then pane

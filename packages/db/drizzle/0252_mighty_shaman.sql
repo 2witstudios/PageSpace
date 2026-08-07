@@ -3,13 +3,13 @@
 -- contract step that drops a column must first PROVE the column holds nothing
 -- the relational tables lack. The sweep + guard are not schema-diffable, so
 -- they are written by hand per the repo's convention (cited precedent:
--- 0246_vengeful_veda.sql — whose promotion sweep this reuses verbatim —
+-- 0247_vengeful_veda.sql — whose promotion sweep this reuses verbatim —
 -- 0225_blushing_tattoo.sql, 0222_wooden_puck.sql, 0116_colossal_tattoo.sql:
 -- DO $$ guards, idempotent re-run, RAISE NOTICE for observability).
 --
 -- Epic Phase 3, CONTRACT: `agent_sessions.workspaceState` stops existing. The
 -- pane grid has been served from `agent_workspace_pane_columns` /
--- `agent_workspace_panes` behind `agent_workspace_layout_revs` since 0246,
+-- `agent_workspace_panes` behind `agent_workspace_layout_revs` since 0247,
 -- written only through the verb engine; the blob was kept one release as the
 -- rolling-deploy shim and dual-written. This migration ends that window.
 --
@@ -46,12 +46,12 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Same tolerance as `persistedWorkspaceStateSchema` (and as 0246): only a
+  -- Same tolerance as `persistedWorkspaceStateSchema` (and as 0247): only a
   -- blob whose `columns` is a jsonb array is promoted, a pane's absent/null
   -- `scope` becomes an unbound row (NULL kind/target), and the retired `tabs`
   -- field is never read.
   --
-  -- And the same `DISTINCT ON` deduplication as 0246, for the same reason: the
+  -- And the same `DISTINCT ON` deduplication as 0247, for the same reason: the
   -- blob is client-authored and may repeat a pane id across two columns, while
   -- the row tables are keyed `(workspaceId, id)`. Without it this sweep would
   -- drop the second occurrence on the floor and the guard below would then

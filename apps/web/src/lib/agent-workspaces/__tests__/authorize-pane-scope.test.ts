@@ -12,7 +12,10 @@
  * bad bind leaves behind outlives the request that made it.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import {
+  workspaceLayoutVerbSchema,
+  type WorkspaceLayoutVerb,
+} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { authorizePaneScope, paneScopesOfVerb, type PaneScopeAuthorityDeps } from '../authorize-pane-scope';
 
 const VIEWER = 'viewer-1';
@@ -50,6 +53,54 @@ describe('paneScopesOfVerb — every verb that can bind a target', () => {
   it('finds nothing on a purely geometric verb', () => {
     expect(paneScopesOfVerb({ type: 'resize_pane', paneId: 'p', heightFraction: 0.5 })).toEqual([]);
     expect(paneScopesOfVerb({ type: 'close_pane', paneId: 'p' })).toEqual([]);
+  });
+
+  /**
+   * The two tests above enumerate today's verbs, so they pass unchanged when a
+   * NEW scope-carrying verb is added and left ungated — which is the one
+   * failure that matters here, because an unauthorized pane row outlives the
+   * request that wrote it.
+   *
+   * `paneScopesOfVerb`'s `never` fall-through makes that a compile error, but a
+   * type-level guard proves nothing to a reader of the suite and is invisible
+   * in a CI log. So this reads the discriminated union at RUNTIME and pins the
+   * verb set: adding a verb to `workspaceLayoutVerbSchema` fails here until
+   * someone has decided, in this file, which list it belongs in.
+   */
+  it('pins the verb union, so a new verb cannot be added without classifying it here', () => {
+    const options = (
+      workspaceLayoutVerbSchema as unknown as {
+        options: { shape: { type: { value: string } } }[];
+      }
+    ).options;
+    const declared = options.map((o) => o.shape.type.value).sort();
+
+    expect(declared).toEqual(
+      [
+        'assign_pane',
+        'close_pane',
+        'ensure',
+        'move_pane',
+        'open_conversation',
+        'reorder_columns',
+        'replace_conversation',
+        'reset_pane',
+        'resize_column',
+        'resize_pane',
+        'split_down',
+        'split_right',
+      ].sort(),
+    );
+
+    // And the split is exactly the one the gate implements: a verb whose schema
+    // declares `scope` must yield it, every other verb must yield nothing.
+    const scopeCarrying = options
+      .filter((o) => 'scope' in (o.shape as Record<string, unknown>))
+      .map((o) => o.shape.type.value)
+      .sort();
+    expect(scopeCarrying).toEqual(
+      ['assign_pane', 'ensure', 'open_conversation', 'replace_conversation'].sort(),
+    );
   });
 });
 

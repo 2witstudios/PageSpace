@@ -53,14 +53,14 @@ CREATE INDEX IF NOT EXISTS "conversations_agent_page_id_idx" ON "conversations" 
 -- does not exist CANNOT be copied — `messages."conversationId"` carries a
 -- validated, cascading FK — so it is left behind deliberately and named by the
 -- guard in step 5 rather than aborting here with an opaque 23503. Migration
--- 0250 already RAISEs on that shape, so reaching it here means 0250 was
+-- 0251 already RAISEs on that shape, so reaching it here means 0251 was
 -- bypassed.
 DO $$
 DECLARE
   swept bigint;
 BEGIN
   IF to_regclass('public.chat_messages') IS NULL THEN
-    RAISE NOTICE '0252: chat_messages is already gone — sweep skipped';
+    RAISE NOTICE '0253: chat_messages is already gone — sweep skipped';
     RETURN;
   END IF;
 
@@ -80,9 +80,9 @@ BEGIN
 
   GET DIAGNOSTICS swept = ROW_COUNT;
   IF swept > 0 THEN
-    RAISE NOTICE '0252: final sweep carried % straggler chat_messages row(s) into messages', swept;
+    RAISE NOTICE '0253: final sweep carried % straggler chat_messages row(s) into messages', swept;
   ELSE
-    RAISE NOTICE '0252: final sweep found nothing to carry — messages was already a superset';
+    RAISE NOTICE '0253: final sweep found nothing to carry — messages was already a superset';
   END IF;
 END $$;--> statement-breakpoint
 
@@ -107,7 +107,7 @@ BEGIN
     SELECT 1 FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'pageId'
   ) THEN
-    RAISE NOTICE '0252: messages."pageId" is already gone — client page-link backfill skipped';
+    RAISE NOTICE '0253: messages."pageId" is already gone — client page-link backfill skipped';
     RETURN;
   END IF;
 
@@ -145,12 +145,12 @@ BEGIN
      AND c."agentPageId" IS NULL
      AND EXISTS (SELECT 1 FROM "messages" m WHERE m."conversationId" = c."id" AND m."pageId" IS NOT NULL);
 
-  RAISE NOTICE '0252: stamped agentPageId on % client conversation(s)', stamped;
+  RAISE NOTICE '0253: stamped agentPageId on % client conversation(s)', stamped;
   IF ambiguous > 0 THEN
-    RAISE WARNING '0252: % client conversation(s) named more than one agent page; anchored to the earliest', ambiguous;
+    RAISE WARNING '0253: % client conversation(s) named more than one agent page; anchored to the earliest', ambiguous;
   END IF;
   IF dead_page > 0 THEN
-    RAISE WARNING '0252: % client conversation(s) named only deleted page(s) and stay page-less', dead_page;
+    RAISE WARNING '0253: % client conversation(s) named only deleted page(s) and stay page-less', dead_page;
   END IF;
 END $$;--> statement-breakpoint
 
@@ -198,7 +198,7 @@ DECLARE
   repaired bigint;
 BEGIN
   IF to_regclass('public.chat_messages') IS NULL THEN
-    RAISE NOTICE '0252: chat_messages is already gone — stale-twin repair skipped';
+    RAISE NOTICE '0253: chat_messages is already gone — stale-twin repair skipped';
     RETURN;
   END IF;
 
@@ -221,9 +221,9 @@ BEGIN
   GET DIAGNOSTICS repaired = ROW_COUNT;
 
   IF repaired > 0 THEN
-    RAISE WARNING '0252: repaired % stale unified row(s) whose edit or soft-delete had landed only on chat_messages (dual-write window loss)', repaired;
+    RAISE WARNING '0253: repaired % stale unified row(s) whose edit or soft-delete had landed only on chat_messages (dual-write window loss)', repaired;
   ELSE
-    RAISE NOTICE '0252: no stale unified rows — every legacy edit/soft-delete had already crossed over';
+    RAISE NOTICE '0253: no stale unified rows — every legacy edit/soft-delete had already crossed over';
   END IF;
 END $$;--> statement-breakpoint
 
@@ -248,7 +248,7 @@ DECLARE
   sample text;
 BEGIN
   IF to_regclass('public.chat_messages') IS NULL THEN
-    RAISE NOTICE '0252: chat_messages is already gone — completeness guard skipped';
+    RAISE NOTICE '0253: chat_messages is already gone — completeness guard skipped';
     RETURN;
   END IF;
 
@@ -280,12 +280,12 @@ BEGIN
     ) x;
 
     RAISE EXCEPTION
-      'chat_messages still holds % row(s) that "messages" does not represent — refusing to DROP the table. % of them name a conversation that does not exist (those cannot be copied: messages."conversationId" is a validated FK, and migration 0250 RAISEs on exactly that shape). First up to 50 ids: %',
+      'chat_messages still holds % row(s) that "messages" does not represent — refusing to DROP the table. % of them name a conversation that does not exist (those cannot be copied: messages."conversationId" is a validated FK, and migration 0251 RAISEs on exactly that shape). First up to 50 ids: %',
       untwinned, orphaned, coalesce(sample, '(none)')
       USING HINT = 'Repair is a human decision, not a migration''s. Run scripts/backfill-unify-messages.ts from a release that still has it, or synthesise the missing conversations rows, then re-run this migration. Do NOT drop the table with rows outstanding.';
   END IF;
 
-  RAISE NOTICE '0252: completeness guard passed — every chat_messages row has a messages twin';
+  RAISE NOTICE '0253: completeness guard passed — every chat_messages row has a messages twin';
 END $$;--> statement-breakpoint
 
 -- ── 6. THE DROP ───────────────────────────────────────────────────────────

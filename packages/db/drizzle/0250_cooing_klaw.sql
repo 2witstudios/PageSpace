@@ -1,6 +1,6 @@
 -- ══════════════════════════════════════════════════════════════════════════
 -- Epic "Agent-Session Single Source of Truth", Phase 4 — integrity constraints
--- (the leaf that follows 0248's expand step).
+-- (the leaf that follows 0249's expand step).
 --
 -- Everything here is a constraint that has ALWAYS been true of correctly
 -- written rows and never enforced. All four are added NOT VALID, deliberately:
@@ -11,11 +11,11 @@
 --     can be blocked by a row written years ago;
 --   * `VALIDATE CONSTRAINT` — which takes only a SHARE UPDATE EXCLUSIVE lock
 --     and can run at any later time — is left to the PR that has looked at
---     real data (Phase 4 PR 14, alongside 0248's chat_messages FK).
+--     real data (Phase 4 PR 14, alongside 0249's chat_messages FK).
 --
 -- The statements `db:generate` produced are rewritten below to add NOT VALID
 -- and an existence guard (repo convention: hand-append to your OWN new
--- migration; never edit an applied one — precedent 0246/0225/0222/0116). The
+-- migration; never edit an applied one — precedent 0247/0225/0222/0116). The
 -- pre-audit NOTICE reports what a future VALIDATE would find, changing nothing.
 -- ══════════════════════════════════════════════════════════════════════════
 DO $$
@@ -37,11 +37,11 @@ BEGIN
   INTO bad_global, bad_page, bad_drive
   FROM "conversations";
 
-  RAISE NOTICE 'integrity constraints (0249) pre-audit: % ai_stream_sessions row(s) reference a missing conversation; conversations violations — global-with-context %, page-without-context %, drive-without-context %. All are grandfathered by NOT VALID and must be repaired before VALIDATE CONSTRAINT.',
+  RAISE NOTICE 'integrity constraints (0250) pre-audit: % ai_stream_sessions row(s) reference a missing conversation; conversations violations — global-with-context %, page-without-context %, drive-without-context %. All are grandfathered by NOT VALID and must be repaired before VALIDATE CONSTRAINT.',
     dangling, bad_global, bad_page, bad_drive;
 END $$;--> statement-breakpoint
 -- The stream table's conversation link becomes real. Only possible after
--- 0248's orphan synthesis: page-chat streams carry the same self-minted
+-- 0249's orphan synthesis: page-chat streams carry the same self-minted
 -- conversationId as chat_messages, so before that sweep a large share of these
 -- rows pointed at nothing. ON DELETE CASCADE — per-generation state (parts
 -- checkpoints, heartbeat, abort mailbox) is meaningless without its

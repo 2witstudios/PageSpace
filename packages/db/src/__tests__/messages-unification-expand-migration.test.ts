@@ -142,14 +142,16 @@ describe('drizzle/0249 messages unification — expand', () => {
     expect(expand.code).toContain(
       'CREATE INDEX IF NOT EXISTS "messages_page_id_is_active_created_at_idx"',
     );
-    // The above-the-gate path names a deferred operator script. That script
-    // is GONE as of 0253, and deliberately: both indexes it built are on
-    // `messages."pageId"`, the transitional column 0253 drops, so anything
-    // still holding it would either be redundant (0249 and 0253 apply in the
-    // same batch) or actively broken (`CREATE INDEX CONCURRENTLY` on a column
-    // that no longer exists). The migration text keeps naming it because
-    // applied migrations are never edited.
-    expect(expand.code).toContain('0248-messages-unification-indexes.sql');
+    // The above-the-gate path used to tell the operator to run a deferred
+    // script. That script is GONE, deliberately: both indexes it built are on
+    // `messages."pageId"`, the transitional column 0253 drops, so running it
+    // is either redundant (0249 and 0253 apply in the same batch) or actively
+    // broken (`CREATE INDEX CONCURRENTLY` against a column that no longer
+    // exists). A NOTICE naming a path the operator cannot follow is worse than
+    // one that states the skip, so the instruction is gone too — the file may
+    // still MENTION the script, but only to explain why it was removed.
+    expect(expand.code).toContain('parity indexes SKIPPED, deliberately');
+    expect(expand.code).not.toContain('Run scripts/deferred-migrations');
     expect(
       existsSync(path.resolve(__dirname, '../../../../scripts/deferred-migrations/0248-messages-unification-indexes.sql')),
     ).toBe(false);

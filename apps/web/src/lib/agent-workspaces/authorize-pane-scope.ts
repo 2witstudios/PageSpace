@@ -66,16 +66,43 @@ export interface PaneScopeAuthorityDeps {
  * PURE: every pane scope a verb would bind. Exhaustive over the verb union by
  * construction — a new scope-carrying verb that is not listed here is a
  * compile error rather than a silently ungated write path.
+ *
+ * Every one of the twelve verbs is named, and the fall-through assigns to
+ * `never`. A `default: return []` would have made the claim above false in the
+ * most dangerous direction: a verb added to `workspaceLayoutVerbSchema` with a
+ * `scope` would yield NO scopes here, so `authorizeVerbScopes` would wave it
+ * through and the unauthorized pane row would be written. The read half
+ * (`resolvePaneLabels`) would still redact the label, but the row outlives the
+ * request. So the cost of forgetting must be a build failure, not a silent
+ * hole — which means listing the scope-free verbs by name rather than letting
+ * a default absorb them.
  */
 export function paneScopesOfVerb(verb: WorkspaceLayoutVerb): PaneScope[] {
   switch (verb.type) {
+    // Scope-carrying: these are the write paths the gate exists for.
     case 'ensure':
     case 'assign_pane':
     case 'open_conversation':
     case 'replace_conversation':
       return [verb.scope];
-    default:
+
+    // Structural only — they move, size or clear panes that are already bound,
+    // and carry no target to authorize.
+    case 'split_right':
+    case 'split_down':
+    case 'close_pane':
+    case 'reset_pane':
+    case 'resize_column':
+    case 'resize_pane':
+    case 'move_pane':
+    case 'reorder_columns':
       return [];
+
+    default: {
+      const _exhaustive: never = verb;
+      void _exhaustive;
+      return [];
+    }
   }
 }
 

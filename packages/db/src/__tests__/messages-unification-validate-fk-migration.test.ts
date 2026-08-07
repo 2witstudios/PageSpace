@@ -323,9 +323,9 @@ describeLive('0251 against a real Postgres', () => {
       // The count, the blast radius, and the id — everything a repair needs.
       expect(reported).toMatch(/1 conversation id\(s\), covering 2 message row\(s\)/);
       expect(reported).toContain('c_no_parent');
-      // It names its provenance (0248's skipped orphans) and both repair
+      // It names its provenance (0249's skipped orphans) and both repair
       // options, rather than leaving an opaque 23503 from VALIDATE itself.
-      expect(reported).toMatch(/0248/);
+      expect(reported).toMatch(/0249/);
       expect(reported).not.toMatch(/violates foreign key constraint/);
 
       // The migration rolled back: the constraint is untouched, and — the
@@ -374,10 +374,10 @@ describeLive('0251 against a real Postgres', () => {
       await s.query(`ALTER TABLE "chat_messages" DROP CONSTRAINT "${FK}"`);
 
       const reported = errorChain(await s.migrate());
-      // Silently re-adding it would be worse: 0248's ON DELETE CASCADE is
+      // Silently re-adding it would be worse: 0249's ON DELETE CASCADE is
       // load-bearing for the retention purge, and a re-add here could differ.
       expect(reported).toMatch(/does not exist/);
-      expect(reported).toMatch(/0248/);
+      expect(reported).toMatch(/0249/);
       expect(await fkState(s)).toHaveLength(0);
     } finally {
       await s.pool.end();
