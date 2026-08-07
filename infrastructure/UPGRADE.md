@@ -15,7 +15,7 @@ emits everything below.
 
 ## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
-**Applies to every deployment.** Migration `0253_agent_workspaces_rename` renames
+**Applies to every deployment.** Migration `0254_agent_workspaces_rename` renames
 the agent-session tables, columns, indexes, constraints and the Sprite-reclaim
 trigger so the schema matches the vocabulary the code has used since Phase 1:
 
@@ -46,7 +46,7 @@ They exist for the rolling-deploy window and the follow-up contract PR removes
 all of them.
 
 **⚠️ Do not skip the release that contains this migration.** A deployment that
-jumps from a pre-0253 image straight past the next release lands on code that
+jumps from a pre-0254 image straight past the next release lands on code that
 has already dropped the shims, against a database whose views were never
 created — the exact version-skipping hazard these notes exist for. Upgrade to
 this release first, let it come up, then continue.
@@ -59,7 +59,7 @@ claim, close and reopen reads. Chat, pages and sandboxes are unaffected, and the
 window closes as soon as the roll completes. For a single-node self-host stack
 (`migrate` one-shot gates the services), there is no window at all.
 
-Take the usual pre-upgrade database snapshot. Rolling back to a pre-0253 image
+Take the usual pre-upgrade database snapshot. Rolling back to a pre-0254 image
 requires renaming the tables and columns back.
 
 ## 2026-08 — Minimum upgrade path: agent pane grid (epic #2161, Phase 3 contract)
@@ -73,14 +73,14 @@ blob to relational rows (`agent_workspace_pane_columns` /
 
 | step | migration | what it does |
 |------|-----------|--------------|
-| expand | `0246_vengeful_veda` | creates the row tables, promotes every blob into them, KEEPS the blob and dual-writes it |
-| contract | `0251_mighty_shaman` | final promotion sweep, refuses-to-drop guard, then `DROP COLUMN "workspaceState"` |
+| expand | `0247_vengeful_veda` | creates the row tables, promotes every blob into them, KEEPS the blob and dual-writes it |
+| contract | `0252_mighty_shaman` | final promotion sweep, refuses-to-drop guard, then `DROP COLUMN "workspaceState"` |
 
-**The rule: never apply `0251` in the same `migrate` run as `0246` while the
+**The rule: never apply `0252` in the same `migrate` run as `0247` while the
 old application image is still what restarts afterwards.** The two migrations
-are safe to run back-to-back (0251 re-sweeps anything 0246 promoted, and the
+are safe to run back-to-back (0252 re-sweeps anything 0247 promoted, and the
 guard proves nothing is lost) — what is NOT safe is leaving an application
-image older than this release pointed at the contracted schema. A pre-0251
+image older than this release pointed at the contracted schema. A pre-0252
 image still `SELECT`s and `UPDATE`s `workspaceState`, so the sessions list and
 the pane-layout `GET`/`PUT` fail with `column "workspaceState" does not exist`
 until the new image is up.
@@ -89,13 +89,13 @@ So, for a version-skipping upgrade:
 
 1. Pull the new images FIRST (`docker compose pull`), so the post-migrate
    restart brings up code that never mentions the column.
-2. Run `migrate` once — it applies every pending migration including 0246 and
-   0251 in order.
+2. Run `migrate` once — it applies every pending migration including 0247 and
+   0252 in order.
 3. Start the stack.
 
 Degradation if you do it out of order is bounded to the window between the
 migrate one-shot and the restart, and it is loud (500s on the agents sidebar
-and the workspace route), not silent. Rolling back to a pre-0251 image after
+and the workspace route), not silent. Rolling back to a pre-0252 image after
 the fact requires restoring the column, so take the usual pre-upgrade database
 snapshot.
 
@@ -450,28 +450,28 @@ the processor has `AUDIT_CHAINER_ALLOW_GENESIS=true`:
 
 ## 2026-08 — `chat_messages` dropped, one message table (epic "Agent-Session Single Source of Truth", Phase 4 PR 15)
 
-Migration **0252** DROPs `chat_messages` and `messages."pageId"`. **This is the
+Migration **0253** DROPs `chat_messages` and `messages."pageId"`. **This is the
 one migration in the epic with no code-level rollback.** Reverting the
 deployment restores the readers, not the rows.
 
 ### MINIMUM UPGRADE PATH — you must pass through a release that carries the backfill
 
-`chat_messages` was merged into `messages` across four releases. 0252 assumes
+`chat_messages` was merged into `messages` across four releases. 0253 assumes
 the copy is complete. A deployment that jumps straight from a pre-merge release
-to this one is handled — 0252 re-runs the copy itself, because tenant/onprem
+to this one is handled — 0253 re-runs the copy itself, because tenant/onprem
 deployments can skip versions and have no operator to run a script — but the
 supported path is still to land **at least one release that contains migration
-0250** (`chat_messages VALIDATE CONSTRAINT`, the receipt that the copy is
+0251** (`chat_messages VALIDATE CONSTRAINT`, the receipt that the copy is
 completable) before this one, and to let it run.
 
 Concretely: **do not deploy this release in the same step as a release older
-than 0248.** 0248 synthesises the `conversations` rows that legacy page-chat
-messages need; 0250 proves none are missing and RAISEs, naming the rows, if any
-are. Both must have applied — and been looked at — before 0252 drops the table
+than 0249.** 0249 synthesises the `conversations` rows that legacy page-chat
+messages need; 0251 proves none are missing and RAISEs, naming the rows, if any
+are. Both must have applied — and been looked at — before 0253 drops the table
 they describe. This release must also ship **at least one release after** the
-one containing 0250 (the soak gate), not alongside it.
+one containing 0251 (the soak gate), not alongside it.
 
-If 0252 aborts, it is telling you `chat_messages` still holds rows `messages`
+If 0253 aborts, it is telling you `chat_messages` still holds rows `messages`
 does not represent. It names up to 50 ids. The table is untouched; repair the
 rows and re-run. Repair is a human decision — one option hands someone a chat
 history and the other destroys one — so the migration will not guess.
@@ -523,4 +523,4 @@ roll, so once it has succeeded the table is gone.
 - **Tenant export bundles no longer carry a `chat_messages` INSERT**, and
   `messages` no longer carries a `pageId` column. `conversations` gains
   `agentPageId`. Bundles produced by an OLDER exporter will not import into a
-  0252 database.
+  0253 database.
