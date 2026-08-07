@@ -342,9 +342,24 @@ async function resolvePaneLabels(
     for (const column of subject.grid) {
       for (const pane of column.panes) {
         if (pane.kind === null || pane.targetId === null) continue;
-        if (pane.kind === 'chat') chatIds.add(pane.targetId);
-        else if (pane.kind === 'terminal') shellIds.add(pane.targetId);
-        else if (pane.kind === 'page') pageIds.add(pane.targetId);
+        // Exhaustive on purpose: a new PaneKind that falls off the end of an
+        // if/else chain collects no ids, so it resolves no label and renders
+        // blank — a silent hole rather than a build failure.
+        switch (pane.kind) {
+          case 'chat':
+            chatIds.add(pane.targetId);
+            break;
+          case 'terminal':
+            shellIds.add(pane.targetId);
+            break;
+          case 'page':
+            pageIds.add(pane.targetId);
+            break;
+          default: {
+            const _exhaustive: never = pane.kind;
+            void _exhaustive;
+          }
+        }
       }
     }
   }

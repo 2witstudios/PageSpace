@@ -4,8 +4,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
+import { workspaceLayoutVerbSchema } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { adoptServerGrid, replayPending, verbAlreadyLanded, type PendingVerbOp } from '../verb-queue';
-import { panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from '../pane-reducer';
+import { applyVerbLocal, panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from '../pane-reducer';
 
 const scope = (targetId = 'conv-1', name = 'Planning'): PaneScope => ({
   kind: 'chat',
@@ -127,5 +128,74 @@ describe('adoptServerGrid', () => {
   it('reads a null or empty grid as "this session has no grid"', () => {
     expect(adoptServerGrid('ses-1', null)).toBeNull();
     expect(adoptServerGrid('ses-1', [])).toBeNull();
+  });
+});
+
+/**
+ * `mintedPaneId` / `mintedColumnId` are module-private, so this pins them the
+ * way `authorize-pane-scope.test.ts` pins `paneScopesOfVerb`: through the
+ * behaviour they drive, against the verb union read at RUNTIME.
+ *
+ * The `never` fall-through makes a missed verb a compile error, but a
+ * type-level guard proves nothing to a reader and is invisible in a CI log.
+ * Adding a verb to `workspaceLayoutVerbSchema` fails here until someone has
+ * decided, in this file, whether it mints identity — which is the decision
+ * that keeps replay idempotent after a 409.
+ */
+describe('the minting tables cover the whole verb union', () => {
+  it('pins which verbs mint identity', () => {
+    const declared = workspaceLayoutVerbSchema.options.map((o) => o.shape.type.value).sort();
+
+    // Every verb, so a new one cannot slip past the classification below.
+    expect(declared).toEqual(
+      [
+        'assign_pane',
+        'close_pane',
+        'ensure',
+        'move_pane',
+        'open_conversation',
+        'reorder_columns',
+        'replace_conversation',
+        'reset_pane',
+        'resize_column',
+        'resize_pane',
+        'split_down',
+        'split_right',
+      ].sort(),
+    );
+
+    // A verb mints identity exactly when its schema declares a `newPaneId` /
+    // `newColumnId` (or is `ensure`, which names both outright). That is the
+    // set `verbAlreadyLanded` must be able to recognise.
+    const minting = workspaceLayoutVerbSchema.options
+      .filter((o) => 'newPaneId' in o.shape || 'newColumnId' in o.shape || o.shape.type.value === 'ensure')
+      .map((o) => o.shape.type.value)
+      .sort();
+    expect(minting).toEqual(['ensure', 'open_conversation', 'split_down', 'split_right'].sort());
+  });
+
+  it('recognises a replayed mint for every minting verb, and nothing for the rest', () => {
+    // `ensure` on an existing workspace is handled by its own branch; the three
+    // splitting verbs are the ones whose replay would splice a duplicate id.
+    const base: WorkspaceState = {
+      id: 'ses-1',
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: scope() }] }],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    };
+
+    const splitRight: WorkspaceLayoutVerb = {
+      type: 'split_right',
+      fromPaneId: 'pane-1',
+      newColumnId: 'col-2',
+      newPaneId: 'pane-2',
+    };
+    expect(verbAlreadyLanded(base, splitRight)).toBe(false);
+    const landed = applyVerbLocal(base, 'ses-1', splitRight).state;
+    expect(verbAlreadyLanded(landed, splitRight)).toBe(true);
+
+    // A non-minting verb never claims to have landed — it is naturally
+    // idempotent, so replay needs no id check.
+    expect(verbAlreadyLanded(landed, { type: 'close_pane', paneId: 'pane-2' })).toBe(false);
   });
 });

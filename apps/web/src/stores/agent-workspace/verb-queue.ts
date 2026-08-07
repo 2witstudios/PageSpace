@@ -18,9 +18,9 @@
  * in the verb payload, so a verb that already landed server-side is
  * detectable structurally: its minted ids are already in the snapshot
  * ({@link verbAlreadyLanded}). That check is what makes replay idempotent for
- * the two verbs that CREATE something (`split_right`, `split_down`, and
- * `open_conversation`'s split branch) — replaying one blind would splice a
- * second column carrying an id that already exists. Every other verb is
+ * the four verbs that MINT identity — `ensure`, `split_right`, `split_down`,
+ * and `open_conversation`'s split branch — replaying one blind would splice a
+ * second column or pane carrying an id that already exists. Every other verb is
  * naturally idempotent: assigning the same scope to the same pane, closing an
  * already-closed pane, resetting an already-unbound pane and repointing an
  * already-repointed target all reduce to the same state.
@@ -50,7 +50,18 @@ export interface PendingVerbOp {
   verb: WorkspaceLayoutVerb;
 }
 
-/** The pane id a verb MINTS (as opposed to the ones it addresses), if any. */
+/**
+ * The pane id a verb MINTS (as opposed to the ones it addresses), if any.
+ *
+ * Every verb is named and the fall-through assigns to `never`, for the same
+ * reason `paneScopesOfVerb` does it: a `default: return null` would make a NEW
+ * minting verb answer "mints nothing", so {@link verbAlreadyLanded} would say
+ * it had not landed, {@link replayPending} would re-apply it after a 409, and
+ * the reducer would splice a second pane carrying an id the server already has
+ * — a compound-PK violation on the next write, surfacing as a 500 five retries
+ * later when the queue gives up and discards the user's work. The cost of
+ * forgetting has to be a build failure.
+ */
 function mintedPaneId(verb: WorkspaceLayoutVerb): string | null {
   switch (verb.type) {
     case 'ensure':
@@ -59,12 +70,27 @@ function mintedPaneId(verb: WorkspaceLayoutVerb): string | null {
     case 'split_down':
     case 'open_conversation':
       return verb.newPaneId;
-    default:
+
+    // Address panes that already exist; mint nothing.
+    case 'assign_pane':
+    case 'close_pane':
+    case 'reset_pane':
+    case 'replace_conversation':
+    case 'resize_column':
+    case 'resize_pane':
+    case 'move_pane':
+    case 'reorder_columns':
       return null;
+
+    default: {
+      const _exhaustive: never = verb;
+      void _exhaustive;
+      return null;
+    }
   }
 }
 
-/** The column id a verb MINTS, if any. */
+/** The column id a verb MINTS, if any. Exhaustive for the same reason as above. */
 function mintedColumnId(verb: WorkspaceLayoutVerb): string | null {
   switch (verb.type) {
     case 'ensure':
@@ -72,8 +98,24 @@ function mintedColumnId(verb: WorkspaceLayoutVerb): string | null {
     case 'split_right':
     case 'open_conversation':
       return verb.newColumnId;
-    default:
+
+    // `split_down` mints a PANE inside the column it split from, never a column.
+    case 'split_down':
+    case 'assign_pane':
+    case 'close_pane':
+    case 'reset_pane':
+    case 'replace_conversation':
+    case 'resize_column':
+    case 'resize_pane':
+    case 'move_pane':
+    case 'reorder_columns':
       return null;
+
+    default: {
+      const _exhaustive: never = verb;
+      void _exhaustive;
+      return null;
+    }
   }
 }
 
