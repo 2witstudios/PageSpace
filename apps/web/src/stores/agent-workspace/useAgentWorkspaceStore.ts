@@ -18,6 +18,7 @@ import {
   type WorkspaceState,
 } from './pane-reducer';
 import { adoptServerGrid, replayPending, type PendingVerbOp } from './verb-queue';
+import { carryPaneLabelsForward, hasUnknownBoundTarget, paneLabelIndex } from './pane-labels';
 
 /**
  * Where each session's pane layout lives — as a DERIVED CACHE of the server's
@@ -44,6 +45,15 @@ import { adoptServerGrid, replayPending, type PendingVerbOp } from './verb-queue
  *     → drop if `rev <= known`; no-op if it carries an opId we still have in
  *     flight (our own echo — our POST's own answer is the authoritative one
  *     and is already on its way); otherwise adopt + replay.
+ *
+ * **Broadcasts carry no labels** (security review HIGH 1). `session:<id>` is
+ * a room, so one payload reaches every member of a shared workspace at once
+ * and per-viewer title redaction is not expressible on it; the server ships
+ * structure only. Names are this client's own business: known bindings keep
+ * their label across a broadcast (`pane-labels.ts`), and a broadcast that
+ * introduces a target we have never labelled triggers one
+ * `refreshWorkspaceSnapshot` — the access-checked GET, whose labels are
+ * resolved for THIS viewer and nobody else.
  *
  * **What this replaced, and why it is gone.** The blob era arbitrated between
  * three copies of the same fact with a debounced PUT, two hydration latches
@@ -822,11 +832,19 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         ) {
           return;
         }
-        commit(
-          sessionId,
-          { ...sync, base: adoptServerGrid(sessionId, payload.grid), rev: payload.rev },
-          'preserve',
-        );
+        // The broadcast is label-free, so re-dress it from what this client
+        // already knows before it reaches the renderer — otherwise a pure
+        // resize would blank every pane header it touched.
+        const known = paneLabelIndex(sync.base);
+        const server = adoptServerGrid(sessionId, payload.grid);
+        // An emptied grid has no labels to carry and nothing to go read.
+        const adopted = server === null ? null : carryPaneLabelsForward(known, server);
+        commit(sessionId, { ...sync, base: adopted, rev: payload.rev }, 'preserve');
+        // A target we have never labelled is the ONE case a broadcast cannot
+        // dress itself: go read it under this viewer's own authority.
+        if (adopted !== null && hasUnknownBoundTarget(known, adopted)) {
+          void get().refreshWorkspaceSnapshot(sessionId);
+        }
       },
 
       refreshWorkspaceSnapshot: async (sessionId) => {

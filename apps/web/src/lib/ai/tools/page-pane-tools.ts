@@ -37,6 +37,13 @@ export interface PagePaneToolDeps {
     conversationId: string;
     pageId: string;
     title?: string;
+    /**
+     * The ACTING USER. `pageId` is model-supplied, so the placement gates it
+     * on this user's own page access — otherwise a prompt-injected agent
+     * turns the pane header into a title-exfiltration channel (security
+     * review, MEDIUM on the HIGH 1 surface).
+     */
+    viewerId: string;
     /** Idempotency key derived from the tool call — a retried call must not place twice. */
     opId: string;
   }): Promise<void>;
@@ -74,19 +81,24 @@ export function createPagePaneTools(deps: PagePaneToolDeps) {
         'Only has a visible effect inside an agent session with an open pane grid; elsewhere it is a harmless no-op.',
       inputSchema: openPagePaneInputSchema,
       execute: async ({ pageId, title }, options): Promise<OpenPagePaneOutput> => {
-        const context = (options as { experimental_context?: { conversationId?: string } } | undefined)
-          ?.experimental_context;
+        const context = (
+          options as { experimental_context?: { conversationId?: string; userId?: string } } | undefined
+        )?.experimental_context;
         const conversationId = context?.conversationId;
+        const viewerId = context?.userId;
         // `toolCallId` is stable across the SDK's own retries of one call, so
         // deriving the opId from it is what makes a retried placement a
         // replay (the verb engine's op memory short-circuits it) instead of
         // a second pane.
         const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
-        if (conversationId && toolCallId) {
+        // No acting user means no authority to place under — the ack below is
+        // still honest (the client fast path is a no-op without a grid too).
+        if (conversationId && toolCallId && viewerId) {
           await deps.placePagePane({
             conversationId,
             pageId,
             title,
+            viewerId,
             opId: `${OPEN_PAGE_PANE_TOOL_NAME}:${toolCallId}`,
           });
         }

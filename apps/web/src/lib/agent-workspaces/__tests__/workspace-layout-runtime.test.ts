@@ -62,7 +62,12 @@ const { mockBroadcast, storeRef, labelRows } = vi.hoisted(() => ({
   mockBroadcast: vi.fn(),
   storeRef: { current: null as unknown },
   /** What the label JOIN finds, per table — the live titles the rows do not store. */
-  labelRows: { conversations: [] as unknown[], shells: [] as unknown[], pages: [] as unknown[] },
+  labelRows: {
+    conversations: [] as unknown[],
+    shells: [] as unknown[],
+    pages: [] as unknown[],
+    workspaces: [] as unknown[],
+  },
 }));
 
 vi.mock('@pagespace/lib/services/agent-workspaces/workspace-layout-store', () => ({
@@ -80,7 +85,7 @@ vi.mock('@/lib/websocket/agent-workspace-events', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
-      from: (table: { __name: 'conversations' | 'shells' | 'pages' }) => ({
+      from: (table: { __name: 'conversations' | 'shells' | 'pages' | 'workspaces' }) => ({
         where: async () => labelRows[table.__name],
       }),
     }),
@@ -88,12 +93,17 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({ inArray: vi.fn() }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { __name: 'conversations' } }));
-vi.mock('@pagespace/db/schema/agent-workspaces', () => ({ agentWorkspaceShells: { __name: 'shells' } }));
+vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
+  agentWorkspaceShells: { __name: 'shells' },
+  agentWorkspaces: { __name: 'workspaces' },
+}));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 
 import { applyWorkspaceLayoutVerb } from '../workspace-layout-runtime';
 
 const WORKSPACE_ID = 'ses-1';
+const VIEWER_ID = 'user-1';
 const scope = { kind: 'chat' as const, name: 'Conversation', targetId: 'conv-1', agentPageId: null };
 /** What the pane comes back as: the name is JOINED, never echoed from the verb. */
 const joinedScope = { ...scope, name: 'Live title' };
@@ -104,9 +114,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   store = createFakeWorkspaceLayoutStore();
   storeRef.current = store;
-  labelRows.conversations = [{ id: 'conv-1', title: 'Live title', type: 'global', contextId: null }];
+  labelRows.conversations = [
+    { id: 'conv-1', title: 'Live title', type: 'global', contextId: null, userId: VIEWER_ID, isShared: false, workspaceId: WORKSPACE_ID },
+  ];
   labelRows.shells = [];
   labelRows.pages = [];
+  labelRows.workspaces = [{ id: WORKSPACE_ID, ownerId: VIEWER_ID }];
 });
 
 const ensure = (opId = 'op-ensure', baseRev = 0) =>
@@ -115,10 +128,11 @@ const ensure = (opId = 'op-ensure', baseRev = 0) =>
     opId,
     baseRev,
     verb: { type: 'ensure', columnId: 'col-1', paneId: 'pane-1', scope },
+    viewerId: VIEWER_ID,
   });
 
 describe('applyWorkspaceLayoutVerb', () => {
-  it('applies a verb, persists rows, and broadcasts the post-write rev with JOINED labels', async () => {
+  it('applies a verb, answers the CALLER with joined labels, and broadcasts a LABEL-FREE grid', async () => {
     const result = await ensure();
     expect(result).toEqual({
       status: 'ok',
@@ -132,6 +146,10 @@ describe('applyWorkspaceLayoutVerb', () => {
     expect(await store.getWorkspaceGrid(WORKSPACE_ID)).toEqual([
       { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
     ]);
+    // SECURITY (review HIGH 1): `session:<id>` is a room — one payload, every
+    // member — so there is no viewer to redact titles for and the broadcast
+    // carries structure only. Clients re-dress it from what they already know
+    // and read anything new under their own authority.
     expect(mockBroadcast).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       rev: 1,
@@ -139,7 +157,7 @@ describe('applyWorkspaceLayoutVerb', () => {
       // The causing op's key rides along so a subscriber can recognize its
       // OWN echo and leave its still-queued verb alone.
       opId: 'op-ensure',
-      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: joinedScope }] }],
+      grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { ...scope, name: '' } }] }],
     });
   });
 
@@ -147,12 +165,15 @@ describe('applyWorkspaceLayoutVerb', () => {
     await ensure('op-1');
     // The conversation is renamed elsewhere. Nothing rewrites the pane row —
     // and nothing needs to, which is the entire point of not storing names.
-    labelRows.conversations = [{ id: 'conv-1', title: 'Renamed', type: 'global', contextId: null }];
+    labelRows.conversations = [
+      { id: 'conv-1', title: 'Renamed', type: 'global', contextId: null, userId: VIEWER_ID, isShared: false, workspaceId: WORKSPACE_ID },
+    ];
     const next = await applyWorkspaceLayoutVerb({
       workspaceId: WORKSPACE_ID,
       opId: 'op-2',
       baseRev: 1,
       verb: { type: 'split_down', fromPaneId: 'pane-1', newPaneId: 'pane-2' },
+      viewerId: VIEWER_ID,
     });
     expect(next.status === 'ok' && next.grid[0].panes[0].scope?.name).toBe('Renamed');
   });
@@ -171,13 +192,13 @@ describe('applyWorkspaceLayoutVerb', () => {
       newColumnId: 'col-2',
       newPaneId: 'pane-2',
     };
-    const first = await applyWorkspaceLayoutVerb({ workspaceId: WORKSPACE_ID, opId: 'op-2', baseRev: 1, verb: split });
+    const first = await applyWorkspaceLayoutVerb({ workspaceId: WORKSPACE_ID, opId: 'op-2', baseRev: 1, verb: split, viewerId: VIEWER_ID });
     expect(first.status === 'ok' && first.applied).toBe(true);
     mockBroadcast.mockClear();
 
     // The retry: same opId, same (now stale) baseRev. It must short-circuit
     // on the op memory — NOT 409, NOT a second column — and not broadcast.
-    const retry = await applyWorkspaceLayoutVerb({ workspaceId: WORKSPACE_ID, opId: 'op-2', baseRev: 1, verb: split });
+    const retry = await applyWorkspaceLayoutVerb({ workspaceId: WORKSPACE_ID, opId: 'op-2', baseRev: 1, verb: split, viewerId: VIEWER_ID });
     expect(retry.status).toBe('ok');
     expect(retry.status === 'ok' && retry.applied).toBe(false);
     expect(retry.rev).toBe(2);
@@ -193,6 +214,7 @@ describe('applyWorkspaceLayoutVerb', () => {
       opId: 'op-stale',
       baseRev: 0,
       verb: { type: 'split_down', fromPaneId: 'pane-1', newPaneId: 'pane-2' },
+      viewerId: VIEWER_ID,
     });
     expect(result).toEqual({
       status: 'stale',
@@ -210,6 +232,7 @@ describe('applyWorkspaceLayoutVerb', () => {
       opId: 'op-noop',
       baseRev: 1,
       verb: { type: 'close_pane', paneId: 'ghost' },
+      viewerId: VIEWER_ID,
     });
     expect(result.status === 'ok' && result.applied).toBe(false);
     expect(result.rev).toBe(1);
@@ -221,6 +244,7 @@ describe('applyWorkspaceLayoutVerb', () => {
       opId: 'op-noop',
       baseRev: 99,
       verb: { type: 'close_pane', paneId: 'ghost' },
+      viewerId: VIEWER_ID,
     });
     expect(replay.status).toBe('ok');
   });

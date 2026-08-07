@@ -341,6 +341,19 @@ export interface SessionToolsDeps {
    */
   findOwnWorkspace: (conversationId: string) => Promise<{ workspaceId: string } | null>;
   /**
+   * THE session-access decision (`checkSessionAccess` — owner or drive
+   * member), applied to a workspace the caller reached by resolving their own
+   * conversation's binding.
+   *
+   * Resolving the binding is NOT the gate (security review HIGH 2). A
+   * conversation→workspace binding is permanent by design, but drive
+   * membership is not: a member who spawns a worker into a shared workspace
+   * and is later removed from the drive still resolves to that workspace
+   * forever, while every HTTP route 404s her. Without this check the tool
+   * surface stayed open after the HTTP surface closed.
+   */
+  checkWorkspaceAccess: (userId: string, workspaceId: string) => Promise<{ allowed: boolean }>;
+  /**
    * The workspace's workers + shells + sandbox status, labels resolved.
    * `callerUserId` is the VIEWER: a caller whose conversation lives in a
    * workspace they do not own (spawned into a shared one) gets other
@@ -493,7 +506,7 @@ export interface SessionToolsDeps {
    * pane's binding for the model to tell one rectangle from another. `null`
    * for a workspace with no grid at all.
    */
-  readPaneGrid?: (workspaceId: string) => Promise<PaneGridListing | null>;
+  readPaneGrid?: (workspaceId: string, viewerId: string) => Promise<PaneGridListing | null>;
   /**
    * Apply ONE layout verb to the caller's workspace grid, through the same
    * single writer (`applyWorkspaceLayoutVerb`) the verbs route uses — same
@@ -611,6 +624,20 @@ const NO_GRID = {
   success: false as const,
   error:
     'This conversation has no pane grid to arrange. Pane layout only exists inside an agent session with an open workspace; elsewhere there is nothing to move or resize.',
+};
+
+/**
+ * The caller's conversation IS bound to a workspace, but they may no longer
+ * use it — the drive membership that admitted them was revoked (security
+ * review HIGH 2). Deliberately distinct from {@link NO_GRID}: this is not an
+ * oracle (the caller's own conversation lives there, so the workspace's
+ * existence was never a secret) and telling the model "you had access and
+ * lost it" is the only answer that stops it retrying forever.
+ */
+const GRID_ACCESS_LOST = {
+  success: false as const,
+  error:
+    'You no longer have access to the workspace this conversation belongs to, so its pane layout cannot be read or rearranged from here.',
 };
 
 function notYourShell(shellId: string): { success: false; error: string } {
@@ -731,23 +758,29 @@ export function createSessionTools(deps: SessionToolsDeps): {
    * A LAYOUT verb's shared open (issue #2208): resolve the caller's own
    * workspace, which is the only grid these tools can reach.
    *
-   * Access control is structural rather than a second predicate — the grid is
-   * addressed by resolving the CALLER'S OWN conversation to its workspace
-   * (`findOwnWorkspace`), never by a workspaceId the model supplies, so there
-   * is no id here for a caller to point somewhere it does not belong. That is
-   * the same footing the shell family stands on, and it means the check the
-   * verbs route runs (`checkSessionAccess`) has already been satisfied by the
-   * time this conversation exists in this workspace at all; the runtime
-   * re-runs it anyway on the way in, so the gate is one function in one place
-   * for both entry points.
+   * Addressing is structural — the grid is reached by resolving the CALLER'S
+   * OWN conversation to its workspace (`findOwnWorkspace`), never by a
+   * workspaceId the model supplies, so there is no id here for a caller to
+   * point somewhere it does not belong.
    *
-   * Refuses, distinctly, the three ways there is nothing to arrange: no auth,
-   * no conversation, and a conversation with no workspace (a plain thread).
+   * ADDRESSING IS NOT AUTHORIZATION, though, and this docblock used to claim
+   * the runtime "re-runs `checkSessionAccess` anyway on the way in" when
+   * nothing on the path checked anything (security review HIGH 2). The
+   * structural argument is unsound in one direction: a conversation→workspace
+   * binding is permanent, drive membership is not. A member who spawned a
+   * worker into a shared workspace and then lost the drive keeps resolving to
+   * it forever — so this now runs the SAME decision the verbs route runs
+   * (`checkWorkspaceAccess` → `checkSessionAccess`), and the gate really is
+   * one function in one place for both entry points.
+   *
+   * Refuses, distinctly, the four ways there is nothing to arrange: no auth,
+   * no conversation, a conversation with no workspace (a plain thread), and a
+   * workspace the caller may no longer use.
    */
   const openOwnGrid = async (
     context: ToolExecutionContext | undefined,
   ): Promise<
-    | { ok: true; workspaceId: string }
+    | { ok: true; workspaceId: string; viewerId: string }
     | { ok: false; error: { success: false; error: string } }
   > => {
     const actor = readActor(context);
@@ -756,7 +789,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
     if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
     const workspace = await deps.findOwnWorkspace(conversationId);
     if (!workspace) return { ok: false, error: NO_GRID };
-    return { ok: true, workspaceId: workspace.workspaceId };
+    const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
+    if (!access.allowed) return { ok: false, error: GRID_ACCESS_LOST };
+    return { ok: true, workspaceId: workspace.workspaceId, viewerId: actor.userId };
   };
 
   /**
@@ -1242,7 +1277,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
         if (!opened.ok) return opened.error;
         if (!deps.readPaneGrid) return NO_GRID;
 
-        const grid = await deps.readPaneGrid(opened.workspaceId);
+        // Labels are a permissioned join (review HIGH 1) — the read says who
+        // is reading, so the model sees exactly what this user's own GET would.
+        const grid = await deps.readPaneGrid(opened.workspaceId, opened.viewerId);
         // A workspace whose grid has never been opened is a real, reportable
         // state — not an error, and not the same as having no workspace.
         if (!grid) {
