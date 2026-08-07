@@ -5,21 +5,6 @@
  * - Actor snapshot fields (actorEmail, actorDisplayName) for denormalized actor info
  * - FK behavior (onDelete: 'set null') to preserve audit logs when users are deleted
  * - SOX/GDPR compliance patterns
- *
- * CLEANUP IS ROW-SCOPED, ON PURPOSE. This file used to end each case with
- *   TRUNCATE TABLE activity_logs, page_permissions, pages, drive_members, drives, users CASCADE
- * which is wrong twice over on a SHARED database. Turbo runs `test:coverage`
- * for @pagespace/db, @pagespace/lib and web concurrently against the one CI
- * Postgres, so that statement (a) took an ACCESS EXCLUSIVE lock on six tables
- * those other suites were mid-insert on — deadlocking (40P01) against their
- * FK RowShare locks, after which the leftover fixture row made the next
- * beforeEach fail with 23505 on users_email_unique — and (b) when it *did*
- * win the race, it silently deleted the other packages' fixtures (the hazard
- * already documented in ../test/setup.ts).
- *
- * So: seed nothing but a user + a drive, record every activity_logs row this
- * file writes, and delete exactly those. Nothing here needs an empty table —
- * the only non-id lookup is scoped by a per-test unique actorEmail.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -35,27 +20,22 @@ describe('activity_logs schema compliance', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
   let testDrive: Awaited<ReturnType<typeof factories.createDrive>>
 
-  /**
-   * Ids of the activity_logs rows written by the current test. Tracked rather
-   * than derived from userId/driveId because both FKs are `onDelete: 'set null'`
-   * — the cases that delete the user (the whole point of this suite) leave logs
-   * whose owning ids are already gone.
-   */
-  let seededLogIds: string[] = []
-
-  /** Mint an activity_logs id and register it for this test's cleanup. */
-  function seedLogId(): string {
-    const id = createId()
-    seededLogIds.push(id)
+  /** Every `activity_logs.id` this file inserts, so afterEach can reap exactly those. */
+  const createdLogIds: string[] = []
+  const trackLog = (id: string): string => {
+    createdLogIds.push(id)
     return id
   }
 
   beforeEach(async () => {
-    seededLogIds = []
     testUser = await factories.createUser({
-      // Unique per test: `users.email` is UNIQUE, and a fixed address makes the
-      // suite collide with itself (and with any other suite on the shared CI
-      // database) the moment one cleanup does not land.
+      // Unique per test. `users.email` is UNIQUE, so a fixed address makes this
+      // suite collide with ITSELF the moment one cleanup does not land — the
+      // other half of the CI failure described in afterEach below. Once the
+      // TRUNCATE lost the lock race and left its row behind, the next beforeEach
+      // died on 23505 `users_email_unique` (Key (email)=(john@example.com)
+      // already exists), turning one lock error into four red tests. A unique
+      // address also cannot collide with another suite on the shared database.
       email: `activity-logs-compliance-${createId()}@example.test`,
       name: 'John Doe',
     })
@@ -63,12 +43,28 @@ describe('activity_logs schema compliance', () => {
   })
 
   afterEach(async () => {
-    // Row-scoped cleanup — delete ONLY what this test seeded. Deleting the user
-    // cascades the drive away (drives.ownerId is onDelete: 'cascade'), but the
-    // logs must go first: they are deliberately outlived by their FKs.
-    if (seededLogIds.length > 0) {
-      await db.delete(activityLogs).where(inArray(activityLogs.id, seededLogIds))
+    // Delete ONLY what this test created.
+    //
+    // This used to be `TRUNCATE activity_logs, page_permissions, pages,
+    // drive_members, drives, users CASCADE`. CI runs
+    // `turbo run test:coverage` across @pagespace/db, @pagespace/lib,
+    // apps/web, apps/admin and apps/realtime CONCURRENTLY against one
+    // database, and TRUNCATE takes ACCESS EXCLUSIVE on all six tables while
+    // those suites hold ROW SHARE on them. Both outcomes were live failures:
+    // losing the lock race deadlocked (40P01) and failed this file's own
+    // tests, and winning it deleted the other suites' fixtures mid-request —
+    // apps/admin's broadcast-templates test 403s with `user_not_found`
+    // because the admin user it had just inserted was gone.
+    //
+    // `activityLogs.userId`/`driveId` are both `onDelete: 'set null'`, so the
+    // FK-behaviour tests below leave their rows reachable by NEITHER key once
+    // they delete the user and drive. Hence the tracked id list rather than a
+    // predicate: it is the only thing that still finds those rows.
+    if (createdLogIds.length > 0) {
+      await db.delete(activityLogs).where(inArray(activityLogs.id, createdLogIds))
+      createdLogIds.length = 0
     }
+    // No-ops for the tests that already deleted these themselves.
     await db.delete(drives).where(eq(drives.id, testDrive.id))
     await db.delete(users).where(eq(users.id, testUser.id))
   })
@@ -76,7 +72,7 @@ describe('activity_logs schema compliance', () => {
   describe('actor snapshot fields', () => {
     it('should have actorEmail field for denormalized actor info', async () => {
       // Create an activity log with actorEmail
-      const logId = seedLogId()
+      const logId = trackLog(createId())
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -101,7 +97,7 @@ describe('activity_logs schema compliance', () => {
     })
 
     it('should have actorDisplayName field for denormalized actor info', async () => {
-      const logId = seedLogId()
+      const logId = trackLog(createId())
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -125,7 +121,7 @@ describe('activity_logs schema compliance', () => {
 
     it('should use default actorEmail when not provided', async () => {
       // When actorEmail is omitted, the default 'legacy@unknown' is used
-      const logId = seedLogId()
+      const logId = trackLog(createId())
 
       await db.insert(activityLogs).values({
         id: logId,
@@ -148,7 +144,7 @@ describe('activity_logs schema compliance', () => {
     })
 
     it('should allow null actorDisplayName', async () => {
-      const logId = seedLogId()
+      const logId = trackLog(createId())
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -174,7 +170,7 @@ describe('activity_logs schema compliance', () => {
   describe('user deletion FK behavior (onDelete: set null)', () => {
     it('should preserve audit logs when user is deleted (userId becomes null)', async () => {
       // Create activity log for user
-      const logId = seedLogId()
+      const logId = trackLog(createId())
       await db.insert(activityLogs).values({
         id: logId,
         userId: testUser.id,
@@ -218,9 +214,9 @@ describe('activity_logs schema compliance', () => {
 
     it('should preserve multiple audit logs when user is deleted', async () => {
       // Create multiple activity logs
-      const log1Id = seedLogId()
-      const log2Id = seedLogId()
-      const log3Id = seedLogId()
+      const log1Id = trackLog(createId())
+      const log2Id = trackLog(createId())
+      const log3Id = trackLog(createId())
 
       await db.insert(activityLogs).values([
         {
@@ -283,7 +279,7 @@ describe('activity_logs schema compliance', () => {
 
   describe('compliance requirements', () => {
     it('should preserve all audit data for SOX 7-year retention', async () => {
-      const logId = seedLogId()
+      const logId = trackLog(createId())
       const resourceId = createId()
       const contentSnapshot = '{"title":"Financial Report Q4","content":"Important financial data..."}'
 
@@ -323,7 +319,7 @@ describe('activity_logs schema compliance', () => {
     })
 
     it('should support AI attribution for automated audit trails', async () => {
-      const logId = seedLogId()
+      const logId = trackLog(createId())
 
       await db.insert(activityLogs).values({
         id: logId,
