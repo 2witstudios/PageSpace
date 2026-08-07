@@ -66,8 +66,8 @@ export interface TableColumnSpec {
  * is born in — and the orphan reconciler's live-sprite predicate
  * (`sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`) never selects it.
  */
-const AGENT_SESSION_SPRITE_EXCLUSIONS: Record<string, string> = {
-  sessionKey: 'Sprite provisioning key in the SOURCE fleet — meaningless to the tenant, which derives its own.',
+const AGENT_WORKSPACE_SPRITE_EXCLUSIONS: Record<string, string> = {
+  spriteKey: 'Sprite provisioning key in the SOURCE fleet — meaningless to the tenant, which derives its own.',
   sandboxId: 'Names a Sprite in the SOURCE fleet; carrying it would point the tenant at a VM it does not own.',
   spriteInstanceId: 'Identity of a SOURCE-fleet Sprite instance — every teardown CAS keys on it, so a stale value is actively dangerous.',
   egressPolicyToken: 'Proof of an egress lockdown confirmed for a SOURCE-fleet VM; unprovable and unusable in the tenant.',
@@ -184,7 +184,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'driveId', 'ownerId', 'name',
       'lastActiveAt', 'endedAt', 'createdAt', 'updatedAt',
     ],
-    excluded: AGENT_SESSION_SPRITE_EXCLUSIONS,
+    excluded: AGENT_WORKSPACE_SPRITE_EXCLUSIONS,
   },
 
   conversations: {

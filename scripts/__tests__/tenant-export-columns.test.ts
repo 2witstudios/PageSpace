@@ -161,7 +161,7 @@ describe('tenant export column registry', () => {
       drives: ['publishSubdomain', 'homePageId', 'not_found_page_id', 'publish_default_og_image_url', 'publish_favicon_url'],
       pages: ['toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'description', 'isPrivate', 'createdBy'],
       channel_messages: ['editedAt', 'parentId', 'replyCount', 'lastReplyAt', 'mirroredFromId', 'quotedMessageId'],
-      conversations: ['sessionId', 'closedInWorkspaceAt', 'rev', 'isShared', 'agentPageId'],
+      conversations: ['workspaceId', 'closedInWorkspaceAt', 'rev', 'isShared', 'agentPageId'],
       messages: ['sourceAgentId'],
     };
 
