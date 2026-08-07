@@ -177,9 +177,19 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   channel_read_status: { columns: ['userId', 'channelId', 'lastReadAt'] },
 
+  // KNOWN GAP (stated, not silent): the pane grid used to ride along in this
+  // table's `workspaceState` jsonb. That column was dropped at the
+  // agent-session SSoT epic's Phase 3 contract step and the grid now lives in
+  // `agent_workspace_pane_columns` / `agent_workspace_panes`, which are NOT
+  // in `TABLE_IMPORT_ORDER` — so a tenant bundle no longer carries pane
+  // LAYOUT. Nothing is orphaned by that: every conversation and shell in the
+  // session is carried and still bound (`conversations.sessionId`), so the
+  // migrated user gets their threads with a fresh default grid instead of
+  // their arrangement. Closing it means WIDENING the carried table set, which
+  // this registry deliberately does not do on its own (see SCOPE NOTE above).
   agent_sessions: {
     columns: [
-      'id', 'driveId', 'ownerId', 'name', 'workspaceState',
+      'id', 'driveId', 'ownerId', 'name',
       'lastActiveAt', 'endedAt', 'createdAt', 'updatedAt',
     ],
     excluded: AGENT_SESSION_SPRITE_EXCLUSIONS,

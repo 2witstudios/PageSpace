@@ -39,7 +39,7 @@ import {
   type AgentSessionListFilter,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-sessions/session-shells-runtime';
-import { getSessionWorkspacesBulk } from '@/lib/agent-sessions/session-workspace-runtime';
+import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-sessions/workspace-layout-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
@@ -110,20 +110,24 @@ export async function GET(request: Request) {
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).
     const sessionIds = sessions.map((session) => session.sessionId);
-    const [shellsBySession, conversationsBySession, workspaceBySession] = await Promise.all([
+    const [shellsBySession, conversationsBySession, gridBySession] = await Promise.all([
       listShellsBulk(sessionIds),
       listSessionConversationsBulk(sessionIds),
-      getSessionWorkspacesBulk(sessionIds),
+      readWorkspaceGridsBulk(sessionIds),
     ]);
     const withChildren = sessions.map((session) => ({
       ...session,
       shells: shellsBySession.get(session.sessionId) ?? [],
       // The sidebar's expansion list: the threads living in this workspace.
       conversations: conversationsBySession.get(session.sessionId) ?? [],
-      // The sidebar's PANE-grouped expansion list, once it exists — `null`
-      // for a session never opened under `useWorkspaceServerSync`, which the
-      // sidebar reads as "fall back to the flat conversation list above."
-      workspace: workspaceBySession.get(session.sessionId) ?? null,
+      // The sidebar's PANE-grouped expansion list, derived from the pane ROWS
+      // (labels joined at read time) — `null` for a session with no grid yet,
+      // which the sidebar reads as "fall back to the flat conversation list
+      // above."
+      workspace: workspaceListEntryFromGrid(
+        session.sessionId,
+        gridBySession.get(session.sessionId) ?? null,
+      ),
     }));
     return NextResponse.json({ sessions: withChildren });
   } catch (error) {

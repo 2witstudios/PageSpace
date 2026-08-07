@@ -1751,6 +1751,13 @@
       "when": 1786048708844,
       "tag": "0249_cooing_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 250,
+      "version": "7",
+      "when": 1786068096644,
+      "tag": "0250_slimy_goblin_queen",
+      "breakpoints": true
     }
   ]
 }

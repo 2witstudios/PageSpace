@@ -34,9 +34,9 @@
  * cross-device) and labels derive at read time. `gridFromWorkspaceState` is
  * the ONE projection from the rich state to what rows own
  * (`{id, kind, targetId}` per pane); `workspaceStateFromGrid` is its inverse,
- * re-hydrating display fields from the rolling-deploy blob where available.
- * The drift-guard property test (blob ≡ rows after ANY verb sequence) pins
- * these two as exact structural inverses.
+ * leaving the non-persisted fields at their neutral defaults (empty labels,
+ * focus on the first pane) for the read path to fill in. The round-trip
+ * property test pins these two as exact structural inverses.
  *
  * **Server-side divergences from the client store (deliberate, documented):**
  *  - `open_conversation`'s replaceable-pane policy is the pure structural
@@ -972,35 +972,29 @@ export function gridFromWorkspaceState(state: WorkspaceState | PersistedWorkspac
 }
 
 /**
- * Re-hydrate a full `WorkspaceState` from persisted rows, using the
- * rolling-deploy blob (when present and matching) purely as the DISPLAY
- * side-channel: `name`/`agentPageId` per pane, plus `activePaneId`/
- * `pendingPickerPaneId` — none of which rows own. Structure (columns, pane
- * order, kind, targetId) always comes from `grid`; a blob disagreeing on
- * structure loses. `grid: []` falls back to the blob wholesale (rows not yet
- * promoted), and `null` means the session truly has no grid.
+ * Re-hydrate a full `WorkspaceState` from persisted rows. Rows are the ONLY
+ * source (epic Phase 3 contract — the `workspaceState` blob that used to
+ * supply the display side-channel is gone), so `grid: []` means the session
+ * truly has no grid and answers `null`.
  *
- * A rows-bound pane the blob does not know (or knows with a different
- * target) gets an empty `name` and a `null` `agentPageId` — display fields,
- * repaired by the title-joining read path, never trusted as facts.
+ * Every bound pane gets an EMPTY `name`/`null` `agentPageId`: labels are not
+ * facts rows own, they are derived at read time by the title-joining read
+ * path (`readWorkspaceLayoutSnapshot`'s `resolvePaneLabels`) — which is
+ * precisely the stale-pane-label drift class the promotion killed.
+ *
+ * `activePaneId` defaults to the FIRST pane and `pendingPickerPaneId` to
+ * `null`: focus is client-local (per #2048 / D5, it deliberately no longer
+ * restores cross-device), so the server has no focus to restore and needs
+ * only a well-formed anchor for the placement policy `open_conversation`
+ * runs when a verb arrives server-side (the AI tool paths). A browser
+ * reducing the same verb locally uses the user's real focus.
  */
 export function workspaceStateFromGrid(params: {
   workspaceId: string;
   grid: LayoutGridColumn[];
-  blob: PersistedWorkspaceState | null;
 }): WorkspaceState | null {
-  const { workspaceId, grid, blob } = params;
-  if (grid.length === 0) {
-    if (!blob || blob.id !== workspaceId) return null;
-    return blob;
-  }
-
-  const blobPanes = new Map<string, PaneState>();
-  if (blob && blob.id === workspaceId) {
-    for (const column of blob.columns) {
-      for (const pane of column.panes) blobPanes.set(pane.id, pane);
-    }
-  }
+  const { workspaceId, grid } = params;
+  if (grid.length === 0) return null;
 
   // Fractions come from the ROWS, like every other structural fact — and stay
   // absent rather than explicitly null when unsized, so a hydrated grid is
@@ -1014,31 +1008,23 @@ export function workspaceStateFromGrid(params: {
       const stored = readFraction(pane.heightFraction);
       const height = stored !== null ? { heightFraction: stored } : {};
       if (pane.kind === null) return { id: pane.id, scope: null, ...height };
-      const known = blobPanes.get(pane.id);
-      const display =
-        known?.scope && known.scope.kind === pane.kind && known.scope.targetId === pane.targetId
-          ? { name: known.scope.name, agentPageId: known.scope.agentPageId }
-          : { name: '', agentPageId: null };
       return {
         id: pane.id,
-        scope: { kind: pane.kind, targetId: pane.targetId, ...display },
+        scope: { kind: pane.kind, targetId: pane.targetId, name: '', agentPageId: null },
         ...height,
       };
     }),
     };
   });
 
-  const paneIds = new Set(columns.flatMap((column) => column.panes.map((pane) => pane.id)));
-  const activePaneId =
-    blob && blob.id === workspaceId && paneIds.has(blob.activePaneId)
-      ? blob.activePaneId
-      : columns[0].panes[0].id;
-  const pendingPickerPaneId =
-    blob && blob.id === workspaceId && blob.pendingPickerPaneId !== null && paneIds.has(blob.pendingPickerPaneId)
-      ? blob.pendingPickerPaneId
-      : null;
+  // `activePaneId` must always name a LIVE pane (the reducer's own invariant),
+  // so an all-empty grid — representable in rows, which carry no `min(1)`
+  // constraint the way the wire schema does — is read as no grid at all
+  // rather than seated with a dangling anchor.
+  const firstPaneId = columns.find((column) => column.panes.length > 0)?.panes[0].id;
+  if (firstPaneId === undefined) return null;
 
-  return { id: workspaceId, columns, activePaneId, pendingPickerPaneId };
+  return { id: workspaceId, columns, activePaneId: firstPaneId, pendingPickerPaneId: null };
 }
 
 /** The wire shape of a grid snapshot: the state's columns (view-state fields stay off the wire). */

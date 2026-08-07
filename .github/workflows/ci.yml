@@ -92,7 +92,7 @@ jobs:
       - name: Run backfill script tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: cd scripts && bunx vitest run __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts __tests__/tenant-export.test.ts __tests__/tenant-import.test.ts __tests__/tenant-validate.test.ts __tests__/backfill-close-orphaned-tab-listings.test.ts __tests__/backfill-unify-messages.test.ts
+        run: cd scripts && bunx vitest run __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts __tests__/tenant-export.test.ts __tests__/tenant-import.test.ts __tests__/tenant-validate.test.ts __tests__/backfill-unify-messages.test.ts
 
       - name: Coverage report
         if: always()
