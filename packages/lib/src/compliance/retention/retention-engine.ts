@@ -137,6 +137,40 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
  *  - messages / chat_messages: `createdAt` (these tables carry no soft-delete
  *    timestamp; `editedAt` is only set on content edits). This matches the
  *    existing `purgeInactiveMessages` semantics.
+ *
+ * ── BOTH MESSAGE LEGS, DELIBERATELY (epic "Agent-Session Single Source of
+ *    Truth", Phase 4 / D6) ────────────────────────────────────────────────
+ * `chat_messages` is being merged into `messages`, and the GDPR EXPORT has
+ * already cut over to reading the unified table alone (it is a superset, so
+ * reading both would duplicate rows). RETENTION MUST NOT FOLLOW IT. While
+ * rows physically exist in `chat_messages`, a table this sweep stops naming
+ * is a table whose soft-deleted personal data is retained forever. The legacy
+ * leg may be removed ONLY by Phase 4 PR 15, in the same change that runs
+ * `DROP TABLE chat_messages` — see
+ * `packages/lib/src/compliance/__tests__/message-unification-compliance-legs.test.ts`,
+ * which fails if it disappears earlier.
+ *
+ * ── CASCADE (migrations 0248/0249) ─────────────────────────────────────────
+ * The `conversations` delete below is no longer a leaf. Three FKs now cascade
+ * from it: `messages.conversationId` (always did), `chat_messages
+ * .conversationId` (0248, NOT VALID — the referential triggers still fire, so
+ * it cascades for every row that names a real conversation), and
+ * `ai_stream_sessions.conversation_id` (0249). Purging one soft-deleted
+ * conversation therefore now also purges its legacy page-chat rows and its
+ * per-generation stream checkpoints — the latter being message CONTENT
+ * (`parts`) that nothing in this codebase has ever deleted. That is strictly
+ * MORE deletion than before, and it is the intended direction: retention's
+ * whole job is that nothing outlives its window.
+ *
+ * The three statements are consequently NO LONGER independent, which is why
+ * the conversations sweep runs AFTER the two message legs rather than
+ * alongside them: two concurrent DELETEs whose row sets overlap (the direct
+ * sweep and the cascade) can lock the same `chat_messages`/`messages` rows in
+ * different orders, and a deadlock aborts the retention run. Sequencing the
+ * cascading statement last costs one round trip and removes that class
+ * entirely. It also makes the reported counts stable: the message legs report
+ * what age-based sweeping removed, and whatever the cascade mops up
+ * afterwards was, by construction, already condemned.
  */
 export async function cleanupSoftDeletedChatRecords(database: DB): Promise<CleanupResult[]> {
   const cutoff = computeChatRetentionCutoff(
@@ -144,20 +178,25 @@ export async function cleanupSoftDeletedChatRecords(database: DB): Promise<Clean
     resolveChatRetentionDays(process.env.RETENTION_CHAT_SOFT_DELETE_DAYS),
   );
 
-  const [chatMsgs, globalMsgs, convos] = await Promise.all([
+  // Both message legs, in parallel: different tables, disjoint row sets.
+  const [chatMsgs, globalMsgs] = await Promise.all([
+    // THE LEGACY LEG. Removable only by Phase 4 PR 15 (see the doc above).
     database
       .delete(chatMessages)
       .where(and(eq(chatMessages.isActive, false), lt(chatMessages.createdAt, cutoff)))
       .returning({ id: chatMessages.id }),
+    // The unified leg.
     database
       .delete(messages)
       .where(and(eq(messages.isActive, false), lt(messages.createdAt, cutoff)))
       .returning({ id: messages.id }),
-    database
-      .delete(conversations)
-      .where(and(eq(conversations.isActive, false), lt(conversations.updatedAt, cutoff)))
-      .returning({ id: conversations.id }),
   ]);
+
+  // Cascades into both message tables and ai_stream_sessions — sequenced last.
+  const convos = await database
+    .delete(conversations)
+    .where(and(eq(conversations.isActive, false), lt(conversations.updatedAt, cutoff)))
+    .returning({ id: conversations.id });
 
   return [
     { table: 'chat_messages', deleted: chatMsgs.length },

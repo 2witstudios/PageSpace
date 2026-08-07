@@ -1722,6 +1722,11 @@
       "import": "./dist/compliance/erasure/ai-provider-erasure.js",
       "require": "./dist/compliance/erasure/ai-provider-erasure.js"
     },
+    "./compliance/erasure/purge-stream-state": {
+      "types": "./dist/compliance/erasure/purge-stream-state.d.ts",
+      "import": "./dist/compliance/erasure/purge-stream-state.js",
+      "require": "./dist/compliance/erasure/purge-stream-state.js"
+    },
     "./compliance/erasure/pseudonymize": {
       "types": "./dist/compliance/erasure/pseudonymize.d.ts",
       "import": "./dist/compliance/erasure/pseudonymize.js",
