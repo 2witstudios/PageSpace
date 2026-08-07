@@ -112,6 +112,8 @@ const fire = (event: string, payload: unknown) => {
   });
 };
 
+import { resetConversationRooms } from '@/lib/realtime/conversation-room-membership';
+
 const entry = (conversationId: string) =>
   useConversationMessagesStore.getState().getEntry(conversationId);
 
@@ -130,6 +132,11 @@ describe('useConversationSubscription', () => {
     vi.clearAllMocks();
     socketHandlers.clear();
     emitted.length = 0;
+    // The room refcount is MODULE-level (a tab has one socket), so it outlives
+    // any single render. Testing Library's auto-cleanup happens to balance it
+    // today; resetting explicitly means a test that deliberately leaves a
+    // subscription mounted cannot silently change what the next one observes.
+    resetConversationRooms();
     mockSocketStatus.current = 'disconnected';
     capturedStreamSocket.channelId = undefined;
     capturedStreamSocket.bootstrapConversationId = undefined;
@@ -206,6 +213,49 @@ describe('useConversationSubscription', () => {
         { event: 'leave_conversation', payload: CONV },
         { event: 'join_conversation', payload: 'conv-2' },
       ]);
+    });
+
+    /**
+     * TWO SUBSCRIPTIONS, ONE ROOM (review finding — MAJOR 1).
+     *
+     * `conversation-room-membership.test.ts` pins the refcount itself; these
+     * pin that THIS hook drives it, which is the half that can regress on its
+     * own. The scenario is the documented one, not a contrived one:
+     * `GlobalChatContext` watches the current conversation app-wide while a
+     * pane watches the same id, so closing the pane used to emit
+     * `leave_conversation` and take the provider's delivery with it — silently,
+     * because the rev-gated protocol just stops advancing the survivor's
+     * watermark.
+     */
+    it('given TWO subscriptions on one conversation, should not leave the room when only one unmounts', () => {
+      const first = render(CONV);
+      const second = render(CONV);
+      emitted.length = 0;
+
+      second.unmount();
+
+      // The pane closed; the provider is still mounted and still rendering this
+      // conversation. Leaving here is what made it go deaf.
+      expect(emitted).toEqual([]);
+
+      first.unmount();
+
+      // Last one out closes the room.
+      expect(emitted).toEqual([{ event: 'leave_conversation', payload: CONV }]);
+    });
+
+    it('should join on EVERY mount, so a second subscriber is never relying on the first', () => {
+      render(CONV);
+      emitted.length = 0;
+
+      render(CONV);
+
+      // Idempotent server-side (the join re-runs `canAccessConversation` and
+      // `socket.join` on a joined room is a no-op), and it is what makes a
+      // replaced socket self-healing: the count can stay above zero across a
+      // socket swap, so a join gated on 0->1 would leave the NEW socket in no
+      // room at all.
+      expect(emitted).toEqual([{ event: 'join_conversation', payload: CONV }]);
     });
   });
 
