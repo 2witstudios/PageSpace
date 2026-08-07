@@ -28,7 +28,7 @@ import { sessionPost } from '../support/http';
  *
  * What replaced it, and what these specs pin:
  *  - every mutation leaves the store as ONE verb against a rev
- *    (`POST /api/agent-sessions/[sessionId]/workspace/verbs`);
+ *    (`POST /api/agent-workspaces/[workspaceId]/workspace/verbs`);
  *  - the write lands in the pane ROWS and broadcasts `workspace:updated` on the
  *    `session:<id>` room, so the other window adopts it LIVE — no reload;
  *  - because the rows are the truth, a window opened afterwards sees the same
@@ -40,7 +40,7 @@ import { sessionPost } from '../support/http';
  * Two independent `BrowserContext`s for the SAME user — the same two-window
  * shape `openTwoWindows` (`fixtures/dispatch.fixture.ts`) builds for the chat
  * surface, rebuilt here for the AGENTS surface because that fixture navigates to
- * an AI_CHAT page and this grid lives at `/dashboard/<driveId>/agents?session=…`.
+ * an AI_CHAT page and this grid lives at `/dashboard/<driveId>/agents?workspace=…`.
  * Independent contexts mean independent `X-Browser-Session-Id`s, which is the
  * app's per-tab identity — this is the real two-device topology, not two tabs
  * sharing a store.
@@ -139,17 +139,17 @@ async function createSession(
   request: APIRequestContext,
   user: SeededUser,
 ): Promise<{ sessionId: string; conversationId: string }> {
-  const response = await sessionPost(request, '/api/agent-sessions', user, {
+  const response = await sessionPost(request, '/api/agent-workspaces', user, {
     driveId: user.driveId,
     name: 'grid convergence spec',
   });
   if (!response.ok()) {
     throw new Error(
-      `createSession: POST /api/agent-sessions answered ${response.status()}: ${(await response.text()).slice(0, 500)}`,
+      `createSession: POST /api/agent-workspaces answered ${response.status()}: ${(await response.text()).slice(0, 500)}`,
     );
   }
-  const body = (await response.json()) as { session: { sessionId: string }; conversationId: string };
-  return { sessionId: body.session.sessionId, conversationId: body.conversationId };
+  const body = (await response.json()) as { session: { workspaceId: string }; conversationId: string };
+  return { sessionId: body.session.workspaceId, conversationId: body.conversationId };
 }
 
 /**
@@ -157,7 +157,7 @@ async function createSession(
  * `expectedPanes` pane bars.
  *
  * The deep link is the whole navigation — `AgentsSurface` mounts `AgentPanes`
- * off `?session=`, and `?c=` seeds the opening conversation. Waiting on a pane
+ * off `?workspace=`, and `?c=` seeds the opening conversation. Waiting on a pane
  * COUNT rather than on the container is what makes the later assertions
  * meaningful: it pins the window's starting grid, so a change observed
  * afterwards is genuinely a change.
@@ -173,7 +173,7 @@ async function openGridWindow(
   openContexts.push(context);
   const page = await context.newPage();
   await page.goto(
-    `/dashboard/${user.driveId}/agents?session=${session.sessionId}&c=${session.conversationId}`,
+    `/dashboard/${user.driveId}/agents?workspace=${session.sessionId}&c=${session.conversationId}`,
   );
   await page.getByTestId(SESSION_PANES).waitFor({ state: 'visible', timeout: 60_000 });
   await expect(page.getByTestId(PANE_BAR)).toHaveCount(expectedPanes, { timeout: 60_000 });

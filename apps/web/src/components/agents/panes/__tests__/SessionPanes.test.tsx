@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { newWorkspace, splitRight, splitDown, type WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
 
 const mobileState = vi.hoisted(() => ({ current: false }));
@@ -17,7 +17,7 @@ import SessionPanes from '../SessionPanes';
 const scope = (name: string): PaneScope => ({ kind: 'chat', name, targetId: 'conv-1', agentPageId: 'agent-1' });
 
 function base(): WorkspaceState {
-  return newWorkspace({ sessionId: 'ses-1', paneId: 'pane-1', columnId: 'col-1', scope: scope('Planning') });
+  return newWorkspace({ workspaceId: 'ses-1', paneId: 'pane-1', columnId: 'col-1', scope: scope('Planning') });
 }
 
 function renderGrid(workspace: WorkspaceState, onSelectPane = vi.fn()) {

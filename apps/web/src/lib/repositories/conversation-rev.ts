@@ -32,13 +32,13 @@ export interface BumpedConversationRow {
   rev: number;
   userId: string;
   isShared: boolean;
-  sessionId: string | null;
+  workspaceId: string | null;
   type: string;
   contextId: string | null;
   title: string | null;
   lastMessageAt: Date | null;
   createdAt: Date;
-  closedInSessionAt: Date | null;
+  closedInWorkspaceAt: Date | null;
   isActive: boolean;
 }
 
@@ -47,13 +47,13 @@ const BUMP_RETURNING = {
   rev: conversations.rev,
   userId: conversations.userId,
   isShared: conversations.isShared,
-  sessionId: conversations.sessionId,
+  workspaceId: conversations.workspaceId,
   type: conversations.type,
   contextId: conversations.contextId,
   title: conversations.title,
   lastMessageAt: conversations.lastMessageAt,
   createdAt: conversations.createdAt,
-  closedInSessionAt: conversations.closedInSessionAt,
+  closedInWorkspaceAt: conversations.closedInWorkspaceAt,
   isActive: conversations.isActive,
 };
 
@@ -63,8 +63,8 @@ const BUMP_RETURNING = {
  * legacy page conversations; the caller still emits its content event with
  * rev 0 but skips directory events (no owner fact to target them with).
  *
- * `extraSet` lets a lifecycle write (title, isShared, sessionId claim,
- * closedInSessionAt) fold its own column change into the SAME statement as
+ * `extraSet` lets a lifecycle write (title, isShared, workspaceId claim,
+ * closedInWorkspaceAt) fold its own column change into the SAME statement as
  * the bump.
  */
 export async function bumpConversationRev(
@@ -116,7 +116,7 @@ export function emitConversationLifecycle(
         title: row.title,
         type: row.type,
         contextId: row.contextId,
-        workspaceId: row.sessionId,
+        workspaceId: row.workspaceId,
         isShared: row.isShared,
         createdAt: row.createdAt.toISOString(),
         lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
@@ -144,7 +144,7 @@ export function emitContextFromRow(
     conversationId: row.id,
     rev: row.rev,
     scope: scopeFromRow(row),
-    workspaceId: row.sessionId,
+    workspaceId: row.workspaceId,
     ownerId: row.userId,
     isShared: row.isShared,
     triggeredBy: triggeredBy ?? {

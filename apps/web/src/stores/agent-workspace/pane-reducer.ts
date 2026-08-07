@@ -1,6 +1,6 @@
 /**
  * The pane grid's pure layout model — re-exported from
- * `@pagespace/lib/agent-sessions/workspace-layout-verbs`, where the model
+ * `@pagespace/lib/agent-workspaces/workspace-layout-verbs`, where the model
  * MOVED (epic Phase 3) so the browser's optimistic apply and the server's
  * verb engine run the SAME reducer instead of two convention-synced copies.
  * Every transition, type, and doc comment lives there now; this module is
@@ -29,4 +29,4 @@ export {
   type ColumnState,
   type WorkspaceState,
   type WorkspaceLayoutVerb,
-} from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
+} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';

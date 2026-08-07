@@ -4,7 +4,7 @@
  * Validates the relational pane-grid tables (epic Phase 3, the #2202
  * machine-panes pattern re-cut for agent sessions): columns, compound PKs,
  * composite FK cascade, and the rev counter living in its OWN table (never a
- * column on `agent_sessions` — the serializing `rev + 1` row lock must not
+ * column on `agent_workspaces` — the serializing `rev + 1` row lock must not
  * contend with sandbox teardown/ensure CAS writes). Runs without a database.
  */
 import { describe, it, expect } from 'vitest';

@@ -20,20 +20,20 @@ export interface SessionConversationSummary {
   lastMessageAt: string | null;
 }
 
-/** One session's row in the `/api/agent-sessions**` listing response. */
+/** One session's row in the `/api/agent-workspaces**` listing response. */
 export interface SessionListEntry {
   sessionId: string;
   conversations: SessionConversationSummary[];
 }
 
 /**
- * The `/api/agent-sessions**` SWR key for a given drive scope — shared so
+ * The `/api/agent-workspaces**` SWR key for a given drive scope — shared so
  * every reader/writer of this cache (the grid's own hook, an optimistic
  * local insert from elsewhere) targets the identical key. A hand-recomputed
  * copy that drifts from this would silently target the wrong cache entry.
  */
 export function agentSessionsKey(driveId: string | null): string {
-  return driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions';
+  return driveId !== null ? `/api/agent-workspaces?driveId=${encodeURIComponent(driveId)}` : '/api/agent-workspaces';
 }
 
 /**
@@ -64,7 +64,7 @@ export function findOpenForAgent<T extends { agentPageId: string | null; lastMes
 }
 
 /**
- * Every `/api/agent-sessions**` SWR entry — an `useSWR`/`mutate` key
+ * Every `/api/agent-workspaces**` SWR entry — an `useSWR`/`mutate` key
  * predicate, not a fetch. Any action that mutates session-listing membership
  * (mint, close, end-session) revalidates through this so every consumer of
  * the shared listing (the sidebar, other panes, `AgentPageView`'s own
@@ -78,14 +78,14 @@ export function findOpenForAgent<T extends { agentPageId: string | null; lastMes
  * `isSessionListingKey` for that narrower, updater-safe predicate.
  */
 export function isAgentSessionsKey(key: unknown): boolean {
-  return typeof key === 'string' && key.startsWith('/api/agent-sessions');
+  return typeof key === 'string' && key.startsWith('/api/agent-workspaces');
 }
 
 /**
  * The two BULK session-listing keys specifically — `agentSessionsKey(null)`
- * ('/api/agent-sessions') and any drive-scoped `agentSessionsKey(driveId)`
- * ('/api/agent-sessions?driveId=...') — never a per-session sub-resource path
- * like `/api/agent-sessions/{id}/shells` or the singular session record,
+ * ('/api/agent-workspaces') and any drive-scoped `agentSessionsKey(driveId)`
+ * ('/api/agent-workspaces?driveId=...') — never a per-session sub-resource path
+ * like `/api/agent-workspaces/{id}/shells` or the singular session record,
  * which `isAgentSessionsKey`'s broader prefix match also catches. Those
  * cache entries hold no `sessions` array at all, so an updater written
  * against `{sessions: [...]}` (`forgetSessionInCache`,
@@ -94,7 +94,7 @@ export function isAgentSessionsKey(key: unknown): boolean {
  * chatgpt-codex-connector on PR #2318).
  */
 export function isSessionListingKey(key: unknown): boolean {
-  return typeof key === 'string' && (key === '/api/agent-sessions' || key.startsWith('/api/agent-sessions?'));
+  return typeof key === 'string' && (key === '/api/agent-workspaces' || key.startsWith('/api/agent-workspaces?'));
 }
 
 /**

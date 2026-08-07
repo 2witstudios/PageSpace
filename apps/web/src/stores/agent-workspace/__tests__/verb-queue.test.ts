@@ -3,7 +3,7 @@
  * functions, so anything provable here is proved without React or a network.
  */
 import { describe, it, expect } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { adoptServerGrid, replayPending, verbAlreadyLanded, type PendingVerbOp } from '../verb-queue';
 import { panesOf, type WorkspaceLayoutVerb, type WorkspaceState } from '../pane-reducer';
 

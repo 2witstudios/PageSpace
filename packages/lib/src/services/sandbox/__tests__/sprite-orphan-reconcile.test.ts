@@ -8,7 +8,7 @@ import {
 /**
  * Carried from `services/machines/__tests__/machine-orphan-reconcile.test.ts`
  * and re-pointed: the outbox arm is unchanged, and the tracking-row arm now
- * enumerates `agent_sessions` only. The guard that was "is the page still
+ * enumerates `agent_workspaces` only. The guard that was "is the page still
  * trashed" is now "is the teardown still requested" — the same question (has the
  * thing that licensed an irreversible destroy been withdrawn since we listed it),
  * asked of the model that replaced pages-and-machines.
@@ -33,8 +33,8 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
       killed.push(sandboxId);
       return { ok: true };
     },
-    markSessionTornDown: async ({ sessionId }) => {
-      stampedSessions.push(sessionId);
+    markSessionTornDown: async ({ workspaceId }) => {
+      stampedSessions.push(workspaceId);
       return true;
     },
     releaseReclaim: async (sandboxId) => {
@@ -53,7 +53,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
 
 const sessionRow: SpriteOrphanRow = {
   kind: 'agent-session',
-  sessionId: 'conv-1',
+  workspaceId: 'conv-1',
   sandboxId: 'pgs-ses-1',
   spriteInstanceId: 'inst-1',
 };
@@ -167,10 +167,10 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     // session's filesystem. A concurrent ensure clears the teardown request as
     // part of recording the new identity, and this re-read is what sees that.
     const killSprite = vi.fn(async () => ({ ok: true }) as const);
-    const revived: SpriteOrphanRow = { ...sessionRow, sessionId: 'conv-revived', sandboxId: 'pgs-ses-revived' };
+    const revived: SpriteOrphanRow = { ...sessionRow, workspaceId: 'conv-revived', sandboxId: 'pgs-ses-revived' };
     const { deps, stampedSessions } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [revived, sessionRow], capped: false }),
-      isTeardownStillRequested: async (sessionId) => sessionId !== 'conv-revived',
+      isTeardownStillRequested: async (workspaceId) => workspaceId !== 'conv-revived',
       killSprite,
     });
 
@@ -226,7 +226,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
   });
 
   it('LEAVES the row untouched when the kill fails — it is the only pointer to the Sprite', async () => {
-    const other: SpriteOrphanRow = { ...sessionRow, sessionId: 'conv-2', sandboxId: 'pgs-ses-2' };
+    const other: SpriteOrphanRow = { ...sessionRow, workspaceId: 'conv-2', sandboxId: 'pgs-ses-2' };
     const { deps, stampedSessions } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [sessionRow, other], capped: false }),
       killSprite: async ({ sandboxId }) =>
@@ -247,9 +247,9 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     const { deps, stampedSessions } = makeDeps({
       listOrphanCandidates: async () => ({
         rows: [
-          { kind: 'agent-session', sessionId: 'conv-a', sandboxId: 'ok-a', spriteInstanceId: null },
-          { kind: 'agent-session', sessionId: 'conv-boom', sandboxId: 'boom', spriteInstanceId: null },
-          { kind: 'agent-session', sessionId: 'conv-b', sandboxId: 'ok-b', spriteInstanceId: null },
+          { kind: 'agent-session', workspaceId: 'conv-a', sandboxId: 'ok-a', spriteInstanceId: null },
+          { kind: 'agent-session', workspaceId: 'conv-boom', sandboxId: 'boom', spriteInstanceId: null },
+          { kind: 'agent-session', workspaceId: 'conv-b', sandboxId: 'ok-b', spriteInstanceId: null },
         ],
         capped: false,
       }),

@@ -49,7 +49,7 @@ function makeDeps(over: Partial<GitSandboxRunDeps> = {}, token: string | null = 
   const { sandbox, runCommandCalls } = makeSandbox(over.reconnect ? undefined : undefined);
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -81,7 +81,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
   const slots = { acquired: 0, released: 0 };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -109,7 +109,7 @@ describe('runGitInSandbox', () => {
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
       },
     });
     await runGitInSandbox({
@@ -389,8 +389,8 @@ describe('opportunistic storage measurement', () => {
         readFileToBuffer: async () => Buffer.from(''),
         createCheckpoint: async () => {},
       }),
-      measureStorage: async ({ sessionId }) => {
-        order.push(`measure:${sessionId}`);
+      measureStorage: async ({ workspaceId }) => {
+        order.push(`measure:${workspaceId}`);
       },
     });
 
@@ -430,7 +430,7 @@ describe('opportunistic storage measurement', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(warnings).toHaveLength(1);
-    expect(warnings[0].meta).toMatchObject({ sessionId: 'ws-1' });
+    expect(warnings[0].meta).toMatchObject({ workspaceId: 'ws-1' });
   });
 
   it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
@@ -438,17 +438,17 @@ describe('opportunistic storage measurement', () => {
     // whenever the two ids diverged (codex review, P1: underbilling). The
     // session id comes from the acquire itself, so it is always present on a
     // successful run.
-    const measured: Array<{ sessionId: string }> = [];
+    const measured: Array<{ workspaceId: string }> = [];
     const { deps } = makeDeps({
       measureStorage: async (input) => {
-        measured.push(input as { sessionId: string });
+        measured.push(input as { workspaceId: string });
       },
     });
 
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: undefined }), deps });
     await Promise.resolve();
 
-    expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
+    expect(measured).toMatchObject([{ workspaceId: 'ws-1' }]);
   });
 });
 
@@ -460,12 +460,12 @@ function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {})
   billing: NonNullable<SandboxRunDeps['billing']>;
   resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }>;
   gateCalls: Array<{ payerId: string }>;
-  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }>;
   releaseHoldCalls: string[];
 } {
   const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
   const gateCalls: Array<{ payerId: string }> = [];
-  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }> = [];
   const releaseHoldCalls: string[] = [];
   const billing: NonNullable<SandboxRunDeps['billing']> = {
     resolvePayerId: async (input) => {
@@ -489,10 +489,10 @@ function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {})
 
 /** Mirrors `tool-runners.test.ts`'s `makeBillingSession` fake. */
 function makeBillingSession(
-  over: Partial<{ sessionId: string; driveId: string | null; ownerId: string }> = {},
+  over: Partial<{ workspaceId: string; driveId: string | null; ownerId: string }> = {},
 ): NonNullable<SandboxRunDeps['resolveBillingSession']> {
   return async (ctx) => ({
-    sessionId: over.sessionId ?? 'ws-1',
+    workspaceId: over.workspaceId ?? 'ws-1',
     driveId: over.driveId !== undefined ? over.driveId : (ctx.driveId ?? null),
     ownerId: over.ownerId ?? ctx.tenantId,
   });
@@ -524,13 +524,13 @@ describe('runGitInSandbox — machine billing (issue #2315: git/gh tools were ne
     const { deps } = makeDeps({ reconnect: async () => sandbox, now: () => new Date(now) });
     const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
     deps.billing = billing;
-    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', sessionId: 'ws-1' });
+    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' });
 
     const result = await runGitInSandbox({ cmd: 'git', args: ['clone', 'https://github.com/a/b'], ctx: makeCtx(), deps });
 
     expect(result).toMatchObject({ success: true });
     expect(trackUsageCalls).toEqual([
-      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', sessionId: 'ws-1' },
+      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
     ]);
     expect(releaseHoldCalls).toEqual([]);
   });

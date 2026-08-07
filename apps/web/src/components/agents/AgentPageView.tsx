@@ -297,7 +297,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               { revalidate: false },
             );
           }
-          // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+          // ...and a broader revalidate for every OTHER `/api/agent-workspaces**`
           // consumer (the sidebar, other panes) whose differently-scoped
           // cache key the local insert above doesn't touch.
           void mutate(isAgentSessionsKey);

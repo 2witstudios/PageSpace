@@ -6,19 +6,20 @@ import {
   UNTRUSTED_TRANSCRIPT_NOTE,
   type SessionToolsDeps,
 } from '../session-tools';
-import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
 import type { ToolExecutionContext } from '../../core/types';
 
 const USER_ID = 'user-1';
 const CALLER_CONVERSATION = 'conv-caller';
 const CALLER_AGENT = 'page-agent-1';
-// The caller's WORKSPACE (agent_sessions.id) — deliberately a DIFFERENT id
+// The caller's WORKSPACE (agent_workspaces.id) — deliberately a DIFFERENT id
 // namespace from the conversation. Review H2 hid behind fakes that reused the
 // conversation id here, so the always-false comparison always "passed".
 const WORKSPACE_ID = 'workspace-row-1';
 
 const SHELL = {
   shellId: 'shell-row-1',
+  workspaceId: WORKSPACE_ID,
   sessionId: WORKSPACE_ID,
   ownerId: USER_ID,
   name: 'shell-1',
@@ -678,7 +679,7 @@ describe('kill_shell', () => {
 describe('shell addressing across the two id namespaces (review H2)', () => {
   it('send_shell reaches a shell whose row carries the WORKSPACE id, not the conversation id', async () => {
     // The regression this whole fixture-shape exists for: rows store
-    // agent_sessions.id, context carries the conversation id, and the old
+    // agent_workspaces.id, context carries the conversation id, and the old
     // comparison across the two namespaces refused every real shell ever.
     const deps = makeDeps();
     const tools = createSessionTools(deps);

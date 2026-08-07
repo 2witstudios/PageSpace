@@ -163,7 +163,7 @@ describe('useSessionDirectoryListener', () => {
     it('given a listing-membership stamp change, should re-read', () => {
       renderHook(() => useSessionDirectoryListener());
 
-      fire('conversation:updated', base({ changes: { closedInSessionAt: null } }));
+      fire('conversation:updated', base({ changes: { closedInWorkspaceAt: null } }));
 
       expect(mockMutate.mock.calls[0]).toHaveLength(1);
     });

@@ -113,7 +113,7 @@ export interface ShellActivityDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
   /**
    * Resolves the session's shells to their in-memory session-map keys — a
-   * DB-only listing of `agent_session_shells` composed with
+   * DB-only listing of `agent_workspace_shells` composed with
    * `deriveShellSessionKey`. An empty array means the session has no shells
    * (nothing to look up — same as no live session). Never touches a Sprite.
    */

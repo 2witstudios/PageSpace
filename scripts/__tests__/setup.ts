@@ -49,7 +49,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       files,
       messages,
       conversations,
-      agent_sessions,
+      agent_workspaces,
       channel_read_status,
       channel_message_reactions,
       channel_messages,
@@ -151,18 +151,18 @@ export const FIXTURES = {
        * round-trip proves the value SURVIVED rather than that the tenant's
        * column default happened to match.
        */
-      sessionId: 'test_agent_session_001',
+      workspaceId: 'test_agent_session_001',
       rev: 7,
       isShared: true,
     },
   },
   /**
    * The working context `conversations.pageChat` is bound to. Carried by the
-   * export because `sessionId` is write-once — a migration that drops the
+   * export because `workspaceId` is write-once — a migration that drops the
    * binding cannot be repaired afterwards. Its Sprite-identity columns are
    * seeded NON-NULL precisely so the round-trip can assert they DO NOT travel.
    */
-  agentSessions: {
+  agentWorkspaces: {
     workspace: {
       id: 'test_agent_session_001',
       name: 'Team workspace',
@@ -215,7 +215,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, conversations, agentSessions, messages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, agentWorkspaces, messages, files, pagePermissions, tags } = FIXTURES;
   const now = new Date();
 
   // Users. `emailBidx` is seeded because it is the LOOKUP KEY for an encrypted
@@ -274,15 +274,15 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   // The working context the conversation below is bound to. Its Sprite columns
   // are deliberately non-NULL: the export must NOT carry them.
   await db.execute(sql`
-    INSERT INTO agent_sessions (id, "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "createdAt", "updatedAt")
-    VALUES (${agentSessions.workspace.id}, ${drives.shared.id}, ${users.owner.id}, ${agentSessions.workspace.name}, ${agentSessions.workspace.sandboxId}, ${agentSessions.workspace.spriteInstanceId}, ${now}, ${now})
+    INSERT INTO agent_workspaces (id, "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "createdAt", "updatedAt")
+    VALUES (${agentWorkspaces.workspace.id}, ${drives.shared.id}, ${users.owner.id}, ${agentWorkspaces.workspace.name}, ${agentWorkspaces.workspace.sandboxId}, ${agentWorkspaces.workspace.spriteInstanceId}, ${now}, ${now})
   `);
 
   // The page conversation the chat messages below belong to. Required since
   // 0248 gave chat_messages.conversationId a real FK — see FIXTURES.conversations.
   await db.execute(sql`
-    INSERT INTO conversations (id, "userId", title, type, "contextId", "sessionId", "closedInSessionAt", rev, "isShared", "lastMessageAt", "createdAt", "updatedAt")
-    VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.sessionId}, ${now}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})
+    INSERT INTO conversations (id, "userId", title, type, "contextId", "workspaceId", "closedInWorkspaceAt", rev, "isShared", "lastMessageAt", "createdAt", "updatedAt")
+    VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.workspaceId}, ${now}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})
   `);
 
   // Chat messages, in the ONE message table. Their page is their

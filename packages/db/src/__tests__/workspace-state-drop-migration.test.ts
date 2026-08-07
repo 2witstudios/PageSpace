@@ -115,12 +115,12 @@ describe('drizzle/0251 workspaceState drop', () => {
 });
 
 describe('the schema no longer declares the blob', () => {
-  it('should have no workspaceState column on agent_sessions', async () => {
-    const { agentSessions } = await import('../schema/agent-sessions');
+  it('should have no workspaceState column on agent_workspaces', async () => {
+    const { agentWorkspaces } = await import('../schema/agent-workspaces');
     // Replaces the drift guard that used to assert blob ≡ rows: with the
     // column gone the only thing left to assert is that it IS gone — the
     // relational rows are the single source, so there is nothing to drift
     // against any more.
-    expect(Object.keys(agentSessions)).not.toContain('workspaceState');
+    expect(Object.keys(agentWorkspaces)).not.toContain('workspaceState');
   });
 });

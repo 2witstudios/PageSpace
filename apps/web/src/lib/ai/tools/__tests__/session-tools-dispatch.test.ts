@@ -12,7 +12,7 @@ import { dispatchThroughChatPipeline } from '../session-tools-runtime';
 vi.mock('next/headers', () => ({ headers: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ canUserViewPage: vi.fn() }));
-vi.mock('@pagespace/lib/services/agent-sessions/session-status', () => ({ deriveSandboxStatus: vi.fn() }));
+vi.mock('@pagespace/lib/services/agent-workspaces/session-status', () => ({ deriveSandboxStatus: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => {
   const silent = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
   return { loggers: { ai: silent, auth: silent } };
@@ -20,20 +20,20 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: { validateSession: vi.fn() },
 }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   createConversationInSession: vi.fn(),
   ensureGlobalSandboxSession: vi.fn(),
   findSessionForConversation: vi.fn(),
   provisionSessionSandbox: vi.fn(),
   getAgentSessionStore: vi.fn(),
 }));
-vi.mock('@/lib/agent-sessions/create-conversation-in-session', () => ({
+vi.mock('@/lib/agent-workspaces/create-conversation-in-session', () => ({
   ConversationUnavailableError: class ConversationUnavailableError extends Error {},
   AgentNotInSessionDriveError: class AgentNotInSessionDriveError extends Error {},
   SessionFullError: class SessionFullError extends Error {},
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({ conversationRepository: {} }));
-vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
   getSessionShellStore: vi.fn(),
   killShellById: vi.fn(),
   listShells: vi.fn(),

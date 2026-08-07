@@ -36,7 +36,7 @@ export interface ConversationSummary {
   lastMessageAt: Date | null;
   createdAt: Date;
   /** Null for a plain (non-session) conversation. */
-  sessionId: string | null;
+  workspaceId: string | null;
 }
 
 export interface Conversation extends ConversationSummary {
@@ -44,7 +44,7 @@ export interface Conversation extends ConversationSummary {
   isActive: boolean;
   updatedAt: Date;
   /** Set when closed out of its session's listing; null while open (or never session-bound). */
-  closedInSessionAt: Date | null;
+  closedInWorkspaceAt: Date | null;
 }
 
 export interface CreateConversationInput {
@@ -195,7 +195,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
-        sessionId: conversations.sessionId,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(
@@ -265,7 +265,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
-        sessionId: conversations.sessionId,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(...conditions))
@@ -336,7 +336,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
-        sessionId: conversations.sessionId,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(

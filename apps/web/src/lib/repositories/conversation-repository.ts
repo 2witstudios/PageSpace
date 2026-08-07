@@ -38,7 +38,7 @@ export interface ConversationStats {
   conversationUserId: string | null;
   isShared: boolean | null;
   /** The session (workspace) this thread was born into — null for a plain page chat. */
-  sessionId: string | null;
+  workspaceId: string | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -163,7 +163,7 @@ export const conversationRepository = {
    * so every caller — including pre-existing ones — gets this guarantee.
    *
    * Returns WHAT HAPPENED rather than void, because the difference is
-   * load-bearing for session binding: `sessionId` is written ONLY on the
+   * load-bearing for session binding: `workspaceId` is written ONLY on the
    * INSERT (a thread is BORN into its session — contract invariant 1), so a
    * caller that needed the binding must know the insert did not happen.
    * Callers that only need idempotent ensure-exists semantics can ignore the
@@ -186,7 +186,7 @@ export const conversationRepository = {
     const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId);
     if (hasConflictingOwner) return 'message_owner_conflict';
 
-    // Always session-agnostic: this never writes `sessionId` (there is no
+    // Always session-agnostic: this never writes `workspaceId` (there is no
     // param for it). A conversation that needs a session gets one afterward,
     // via `claimConversationInSession` — see `claim-conversation-in-session.ts`.
     const [inserted] = await db
@@ -197,7 +197,7 @@ export const conversationRepository = {
         type: 'page',
         contextId: pageId,
         isShared: opts?.isShared ?? false,
-        sessionId: null,
+        workspaceId: null,
         title: opts?.title ?? null,
         updatedAt: new Date(),
       })
@@ -254,26 +254,26 @@ export const conversationRepository = {
 
   /**
    * Bind a NEVER-BOUND conversation to a session — the only UPDATE of
-   * `conversations.sessionId` anywhere in the codebase, and unable to
-   * re-point one: `sessionId IS NULL` in the WHERE makes a rebind attempt
+   * `conversations.workspaceId` anywhere in the codebase, and unable to
+   * re-point one: `workspaceId IS NULL` in the WHERE makes a rebind attempt
    * match zero rows rather than depending on a check the caller could skip.
    * `userId` rides the WHERE too, so ownership is enforced by the write
    * itself, closing the read-then-write gap that made the H1 rebind finding
    * exploitable in the old create-then-UPDATE shape. See
    * `claim-conversation-in-session.ts` for the full gate this backs.
    *
-   * `closedInSessionAt` is cleared in the same statement: a row whose former
+   * `closedInWorkspaceAt` is cleared in the same statement: a row whose former
    * session was deleted (FK `ON DELETE SET NULL`) can arrive here
-   * `sessionId`-null but still stamped closed, and binding it without
+   * `workspaceId`-null but still stamped closed, and binding it without
    * clearing would produce a bound-but-invisible thread that holds no cap
    * slot and shows in no listing.
    */
-  async claimConversation(conversationId: string, userId: string, sessionId: string): Promise<'claimed' | 'noop'> {
+  async claimConversation(conversationId: string, userId: string, workspaceId: string): Promise<'claimed' | 'noop'> {
     const [updated] = await db
       .update(conversations)
       .set({
-        sessionId,
-        closedInSessionAt: null,
+        workspaceId,
+        closedInWorkspaceAt: null,
         updatedAt: new Date(),
         // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
         rev: sql`${conversations.rev} + 1`,
@@ -281,14 +281,14 @@ export const conversationRepository = {
       .where(and(
         eq(conversations.id, conversationId),
         eq(conversations.userId, userId),
-        isNull(conversations.sessionId),
+        isNull(conversations.workspaceId),
         eq(conversations.isActive, true),
       ))
       .returning();
     if (!updated) return 'noop';
     emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, {
-      workspaceId: sessionId,
-      closedInSessionAt: null,
+      workspaceId: workspaceId,
+      closedInWorkspaceAt: null,
     });
     return 'claimed';
   },
@@ -392,7 +392,7 @@ export const conversationRepository = {
         lm.last_message_content as "lastMessageContent",
         conv."userId" as "conversationUserId",
         conv."isShared" as "isShared",
-        conv."sessionId" as "sessionId"
+        conv."workspaceId" as "workspaceId"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"
@@ -570,7 +570,7 @@ export const conversationRepository = {
   },
 
   /**
-   * Close a conversation OUT of its session's listing (`closedInSessionAt`
+   * Close a conversation OUT of its session's listing (`closedInWorkspaceAt`
    * stamp; never touches history soft-delete). The write, its rev bump, and
    * the `conversation:closed` emission live here so the session runtime's
    * wiring cannot skip any of the three (SSoT §3 clause 1).
@@ -578,8 +578,8 @@ export const conversationRepository = {
   async closeConversationListing(conversationId: string): Promise<'closed' | 'noop'> {
     const [updated] = await db
       .update(conversations)
-      .set({ closedInSessionAt: new Date(), updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
-      .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInSessionAt)))
+      .set({ closedInWorkspaceAt: new Date(), updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInWorkspaceAt)))
       .returning();
     if (!updated) return 'noop';
     emitConversationLifecycle('closed', { ...updated, rev: Number(updated.rev) });
@@ -590,8 +590,8 @@ export const conversationRepository = {
   async reopenConversationListing(conversationId: string): Promise<'reopened' | 'noop'> {
     const [updated] = await db
       .update(conversations)
-      .set({ closedInSessionAt: null, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
-      .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInSessionAt)))
+      .set({ closedInWorkspaceAt: null, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInWorkspaceAt)))
       .returning();
     if (!updated) return 'noop';
     emitConversationLifecycle('reopened', { ...updated, rev: Number(updated.rev) });

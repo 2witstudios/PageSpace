@@ -14,7 +14,7 @@ export interface ManifestTableCounts {
   channelMessages: number;
   channelMessageReactions: number;
   channelReadStatus: number;
-  agentSessions: number;
+  agentWorkspaces: number;
   conversations: number;
   messages: number;
   files: number;
@@ -110,9 +110,9 @@ export const TABLE_IMPORT_ORDER = [
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',
-  // Before `conversations`: `conversations.sessionId` FKs here, so the
+  // Before `conversations`: `conversations.workspaceId` FKs here, so the
   // session rows have to exist before a bound thread can be inserted.
-  'agent_sessions',
+  'agent_workspaces',
   'conversations',
   'messages',
   'files',

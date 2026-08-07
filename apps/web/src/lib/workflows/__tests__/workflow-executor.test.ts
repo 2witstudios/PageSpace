@@ -50,7 +50,7 @@ const { mockSpawnSession, mockCreateConversationInSession, mockEndSession } = vi
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
 }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   spawnSession: mockSpawnSession,
   createConversationInSession: mockCreateConversationInSession,
   endSession: mockEndSession,
@@ -474,7 +474,7 @@ describe('executeWorkflow', () => {
       // and release the session's compute when the run ends (review #2326).
       expect(mockSpawnSession).toHaveBeenCalledTimes(1);
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'wf-ses-1', agentPageId: mockAgent.id }),
+        expect.objectContaining({ workspaceId: 'wf-ses-1', agentPageId: mockAgent.id }),
       );
       expect(mockEndSession).toHaveBeenCalledWith('wf-ses-1');
     });

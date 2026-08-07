@@ -1,7 +1,7 @@
 import {
   shellConnectPayloadSchema,
   type ShellConnectPayload,
-} from '@pagespace/lib/agent-sessions/contract';
+} from '@pagespace/lib/agent-workspaces/contract';
 
 export type TerminalConnectPayload = { pageId: string; cols: number; rows: number };
 
@@ -32,7 +32,7 @@ export function validateTerminalConnectPayload(payload: unknown): Result {
 
 /**
  * Parse a `shell:connect` payload with the ONE shared contract schema
- * (`packages/lib/src/agent-sessions/contract.ts`) instead of a local shape:
+ * (`packages/lib/src/agent-workspaces/contract.ts`) instead of a local shape:
  * web routes, this bridge, and the frontend all validate the same zod object,
  * so the wire shape cannot drift per surface. The schema strips unknown keys,
  * REJECTS nonsense dimensions (zero, negative, non-finite, non-numeric) and

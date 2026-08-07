@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
-import { checkSessionAccess, createConversationInSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-sessions-runtime';
 import {
   AgentNotInSessionDriveError,
   ConversationUnavailableError,
   SessionFullError,
-} from '@/lib/agent-sessions/create-conversation-in-session';
-import { sessionConversationLimitExceeded } from '@/lib/agent-sessions/quota-response';
-import { sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
+} from '@/lib/agent-workspaces/create-conversation-in-session';
+import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
+import { sessionNotFoundOrDenied } from '@/lib/agent-workspaces/session-unavailable-response';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -108,7 +108,7 @@ export async function GET(
         isOwner,
         // The workspace the thread was born into (null = plain page chat) —
         // what lets the page's Chat tab render the pane grid for it.
-        sessionId: conv.sessionId ?? null,
+        sessionId: conv.workspaceId ?? null,
         lastMessage: {
           role: conv.lastMessageRole,
           timestamp: conv.lastMessageTime,
@@ -208,12 +208,17 @@ export async function POST(
     // conversations and owns the one sandbox they share). Gated on the
     // session access check so a caller cannot bind a thread into a workspace
     // they cannot reach.
+    // Accepts BOTH spellings for one release: `workspaceId` is the name after
+    // the agent_sessions → agent_workspaces rename, `sessionId` is what a
+    // pre-rename client bundle still sends during the rolling-deploy window.
+    // The contract PR drops the legacy key.
+    const workspaceIdFromBody = typeof body.workspaceId === 'string' && body.workspaceId.length > 0 ? body.workspaceId : null;
     const sessionId: string | null =
-      typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null;
+      workspaceIdFromBody ?? (typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null);
     if (sessionId !== null) {
       const sessionAccess = await checkSessionAccess(auth.userId, sessionId);
       if (!sessionAccess.allowed) {
-        // Not found and denied answer THE SAME 404 — the [sessionId] family's
+        // Not found and denied answer THE SAME 404 — the [workspaceId] family's
         // policy (review #2261/5), applied here too since this route gates on
         // the identical checkSessionAccess call: a 403-vs-404 split would let
         // a caller learn whether a session id is real even when they can
@@ -226,7 +231,7 @@ export async function POST(
     // isShared defaults to false — conversation is private to this user.
     if (sessionId !== null) {
       try {
-        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, sessionId });
+        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, workspaceId: sessionId });
       } catch (error) {
         if (error instanceof SessionFullError) {
           return sessionConversationLimitExceeded(request, auth.userId, sessionId, 'page-agents/conversations');

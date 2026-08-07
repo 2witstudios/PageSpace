@@ -46,7 +46,7 @@ const {
   mockGetAiAgent: vi.fn(),
 }));
 
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
   ensureDriveSessionForConversation: mockEnsureDriveSessionForConversation,
@@ -67,14 +67,14 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 // The tenant gather is mocked (it reads the DB); the pure access decision and
 // the pure redaction rule are deliberately REAL — the whole point of the
 // shared-workspace listing is that it reuses those exact functions.
-vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-session-tenant', () => ({
   resolveDriveMembership: mockResolveDriveMembership,
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation, getAiAgent: mockGetAiAgent },
 }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/session-shells-runtime', () => ({
   getSessionShellStore: vi.fn(),
   killShellById: vi.fn(),
   listShells: vi.fn(),
@@ -247,7 +247,7 @@ describe('createWorkerSession — placement', () => {
 
     expect(result).toEqual({ ok: true, workspaceId: 'ses-caller' });
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'ses-caller', conversationId: 'worker-conv-new' }),
+      expect.objectContaining({ workspaceId: 'ses-caller', conversationId: 'worker-conv-new' }),
     );
     expect(mockSpawnSession).not.toHaveBeenCalled();
     expect(mockCheckSessionAccess).not.toHaveBeenCalled();
@@ -265,7 +265,7 @@ describe('createWorkerSession — placement', () => {
       expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
       expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null });
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'ses-fresh' }),
+        expect.objectContaining({ workspaceId: 'ses-fresh' }),
       );
       expect(mockEndSession).not.toHaveBeenCalled();
     });
@@ -351,7 +351,7 @@ describe('createWorkerSession — placement', () => {
       expect(result).toEqual({ ok: true, workspaceId: 'ses-target' });
       expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-target');
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'ses-target' }),
+        expect.objectContaining({ workspaceId: 'ses-target' }),
       );
       expect(mockSpawnSession).not.toHaveBeenCalled();
     });

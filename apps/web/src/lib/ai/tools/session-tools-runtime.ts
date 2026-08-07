@@ -25,13 +25,13 @@ import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { resolveDriveMembership } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
-import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
-import { redactConversationTitleForViewer } from '@pagespace/lib/agent-sessions/redact-conversation-listing';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-session-access';
+import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
+import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/session-status';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
   checkAccessForSubject,
@@ -46,22 +46,22 @@ import {
   provisionSessionSandbox,
   spawnSession,
   getAgentSessionStore,
-} from '@/lib/agent-sessions/agent-sessions-runtime';
-import { countOpenConversations } from '@/lib/agent-sessions/conversation-cap';
-import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-sessions/workspace-placement';
-import { readWorkspaceLayoutSnapshot } from '@/lib/agent-sessions/workspace-layout-runtime';
+} from '@/lib/agent-workspaces/agent-sessions-runtime';
+import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
+import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
+import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
-} from '@/lib/agent-sessions/create-conversation-in-session';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+} from '@/lib/agent-workspaces/create-conversation-in-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-session';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,
   killShellById,
   listShells,
   spawnShell,
-} from '@/lib/agent-sessions/session-shells-runtime';
+} from '@/lib/agent-workspaces/session-shells-runtime';
 import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-streams';
 import {
   createSessionTools,
@@ -371,12 +371,12 @@ async function listWorkspaceWorkers({
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(conversations.sessionId, workspaceId),
+          eq(conversations.workspaceId, workspaceId),
           eq(conversations.isActive, true),
           // A closed listing is gone from the human's sidebar — `list_sessions`
           // must agree, or an agent keeps seeing (and dispatching to) a
           // sibling the user believes they already closed.
-          isNull(conversations.closedInSessionAt),
+          isNull(conversations.closedInWorkspaceAt),
         ),
       )
       .orderBy(desc(conversations.createdAt))
@@ -878,17 +878,17 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         ownerId: conversation.userId,
         agentPageId: conversation.type === 'page' ? conversation.contextId : null,
         name: conversation.title ?? '',
-        // The WORKSPACE this conversation is bound to (conversations.sessionId
-        // — the agent_sessions.id FK), or null for a workspace-less thread.
+        // The WORKSPACE this conversation is bound to (conversations.workspaceId
+        // — the agent_workspaces.id FK), or null for a workspace-less thread.
         // `openOwnSession` requires it non-null (a plain thread is not a
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
-        workspaceId: conversation.sessionId,
+        workspaceId: conversation.workspaceId,
         // The human closed this conversation's LISTING (it no longer shows in
         // their sidebar) — `openOwnSession` refuses on this, so a worker verb
         // can never dispatch new work into, read, or kill a worker the user
         // has already closed.
-        isClosed: conversation.closedInSessionAt !== null,
+        isClosed: conversation.closedInWorkspaceAt !== null,
       };
     },
 
@@ -916,7 +916,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           conversationId,
           userId: ownerId,
           agentPageId,
-          sessionId: workspaceId,
+          workspaceId,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -1021,7 +1021,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // WORKSPACE, so resolve the working context first.
       const session = await findSessionForConversation(conversationId);
       if (!session) return { ok: false, reason: 'no_session' };
-      const spawned = await spawnShell({ sessionId: session.id, ownerId, name });
+      const spawned = await spawnShell({ workspaceId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
       return { ok: true, shell: spawned.shell };
     },
@@ -1032,7 +1032,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       if (!row) return null;
       return {
         shellId: row.id,
-        workspaceId: row.sessionId,
+        workspaceId: row.workspaceId,
         name: row.name,
         ...(row.coldTail !== null || row.coldTailHasOutput
           ? {

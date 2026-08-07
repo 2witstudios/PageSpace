@@ -12,23 +12,23 @@ it derives at read time or it doesn't ship.
 
 ```
 Drive (or null = global assistant)
- └─ Session / Workspace          agent_sessions row — owns ONE Sprite sandbox
+ └─ Session / Workspace          agent_workspaces row — owns ONE Sprite sandbox
      ├─ conversation w/ Agent A  conversations row, sessionId FK
      ├─ conversation w/ Agent B  (many agents, one filesystem)
-     └─ shell-1, shell-2         agent_session_shells rows — PTYs in the same sandbox
+     └─ shell-1, shell-2         agent_workspace_shells rows — PTYs in the same sandbox
 ```
 
-A **session** (the `agent_sessions` table; canonically a *workspace*, see §4) is a working
+A **session** (the `agent_workspaces` table; canonically a *workspace*, see §4) is a working
 context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
-Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
+Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 
 - **A session is NOT a conversation.** The first cut made `conversationId` the primary
   key and folded the Sprite name from it — a cardinality error that forced one
-  environment per thread. PR #2258 inverted the association: `agent_sessions.id` is its
+  environment per thread. PR #2258 inverted the association: `agent_workspaces.id` is its
   own cuid, and `conversations.sessionId` FKs it. The Sprite key
   (`deriveAgentSessionSpriteKey`) folds the session id, so every conversation and shell
   in a session resolves the same sandbox **by construction** — no shared id is threaded
@@ -36,7 +36,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
 - **Binding is write-once.** `conversations.sessionId` is set at creation, or — for a
   conversation that has never had one — by exactly one guarded claim of the caller's own
   row (`conversationRepository.claimConversation`, `WHERE sessionId IS NULL AND userId =
-  :caller`; `apps/web/src/lib/agent-sessions/claim-conversation-in-session.ts`). No
+  :caller`; `apps/web/src/lib/agent-workspaces/claim-conversation-in-session.ts`). No
   UPDATE path re-points a bound row: a thread's history and its filesystem always agree.
   Moving a thread to another session is a **fork** (a new conversation), never a rebind.
 - **History outlives compute.** The FK is ON DELETE SET NULL: deleting a session keeps
@@ -48,7 +48,7 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
   There is no `session_ended` refusal anywhere. A reopened row is re-endable.
 - **Global assistant = null `driveId`.** A global-assistant session lives outside any
   drive; access and billing fall back to `ownerId` — owner-only **by construction**
-  (`packages/lib/src/agent-sessions/decide-session-access.ts`: a null-drive session has
+  (`packages/lib/src/agent-workspaces/decide-session-access.ts`: a null-drive session has
   no drive to share through). Drive sessions authorize by drive access
   (owner/accepted member); unknown denies.
 - **No `agentPageId` on the session.** A session hosts conversations with many agents,
@@ -57,23 +57,23 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
 - **Ids address, names label.** `name` carries no uniqueness constraint and nothing
   looks a session up by it. (Shell names are unique per session for tab titles only;
   lookups always go through `id`.)
-- **`closedInSessionAt` ≠ `isActive`.** Closing a conversation out of its session's
-  listing (`closedInSessionAt`) never touches history soft-delete (`isActive`).
+- **`closedInWorkspaceAt` ≠ `isActive`.** Closing a conversation out of its session's
+  listing (`closedInWorkspaceAt`) never touches history soft-delete (`isActive`).
   Reopening clears the stamp. Closed listings are refused by worker verbs (§2).
 - **Sandbox status is derived, never stored** (`deriveSandboxStatus`,
-  `packages/lib/src/services/agent-sessions/session-status.ts`): the four lifecycle
+  `packages/lib/src/services/agent-workspaces/session-status.ts`): the four lifecycle
   stamps are each single-writer facts; a status column would be a second copy. This
   stays true under the epic — it is the pattern, not an exception to it.
 - **Pane grid: COMPLETE** (epic Phase 3, the #2202 machine-panes pattern).
   `agent_workspace_pane_columns` / `agent_workspace_panes` rows behind a
   per-workspace rev (`agent_workspace_layout_revs`) are the ONE source of
   truth, mutated only by idempotent verbs
-  (`POST /api/agent-sessions/{id}/workspace/verbs {opId, baseRev, verb}`,
+  (`POST /api/agent-workspaces/{id}/workspace/verbs {opId, baseRev, verb}`,
   stale rev → 409 + truth) through ONE reducer (`applyVerbLocal`,
-  `packages/lib/src/agent-sessions/workspace-layout-verbs.ts`) that the client
+  `packages/lib/src/agent-workspaces/workspace-layout-verbs.ts`) that the client
   store re-exports, each applied verb broadcasting rev-carrying
   `workspace:updated` to the `session:<id>` room. The three-way membership
-  duplication is gone: the `agent_sessions.workspaceState` jsonb blob was
+  duplication is gone: the `agent_workspaces.workspaceState` jsonb blob was
   dropped at the contract step (migration 0250, guarded by a pre-drop
   RAISE-EXCEPTION check that no blob described a pane binding the rows
   lacked), the localStorage grid copy and its hydration latches died with the
@@ -163,7 +163,7 @@ finding 1's workspace confinement.
    keeps its agent and activity time but reads `(private thread)`. The owner sees
    everything in their own workspace. One pure mechanism —
    `redactConversationTitleForViewer`
-   (`packages/lib/src/agent-sessions/redact-conversation-listing.ts`) — routed
+   (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`) — routed
    through every viewer-facing mapping of session-conversation rows. This is a
    deliberately conservative product decision, explicitly open to veto: adjusting
    it is one function. Transcript content stays owner-gated regardless.
@@ -347,23 +347,56 @@ twice is a lock protocol that drifts into double generation and double billing.
 
 ## 4. Vocabulary
 
-"sessionId" has carried five meanings. The canonical names:
+"sessionId" carried five meanings. **The epic's final phase (Phase 5) landed the renames,
+so the schema, the modules and the routes now say what they mean** — the table below is no
+longer a decoder for a divergent codebase, it is the vocabulary itself, plus the one
+deliberate exception (the frozen tool wire) and the shims that expire next release.
 
-| Canonical name | What it is | Where "sessionId" meant this |
+| Canonical name | What it is | Where "sessionId" used to mean this |
 |---|---|---|
-| `workspaceId` | An `agent_sessions` row — the working context / sandbox owner | Everywhere except the tool layer: `conversations.sessionId`, `agent_session_shells.sessionId`, `/api/agent-sessions/[sessionId]`, `?session=` URLs |
+| `workspaceId` | An `agent_workspaces` row — the working context / sandbox owner | Everywhere except the tool layer. Renamed in Phase 5: `conversations.sessionId` → `workspaceId`, `agent_session_shells.sessionId` → `agent_workspace_shells.workspaceId`, `/api/agent-sessions/[sessionId]` → `/api/agent-workspaces/[workspaceId]`, `?session=` → `?workspace=` |
 | `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts` — mapped to a `conversationId` local at the zod boundary; internally `WorkerRow.conversationId`, with `WorkerRow.workspaceId` naming the workspace) |
 | *(frozen)* `sessionId` | The model-facing tool param | The wire vocabulary is deliberately frozen at the zod boundary: to the model, a "session" is a worker you talk to and a "workspace" is the environment. Internal renames never touch these schemas |
 | `paneId` / `columnId` | One rectangle of a workspace's grid, and the vertical stack it sits in | The layout tools (`list_panes` / `resize_pane` / `move_pane` / `arrange_panes`, issue #2208). These sit on the WORKSPACE side of the frozen split — panes are furniture of the environment — so they deliberately say "pane"/"column"/"workspace" and never "session". They take no workspaceId at all: the grid is the caller's own, resolved from its conversation |
-| `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` (rename lands in the epic's final phase) |
+| `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` and `TerminalSession.sessionId` (realtime). Both renamed in Phase 5 |
+| `spriteKey` | The opaque HMAC name a workspace's Sprite is provisioned under | `agent_sessions.sessionKey`, renamed in Phase 5. Distinct from realtime's `sessionKey`, which is the PTY map key (`shell:<shellId>`) and keeps its name |
 | — | Auth login sessions (`sessions` table, `packages/db/src/schema/sessions.ts`) | Unrelated. Never mix with any of the above |
 
 Also nearby but distinct: `ai_stream_sessions` (a background streaming *run* of one chat
-turn) is a run record, not an address in any of the five senses.
+turn) is a run record, not an address in any of the five senses. So is
+`monitoring.session_id` (`AIUsageData.sessionId`), a shared analytics column many
+unrelated sources write; the sandbox billing/storage paths map a `workspaceId` onto it at
+the boundary rather than renaming a column they do not own.
 
-The epic's final phase renames the DB/module/route layer to match (`agent_sessions` →
-`agent_workspaces`, `conversations.sessionId` → `workspaceId`, etc., with one-release
-compat shims). Until then, this table is the decoder.
+### What Phase 5 renamed, and what it deliberately did not
+
+Renamed: tables `agent_sessions` → `agent_workspaces` and `agent_session_shells` →
+`agent_workspace_shells`; columns as in the table above; module directories
+(`packages/lib/src/agent-sessions/`, `packages/lib/src/services/agent-sessions/`,
+`apps/web/src/lib/agent-sessions/` → `agent-workspaces/`) and the schema file; routes
+`/api/agent-sessions/**` → `/api/agent-workspaces/**`.
+
+**FROZEN, and not renamed:** the model-facing tool vocabulary. `spawn_session` /
+`send_session` / `read_session` / `kill_session` / `list_sessions`, their descriptions,
+and their zod parameter names (`sessionId` = a worker's CONVERSATION id) are byte-identical
+to before, pinned as literals by `session-tools-schema.test.ts`. To the model, a "session"
+is still a worker you talk to and a "workspace" is still the environment; that split is a
+product decision, not an accident of history, and the internal renames stop at the zod
+boundary.
+
+Also unchanged, on purpose: the `pgs-ses-` Sprite-name prefix and the
+`agent-session-sprite:v2` HMAC namespace (`session-sprite-key.ts`) — both are fold inputs,
+so touching either re-derives every live VM's name; the `resourceType: 'agent_session'`
+security-audit value, which is recorded history; and the web→realtime shell-activity wire
+field, which would need its own accept-both window.
+
+**Compat shims, valid for ONE release** (the contract PR deletes all four): updatable
+Postgres views named `agent_sessions` / `agent_session_shells` exposing the old column
+names; `afterFiles` rewrites aliasing `/api/agent-sessions/**`; `?session=` still parsed
+alongside `?workspace=`; and `sessionId` still emitted next to `workspaceId` in the session
+and shell DTOs. The one pair with NO shim is `conversations.sessionId` /
+`closedInSessionAt` — a table that keeps its own name leaves no name to hang a view on; see
+`infrastructure/UPGRADE.md`.
 
 ## 5. Keeping this honest
 

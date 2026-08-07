@@ -3,7 +3,7 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import type { AttachmentMeta } from '@pagespace/lib/types';

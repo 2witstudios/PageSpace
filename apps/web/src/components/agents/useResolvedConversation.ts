@@ -83,7 +83,7 @@ export async function createPageConversation({
   if (canUseSessions) {
     try {
       const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-        '/api/agent-sessions',
+        '/api/agent-workspaces',
         { driveId, agentPageId: agentId },
       );
       conversationMessagesActions.seedConversation(created.conversationId);

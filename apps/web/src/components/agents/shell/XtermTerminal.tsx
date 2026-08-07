@@ -396,7 +396,7 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
         };
 
         // The tracking row for this shell must already exist — the pane picker's
-        // `POST /api/agent-sessions/{sessionId}/shells` (`AgentPanes.tsx`'s
+        // `POST /api/agent-workspaces/{sessionId}/shells` (`AgentPanes.tsx`'s
         // `handlePickShell`) reserves it before this component is ever bound to
         // it, so connecting here only ever attaches to (or resumes) an
         // already-known session.

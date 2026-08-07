@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
@@ -53,16 +53,16 @@ import { buildShellCheckAuth } from './terminal/shell-access';
 import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { handleShellActivityRequest } from './terminal/shell-activity';
-import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-sessions/agent-session-access';
+import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-session-access';
 import {
   resolveSessionTenantId,
   resolveDriveMembership,
   canRunCodeForSession,
-} from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
-import { resolveSessionShellById } from '@pagespace/lib/services/agent-sessions/session-shells';
-import { createDbSessionShellStore } from '@pagespace/lib/services/agent-sessions/session-shells-store';
-import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-sessions/agent-sessions-store';
-import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-sessions/agent-session-sprite';
+} from '@pagespace/lib/services/agent-workspaces/agent-session-tenant';
+import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/session-shells';
+import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/session-shells-store';
+import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-sessions-store';
+import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-session-sprite';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import {
@@ -164,11 +164,11 @@ async function resolveOwnerTier(ownerId: string) {
  * function the web tier's `provisionSessionSandbox` calls, so a vanished
  * drive fails closed identically on both tiers.
  */
-async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: string; userId: string }): Promise<
+async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId: string; userId: string }): Promise<
   { ok: true; sandboxId: string } | { ok: false; reason: string }
 > {
   const store = await dbAgentSessionStorePromise;
-  const row = await store.findById(sessionId);
+  const row = await store.findById(workspaceId);
   if (!row) return { ok: false, reason: 'session_not_found' };
 
   const tenant = await resolveSessionTenantId(row);
@@ -179,7 +179,7 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   const host = createSpriteSandboxHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   const result = await ensureAgentSessionSandbox({
-    row: { ...row, sessionId: row.id },
+    row: { ...row, workspaceId: row.id },
     intent: 'ensure',
     actor: { userId, tenantId },
     deps: {
@@ -207,10 +207,10 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
       // shell-only session never touches it. The reconcile maps a null
       // measurement to 0 GB and advances the watermark regardless, so those
       // sessions would bill $0 for storage permanently.
-      measureSessionStorage: async ({ sessionId, handle }) => {
+      measureSessionStorage: async ({ workspaceId, handle }) => {
         await refreshSessionStorageMeasurement({
           handle,
-          sessionId,
+          workspaceId,
           // The generation just minted, for the writer's CAS (see the web tier).
           spriteInstanceId: handle.spriteInstanceId ?? null,
           // Null for the same reason as the web tier: this fires on the create
@@ -218,7 +218,7 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
           lastMeasuredAt: null,
           now: new Date(),
           persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
-            await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
+            await store.recordStorageMeasurement({ workspaceId, spriteInstanceId, measuredBytes, measuredAt });
           },
         });
       },
@@ -256,10 +256,10 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
  * tier's `measureWarmSessionStorage`; kept here rather than imported because the
  * two tiers construct their sandbox clients differently.
  */
-async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: string): Promise<void> {
+async function measureWarmSessionStorageOnResume(workspaceId: string, sandboxId: string): Promise<void> {
   try {
     const store = await dbAgentSessionStorePromise;
-    const row = await store.findById(sessionId);
+    const row = await store.findById(workspaceId);
     if (!row || row.sandboxId === null || row.spriteTornDownAt !== null) return;
     if (!shouldRefreshMeasurement({
       lastMeasuredAt: row.storageMeasuredAt ?? null,
@@ -274,7 +274,7 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
 
     await refreshSessionStorageMeasurement({
       handle: { exec: (args) => sandbox.runCommand(args) },
-      sessionId,
+      workspaceId,
       // The FETCHED sandbox's own generation, not the row's: the CAS has to
       // describe the disk that was walked (see the web tier). Here the two
       // usually agree — the sandbox is fetched right after the row — but
@@ -283,7 +283,7 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
       persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
-        await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
+        await store.recordStorageMeasurement({ workspaceId, spriteInstanceId, measuredBytes, measuredAt });
       },
     });
   } catch {
@@ -302,14 +302,14 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbSessionShellStorePromise;
     return resolveSessionShellById({ shellId, deps: { store } });
   },
-  checkSessionAccess: async ({ requesterId, sessionId }) => {
+  checkSessionAccess: async ({ requesterId, workspaceId }) => {
     const store = await dbAgentSessionStorePromise;
-    const row = await store.findById(sessionId);
+    const row = await store.findById(workspaceId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
     const subject = { ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
       requesterId,
-      sessionId,
+      workspaceId,
       deps: {
         // The row was just read; hand the wrapper the same subject rather than
         // paying a second lookup for the identical answer.
@@ -391,9 +391,9 @@ const shellSessionDeps: ShellSessionDeps = {
   sessionMap: agentTerminalSessionMap,
   openShell: openPtyShell,
   checkAuth: shellCheckAuth,
-  persistStreamSessionId: async ({ shellId, sessionId }) => {
+  persistSpriteExecId: async ({ shellId, spriteExecId }) => {
     const store = await dbSessionShellStorePromise;
-    await store.updateStreamSessionId({ id: shellId, streamSessionId: sessionId, now: new Date() });
+    await store.updateSpriteExecId({ id: shellId, spriteExecId: spriteExecId, now: new Date() });
   },
   persistColdTail: async ({ shellId, tail, hasOutput, endedAt }) => {
     const store = await dbSessionShellStorePromise;
@@ -909,7 +909,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.activity) {
         // Streams an agent's bash run into the live shell feeds of its SESSION
         // (the shell:* successor to /api/terminal-activity, addressed by
-        // sessionId). Best-effort: no live shell (nobody watching) is not an
+        // workspaceId). Best-effort: no live shell (nobody watching) is not an
         // error.
         readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
@@ -925,9 +925,9 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                     // A DB-only listing of the session's shells composed with the
                     // pure key derivation — no Sprite is resolved or woken to
                     // answer "is anyone watching".
-                    resolveShellKeys: async (sessionId) => {
+                    resolveShellKeys: async (workspaceId) => {
                         const store = await dbSessionShellStorePromise;
-                        const rows = await store.list(sessionId);
+                        const rows = await store.list(workspaceId);
                         return rows.map((row) => deriveShellSessionKey({ shellId: row.id }));
                     },
                 },
@@ -1264,15 +1264,15 @@ io.on('connection', (socket: AuthSocket) => {
       emitValidationError(socket, 'join_session', validation.error);
       return;
     }
-    const sessionId = validation.value;
+    const workspaceId = validation.value;
 
     try {
       const store = await dbAgentSessionStorePromise;
-      const row = await store.findById(sessionId);
+      const row = await store.findById(workspaceId);
       const decision = row
         ? await checkAgentSessionAccess({
             requesterId: userId,
-            sessionId,
+            workspaceId,
             deps: {
               // The row was just read; hand the wrapper the same subject
               // rather than paying a second lookup for the same answer.
@@ -1287,16 +1287,16 @@ io.on('connection', (socket: AuthSocket) => {
         // Deny quietly (no disconnect), same as `join_conversation`: a stale
         // join after a session end or a drive removal is an expected client
         // state, not a protocol violation.
-        loggers.realtime.warn('Session layout join denied', { userId, sessionId, reason: decision.reason });
+        loggers.realtime.warn('Session layout join denied', { userId, workspaceId, reason: decision.reason });
         return;
       }
 
-      const room = sessionRoom(sessionId);
+      const room = sessionRoom(workspaceId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
       loggers.realtime.debug('User joined session layout room', { userId, room });
     } catch (error) {
-      loggers.realtime.error('Error joining session layout room', error as Error, { sessionId });
+      loggers.realtime.error('Error joining session layout room', error as Error, { workspaceId });
     }
   });
 

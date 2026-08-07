@@ -61,7 +61,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       try {
         if (input.kind === 'shell') {
           const created = await post<{ session: { sessionId: string }; shellId: string; shellName: string }>(
-            '/api/agent-sessions',
+            '/api/agent-workspaces',
             { driveId: input.driveId, firstThing: 'shell', name: input.name },
           );
           setSpawnTarget(null);
@@ -83,7 +83,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
           return;
         }
         const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-          '/api/agent-sessions',
+          '/api/agent-workspaces',
           { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
         );
         setSpawnTarget(null);

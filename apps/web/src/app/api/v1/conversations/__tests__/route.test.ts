@@ -129,8 +129,8 @@ const existingConversation = {
   createdAt: new Date('2024-01-15T10:00:00.000Z'),
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
-  sessionId: null,
-  closedInSessionAt: null, agentPageId: null, rev: 0,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
   lastMessageAt: null,
 };
 

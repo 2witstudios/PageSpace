@@ -19,7 +19,7 @@
  *  1. A PURE model: the shared verb engine (`@pagespace/lib`) as the server, and
  *     `verb-queue.ts`'s `replayPending`/`adoptServerGrid`/`verbAlreadyLanded` as
  *     the client. No zustand, no fetch, no timers. The server model is a
- *     transcription of `lib/agent-sessions/workspace-layout-runtime.ts` —
+ *     transcription of `lib/agent-workspaces/workspace-layout-runtime.ts` —
  *     replay-check first, then `baseRev`, then reduce, then the content diff
  *     that decides whether rev moves.
  *  2. The REAL store, driven through its public actions with `fetchWithAuth`
@@ -29,7 +29,7 @@
  *     would prove the algebra and miss the wiring.
  *
  * **Reproducibility.** No fast-check in this repo; the house precedent is a
- * seeded LCG (`packages/lib/src/agent-sessions/__tests__/workspace-layout-verbs.test.ts`'s
+ * seeded LCG (`packages/lib/src/agent-workspaces/__tests__/workspace-layout-verbs.test.ts`'s
  * blob≡rows drift guard, 25 seeds × 40 verbs). Same generator, same discipline:
  * every run is a pure function of one integer seed, every assertion names its
  * seed and step, and the generator's aggression scales with the seed so a
@@ -42,7 +42,7 @@
  * for and precisely what the wire carries.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PaneScope, PersistedColumnState } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope, PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import {
   applyVerbLocal,
   gridFromWorkspaceState,
@@ -50,7 +50,7 @@ import {
   workspaceLayoutVerbSchema,
   type WorkspaceLayoutVerb,
   type WorkspaceState,
-} from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
+} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { adoptServerGrid, replayPending, type PendingVerbOp } from '../verb-queue';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
 
