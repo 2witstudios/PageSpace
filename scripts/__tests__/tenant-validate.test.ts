@@ -159,7 +159,7 @@ describe('validateData', () => {
     expect(find('users').sourceCount).toBe(2);
     expect(find('drives').sourceCount).toBe(1);
     expect(find('pages').sourceCount).toBe(3);
-    expect(find('chat_messages').sourceCount).toBe(2);
+    expect(find('messages').sourceCount).toBe(2);
     expect(find('files').sourceCount).toBe(1);
     expect(find('page_permissions').sourceCount).toBe(1);
     expect(find('tags').sourceCount).toBe(1);

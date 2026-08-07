@@ -32,7 +32,6 @@ vi.mock('@pagespace/db/operators', () => ({
   ne: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id', driveId: 'driveId' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({

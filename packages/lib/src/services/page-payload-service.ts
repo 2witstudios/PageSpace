@@ -187,12 +187,11 @@ async function fetchChatMessages(
   // client history view, so an empty mid-flight row would be pure noise. See Server Stream
   // Durability epic PR 2.
   //
-  // Unified `messages` table since the message-table merge (epic
-  // "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope is the
-  // JOIN — `conversations.type = 'page'` AND `conversations.contextId = pageId`
-  // — not `messages.pageId`, which is transitional and dropped at the contract
-  // PR. The emitted `pageId` is therefore the argument itself, which is what
-  // the join proves it equals.
+  // One `messages` table since the message-table merge (epic "Agent-Session
+  // Single Source of Truth", Phase 4 / D6). Page scope is the JOIN —
+  // `conversations.type = 'page'` AND `conversations.contextId = pageId` —
+  // because a row's page is its CONVERSATION's page. The emitted `pageId` is
+  // therefore the argument itself, which is what the join proves it equals.
   const rows = await runner
     .select({
       id: messages.id,

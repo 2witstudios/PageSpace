@@ -63,13 +63,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { __table: 'pages', id: 'id' },
   drives: { __table: 'drives', id: 'id' },
-  chatMessages: {
-    __table: 'chatMessages',
-    pageId: 'pageId',
-    createdAt: 'createdAt',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-  },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },
@@ -91,7 +84,6 @@ vi.mock('@pagespace/db/db', () => {
           if (table?.__table === 'pages') return resolve([AGENT_ROW]);
           if (table?.__table === 'users') return resolve([GATE_USER_ROW]);
           if (table?.__table === 'drives') return resolve([DRIVE_ROW]);
-          if (table?.__table === 'chatMessages') return resolve([]);
           return resolve([]);
         } catch (e) {
           return reject?.(e);

@@ -74,7 +74,7 @@ vi.mock('@/lib/repositories/message-repository', () => ({
     getRecentPageMessages: vi.fn().mockResolvedValue([]),
   },
 }));
-vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' }, chatMessages: { pageId: 'pageId', createdAt: 'createdAt' } }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
 
 // The credit gate under test. Default: allowed. Individual tests override.

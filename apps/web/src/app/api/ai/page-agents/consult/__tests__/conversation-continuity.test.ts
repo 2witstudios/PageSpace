@@ -70,13 +70,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { __table: 'pages', id: 'id' },
   drives: { __table: 'drives', id: 'id' },
-  chatMessages: {
-    __table: 'chatMessages',
-    pageId: 'pageId',
-    createdAt: 'createdAt',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-  },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },

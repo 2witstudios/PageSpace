@@ -17,7 +17,6 @@ vi.mock('@pagespace/db/db', () => ({
       taskItems: { findFirst: vi.fn() },
       taskLists: { findFirst: vi.fn() },
       taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
-      chatMessages: { findFirst: vi.fn() },
       channelMessages: { findMany: vi.fn() },
     },
   },
@@ -53,16 +52,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
   drives: { id: 'id' },
-  chatMessages: {
-    id: 'id',
-    pageId: 'pageId',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    role: 'role',
-    userId: 'userId',
-  },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { pageId: 'pageId', position: 'position' },

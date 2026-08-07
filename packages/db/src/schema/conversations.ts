@@ -29,6 +29,49 @@ export const conversations = pgTable('conversations', {
    */
   sessionId: text('sessionId').references(() => agentSessions.id, { onDelete: 'set null' }),
   /**
+   * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
+   * `POST /api/v1/conversations` mints for pagespace-cli and other
+   * OpenAI-compatible clients (epic "Agent-Session Single Source of Truth",
+   * Phase 4 PR 15).
+   *
+   * Every other conversation kind already names its page in `contextId`:
+   * `type='page'` puts the agent page there, and that is the authority every
+   * page-scoped reader derives from. A `type='client'` row cannot, because its
+   * `contextId` is its DRIVE — and that is not decoration, it is the scope a
+   * drive-scoped MCP token is authorized against
+   * (`GET`/`DELETE /api/v1/conversations/[id]` refuse a conversation whose
+   * `contextId` is not in the token's allowed drives). So the page needs its
+   * own column, and this is it.
+   *
+   * Until PR 15 the fact lived on `messages.pageId`, copied onto every row of
+   * the thread — the transitional column the merge carried and this PR drops.
+   * Moving it here is the same fact with ONE owner instead of N, which is the
+   * epic's rule; it also fixes a latent bug, because a thread whose requests
+   * named two different agent pages had its history load silently truncated to
+   * the subset matching the request's page.
+   *
+   * WRITE-ONCE, and stamped lazily: the page is not known when
+   * `POST /api/v1/conversations` mints the row (the model, and therefore the
+   * agent page, arrives with the first completion). The first
+   * `POST /api/v1/chat/completions` against the thread claims it
+   * (`conversationRepository.stampClientConversationPage`, `WHERE type='client'
+   * AND "agentPageId" IS NULL`); later requests naming a different agent never
+   * re-point it, for the same reason `sessionId` is write-once.
+   *
+   * `ON DELETE SET NULL`, matching `sessionId` and NOT the
+   * `chat_messages.pageId` cascade it replaces: a permanently deleted page
+   * takes its chat MESSAGES with it (the trash route does that explicitly) but
+   * has never deleted `conversations` rows, and this column must not become
+   * the first thing that does.
+   *
+   * NULL for every other conversation type, and for a client thread that has
+   * not yet run a completion. Read it through `derivedPageId()` /
+   * `unifiedPageScope()` (`apps/web/src/lib/repositories/unified-message-scope.ts`),
+   * never directly — those are where "which column names this row's page"
+   * is defined exactly once.
+   */
+  agentPageId: text('agentPageId').references(() => pages.id, { onDelete: 'set null' }),
+  /**
    * Stamped when this thread is closed OUT OF its session's listing — a fact
    * separate from `isActive` (history soft-delete) on purpose: closing from
    * the session must never touch history. NULL = open in the session's
@@ -60,6 +103,13 @@ export const conversations = pgTable('conversations', {
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
   sessionIdx: index('conversations_session_id_idx').on(table.sessionId),
+  /**
+   * The `type='client'` half of `unifiedPageScope()`. Page-scoped reads join
+   * `conversations` and filter on `contextId` OR this column, so the second
+   * disjunct needs its own index for the same reason the first one has
+   * `conversations_context_id_idx`.
+   */
+  agentPageIdx: index('conversations_agent_page_id_idx').on(table.agentPageId),
   /**
    * `type` ⇄ `contextId` consistency — the invariant every reader has always
    * assumed and nothing has ever enforced (epic "Agent-Session Single Source
@@ -99,19 +149,19 @@ export const conversations = pgTable('conversations', {
 }));
 
 /**
- * Unified messages table for all conversation types.
+ * THE message table — one table for every conversation type (global
+ * assistant, page chat, drive chat, API-managed client threads).
  *
- * THE MERGE TARGET for `chat_messages` (packages/db/src/schema/core.ts) —
- * epic "Agent-Session Single Source of Truth", Phase 4 (D6). The two tables
- * are column-identical except three deltas, all of which land here in the
- * EXPAND step (migration 0248) so that the later dual-write/backfill/reader
- * cutover PRs have somewhere to write:
- *
- *   1. `userId` relaxed to NULLABLE — agent/system-authored rows (consult
- *      replies, `/help` responses, worker dispatches) have no human author,
- *      and `chat_messages.userId` has always been nullable.
- *   2. `sourceAgentId` adopted — the agent page that authored the row.
- *   3. `pageId` carried TRANSITIONALLY (see the column).
+ * `chat_messages` was merged INTO this table across Phase 4 of the epic
+ * "Agent-Session Single Source of Truth" (D6) and DROPPED at PR 15, migration
+ * 0252. Two of the three columns that merge added are permanent — a nullable
+ * `userId` and `sourceAgentId` — and the third, a transitional `pageId`, went
+ * with the legacy table: a row's page is derived from its conversation
+ * (`conversations.contextId` for `type='page'`, `conversations.agentPageId`
+ * for `type='client'`), never stored per row. `unifiedPageScope()` /
+ * `derivedPageId()` in
+ * `apps/web/src/lib/repositories/unified-message-scope.ts` are the single
+ * definition of that derivation.
  *
  * ATTRIBUTION RULE (the contract every writer and reader must honour):
  *   - `userId` NOT NULL  ⇒ a human wrote it, and that is who.
@@ -120,12 +170,11 @@ export const conversations = pgTable('conversations', {
  *                          legal and means "authored by the platform, source
  *                          not recorded".
  *
- * There is DELIBERATELY NO CHECK constraint binding those two columns. The
- * legacy `chat_messages` corpus contains NULL/NULL rows (agent replies
- * written before `sourceAgentId` existed) and the backfill copies them
- * verbatim; a CHECK would either reject the backfill or force us to invent
- * attribution we do not have. The rule is documented and tested, not
- * enforced by the database.
+ * There is DELIBERATELY NO CHECK constraint binding those two columns. Rows
+ * carried over from the legacy corpus include NULL/NULL ones (agent replies
+ * written before `sourceAgentId` existed); a CHECK would either have rejected
+ * the backfill or forced us to invent attribution we do not have. The rule is
+ * documented and tested, not enforced by the database.
  */
 export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -145,44 +194,30 @@ export const messages = pgTable('messages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
-  // Lifecycle state of an assistant row from the moment generation starts. See chat_messages.status
-  // (packages/db/src/schema/core.ts) for the full contract.
+  // Lifecycle state of an assistant row from the moment generation starts.
+  // 'streaming' rows are placeholders (empty content, mid-flight);
+  // 'interrupted' rows are terminal with real partial content; pre-existing
+  // rows read as 'complete' via the default. See Server Stream Durability
+  // epic PR 2.
   status: text('status', { enum: ['streaming', 'complete', 'interrupted'] }).default('complete').notNull(),
   /**
-   * TRANSITIONAL — carried only so the cutover can copy `chat_messages` rows
-   * without losing a column, and DROPPED at the contract PR (Phase 4 PR 15).
-   * It is not the source of truth even while it exists: a page conversation's
-   * page is `conversations.contextId` (`type='page'`), which is exactly what
-   * every reader derives after the cutover. Nothing new may be built on this
-   * column.
-   *
-   * No FK to `pages`, deliberately: an FK on a column scheduled for deletion
-   * buys nothing (the authoritative link, `conversations.contextId`, has none
-   * either), and its `ON DELETE CASCADE` would add a second, redundant delete
-   * path for page teardown during the very window in which both tables hold
-   * the same rows.
-   */
-  pageId: text('pageId'),
-  /**
-   * The agent page that authored this row, when known. Adopted verbatim from
-   * `chat_messages.sourceAgentId`, including its `ON DELETE SET NULL`:
+   * The agent page that authored this row, when known. `ON DELETE SET NULL`:
    * deleting an agent must never delete the transcript it produced — the
    * message survives, attributed to nobody (see the attribution rule above).
+   *
+   * NOT the row's page: this names the AUTHOR. Where the row LIVES is its
+   * conversation's business (`derivedPageId()`).
    */
   sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),
   userIdx: index('messages_user_id_idx').on(table.userId),
-  // Parity with `chat_messages`'s page-scoped access paths, so the reader
-  // cutover does not regress page-chat history loads onto sequential scans.
-  // CREATED CONDITIONALLY by 0248: below the size gate the migration builds
-  // them inline; above it they are built by
-  // scripts/deferred-migrations/0248-messages-unification-indexes.sql with
-  // CREATE INDEX CONCURRENTLY. Both paths produce these exact names, so this
-  // declaration stays the single description of the intended end state.
-  pageIdx: index('messages_page_id_idx').on(table.pageId),
-  pageIsActiveCreatedAtIdx: index('messages_page_id_is_active_created_at_idx').on(table.pageId, table.isActive, table.createdAt),
+  // The page-scoped indexes 0248 created on the transitional `pageId` went
+  // with the column in 0252. A page-scoped read is now a JOIN through
+  // `conversations`, served by `conversations_context_id_idx` /
+  // `conversations_agent_page_id_idx` on the outer side and
+  // `messages_conversation_id_created_at_idx` on this one.
 }));
 
 // Relations
@@ -207,8 +242,6 @@ export const messagesRelations = relations(messages, ({ one }) => ({
     fields: [messages.userId],
     references: [users.id],
   }),
-  // Mirrors `chatMessagesRelations.sourceAgent` so the reader cutover can
-  // move relation-shaped queries across without changing their shape.
   sourceAgent: one(pages, {
     fields: [messages.sourceAgentId],
     references: [pages.id],

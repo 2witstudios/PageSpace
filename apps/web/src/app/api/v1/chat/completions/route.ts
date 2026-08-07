@@ -181,6 +181,18 @@ export async function POST(request: Request): Promise<Response> {
         return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
       }
       isConversationShared = conv?.isShared === true;
+      // A `type='client'` thread (the shape `POST /api/v1/conversations`
+      // mints) is created before anyone knows which agent it will talk to —
+      // the model, and therefore the agent page, arrives HERE. Claim it, once:
+      // the stamp is what makes the thread's rows page-scoped, and so what
+      // keeps this route's history load and the thread's own edit/delete route
+      // working now that `messages.pageId` is gone (epic "Agent-Session Single
+      // Source of Truth", Phase 4 PR 15). Write-once in the statement — a
+      // later request naming a different agent matches no row rather than
+      // re-anchoring a thread whose permissions already follow the first page.
+      if (conv?.type === 'client') {
+        await conversationRepository.stampClientConversationPage(incomingConversationId, pageId);
+      }
     }
   }
 
@@ -385,13 +397,11 @@ export async function POST(request: Request): Promise<Response> {
 
     let inferenceMessages = messages;
     if (isThreadMode && !clientManagesHistory) {
-      // Reads the UNIFIED `messages` table since the message-table merge (epic
-      // "Agent-Session Single Source of Truth", Phase 4 / D6 — #2349 deferred
-      // this route's history load to this PR). `pageId` stays a real scope:
-      // it is what stops a caller pairing another page's conversationId with a
-      // page they can reach. For the `type='client'` threads this route mints,
-      // that scope resolves through the transitional `messages.pageId` — see
-      // `unifiedPageScope`.
+      // Reads the UNIFIED `messages` table (epic "Agent-Session Single Source
+      // of Truth", Phase 4 / D6). `pageId` stays a real scope: it is what
+      // stops a caller pairing another page's conversationId with a page they
+      // can reach. For a `type='client'` thread that scope resolves through
+      // `conversations.agentPageId`, stamped above — see `unifiedPageScope`.
       const dbMessages = await messageRepository.getMessagesForPage(pageId, conversationId);
       inferenceMessages = [...await Promise.all(dbMessages.map(convertDbMessageToUIMessage)), userMessage];
     }

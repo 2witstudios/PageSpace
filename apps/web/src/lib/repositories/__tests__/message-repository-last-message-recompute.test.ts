@@ -75,7 +75,6 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'chat_messages.id', isActive: 'chat_messages.isActive', createdAt: 'chat_messages.createdAt' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', name: 'users.name', image: 'users.image' } }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
@@ -90,7 +89,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     conversationId: 'messages.conversationId',
     isActive: 'messages.isActive',
     createdAt: 'messages.createdAt',
-    pageId: 'messages.pageId',
   },
 }));
 
@@ -278,17 +276,3 @@ describe('messageRepository.purgeInactiveMessages', () => {
   });
 });
 
-describe('messageRepository.purgeInactiveLegacyChatMessages', () => {
-  it('sweeps the legacy leg and reports its own count, without recomputing anything', async () => {
-    mockDeleteReturning.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
-
-    const purged = await messageRepository.purgeInactiveLegacyChatMessages(new Date('2026-01-01T00:00:00Z'));
-
-    assert({
-      given: 'a sweep of soft-deleted rows on the legacy chat_messages leg',
-      should: 'return the removed count and touch no conversation timestamp — lastMessageAt is derived from the unified leg, and recomputing it from a table no reader consults would be a second answer',
-      actual: { purged, recomputes: mockTransaction.mock.calls.length },
-      expected: { purged: 2, recomputes: 0 },
-    });
-  });
-});

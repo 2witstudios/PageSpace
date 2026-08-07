@@ -8,7 +8,6 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import {
   computePageMutation,
   restoreFields,
@@ -293,10 +292,10 @@ describe('pickConversationTable', () => {
     });
   });
 
-  it('routes a page conversation to the UNIFIED messages table, with chat_messages as its legacy leg', () => {
+  it('routes a page conversation to the one messages table', () => {
     assert({
       given: 'no conversationType but a pageId present',
-      should: 'select the unified `messages` table for reads and rollback writes, and name `chat_messages` as the leg a write must also mirror until the contract PR drops it (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12)',
+      should: 'select `messages` for reads and rollback writes — the legacy `chat_messages` leg it used to also mirror onto was dropped with the table (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 15)',
       actual: (() => {
         const r = pickConversationTable({ conversationType: undefined, hasPageId: true });
         return {
@@ -304,22 +303,22 @@ describe('pickConversationTable', () => {
           isGlobal: r.isGlobal,
           label: r.label,
           isUnifiedTable: r.table === messages,
-          legacyIsChatMessages: r.legacyTable === chatMessages,
+          hasLegacyLeg: 'legacyTable' in r,
         };
       })(),
-      expected: { isChannel: false, isGlobal: false, label: 'page', isUnifiedTable: true, legacyIsChatMessages: true },
+      expected: { isChannel: false, isGlobal: false, label: 'page', isUnifiedTable: true, hasLegacyLeg: false },
     });
   });
 
-  it('gives a global conversation no legacy leg', () => {
+  it('routes a global conversation to the same table', () => {
     assert({
       given: 'a global conversation',
-      should: 'select the unified table and report no legacy leg — `messages` was always the global assistant\'s only table, so there is nothing to mirror',
+      should: 'select `messages` — one table for every kind of thread, so page and global differ only in their label',
       actual: (() => {
         const r = pickConversationTable({ conversationType: 'global', hasPageId: false });
-        return { label: r.label, isUnifiedTable: r.table === messages, legacyTable: r.legacyTable };
+        return { label: r.label, isUnifiedTable: r.table === messages, hasLegacyLeg: 'legacyTable' in r };
       })(),
-      expected: { label: 'global', isUnifiedTable: true, legacyTable: null },
+      expected: { label: 'global', isUnifiedTable: true, hasLegacyLeg: false },
     });
   });
 });

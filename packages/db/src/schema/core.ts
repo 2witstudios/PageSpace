@@ -99,56 +99,6 @@ export const pages = pgTable('pages', {
     }
 });
 
-export const chatMessages = pgTable('chat_messages', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  /**
-   * Group messages into conversation sessions.
-   *
-   * Self-minting (`$defaultFn`) and, for its whole history, referentially
-   * unanchored: a row could name a `conversations` id that never existed.
-   * Migration 0248 (epic "Agent-Session Single Source of Truth", Phase 4 —
-   * the expand step) synthesises the missing `conversations` rows and adds a
-   * real FK to `conversations(id)` ON DELETE CASCADE, `NOT VALID` — new
-   * writes are checked, the existing corpus is left unscanned until a later
-   * PR runs `VALIDATE CONSTRAINT`.
-   *
-   * That FK is declared IN THE MIGRATION, not here, for two reasons, and the
-   * omission is deliberate rather than an oversight:
-   *   1. `NOT VALID` has no drizzle expression — a `.references()` here would
-   *      generate a VALIDATED FK, whose creation scans every row of this
-   *      table under a lock. On a large corpus that is an outage.
-   *   2. `core.ts` importing `conversations.ts` would close an import cycle
-   *      (conversations → agent-sessions → core).
-   * Keep the two in sync by hand: the constraint is
-   * `chat_messages_conversationId_conversations_id_fk`.
-   */
-  conversationId: text('conversationId').notNull().$defaultFn(() => createId()),
-  role: text('role').notNull(),
-  content: text('content').notNull(),
-  toolCalls: jsonb('toolCalls'),
-  toolResults: jsonb('toolResults'),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  isActive: boolean('isActive').default(true).notNull(),
-  editedAt: timestamp('editedAt', { mode: 'date' }),
-  userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
-  sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
-  messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
-  // Lifecycle state of an assistant row from the moment generation starts. 'streaming' rows are
-  // placeholders (empty content, mid-flight); 'interrupted' rows are terminal with real partial
-  // content; pre-existing rows read as 'complete' via the default. See Server Stream Durability epic PR 2.
-  status: text('status', { enum: ['streaming', 'complete', 'interrupted'] }).default('complete').notNull(),
-}, (table) => {
-    return {
-        pageIdx: index('chat_messages_page_id_idx').on(table.pageId),
-        userIdx: index('chat_messages_user_id_idx').on(table.userId),
-        conversationIdx: index('chat_messages_conversation_id_idx').on(table.conversationId), // Index for conversation filtering
-        pageConversationIdx: index('chat_messages_page_id_conversation_id_idx').on(table.pageId, table.conversationId), // Composite index for queries
-        pageIsActiveCreatedAtIndex: index('chat_messages_page_id_is_active_created_at_idx').on(table.pageId, table.isActive, table.createdAt),
-    }
-});
-
-
 export const tags = pgTable('tags', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').unique().notNull(),
@@ -261,25 +211,7 @@ export const pagesRelations = relations(pages, ({ one, many }) => ({
     mentionsFrom: many(mentions, { relationName: 'MentionsFrom' }),
     mentionsTo: many(mentions, { relationName: 'MentionsTo' }),
     userMentionsFrom: many(userMentions, { relationName: 'UserMentionsFrom' }),
-    messages: many(chatMessages),
     // permissions relation handled separately to avoid circular dependency
-}));
-
-
-export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
-    page: one(pages, {
-        fields: [chatMessages.pageId],
-        references: [pages.id],
-    }),
-    user: one(users, {
-        fields: [chatMessages.userId],
-        references: [users.id],
-    }),
-    sourceAgent: one(pages, {
-        fields: [chatMessages.sourceAgentId],
-        references: [pages.id],
-        relationName: 'sourceAgent',
-    }),
 }));
 
 

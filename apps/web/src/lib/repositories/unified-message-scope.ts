@@ -1,14 +1,14 @@
 /**
  * HOW A UNIFIED `messages` ROW NAMES ITS PAGE — one definition, shared by
  * every page-scoped reader (epic "Agent-Session Single Source of Truth",
- * Phase 4 / D6, reader cutover).
+ * Phase 4 / D6).
  *
  * `chat_messages` had a `pageId` column and every page-scoped query said
- * `pageId = X`. The unified table's authoritative page link is
- * `conversations.contextId` for a `type='page'` conversation, so the readers
- * translate that predicate into a JOIN. Getting that translation subtly
- * different in each of the ~8 call sites is the failure mode this module
- * exists to prevent, so the rule lives here and nowhere else.
+ * `pageId = X`. The unified table has no such column — a row's page is its
+ * CONVERSATION's page — so the readers translate that predicate into a JOIN.
+ * Getting that translation subtly different in each of the ~8 call sites is
+ * the failure mode this module exists to prevent, so the rule lives here and
+ * nowhere else.
  *
  * A leaf module on purpose: schema + operators only, no repository imports, so
  * anything from a route to `page-service.ts` can depend on it without pulling
@@ -16,25 +16,32 @@
  */
 
 import { eq, and, or, sql, type SQL } from '@pagespace/db/operators';
-import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { conversations } from '@pagespace/db/schema/conversations';
 
 /**
  * The page a unified row belongs to, derived at read time.
  *
- * PRIMARY: `conversations.contextId` when `conversations.type = 'page'` — the
- * end-state authority (D6: "no `pageId` in the end state"), indexed by
- * `conversations_context_id_idx`.
+ * TWO conversation kinds name a page, and each names it in its own column —
+ * one owner per fact, keyed by `type`:
  *
- * FALLBACK: the transitional `messages.pageId`, and ONLY for a conversation
- * that is not `type='page'`. The one shape that needs it is `type='client'` —
- * an API-managed thread (`/api/v1/chat/completions`) whose `contextId` is a
- * DRIVE id or null, while its rows still name the agent page they ran against.
- * Before this cutover those rows answered `chat_messages.pageId`; dropping
- * them to null here would 404 a pagespace-cli thread's own edit/delete route.
+ *   `type='page'`   → `conversations.contextId`, indexed by
+ *                     `conversations_context_id_idx`. The in-app page chat.
+ *   `type='client'` → `conversations.agentPageId`, indexed by
+ *                     `conversations_agent_page_id_idx`. The API-managed
+ *                     threads `POST /api/v1/conversations` mints, whose
+ *                     `contextId` is a DRIVE (and is load-bearing there: it is
+ *                     what a drive-scoped MCP token is authorized against), so
+ *                     their page needs a column of its own.
  *
- * The column is scheduled for deletion (Phase 4 PR 15), which is exactly when
- * `type='client'`'s page link has to be given a real home. Recorded here so
- * that PR cannot miss it.
+ * Everything else — `type='global'`, `type='drive'` — derives NULL, and a NULL
+ * here is what the page-scoped edit/delete routes 404 on: a page route must
+ * never become a second door onto a global-assistant message.
+ *
+ * Until PR 15 the `type='client'` branch read the transitional
+ * `messages.pageId`, copied onto every row of the thread. Moving it to the
+ * conversation is the same fact with one owner instead of N — and it fixed a
+ * latent truncation bug on the way, since a thread whose requests named two
+ * different agent pages used to load only the subset matching the request's.
  *
  * A FUNCTION, not a module-level constant: building the fragment eagerly would
  * make every module that transitively imports the message repository require a
@@ -42,7 +49,7 @@ import { conversations, messages } from '@pagespace/db/schema/conversations';
  * mock `@pagespace/db/operators` and never touch a page-scoped read.
  */
 export function derivedPageId(): SQL<string | null> {
-  return sql<string | null>`CASE WHEN ${conversations.type} = 'page' THEN ${conversations.contextId} ELSE ${messages.pageId} END`;
+  return sql<string | null>`CASE WHEN ${conversations.type} = 'page' THEN ${conversations.contextId} WHEN ${conversations.type} = 'client' THEN ${conversations.agentPageId} END`;
 }
 
 /**
@@ -53,24 +60,30 @@ export function derivedPageId(): SQL<string | null> {
  * messages.conversationId))`. Safe for every row: `messages.conversationId`
  * carries a validated FK, so the inner join drops nothing.
  *
- * Two disjuncts, for the same reason `derivedPageId` has two branches. A
- * row cannot be caught by the wrong one: migration 0248 derived every page
- * conversation's `contextId` FROM `chat_messages.pageId` after auditing the
- * mapping 1:1, and a drive id can never equal a page id.
+ * Two disjuncts, for the same reason `derivedPageId` has two branches. A row
+ * cannot be caught by the wrong one — the two columns are disjoint by `type`.
+ *
+ * Deliberately WIDER than the "page conversations only" form the internal
+ * readers use (Phase 4 PR 11: session transcripts, memory discovery, pulse,
+ * search). These are the paths a user drives — the page chat history load, the
+ * consult context, the edit/delete routes, page teardown — and they keep exact
+ * behavioural parity with `chat_messages.pageId = X`, which caught client
+ * threads too. The difference between the two forms is asserted, not assumed,
+ * by `__tests__/unified-reader-parity.integration.test.ts`.
  */
 export function unifiedPageScope(pageId: string): SQL {
   return or(
     and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId)),
-    eq(messages.pageId, pageId),
+    and(eq(conversations.type, 'client'), eq(conversations.agentPageId, pageId)),
   )!;
 }
 
 /**
  * The raw-SQL twin of `unifiedPageScope`, for the hand-written aggregate
  * queries that cannot use the drizzle builder (the page-agent conversation
- * listing and its count). Expects the caller's FROM list to alias `messages`
- * as `m` and its joined `conversations` row as `pc`.
+ * listing and its count). Expects the caller's joined `conversations` row to
+ * be aliased `pc`.
  */
 export function unifiedPageScopeSql(pageId: string): SQL {
-  return sql`((pc.type = 'page' AND pc."contextId" = ${pageId}) OR m."pageId" = ${pageId})`;
+  return sql`((pc.type = 'page' AND pc."contextId" = ${pageId}) OR (pc.type = 'client' AND pc."agentPageId" = ${pageId}))`;
 }

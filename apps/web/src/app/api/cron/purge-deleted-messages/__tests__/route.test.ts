@@ -5,13 +5,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Since the message-table merge (epic "Agent-Session Single Source of Truth",
-// Phase 4 / D6, PR 12) BOTH message purges live on the message repository:
-// `purgeInactiveMessages` sweeps the unified `messages` table (page rows
-// included now) and `purgeInactiveLegacyChatMessages` sweeps the legacy leg
-// that the dual-write still fills. `globalConversationRepository` keeps only
-// the CONVERSATION purge.
+// Phase 4 / D6) `purgeInactiveMessages` sweeps the ONE `messages` table, page
+// rows included. The separate legacy sweep went with `chat_messages` at PR 15.
+// `globalConversationRepository` keeps only the CONVERSATION purge.
 const { mockMessageRepo, mockGlobalRepo, mockDmRepo, mockAudit } = vi.hoisted(() => ({
-  mockMessageRepo: { purgeInactiveMessages: vi.fn(), purgeInactiveLegacyChatMessages: vi.fn() },
+  mockMessageRepo: { purgeInactiveMessages: vi.fn() },
   mockGlobalRepo: { purgeInactiveConversations: vi.fn() },
   mockDmRepo: { purgeInactiveMessages: vi.fn() },
   mockAudit: vi.fn(),
@@ -58,7 +56,6 @@ describe('/api/cron/purge-deleted-messages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockMessageRepo.purgeInactiveLegacyChatMessages.mockResolvedValue(5);
     mockMessageRepo.purgeInactiveMessages.mockResolvedValue(3);
     mockGlobalRepo.purgeInactiveConversations.mockResolvedValue(2);
     mockDmRepo.purgeInactiveMessages.mockResolvedValue(4);
@@ -73,7 +70,6 @@ describe('/api/cron/purge-deleted-messages', () => {
         resourceType: 'cron_job',
         resourceId: 'purge_deleted_messages',
         details: {
-          chatMessagesPurged: 5,
           globalMessagesPurged: 3,
           directMessagesPurged: 4,
           conversationsPurged: 2,

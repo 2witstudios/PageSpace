@@ -43,7 +43,6 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'chat_messages.id', conversationId: 'chat_messages.conversation_id', role: 'chat_messages.role', status: 'chat_messages.status', isActive: 'chat_messages.is_active', createdAt: 'chat_messages.created_at' },
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({

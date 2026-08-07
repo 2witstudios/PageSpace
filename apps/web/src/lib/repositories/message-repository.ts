@@ -27,21 +27,12 @@
  * on them; deleted in a later PR). The legacy edit/delete/undo broadcasts
  * moved INTO this module alongside the writes they describe.
  *
- * ── ONE TABLE (Phase 4 PRs 10 → 14, D6) ───────────────────────────────────
- * `chat_messages` has been merged into `messages`. PR 10 dual-wrote both
- * legs, PRs 11/12 moved every reader onto `messages`, and PR 14 (this state)
- * STOPPED the legacy leg: no method below INSERTs or UPDATEs `chat_messages`,
- * and neither does anything else in the app. Page rows go through the shared
- * page writer (`unified-message-leg.ts`); global rows are written here
- * directly, as they always were, with explicit `pageId: null` /
- * `sourceAgentId: null` so a global row reads as "not a page row".
- *
- * The env kill switch that used to disable the second leg is gone with the leg
- * it switched off — see docs/2.0-architecture/agent-sessions.md §3a.
- *
- * `chat_messages` is still READ-capable and still swept — see
- * `purgeInactiveLegacyChatMessages`, which is the one method here that still
- * names it, and only to DELETE. PR 15 drops the table.
+ * ── ONE TABLE (Phase 4, D6) ───────────────────────────────────────────────
+ * `chat_messages` was merged into `messages` and DROPPED at PR 15 (migration
+ * 0252). There is one message table, and this module is its writer: page rows
+ * go through the shared page writer (`unified-message-leg.ts`), global rows
+ * are written here directly, as they always were, with an explicit
+ * `sourceAgentId: null`.
  *
  * ── READER CUTOVER + REPOSITORY MERGE (Phase 4 PR 12, D6) ─────────────────
  * This module is also the one READER for durable chat messages. The whole
@@ -49,14 +40,13 @@
  * message-table half of `global-conversation-repository.ts` moved in here, and
  * every one reads the UNIFIED `messages` table.
  *
- * Page scope is `unifiedPageScope()` — see its doc for why it is a JOIN
- * through `conversations`, not `messages.pageId`.
+ * Page scope is `unifiedPageScope()` — see its doc for why a row's page is
+ * derived from its conversation rather than stored on the row.
  */
 
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
 import { eq, and, ne, lt, desc } from '@pagespace/db/operators';
-import { chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { messages } from '@pagespace/db/schema/conversations';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -146,16 +136,15 @@ async function savePageMessageRow({
   const toolResultsJson = serializeJsonColumn(toolResults);
   const createdAt = new Date();
 
-  // The scoped upsert lives in the shared page writer now (Phase 4 PR 14
-  // removed the `chat_messages` statement that used to sit here and hold the
-  // gate). The gate itself is unchanged and is what `no_match` reports: a
+  // The scoped upsert lives in the shared page writer. The gate it carries is
+  // inherited verbatim from the legacy statement, and is what `no_match`
+  // reports: a
   // client-supplied messageId colliding with a row in a DIFFERENT conversation
   // — ids are one global space — declines the conflict action entirely (no
   // overwrite, no re-parent), and the role half closes same-conversation role
   // spoofing (a 'user' save whose id equals an existing 'assistant' row's).
   const outcome = await upsertUnifiedPageMessage(dbClient, {
     messageId,
-    pageId,
     conversationId,
     userId,
     role,
@@ -225,9 +214,8 @@ async function saveGlobalMessageRow({
   // role-spoofing gates, spelled out here because the global path writes the
   // table directly rather than through the shared page writer.
   //
-  // The two columns migration 0248 added are explicit rather than left to the
-  // column defaults: a global row must read as "not a page row" to every
-  // reader, and `pageId: null` is what says so.
+  // `sourceAgentId` is explicit rather than left to the column default: the
+  // attribution rule is a contract, and a global row states its half of it.
   const result = await dbClient
     .insert(messages)
     .values({
@@ -241,9 +229,6 @@ async function saveGlobalMessageRow({
       createdAt: new Date(),
       isActive: true,
       status,
-      // A global-assistant thread has no page: `conversations.type='global'`
-      // and (per 0249's CHECK) a NULL `contextId`. Never a page id.
-      pageId: null,
       // The global assistant is not an agent PAGE, so there is no agent page
       // id to attribute: NULL means "platform-authored, source not recorded",
       // which is exactly the attribution rule's second clause.
@@ -285,9 +270,9 @@ async function saveGlobalMessageRow({
 /**
  * One durable row of the unified `messages` table, as the read seam returns
  * it. Structurally the useful subset of the former `ChatMessage`
- * (chat-message-repository) minus `pageId` — the transitional column this
- * cutover deliberately stops reading — so the OpenAI-shaped serializers accept
- * it unchanged.
+ * (chat-message-repository) minus its `pageId` column — a row's page is its
+ * CONVERSATION's page now — so the OpenAI-shaped serializers accept it
+ * unchanged.
  */
 export interface UnifiedMessageRow {
   id: string;
@@ -308,13 +293,14 @@ export interface UnifiedMessageRow {
  * A page-chat row plus the page it belongs to, derived at read time. Returned
  * by the readers whose callers need the page for a permission check
  * (`checkMCPPageScope`, `canPrincipalEditPage`) — historically
- * `chat_messages.pageId`.
+ * `chat_messages.pageId`, now derived (`derivedPageId`).
  */
 export interface UnifiedPageMessageRow extends UnifiedMessageRow {
   /**
-   * `conversations.contextId` for a page conversation; the transitional
-   * `messages.pageId` otherwise (see `derivedPageId`). Null when the row
-   * names no page at all — a global-assistant message.
+   * `conversations.contextId` for a `type='page'` conversation,
+   * `conversations.agentPageId` for a `type='client'` one (see
+   * `derivedPageId`). Null when the row names no page at all — a
+   * global-assistant message, or an API thread that has not run a completion.
    */
   pageId: string | null;
 }
@@ -656,7 +642,6 @@ export const messageRepository = {
       if (row && !row.isActive) return null;
       await insertUnifiedPageMessage(tx, {
         messageId: args.messageId,
-        pageId: args.pageId,
         conversationId: args.conversationId,
         userId: null,
         role: 'assistant',
@@ -700,8 +685,7 @@ export const messageRepository = {
         toolResults: null,
         isActive: true,
         status: 'streaming',
-        // Global leg — see saveGlobalMessageRow for why these are explicit.
-        pageId: null,
+        // Global leg — see saveGlobalMessageRow for why this is explicit.
         sourceAgentId: null,
       });
       const bumped = await bumpConversationRev(tx, args.conversationId);
@@ -737,7 +721,6 @@ export const messageRepository = {
       // legacy statement that used to hold the guard did.
       const written = await materializeUnifiedPageMessage(tx, {
         messageId: args.messageId,
-        pageId: args.pageId,
         conversationId: args.conversationId,
         userId: null,
         role: 'assistant',
@@ -784,8 +767,7 @@ export const messageRepository = {
           createdAt: args.createdAt,
           isActive: true,
           status: 'interrupted',
-          // Global leg — see saveGlobalMessageRow for why these are explicit.
-          pageId: null,
+          // Global leg — see saveGlobalMessageRow for why this is explicit.
           sourceAgentId: null,
         })
         .onConflictDoUpdate({
@@ -1151,8 +1133,8 @@ export const messageRepository = {
    * Returns soft-deleted rows too (the legacy reader did; the routes make
    * their own `isActive` decision). A GLOBAL-assistant row resolves with
    * `pageId: null`, which is the callers' cue to 404 — before the cutover
-   * those ids simply did not exist in `chat_messages`, and a page route must
-   * not become a second door onto a global message.
+   * those ids simply did not exist in the page-chat table, and a page route
+   * must not become a second door onto a global message.
    */
   async getMessageById(messageId: string): Promise<UnifiedPageMessageRow | null> {
     const [row] = await db
@@ -1281,26 +1263,6 @@ export const messageRepository = {
       }
     }
 
-    return result.length;
-  },
-
-  /**
-   * Hard-delete soft-deleted LEGACY `chat_messages` rows older than the
-   * cutoff. Housekeeping for a frozen table: since Phase 4 PR 14 nothing
-   * INSERTs or UPDATEs `chat_messages`, but the rows written before the freeze
-   * are still there and retention still owes the user their removal, so the
-   * sweep runs until PR 15 drops the table. A DELETE is the ONLY statement
-   * this repository still aims at that table.
-   *
-   * No `lastMessageAt` recompute — that field is derived from `messages` (see
-   * `purgeInactiveMessages`), and recomputing it from a table no reader
-   * consults would be inventing a second answer.
-   */
-  async purgeInactiveLegacyChatMessages(olderThan: Date): Promise<number> {
-    const result = await db
-      .delete(chatMessages)
-      .where(and(eq(chatMessages.isActive, false), lt(chatMessages.createdAt, olderThan)))
-      .returning({ id: chatMessages.id });
     return result.length;
   },
 };

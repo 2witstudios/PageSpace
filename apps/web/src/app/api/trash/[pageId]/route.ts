@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { and, eq, sql } from '@pagespace/db/operators'
-import { pages, favorites, pageTags, chatMessages } from '@pagespace/db/schema/core'
+import { pages, favorites, pageTags } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { channelMessages } from '@pagespace/db/schema/chat';
@@ -27,39 +27,31 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     await tx.delete(favorites).where(eq(favorites.pageId, pageId));
     await tx.delete(pageTags).where(eq(pageTags.pageId, pageId));
 
-    // UNIFIED `messages` — permanent delete of a page must take its chat
-    // history with it (epic "Agent-Session Single Source of Truth", Phase 4 /
-    // D6). Explicit, because nothing else would do it: `chat_messages.pageId`
-    // carries an ON DELETE CASCADE to `pages` and `messages.pageId`
-    // deliberately does not (it is the transitional column), while
-    // `conversations.contextId` has never been a foreign key. Without this
-    // statement the reader cutover would leave every page-chat message alive
-    // and readable by conversation id after its page was permanently deleted.
+    // Permanent delete of a page must take its chat history with it (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). Explicit, because
+    // nothing else would do it: `conversations.contextId` has never been a
+    // foreign key, `conversations.agentPageId`'s is ON DELETE SET NULL, and
+    // the `chat_messages.pageId` cascade that used to cover this went with the
+    // table at PR 15. Without this statement a permanently deleted page's chat
+    // history would outlive it, still readable by conversation id.
     //
-    // Two predicates, the same pair `unifiedPageScope` documents: the page's
-    // own `type='page'` conversations, plus any row still naming the page in
-    // the transitional column (the `type='client'` API threads). Together they
-    // are exactly the set `chat_messages`' cascade removes.
+    // The conversation set is exactly `unifiedPageScope`'s two disjuncts: the
+    // page's own `type='page'` threads, plus the `type='client'` API threads
+    // that named it. Collected BEFORE the `pages` delete below, which is what
+    // clears `agentPageId`.
     const pageConversationIds = await tx
       .select({ id: conversations.id })
       .from(conversations)
-      .where(and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId)));
-    await tx.delete(messages).where(
-      pageConversationIds.length > 0
-        ? or(
-            inArray(messages.conversationId, pageConversationIds.map((c) => c.id)),
-            eq(messages.pageId, pageId),
-          )
-        : eq(messages.pageId, pageId),
-    );
+      .where(or(
+        and(eq(conversations.type, 'page'), eq(conversations.contextId, pageId)),
+        and(eq(conversations.type, 'client'), eq(conversations.agentPageId, pageId)),
+      ));
+    if (pageConversationIds.length > 0) {
+      await tx.delete(messages).where(
+        inArray(messages.conversationId, pageConversationIds.map((c) => c.id)),
+      );
+    }
 
-    // The frozen legacy table. Since Phase 4 PR 14 nothing INSERTs or UPDATEs
-    // `chat_messages`, but the rows written before the freeze are still there
-    // and a permanently deleted page must take them with it. Kept explicit
-    // rather than left to `chat_messages.pageId`'s ON DELETE CASCADE (which
-    // fires on the `pages` delete below) so the teardown reads as one list of
-    // what it removes; PR 15 deletes this line with the table.
-    await tx.delete(chatMessages).where(eq(chatMessages.pageId, pageId));
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 
     await tx.delete(pages).where(eq(pages.id, pageId));

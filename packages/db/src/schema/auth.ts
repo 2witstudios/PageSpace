@@ -1,7 +1,6 @@
 import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
@@ -202,7 +201,6 @@ import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   deviceTokens: many(deviceTokens),
-  chatMessages: many(chatMessages),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   socketTokens: many(socketTokens),

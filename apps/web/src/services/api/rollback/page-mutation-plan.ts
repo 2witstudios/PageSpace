@@ -10,7 +10,6 @@
  */
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import { computePageStateHash } from '@pagespace/lib/services/page-version-service';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -183,15 +182,8 @@ export function restoreFields(
 
 /** Message table plus the derived flags for a conversation. */
 export interface ConversationTableSelection {
-  /** The authoritative table — the one every reader consults. */
+  /** The table this message lives in — the one every reader consults. */
   table: typeof channelMessages | typeof messages;
-  /**
-   * The legacy `chat_messages` leg, for a PAGE conversation only; null
-   * otherwise. Transitional (Phase 4 / D6): reads come from `table`, but a
-   * write must still land on both legs until PR 15 drops `chat_messages`, or a
-   * revert of the reader cutover would find un-rolled-back rows there.
-   */
-  legacyTable: typeof chatMessages | null;
   isChannel: boolean;
   isGlobal: boolean;
   label: 'channel' | 'global' | 'page';
@@ -217,6 +209,5 @@ export function pickConversationTable(params: {
   const isGlobal = !isChannel && (!params.hasPageId || params.conversationType === 'global');
   const table = isChannel ? channelMessages : messages;
   const label = isChannel ? 'channel' : isGlobal ? 'global' : 'page';
-  const legacyTable = label === 'page' ? chatMessages : null;
-  return { table, legacyTable, isChannel, isGlobal, label };
+  return { table, isChannel, isGlobal, label };
 }

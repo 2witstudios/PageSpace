@@ -75,12 +75,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chatMessages.id',
-    pageId: 'chatMessages.pageId',
-    conversationId: 'chatMessages.conversationId',
-    isActive: 'chatMessages.isActive',
-  },
   pages: { id: 'pages.id', type: 'pages.type', isTrashed: 'pages.isTrashed' },
 }));
 

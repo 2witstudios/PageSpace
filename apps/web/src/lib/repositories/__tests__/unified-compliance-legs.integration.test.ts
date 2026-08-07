@@ -28,7 +28,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { aiStreamSessions, aiPendingAbortIntents } from '@pagespace/db/schema/ai-streams';
@@ -59,7 +59,7 @@ async function seedStreamSession(args: {
   return messageId;
 }
 
-describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy leg since PR 14)', () => {
+describe('compliance over the unified message corpus (Phase 4 PR 13; one table since PR 15)', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -111,9 +111,7 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
       const globalQuestionId = createId();
       const globalReplyId = createId();
 
-      // THE PRODUCTION WRITER. Since Phase 4 PR 14 it writes `messages` and
-      // nothing else, so the legacy twins this suite needs are seeded by hand
-      // below — see the note there.
+      // THE PRODUCTION WRITER — one table.
       await messageRepository.savePageMessage({
         messageId: ownerQuestionId,
         pageId: agentPage.id,
@@ -142,18 +140,6 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
         role: 'user',
         content: 'bystander question',
       });
-
-      // THE PRE-FREEZE LEGACY TWINS. Every page row above ALSO exists in
-      // `chat_messages` on any real database that predates PR 14, under the
-      // SAME primary key — that is exactly what makes "read both tables"
-      // duplicate each row, which is what RULE 1 exists to forbid. The writer
-      // no longer produces them (the legacy leg is frozen), so the corpus
-      // states the history explicitly instead of pretending it never existed.
-      await db.insert(chatMessages).values([
-        { id: ownerQuestionId, pageId: agentPage.id, conversationId: pageConversationId, userId: owner.id, role: 'user', content: 'owner question', isActive: true, status: 'complete' },
-        { id: agentReplyId, pageId: agentPage.id, conversationId: pageConversationId, userId: null, role: 'assistant', content: 'agent reply', sourceAgentId: agentPage.id, isActive: true, status: 'complete' },
-        { id: bystanderMessageId, pageId: agentPage.id, conversationId: pageConversationId, userId: bystander.id, role: 'user', content: 'bystander question', isActive: true, status: 'complete' },
-      ]);
 
       // Global history — one leg, always has been.
       await messageRepository.saveGlobalMessage({
@@ -185,19 +171,14 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
       };
     });
 
-    it('the corpus really does hold a legacy twin per page row — without this the rest of the suite proves nothing', async () => {
+    it('the corpus really is what the rules below are asserted over', async () => {
       if (!dbAvailable) return;
 
-      const legacy = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(eq(chatMessages.conversationId, corpus.pageConversationId));
       const unified = await db
         .select({ id: messages.id })
         .from(messages)
         .where(eq(messages.conversationId, corpus.pageConversationId));
 
-      expect(legacy.map((r) => r.id).sort()).toEqual(unified.map((r) => r.id).sort());
       expect(unified).toHaveLength(3);
     });
 
@@ -256,30 +237,13 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
       expect(globalRow?.pageId).toBeUndefined();
     });
 
-    it('covers every frozen legacy row the subject authored — the unified table is a SUPERSET, which is the premise of reading it alone', async () => {
-      if (!dbAvailable) return;
-
-      const legacyOwn = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(
-          and(
-            eq(chatMessages.conversationId, corpus.pageConversationId),
-            eq(chatMessages.userId, corpus.ownerId)
-          )
-        );
-      const exportedIds = new Set((await collectUserMessages(db, corpus.ownerId)).map((m) => m.id));
-
-      expect(legacyOwn.length).toBeGreaterThan(0);
-      for (const row of legacyOwn) expect(exportedIds.has(row.id)).toBe(true);
-    });
   });
 
   // ==========================================================================
   // RULE 2 — erasure reaches BOTH legs, plus the stream state no FK reached.
   // ==========================================================================
-  describe('RULE 2 — erasure reaches both message legs and the subject\'s stream state', () => {
-    it('deleting the user removes their rows from BOTH message tables — including the agent-authored (userId NULL) row, which only the 0248 conversations FK reaches', async () => {
+  describe('RULE 2 — erasure reaches every message and the subject\'s stream state', () => {
+    it('deleting the user removes their messages — including the agent-authored (userId NULL) row, which only the conversations FK reaches', async () => {
       if (!dbAvailable) return;
 
       const subject = await factories.createUser();
@@ -303,21 +267,14 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
 
       await db.delete(users).where(eq(users.id, subject.id));
 
-      const legacyLeft = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(inArray(chatMessages.id, [questionId, agentReplyId]));
       const unifiedLeft = await db
         .select({ id: messages.id })
         .from(messages)
         .where(inArray(messages.id, [questionId, agentReplyId]));
 
-      // The user-authored row goes via `userId → users` on BOTH legs; the
-      // agent-authored one has no userId at all and is reached only through
-      // `conversations` — on the unified leg by its long-standing FK, on the
-      // legacy leg by the FK migration 0248 added. Erasure must keep naming
-      // both tables until PR 15 drops chat_messages.
-      expect(legacyLeft).toEqual([]);
+      // The user-authored row goes via `userId → users`; the agent-authored
+      // one has no userId at all and is reached only through `conversations`.
+      // Both paths must land, or an erasure request leaves content behind.
       expect(unifiedLeft).toEqual([]);
     });
 
@@ -388,8 +345,8 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
   // ==========================================================================
   // RULE 2/3 — retention sweeps both legs, and its cascade is real.
   // ==========================================================================
-  describe('RULE 2/3 — retention sweeps both legs and cascades as documented', () => {
-    it('hard-deletes soft-deleted rows from BOTH message tables, and a purged conversation takes its legacy rows and stream state with it', async () => {
+  describe('RULE 2/3 — retention sweeps the table and cascades as documented', () => {
+    it('hard-deletes soft-deleted messages, and a purged conversation takes its rows and stream state with it', async () => {
       if (!dbAvailable) return;
 
       const owner = await factories.createUser();
@@ -407,16 +364,10 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
         { id: purgedConversationId, userId: owner.id, type: 'page', contextId: agentPage.id, isActive: false, updatedAt: daysAgo(90) },
       ]);
 
-      const staleLegacyOnlyId = createId();
       const staleUnifiedId = createId();
-      const cascadedLegacyId = createId();
       const cascadedUnifiedId = createId();
       const old = daysAgo(90);
 
-      await db.insert(chatMessages).values([
-        { id: staleLegacyOnlyId, pageId: agentPage.id, conversationId: liveConversationId, role: 'user', content: 'soft-deleted', isActive: false, createdAt: old, userId: owner.id },
-        { id: cascadedLegacyId, pageId: agentPage.id, conversationId: purgedConversationId, role: 'user', content: 'still active', isActive: true, createdAt: old, userId: owner.id },
-      ]);
       await db.insert(messages).values([
         { id: staleUnifiedId, conversationId: liveConversationId, role: 'user', content: 'soft-deleted', isActive: false, createdAt: old, userId: owner.id },
         { id: cascadedUnifiedId, conversationId: purgedConversationId, role: 'user', content: 'still active', isActive: true, createdAt: old, userId: owner.id },
@@ -428,16 +379,14 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
 
       const results = await cleanupSoftDeletedChatRecords(db);
 
-      // Both legs are named in the report — the cron output is where a leg
-      // that silently stopped working would first be visible.
+      // Every swept table is named in the report — the cron output is where a
+      // sweep that silently stopped working would first be visible.
       expect(results.map((r) => r.table)).toEqual(
-        expect.arrayContaining(['chat_messages', 'messages', 'conversations'])
+        expect.arrayContaining(['messages', 'conversations'])
       );
+      // …and the dropped leg is NOT, because it no longer exists.
+      expect(results.map((r) => r.table)).not.toContain('chat_messages');
 
-      const legacyLeft = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(inArray(chatMessages.id, [staleLegacyOnlyId, cascadedLegacyId]));
       const unifiedLeft = await db
         .select({ id: messages.id })
         .from(messages)
@@ -451,11 +400,9 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
         .from(aiStreamSessions)
         .where(eq(aiStreamSessions.messageId, cascadedStreamId));
 
-      // The age-based sweeps got the soft-deleted rows on both legs; the
-      // conversations delete cascaded into the still-active ones (0248) and
-      // into the stream checkpoints (0249). Nothing that was condemned
-      // survived, on either leg.
-      expect(legacyLeft).toEqual([]);
+      // The age-based sweep got the soft-deleted row; the conversations
+      // delete cascaded into the still-active one and into the stream
+      // checkpoints (0249). Nothing that was condemned survived.
       expect(unifiedLeft).toEqual([]);
       expect(conversationLeft).toEqual([]);
       expect(streamLeft).toEqual([]);
@@ -468,7 +415,7 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
       expect(liveLeft).toHaveLength(1);
     });
 
-    it('leaves recent soft-deleted rows alone on both legs — the grace period is not leg-dependent', async () => {
+    it('leaves recent soft-deleted rows alone — the grace period is real', async () => {
       if (!dbAvailable) return;
 
       const owner = await factories.createUser();
@@ -479,12 +426,7 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
         id: conversationId, userId: owner.id, type: 'page', contextId: agentPage.id, isActive: true, updatedAt: new Date(),
       });
 
-      const recentLegacyId = createId();
       const recentUnifiedId = createId();
-      await db.insert(chatMessages).values({
-        id: recentLegacyId, pageId: agentPage.id, conversationId, role: 'user',
-        content: 'just deleted', isActive: false, createdAt: new Date(), userId: owner.id,
-      });
       await db.insert(messages).values({
         id: recentUnifiedId, conversationId, role: 'user',
         content: 'just deleted', isActive: false, createdAt: new Date(), userId: owner.id,
@@ -492,15 +434,10 @@ describe('compliance over a merged message corpus (Phase 4 PR 13, frozen legacy 
 
       await cleanupSoftDeletedChatRecords(db);
 
-      const legacyLeft = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, recentLegacyId));
       const unifiedLeft = await db
         .select({ id: messages.id })
         .from(messages)
         .where(eq(messages.id, recentUnifiedId));
-      expect(legacyLeft).toHaveLength(1);
       expect(unifiedLeft).toHaveLength(1);
     });
   });
