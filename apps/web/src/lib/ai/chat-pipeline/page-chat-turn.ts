@@ -1129,20 +1129,36 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       model: currentModel,
     });
     
-    // Update page's AI provider/model if changed
+    // Echo the page's AI provider/model when the request picked a different one.
+    //
+    // FIRE-AND-FORGET, deliberately. This is an INCIDENTAL write — a
+    // convenience echo of the model the user just chose in the picker — and it
+    // used to be awaited with its `PageRevisionMismatchError` translated into a
+    // 428/409 response. So a concurrent edit to the agent page (another tab
+    // renaming it, a tool touching its config) could fail the whole chat turn
+    // with a "revision conflict" the user cannot act on — and by this point
+    // their message is already persisted, leaving a user turn with no reply.
+    //
+    // A conflict here means someone else's config write won, which is a fine
+    // outcome for an echo: `PATCH /api/ai/chat` is the DELIBERATE path for this
+    // mutation and keeps its optimistic-concurrency semantics. Losing the echo
+    // costs a stale picker default until the next successful write; failing the
+    // turn costs the conversation.
     if (selectedProvider && selectedModel && chatId) {
       if (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel) {
-        try {
+        const configPageId = chatId;
+        const expectedRevision = typeof page.revision === 'number' ? page.revision : undefined;
+        void (async () => {
           const actorInfo = await getActorInfo(userId);
           await applyPageMutation({
-            pageId: chatId,
+            pageId: configPageId,
             operation: 'agent_config_update',
             updates: {
               aiProvider: selectedProvider,
               aiModel: selectedModel,
             },
             updatedFields: ['aiProvider', 'aiModel'],
-            expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+            expectedRevision,
             context: {
               userId,
               actorEmail: actorInfo.actorEmail,
@@ -1150,19 +1166,20 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               resourceType: 'agent',
             },
           });
-        } catch (error) {
+        })().catch((error) => {
           if (error instanceof PageRevisionMismatchError) {
-            return NextResponse.json(
-              {
-                error: error.message,
-                currentRevision: error.currentRevision,
-                expectedRevision: error.expectedRevision,
-              },
-              { status: error.expectedRevision === undefined ? 428 : 409 }
-            );
+            loggers.ai.debug('AI Chat API: agent config echo lost a revision race', {
+              pageId: configPageId,
+              currentRevision: error.currentRevision,
+              expectedRevision: error.expectedRevision,
+            });
+            return;
           }
-          throw error;
-        }
+          loggers.ai.warn('AI Chat API: agent config echo failed', {
+            pageId: configPageId,
+            error: error instanceof Error ? error.message : 'unknown',
+          });
+        });
       }
     }
 
