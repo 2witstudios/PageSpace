@@ -58,6 +58,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { buildNativeExportFiles } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
@@ -94,6 +95,13 @@ const mockUserData = {
   notifications: [],
   displayPreferences: [],
   personalization: null,
+  // The categories the "Agent-Session Single Source of Truth" epic added. They
+  // were missing from the export for the whole epic, and THIS FILE is why
+  // nobody noticed: the category assertion below used to be a hand-written list
+  // that agreed with whatever the route already emitted, so an absent category
+  // could never fail it. It is now derived — see the test.
+  agentWorkspaces: [{ id: 'ws-1', role: 'owner', name: 'Working context', shells: [] }],
+  streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
 };
 
 describe('GET /api/account/export', () => {
@@ -188,33 +196,45 @@ describe('GET /api/account/export', () => {
       expect(response.body).toBeInstanceOf(ReadableStream);
     });
 
-    it('appends all data categories to archive', async () => {
+    /**
+     * DERIVED, NOT HAND-WRITTEN.
+     *
+     * This assertion used to be a literal list of the fourteen file names the
+     * route happened to emit, plus a hardcoded `toHaveBeenCalledTimes(15)`. A
+     * list like that agrees with the code by construction: when the
+     * agent-session epic moved a large amount of user work into
+     * `agent_workspaces` / `agent_workspace_shells` / `ai_stream_sessions` and
+     * grew no collector for any of it, this test stayed green — it was PINNING
+     * the omission rather than catching it.
+     *
+     * So it now derives the expectation from `buildNativeExportFiles`, the same
+     * function the route calls, and asserts the archive carries exactly that
+     * inventory. The list can never again lag the bundle. Catching the missing
+     * COLLECTOR is a different job, done at the schema level by
+     * `packages/lib/src/compliance/export/gdpr-export-coverage.test.ts`.
+     */
+    it('appends every file the native bundle defines, and nothing else', async () => {
       vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
 
       await GET(createRequest());
 
-      // 14 data files (personalization omitted when null) + manifest.json
-      expect(mockArchive.append).toHaveBeenCalledTimes(15);
-      // Verify each data category name pattern
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );
-      expect(appendCalls.some((n: string) => n.includes('profile.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('drives.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('pages.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('messages.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('files-metadata.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('activity.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('system-logs.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('api-metrics.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('error-logs.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('ai-usage.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('tasks.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('sessions.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('notifications.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('display-preferences.json'))).toBe(true);
-      // manifest.json is always present (Art 20 self-describing bundle)
-      expect(appendCalls.some((n: string) => n.includes('manifest.json'))).toBe(true);
+      const basenames = appendCalls.map((n: string) => n.split('/').pop()!);
+      const expected = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
+
+      // manifest.json is always present (Art 20 self-describing bundle).
+      expect(basenames.sort()).toEqual([...expected, 'manifest.json'].sort());
+      expect(mockArchive.append).toHaveBeenCalledTimes(expected.length + 1);
+    });
+
+    it('carries the agent-session categories the epic left out of the export', () => {
+      // Regression pins, named individually so a future edit that drops one
+      // fails with the category rather than as a set difference.
+      const names = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
+      expect(names).toContain('agent-workspaces.json');
+      expect(names).toContain('stream-state.json');
     });
 
     it('manifest.json documents the schema version and file inventory', async () => {
@@ -261,12 +281,15 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      // 15 data files + manifest.json
-      expect(mockArchive.append).toHaveBeenCalledTimes(16);
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );
       expect(appendCalls.some((n: string) => n.includes('personalization.json'))).toBe(true);
+      // One more file than the null-personalization case — asserted as a
+      // DELTA rather than a hardcoded total, so a category added to the bundle
+      // does not silently re-pin this count either.
+      const withoutPersonalization = buildNativeExportFiles(mockUserData as never).length;
+      expect(mockArchive.append).toHaveBeenCalledTimes(withoutPersonalization + 1 + 1);
     });
 
     it('calls archive.finalize()', async () => {

@@ -9,10 +9,22 @@ import { eq } from 'drizzle-orm';
 
 export const factories = {
   async createUser(overrides?: Partial<typeof users.$inferInsert>) {
+    const id = createId()
     const user = {
-      id: createId(),
+      id,
       name: faker.person.fullName(),
-      email: faker.internet.email(),
+      /**
+       * Unique BY CONSTRUCTION, not by luck. `faker.internet.email()` draws
+       * from a small fixed name pool, so it repeats within a single CI run —
+       * and `users` is no longer truncated between suites (that TRUNCATE took
+       * ACCESS EXCLUSIVE on shared tables and deleted other packages' fixtures,
+       * so it was scoped down). Rows now accumulate across the whole run, which
+       * turns a repeat into a `users_email_unique` violation (23505) surfacing
+       * as some unrelated test failing on an insert. Folding the row's own id
+       * in removes the collision entirely; `@example.test` matches the
+       * convention the hand-written integration fixtures already use.
+       */
+      email: `${faker.person.firstName().toLowerCase().replace(/[^a-z]/g, '')}-${id}@example.test`,
       emailVerified: new Date(),
       provider: 'email' as const,
       tokenVersion: 0,

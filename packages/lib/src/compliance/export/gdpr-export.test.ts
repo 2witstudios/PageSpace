@@ -825,6 +825,7 @@ describe('collectAllUserData', () => {
         return emptyWithLimit();
       }),
       innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
     };
 
     const result = await collectAllUserData(db as never, 'user-1');
@@ -845,6 +846,11 @@ describe('collectAllUserData', () => {
     expect(Array.isArray(result!.sessions)).toBe(true);
     expect(Array.isArray(result!.notifications)).toBe(true);
     expect(Array.isArray(result!.displayPreferences)).toBe(true);
+    // The agent-session epic's categories. Aggregated here for the same reason
+    // as every other one: a collector nobody calls from `collectAllUserData`
+    // reaches nobody's export.
+    expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.streamState)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });
