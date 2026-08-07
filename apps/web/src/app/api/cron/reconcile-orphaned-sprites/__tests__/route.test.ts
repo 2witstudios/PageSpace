@@ -18,7 +18,7 @@ vi.mock('@pagespace/lib/services/sandbox/sprite-orphan-reconcile', () => ({
   reconcileOrphanSprites: mockReconcile,
 }));
 
-vi.mock('@/lib/agent-sessions/agent-session-orphan-reconcile-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-session-orphan-reconcile-runtime', () => ({
   defaultReconcileAgentSessionOrphanSpritesDeps: {},
 }));
 

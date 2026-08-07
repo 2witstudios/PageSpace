@@ -24,6 +24,7 @@ const WORKSPACE_ID = 'workspace-row-1';
 
 const SHELL = {
   shellId: 'shell-row-1',
+  workspaceId: WORKSPACE_ID,
   sessionId: WORKSPACE_ID,
   ownerId: USER_ID,
   name: 'shell-1',

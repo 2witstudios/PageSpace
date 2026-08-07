@@ -87,7 +87,7 @@ export const driveCalendarRoom = (driveId: string): string => `drive:${driveId}:
 export const dmRoom = (conversationId: string): string => `dm:${conversationId}`;
 
 /**
- * Agent-session workspace room (`session:<agent_sessions.id>`) — the layout
+ * Agent-session workspace room (`session:<agent_workspaces.id>`) — the layout
  * plane for one workspace: `workspace:updated` (rev-carrying pane-grid
  * events) fan out here (epic Phase 3). Join sites arrive with the client
  * store rewrite PR; the shape is in the grammar now so the server's verb

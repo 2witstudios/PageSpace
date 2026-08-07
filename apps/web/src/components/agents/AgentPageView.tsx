@@ -88,7 +88,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
 
   // A deep link from the Agents surface's past-conversations list
   // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
-  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
+  // the Agents surface's own `?workspace=`/`?c=`/`?agent=`, so it's captured
   // once at mount and never re-read afterward (a later History-tab pick or
   // "new conversation" is not fighting a stale URL param).
   const searchParams = useSearchParams();
@@ -297,7 +297,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               { revalidate: false },
             );
           }
-          // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+          // ...and a broader revalidate for every OTHER `/api/agent-workspaces**`
           // consumer (the sidebar, other panes) whose differently-scoped
           // cache key the local insert above doesn't touch.
           void mutate(isAgentSessionsKey);

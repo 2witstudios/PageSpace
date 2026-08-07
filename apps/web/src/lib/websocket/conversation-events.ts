@@ -85,7 +85,7 @@ export interface ConversationEventBase {
    */
   rev: number;
   scope: ConversationEventScope;
-  /** The agent workspace (`agent_sessions.id`) the conversation is bound into, or null. */
+  /** The agent workspace (`agent_workspaces.id`) the conversation is bound into, or null. */
   workspaceId: string | null;
   triggeredBy: ConversationEventTriggeredBy;
 }
@@ -119,7 +119,7 @@ export interface ConversationChangedFields {
   lastMessageAt?: string | null;
   isShared?: boolean;
   workspaceId?: string | null;
-  closedInSessionAt?: string | null;
+  closedInWorkspaceAt?: string | null;
 }
 
 export interface ConversationDirectoryPayload extends ConversationEventBase {

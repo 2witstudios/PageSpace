@@ -47,9 +47,9 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
-    "./schema/agent-sessions": {
-      "types": "./dist/schema/agent-sessions.d.ts",
-      "default": "./dist/schema/agent-sessions.js"
+    "./schema/agent-workspaces": {
+      "types": "./dist/schema/agent-workspaces.d.ts",
+      "default": "./dist/schema/agent-workspaces.js"
     },
     "./schema/agent-workspace-layout": {
       "types": "./dist/schema/agent-workspace-layout.d.ts",

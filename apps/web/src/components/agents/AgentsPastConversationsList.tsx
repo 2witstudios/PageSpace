@@ -49,7 +49,7 @@ function buildKey(driveId: string | undefined, cursor: string | null): string {
   if (driveId) params.set('driveId', driveId);
   params.set('limit', String(PAGE_SIZE));
   if (cursor) params.set('cursor', cursor);
-  return `/api/agent-sessions/conversations?${params.toString()}`;
+  return `/api/agent-workspaces/conversations?${params.toString()}`;
 }
 
 function rowLabel(row: ConversationRowDTO): string {
@@ -145,7 +145,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
         setClaimingId(target.conversationId);
         try {
           const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-            '/api/agent-sessions',
+            '/api/agent-workspaces',
             { firstThing: 'claim', conversationId: target.conversationId, driveId: target.driveId ?? undefined },
           );
           // The sidebar (and any other pane) reads this same shared listing —

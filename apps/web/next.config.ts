@@ -181,7 +181,27 @@ export const nextConfig: NextConfig = {
     // prerender check, otherwise the prerendered 404 for that namespace (Next
     // treats it as static because public/.well-known/ exists) wins and the
     // afterFiles rewrite never fires. See RFC 8414 discovery — pagespace-cli.
-    return { beforeFiles: [...WELL_KNOWN_REWRITES] };
+    return {
+      beforeFiles: [...WELL_KNOWN_REWRITES],
+      // ROLLING-DEPLOY COMPAT, one release only (agent_sessions →
+      // agent_workspaces, epic Phase 5). Fly rolls web instance by instance, so
+      // a browser holding a pre-rename bundle keeps calling the old paths for
+      // minutes after the new code is serving. afterFiles: the real
+      // `/api/agent-workspaces/**` handlers are matched first and this only
+      // catches what would otherwise 404. Middleware runs BEFORE rewrites, and
+      // its `/api/:path*` matcher covers both spellings identically, so auth is
+      // unchanged. The contract PR deletes this block.
+      afterFiles: [
+        {
+          source: "/api/agent-sessions",
+          destination: "/api/agent-workspaces",
+        },
+        {
+          source: "/api/agent-sessions/:path*",
+          destination: "/api/agent-workspaces/:path*",
+        },
+      ],
+    };
   },
 };
 

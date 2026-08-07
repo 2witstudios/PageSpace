@@ -5,7 +5,7 @@ import {
   realtimeShellIoTransport,
   type RealtimeShellIoTransport,
 } from '../shell-io';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn() } },

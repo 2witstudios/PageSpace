@@ -18,7 +18,7 @@ import {
 
 describe('parseAgentSelection', () => {
   test('reads all three params out of a full selection', () => {
-    expect(parseAgentSelection('?session=ses-1&c=conv-1&agent=agent-1')).toEqual({
+    expect(parseAgentSelection('?workspace=ses-1&c=conv-1&agent=agent-1')).toEqual({
       sessionId: 'ses-1',
       conversationId: 'conv-1',
       agentId: 'agent-1',
@@ -28,7 +28,7 @@ describe('parseAgentSelection', () => {
   test('accepts a search string with no leading question mark', () => {
     // `window.location.search` carries the `?`; a `URLSearchParams` stringified
     // back out does not. Both are the same selection.
-    expect(parseAgentSelection('session=ses-1&c=conv-1&agent=agent-1')).toEqual({
+    expect(parseAgentSelection('workspace=ses-1&c=conv-1&agent=agent-1')).toEqual({
       sessionId: 'ses-1',
       conversationId: 'conv-1',
       agentId: 'agent-1',
@@ -38,7 +38,7 @@ describe('parseAgentSelection', () => {
   test('a session with no conversation is a valid, partial selection', () => {
     // The degenerate deep-link state (a hand-trimmed URL) — it must round-trip,
     // not collapse to empty.
-    expect(parseAgentSelection('?session=ses-1')).toEqual({
+    expect(parseAgentSelection('?workspace=ses-1')).toEqual({
       sessionId: 'ses-1',
       conversationId: null,
       agentId: null,
@@ -47,8 +47,8 @@ describe('parseAgentSelection', () => {
 
   test('a conversation with no agent keeps the conversation', () => {
     // A global-assistant conversation has no agent page (`agentPageId: null` in
-    // the contract), so `?session=&c=` without `agent` is a real address.
-    expect(parseAgentSelection('?session=ses-1&c=conv-1')).toEqual({
+    // the contract), so `?workspace=&c=` without `agent` is a real address.
+    expect(parseAgentSelection('?workspace=ses-1&c=conv-1')).toEqual({
       sessionId: 'ses-1',
       conversationId: 'conv-1',
       agentId: null,
@@ -61,7 +61,7 @@ describe('parseAgentSelection', () => {
   });
 
   test('ignores params this surface does not own', () => {
-    expect(parseAgentSelection('?session=ses-1&tab=shell&utm_source=x')).toEqual({
+    expect(parseAgentSelection('?workspace=ses-1&tab=shell&utm_source=x')).toEqual({
       sessionId: 'ses-1',
       conversationId: null,
       agentId: null,
@@ -69,13 +69,13 @@ describe('parseAgentSelection', () => {
   });
 
   test('treats a blank value as absent rather than as an id of ""', () => {
-    // `?session=` survives a hand-edit or a stale bookmark; selecting the
+    // `?workspace=` survives a hand-edit or a stale bookmark; selecting the
     // session whose id is the empty string is not a thing.
-    expect(parseAgentSelection('?session=&agent=&c=')).toEqual(EMPTY_AGENT_SELECTION);
+    expect(parseAgentSelection('?workspace=&agent=&c=')).toEqual(EMPTY_AGENT_SELECTION);
   });
 
   test('decodes percent-encoded values', () => {
-    expect(parseAgentSelection('?session=a%2Fb')).toEqual({
+    expect(parseAgentSelection('?workspace=a%2Fb')).toEqual({
       sessionId: 'a/b',
       conversationId: null,
       agentId: null,
@@ -85,7 +85,7 @@ describe('parseAgentSelection', () => {
   test('never throws on malformed input', () => {
     // URLSearchParams is total over strings — this test pins that we keep
     // relying on it rather than growing a hand-rolled parser that isn't.
-    for (const malformed of ['???', '&&&', '%', '?session=%E0%A4%A', '=', '?=v', 'session', '?session']) {
+    for (const malformed of ['???', '&&&', '%', '?workspace=%E0%A4%A', '=', '?=v', 'session', '?session']) {
       expect(() => parseAgentSelection(malformed)).not.toThrow();
     }
     expect(parseAgentSelection('%')).toEqual(EMPTY_AGENT_SELECTION);
@@ -93,8 +93,35 @@ describe('parseAgentSelection', () => {
   });
 
   test('takes the first occurrence of a repeated param', () => {
-    expect(parseAgentSelection('?session=first&session=second')).toEqual({
+    expect(parseAgentSelection('?workspace=first&workspace=second')).toEqual({
       sessionId: 'first',
+      conversationId: null,
+      agentId: null,
+    });
+  });
+
+  // ROLLING-DEPLOY COMPAT, one release only (agent_sessions → agent_workspaces).
+  // Every bookmark, shared link and restored tab minted before the rename spells
+  // the workspace `?session=`; dropping it would silently deselect them all.
+  test('still accepts the pre-rename ?session= spelling', () => {
+    expect(parseAgentSelection('?session=ses-1&c=conv-1&agent=agent-1')).toEqual({
+      sessionId: 'ses-1',
+      conversationId: 'conv-1',
+      agentId: 'agent-1',
+    });
+  });
+
+  test('prefers ?workspace= when a link carries both spellings', () => {
+    expect(parseAgentSelection('?session=old&workspace=new')).toEqual({
+      sessionId: 'new',
+      conversationId: null,
+      agentId: null,
+    });
+  });
+
+  test('falls back to ?session= when ?workspace= is present but blank', () => {
+    expect(parseAgentSelection('?workspace=&session=ses-1')).toEqual({
+      sessionId: 'ses-1',
       conversationId: null,
       agentId: null,
     });
@@ -116,7 +143,7 @@ describe('buildAgentSelectionUrl', () => {
   test('builds the global URL with all params', () => {
     expect(
       buildAgentSelectionUrl({ sessionId: 'ses-1', conversationId: 'conv-1', agentId: 'agent-1' }),
-    ).toBe('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    ).toBe('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
   });
 
   test('builds the drive-scoped URL with all params', () => {
@@ -127,13 +154,13 @@ describe('buildAgentSelectionUrl', () => {
         conversationId: 'conv-1',
         agentId: 'agent-1',
       }),
-    ).toBe('/dashboard/drive-1/agents?session=ses-1&c=conv-1&agent=agent-1');
+    ).toBe('/dashboard/drive-1/agents?workspace=ses-1&c=conv-1&agent=agent-1');
   });
 
   test('omits absent params rather than emitting empty ones', () => {
-    // `?session=x` and `?session=x&c=` would parse identically, but only one of
+    // `?workspace=x` and `?workspace=x&c=` would parse identically, but only one of
     // them is a URL a user can read.
-    expect(buildAgentSelectionUrl({ sessionId: 'ses-1' })).toBe('/dashboard/agents?session=ses-1');
+    expect(buildAgentSelectionUrl({ sessionId: 'ses-1' })).toBe('/dashboard/agents?workspace=ses-1');
     expect(buildAgentSelectionUrl({ conversationId: 'conv-1' })).toBe('/dashboard/agents?c=conv-1');
     expect(buildAgentSelectionUrl({ agentId: 'agent-1' })).toBe('/dashboard/agents?agent=agent-1');
   });
@@ -152,11 +179,11 @@ describe('buildAgentSelectionUrl', () => {
     // history entries.
     expect(
       buildAgentSelectionUrl({ agentId: 'agent-1', conversationId: 'conv-1', sessionId: 'ses-1' }),
-    ).toBe('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    ).toBe('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
   });
 
   test('encodes values that would otherwise break the query string', () => {
-    expect(buildAgentSelectionUrl({ sessionId: 'a b&c=d' })).toBe('/dashboard/agents?session=a+b%26c%3Dd');
+    expect(buildAgentSelectionUrl({ sessionId: 'a b&c=d' })).toBe('/dashboard/agents?workspace=a+b%26c%3Dd');
     expect(buildAgentSelectionUrl({ driveId: 'drive one' })).toBe('/dashboard/drive%20one/agents');
   });
 

@@ -17,7 +17,7 @@
  * not resolved yet renders `loading`, never a speculative terminal.
  */
 
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 
 export type PaneSurface =
   /** Unbound — the pane shows the picker. */

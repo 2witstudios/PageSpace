@@ -18,3 +18,24 @@ describe('next.config rewrites — RFC 8414 discovery URL', () => {
     });
   });
 });
+
+describe('next.config rewrites — agent-sessions → agent-workspaces compat alias', () => {
+  it('aliases the pre-rename API paths via afterFiles, so a stale browser bundle keeps working through the deploy', async () => {
+    const { nextConfig } = await import('../../next.config');
+
+    const rewrites = await nextConfig.rewrites?.();
+    const afterFiles = Array.isArray(rewrites) ? [] : (rewrites?.afterFiles ?? []);
+
+    // afterFiles, NOT beforeFiles: the real /api/agent-workspaces/** handlers
+    // must win on their own paths, and this only catches requests that would
+    // otherwise 404.
+    expect(afterFiles).toContainEqual({
+      source: '/api/agent-sessions',
+      destination: '/api/agent-workspaces',
+    });
+    expect(afterFiles).toContainEqual({
+      source: '/api/agent-sessions/:path*',
+      destination: '/api/agent-workspaces/:path*',
+    });
+  });
+});

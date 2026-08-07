@@ -53,7 +53,7 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
 // The bound-session lookup for payer-derived sandbox eligibility (review
 // #2326) hits the real DB through the agent-sessions runtime; this suite's
 // conversations are unbound, so the eligibility path takes the userId branch.
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   findSessionForConversation: vi.fn().mockResolvedValue(null),
 }));
 
@@ -765,7 +765,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  sessionId: null, closedInSessionAt: null, agentPageId: null, rev: 0,
+  workspaceId: null, closedInWorkspaceAt: null, agentPageId: null, rev: 0,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 

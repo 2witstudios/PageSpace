@@ -132,13 +132,13 @@ describe('runImport', () => {
       await reimport('conversation');
 
       const rows = (await db.execute(sql.raw(
-        `SELECT "sessionId", rev, "closedInSessionAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
+        `SELECT "workspaceId", rev, "closedInWorkspaceAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
       ))).rows as Record<string, unknown>[];
 
       expect(rows).toHaveLength(1);
-      expect(rows[0].sessionId).toBe(FIXTURES.agentSessions.workspace.id);
+      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
       expect(Number(rows[0].rev)).toBe(FIXTURES.conversations.pageChat.rev);
-      expect(rows[0].closedInSessionAt).not.toBeNull();
+      expect(rows[0].closedInWorkspaceAt).not.toBeNull();
       expect(rows[0].isShared).toBe(true);
     });
 
@@ -146,19 +146,19 @@ describe('runImport', () => {
       await reimport('session');
 
       const rows = (await db.execute(sql.raw(
-        `SELECT "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "sessionKey", "storageMeasuredBytes" FROM agent_sessions WHERE id = '${FIXTURES.agentSessions.workspace.id}'`,
+        `SELECT "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "spriteKey", "storageMeasuredBytes" FROM agent_workspaces WHERE id = '${FIXTURES.agentWorkspaces.workspace.id}'`,
       ))).rows as Record<string, unknown>[];
 
       expect(rows).toHaveLength(1);
       expect(rows[0].driveId).toBe(FIXTURES.drives.shared.id);
       expect(rows[0].ownerId).toBe(FIXTURES.users.owner.id);
-      expect(rows[0].name).toBe(FIXTURES.agentSessions.workspace.name);
+      expect(rows[0].name).toBe(FIXTURES.agentWorkspaces.workspace.name);
       // The exclusion allowlist in scripts/lib/tenant-export-columns.ts: these
       // name a VM in the SOURCE fleet and must NOT reach the tenant, which
       // provisions its own on first use.
       expect(rows[0].sandboxId).toBeNull();
       expect(rows[0].spriteInstanceId).toBeNull();
-      expect(rows[0].sessionKey).toBeNull();
+      expect(rows[0].spriteKey).toBeNull();
       expect(rows[0].storageMeasuredBytes).toBeNull();
     });
 

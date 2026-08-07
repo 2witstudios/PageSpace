@@ -49,7 +49,7 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
     expect(code).toContain('CONSTRAINT "agent_workspace_panes_workspaceId_id_pk" PRIMARY KEY("workspaceId","id")');
   });
 
-  it('should cascade the whole grid from agent_sessions, and panes from their column via the composite FK', () => {
+  it('should cascade the whole grid from agent_workspaces, and panes from their column via the composite FK', () => {
     expect(code).toContain(
       'ALTER TABLE "agent_workspace_pane_columns" ADD CONSTRAINT "agent_workspace_pane_columns_workspaceId_agent_sessions_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."agent_sessions"("id") ON DELETE cascade',
     );
@@ -58,7 +58,7 @@ describe('drizzle/0246 agent workspace layout promotion', () => {
     );
   });
 
-  it('should keep the rev in its OWN cascading table, defaulting to 0 (never a column on agent_sessions)', () => {
+  it('should keep the rev in its OWN cascading table, defaulting to 0 (never a column on agent_workspaces)', () => {
     expect(code).toContain('"rev" bigint DEFAULT 0 NOT NULL');
     expect(code).toContain(
       'ALTER TABLE "agent_workspace_layout_revs" ADD CONSTRAINT "agent_workspace_layout_revs_workspaceId_agent_sessions_id_fk" FOREIGN KEY ("workspaceId") REFERENCES "public"."agent_sessions"("id") ON DELETE cascade',

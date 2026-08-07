@@ -13,6 +13,55 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
+
+**Applies to every deployment.** Migration `0253_agent_workspaces_rename` renames
+the agent-session tables, columns, indexes, constraints and the Sprite-reclaim
+trigger so the schema matches the vocabulary the code has used since Phase 1:
+
+| Before | After |
+|---|---|
+| `agent_sessions` | `agent_workspaces` |
+| `agent_session_shells` | `agent_workspace_shells` |
+| `agent_sessions.sessionKey` | `agent_workspaces.spriteKey` |
+| `agent_session_shells.sessionId` | `agent_workspace_shells.workspaceId` |
+| `agent_session_shells.streamSessionId` | `agent_workspace_shells.spriteExecId` |
+| `conversations.sessionId` | `conversations.workspaceId` |
+| `conversations.closedInSessionAt` | `conversations.closedInWorkspaceAt` |
+
+**Nothing is dropped, recreated or rewritten.** Every statement is an
+`ALTER ... RENAME`, so no row is touched and **no `agent_workspaces.id` value
+changes** — which is the property that matters most here: every Sprite (the VM
+backing a workspace's sandbox) is provisioned under a name HMAC-folded from that
+id, so a rewritten id would orphan every running machine and strand its
+persistent filesystem. The `machine_sprite_reclaims` AFTER DELETE trigger rides
+the rename intact (`ALTER TABLE RENAME` carries triggers; `DROP TABLE` would
+not), and the migration test deletes a real row to prove it still fires.
+
+**Compat shims — valid for ONE release.** The migration installs auto-updatable
+views named `agent_sessions` and `agent_session_shells` exposing the old column
+names, and the app aliases `/api/agent-sessions/**` to
+`/api/agent-workspaces/**` and still parses `?session=` alongside `?workspace=`.
+They exist for the rolling-deploy window and the follow-up contract PR removes
+all of them.
+
+**⚠️ Do not skip the release that contains this migration.** A deployment that
+jumps from a pre-0253 image straight past the next release lands on code that
+has already dropped the shims, against a database whose views were never
+created — the exact version-skipping hazard these notes exist for. Upgrade to
+this release first, let it come up, then continue.
+
+**One gap, deliberately:** `conversations` keeps its own table name, so there is
+no name left to hang a compat view on and its two renamed columns have **no
+shim**. Between the migrate one-off finishing and `web` finishing its roll, a
+still-running pre-rename web instance will error on the agent session-listing,
+claim, close and reopen reads. Chat, pages and sandboxes are unaffected, and the
+window closes as soon as the roll completes. For a single-node self-host stack
+(`migrate` one-shot gates the services), there is no window at all.
+
+Take the usual pre-upgrade database snapshot. Rolling back to a pre-0253 image
+requires renaming the tables and columns back.
+
 ## 2026-08 — Minimum upgrade path: agent pane grid (epic #2161, Phase 3 contract)
 
 **Applies to tenant / self-host deployments that skip releases.** Cloud rolls

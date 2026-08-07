@@ -76,7 +76,7 @@ function makeAuthSuccess(sessionKey = 'shell:shl-1') {
       command: 'claude',
       args: [],
       commandOverride: null,
-      streamSessionId: null,
+      spriteExecId: null,
       releaseSlot: vi.fn(),
     })),
   };
@@ -336,7 +336,7 @@ describe('shell task holds (wiring)', () => {
       command: 'claude',
       args: [],
       commandOverride: null,
-      streamSessionId: 'sess-live', // still running server-side — this is a RESUME
+      spriteExecId: 'sess-live', // still running server-side — this is a RESUME
       releaseSlot: vi.fn(),
     }));
     checkAuth.mockResolvedValue(auth);

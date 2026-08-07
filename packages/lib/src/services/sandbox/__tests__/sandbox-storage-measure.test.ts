@@ -8,7 +8,7 @@ import {
 
 /**
  * Opportunistic storage measurement — the writer that gives
- * `agent_sessions.storageMeasuredBytes` a production source. Without it the
+ * `agent_workspaces.storageMeasuredBytes` a production source. Without it the
  * reconcile prices every session at the never-measured 0 floor while still
  * advancing its watermark, permanently discarding the interval.
  */
@@ -68,7 +68,7 @@ describe('shouldRefreshMeasurement', () => {
 describe('refreshSessionStorageMeasurement', () => {
   it('given a never-measured session, should run du on the workspace and persist the bytes', async () => {
     const persisted: Array<{
-      sessionId: string;
+      workspaceId: string;
       spriteInstanceId: string | null;
       measuredBytes: number;
       measuredAt: Date;
@@ -77,7 +77,7 @@ describe('refreshSessionStorageMeasurement', () => {
 
     const result = await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
@@ -89,7 +89,7 @@ describe('refreshSessionStorageMeasurement', () => {
     // writer needs to know which generation's disk this number describes before
     // it commits to a row that may have moved on.
     expect(persisted).toEqual([
-      { sessionId: 'conv_1', spriteInstanceId: 'instance-A', measuredBytes: 2048, measuredAt: NOW },
+      { workspaceId: 'conv_1', spriteInstanceId: 'instance-A', measuredBytes: 2048, measuredAt: NOW },
     ]);
     // -B1 (allocated bytes, not apparent size) and -x (don't cross mounts) are
     // the whole reason this bills what was written rather than the allocation.
@@ -100,7 +100,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const { handle, calls } = fakeHandle({ stdout: '999\t/workspace' });
     const result = await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: 'instance-A',
       lastMeasuredAt: new Date(NOW.getTime() - 5),
       now: NOW,
@@ -115,7 +115,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const { handle } = fakeHandle(new Error('sandbox unreachable'));
     const result = await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
@@ -129,7 +129,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const { handle } = fakeHandle({ stdout: '4096\t/workspace\n', exitCode: 1 });
     const result = await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
@@ -143,7 +143,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const { handle } = fakeHandle({ stdout: 'du: permission denied\n', exitCode: 1 });
     const result = await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
@@ -158,7 +158,7 @@ describe('refreshSessionStorageMeasurement', () => {
 
     await refreshSessionStorageMeasurement({
       handle,
-      sessionId: 'conv_1',
+      workspaceId: 'conv_1',
       spriteInstanceId: null,
       lastMeasuredAt: null,
       now: NOW,
@@ -166,7 +166,7 @@ describe('refreshSessionStorageMeasurement', () => {
     });
 
     expect(persisted).toEqual([
-      { sessionId: 'conv_1', spriteInstanceId: null, measuredBytes: 512, measuredAt: NOW },
+      { workspaceId: 'conv_1', spriteInstanceId: null, measuredBytes: 512, measuredAt: NOW },
     ]);
   });
 });

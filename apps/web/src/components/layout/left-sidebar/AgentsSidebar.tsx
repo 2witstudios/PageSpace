@@ -26,7 +26,7 @@ import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/us
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
-import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
+import type { PersistedWorkspaceState } from '@pagespace/lib/agent-workspaces/contract';
 import {
   isAgentSessionsKey,
   isSessionListingKey,
@@ -65,7 +65,7 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  *   grouped under a drive header.
  *
  * **Clicking a row does not navigate.** Selection goes to
- * `useAgentSurfaceStore`, which mirrors it to `?session=&c=&agent=` via
+ * `useAgentSurfaceStore`, which mirrors it to `?workspace=&c=&agent=` via
  * `pushState`. The route never changes, so nothing above or beside this
  * component remounts, so live shells and streaming chats survive every click.
  */
@@ -91,8 +91,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
 
   const sessionsKey = isAuthenticated
     ? driveId
-      ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}`
-      : '/api/agent-sessions'
+      ? `/api/agent-workspaces?driveId=${encodeURIComponent(driveId)}`
+      : '/api/agent-workspaces'
     : null;
   const {
     data,
@@ -652,7 +652,7 @@ function SessionRow({
     setConfirmingEnd(false);
     forgetSessionInCache(mutate, session.sessionId);
     try {
-      await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
+      await del(`/api/agent-workspaces/${encodeURIComponent(session.sessionId)}`);
     } catch (error) {
       // The optimistic assumption was wrong. Restore the grid and the
       // session's row LOCALLY (from the snapshots above) — a real revalidate
@@ -706,7 +706,7 @@ function SessionRow({
     async (conversationId: string) => {
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
@@ -757,7 +757,7 @@ function SessionRow({
       }
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
         // The grid never empties (contract invariant 3): if this was the
         // grid's ONLY pane, prefer rebinding it to another open listing over

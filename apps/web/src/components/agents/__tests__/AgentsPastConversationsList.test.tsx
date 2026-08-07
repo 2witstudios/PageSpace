@@ -28,7 +28,7 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   };
 });
 
-// Spies on the shared `/api/agent-sessions**` invalidation only — `useSWR`
+// Spies on the shared `/api/agent-workspaces**` invalidation only — `useSWR`
 // and `SWRConfig` stay real so this component's own data fetching (via the
 // isolated per-test Map provider below) is unaffected.
 const mockMutate = vi.hoisted(() => vi.fn());
@@ -155,7 +155,7 @@ describe('AgentsPastConversationsList', () => {
     await user.click(await screen.findByText('Page chat'));
 
     await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         firstThing: 'claim',
         conversationId: 'conv-page',
         driveId: 'drive-1',
@@ -199,7 +199,7 @@ describe('AgentsPastConversationsList', () => {
     await user.click(await screen.findByText('Global assistant chat'));
 
     await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         firstThing: 'claim',
         conversationId: 'conv-global',
         driveId: undefined,

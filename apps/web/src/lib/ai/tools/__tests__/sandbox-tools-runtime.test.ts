@@ -24,7 +24,7 @@ const {
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-sessions-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   provisionSessionSandbox: mockProvisionSessionSandbox,
   // Opportunistic storage measurement rides this path fire-and-forget. Stubbed
@@ -60,7 +60,7 @@ import {
 } from '../sandbox-tools-runtime';
 import type { ToolExecutionContext } from '../../core/types';
 import type { AcquireSandboxRequest } from '@pagespace/lib/services/sandbox/tool-runners';
-import type { AgentSessionRecord } from '@pagespace/lib/services/agent-sessions/agent-sessions-store';
+import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-sessions-store';
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -361,7 +361,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
       ownerId: 'u1',
       driveId: 'd1',
       name: null,
-      sessionKey: null,
+      spriteKey: null,
       sandboxId: null,
       spriteInstanceId: null,
       egressPolicyToken: null,
@@ -395,7 +395,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     vi.clearAllMocks();
     mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
     mockFindSessionForConversation.mockResolvedValue(sessionRecord);
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' });
     // Most tests in this block exercise a PAGE conversation (`baseInput` sets
     // `agentPageId`) — page conversations never auto-provision, so the default
     // here matches that and the global-only tests below override it.
@@ -433,12 +433,12 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
       spriteInstanceId: 'instance-A',
       runCommand: vi.fn(async () => ({ exitCode: 0, stdout: '1\t/workspace', stderr: '' })),
     };
-    await deps.measureStorage!({ sandbox: sandbox as never, sessionId: 'conv-1' });
+    await deps.measureStorage!({ sandbox: sandbox as never, workspaceId: 'conv-1' });
 
     const [call] = mockMeasureWarmSessionStorage.mock.calls as unknown as [
-      [{ sessionId: string; attach: () => Promise<{ spriteInstanceId: string | null } | null> }],
+      [{ workspaceId: string; attach: () => Promise<{ spriteInstanceId: string | null } | null> }],
     ];
-    expect(call[0].sessionId).toBe('conv-1');
+    expect(call[0].workspaceId).toBe('conv-1');
     const attached = await call[0].attach();
     expect(attached?.spriteInstanceId).toBe('instance-A');
   });
@@ -459,7 +459,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(result).toEqual({ ok: false, reason: 'session_runtime_exceeded' });
     // One runtime budget per WORKSPACE, however many threads work in it.
     expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith({
-      sessionId: 'ses-1',
+      workspaceId: 'ses-1',
       now: expect.any(Number),
     });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
@@ -528,7 +528,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // R0's payoff test at the tool layer: sandbox sharing is structural. Both
     // threads resolve one session row, and provisioning folds ITS id — so both
     // acquisitions name one sandboxId with no shared id threaded anywhere.
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true, sessionId: 'ws-1' });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true, workspaceId: 'ws-1' });
     const deps = buildRealSandboxRunDeps();
 
     const a = await deps.acquireSandbox(baseInput({ conversationId: 'conv-a' }));
@@ -572,14 +572,14 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   });
 
   it('given a successful provision, should return the sandbox with pageId = the agent page and record activity keyed by the session id', async () => {
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, sessionId: 'ws-1' });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ws-1' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, sessionId: 'ses-1', pageId: 'agent-1' });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ses-1', pageId: 'agent-1' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
     expect(mockRecordSessionActivity).toHaveBeenCalledWith({
-      sessionId: 'ses-1',
+      workspaceId: 'ses-1',
       now: expect.any(Number),
     });
   });
@@ -587,7 +587,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   it('given no agentPageId (a global-assistant conversation), should return no pageId', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined, driveId: undefined }));
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ses-1', pageId: undefined });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ses-1', pageId: undefined });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
   });
 });
@@ -604,7 +604,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       ownerId: 'u1',
       driveId: 'd1',
       name: null,
-      sessionKey: null,
+      spriteKey: null,
       sandboxId: null,
       spriteInstanceId: null,
       egressPolicyToken: null,
@@ -640,7 +640,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       tier: 'pro',
     });
 
-    expect(result).toEqual({ sessionId: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' });
+    expect(result).toEqual({ workspaceId: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
   });
 
@@ -656,7 +656,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       tier: 'pro',
     });
 
-    expect(result).toEqual({ sessionId: 'ses-1', driveId: null, ownerId: 'global-owner-1' });
+    expect(result).toEqual({ workspaceId: 'ses-1', driveId: null, ownerId: 'global-owner-1' });
   });
 
   it('given no conversationId, resolves null WITHOUT touching the session runtime', async () => {
@@ -712,7 +712,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       tier: 'pro',
     });
 
-    expect(result).toEqual({ sessionId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    expect(result).toEqual({ workspaceId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
     expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
   });
 

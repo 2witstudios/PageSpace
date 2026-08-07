@@ -156,7 +156,7 @@ jobs:
       # free) while SQL needs `IS NULL`, so a mocked test cannot tell a correct
       # CAS from one that silently matches nothing. This runs them for real.
       - name: Run agent-session store integration tests
-        run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-sessions/__tests__/agent-sessions-store.integration.test.ts
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test

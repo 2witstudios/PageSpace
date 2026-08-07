@@ -3,7 +3,7 @@
  *
  * The behaviour worth pinning hardest is the one that has no visible symptom
  * when it breaks: **clicking a row does not navigate**. Selection goes to the
- * store, which writes `?session=&c=&agent=` with `pushState`, and the route
+ * store, which writes `?workspace=&c=&agent=` with `pushState`, and the route
  * never changes — so nothing remounts and a live shell or streaming chat
  * survives the click. A regression to `router.push` would look identical on
  * screen and would silently tear down every PTY on the surface.
@@ -204,7 +204,7 @@ describe('AgentsSidebar', () => {
   test("lists the drive's sessions for a non-admin authenticated user", async () => {
     renderSidebar();
     expect(await screen.findByText('api refactor')).toBeDefined();
-    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1');
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
   });
 
   test('refuses when signed out, and makes no request on their behalf', () => {
@@ -411,7 +411,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() => {
         const verbCall = mockFetchWithAuth.mock.calls.find(
           ([url, init]) =>
-            url === '/api/agent-sessions/ses-1/workspace/verbs' &&
+            url === '/api/agent-workspaces/ses-1/workspace/verbs' &&
             (init as RequestInit | undefined)?.method === 'POST',
         );
         expect(verbCall).toBeDefined();
@@ -549,7 +549,7 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByText(/end session/i)).toBeDefined();
       const putCall = mockFetchWithAuth.mock.calls.find(
         ([url, init]) =>
-          url === '/api/agent-sessions/ses-1/workspace' &&
+          url === '/api/agent-workspaces/ses-1/workspace' &&
           (init as RequestInit | undefined)?.method === 'PUT',
       );
       expect(putCall).toBeUndefined();
@@ -579,7 +579,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       await waitFor(() => {
         const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
@@ -619,7 +619,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       await waitFor(() => {
         const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
@@ -729,7 +729,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-      expect(window.location.search).toBe('?session=ses-1&c=conv-1&agent=agent-1');
+      expect(window.location.search).toBe('?workspace=ses-1&c=conv-1&agent=agent-1');
       // The whole point: no route change, so nothing remounts.
       expect(mockPush).not.toHaveBeenCalled();
     });
@@ -761,7 +761,7 @@ describe('AgentsSidebar', () => {
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
-      expect(window.location.search).toBe('?session=ses-1&c=conv-2&agent=agent-1');
+      expect(window.location.search).toBe('?workspace=ses-1&c=conv-2&agent=agent-1');
       expect(mockPush).not.toHaveBeenCalled();
     });
 
@@ -966,7 +966,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, '{Enter}');
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
         agentPageId: 'agent-1',
         name: '',
@@ -994,7 +994,7 @@ describe('AgentsSidebar', () => {
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       // Drive-scoped, not the global assistant group: driveId stays 'drive-1'.
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
         agentPageId: null,
         name: '',
@@ -1069,7 +1069,7 @@ describe('AgentsSidebar', () => {
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
@@ -1110,7 +1110,7 @@ describe('AgentsSidebar', () => {
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       // Still pending — nothing has resolved yet.
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
@@ -1141,7 +1141,7 @@ describe('AgentsSidebar', () => {
       await user.click(screen.getByLabelText('End session'));
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
 
       // While that DELETE is still pending, the user navigates to a
       // different session entirely.
@@ -1219,7 +1219,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       // Instant sidebar freshness, same as the session row's other mutating actions.
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
@@ -1240,7 +1240,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
     });
 
@@ -1374,7 +1374,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'my assistant session{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
           agentPageId: null,
           name: 'my assistant session',
@@ -1408,7 +1408,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       expect(await screen.findByText('api refactor')).toBeDefined();
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions');
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces');
       // The drive name resolves through the roster, not the agents-by-drive fetch.
       expect(screen.getByText('Alpha')).toBeDefined();
     });
@@ -1491,7 +1491,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'my session{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: 'drive-1',
           agentPageId: 'agent-1',
           name: 'my session',
@@ -1520,7 +1520,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, '{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
           agentPageId: null,
           name: '',

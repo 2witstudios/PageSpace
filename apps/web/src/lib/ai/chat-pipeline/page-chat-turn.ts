@@ -917,7 +917,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 type: 'page',
                 contextId: chatId!,
                 isShared: false,
-                sessionId: null,
+                workspaceId: null,
                 title: null,
                 updatedAt: new Date(),
               })

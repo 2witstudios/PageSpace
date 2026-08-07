@@ -2,7 +2,7 @@ import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from '
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
-import { agentSessions } from './agent-sessions';
+import { agentWorkspaces } from './agent-workspaces';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -20,14 +20,14 @@ export const conversations = pgTable('conversations', {
    * NULL for a plain chat with no session. The binding is write-once: set
    * either at creation, or — for a conversation that has never had one — by
    * exactly one guarded claim of the caller's own row
-   * (`conversationRepository.claimConversation`, `WHERE sessionId IS NULL AND
-   * userId = :caller`; see `apps/web/src/lib/agent-sessions/claim-conversation-in-session.ts`).
+   * (`conversationRepository.claimConversation`, `WHERE workspaceId IS NULL AND
+   * userId = :caller`; see `apps/web/src/lib/agent-workspaces/claim-conversation-in-session.ts`).
    * It never re-points an already-bound row: a thread's history and its
    * filesystem always agree, so moving a thread to another session is a
    * fork, never a rebind. ON DELETE SET NULL: deleting a session keeps its
    * threads as plain history (also reachable via the same claim path again).
    */
-  sessionId: text('sessionId').references(() => agentSessions.id, { onDelete: 'set null' }),
+  workspaceId: text('workspaceId').references(() => agentWorkspaces.id, { onDelete: 'set null' }),
   /**
    * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
    * `POST /api/v1/conversations` mints for pagespace-cli and other
@@ -56,9 +56,9 @@ export const conversations = pgTable('conversations', {
    * `POST /api/v1/chat/completions` against the thread claims it
    * (`conversationRepository.stampClientConversationPage`, `WHERE type='client'
    * AND "agentPageId" IS NULL`); later requests naming a different agent never
-   * re-point it, for the same reason `sessionId` is write-once.
+   * re-point it, for the same reason `workspaceId` is write-once.
    *
-   * `ON DELETE SET NULL`, matching `sessionId` and NOT the
+   * `ON DELETE SET NULL`, matching `workspaceId` and NOT the
    * `chat_messages.pageId` cascade it replaces: a permanently deleted page
    * takes its chat MESSAGES with it (the trash route does that explicitly) but
    * has never deleted `conversations` rows, and this column must not become
@@ -79,7 +79,7 @@ export const conversations = pgTable('conversations', {
    * longer counted against the session's conversation cap). Reopening is
    * just clearing the stamp.
    */
-  closedInSessionAt: timestamp('closedInSessionAt', { mode: 'date' }),
+  closedInWorkspaceAt: timestamp('closedInWorkspaceAt', { mode: 'date' }),
   /**
    * Monotonic per-conversation revision counter (Agent-Session Single Source
    * of Truth epic, Phase 2). Every committed message/conversation mutation
@@ -102,7 +102,7 @@ export const conversations = pgTable('conversations', {
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
-  sessionIdx: index('conversations_session_id_idx').on(table.sessionId),
+  workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
   /**
    * The `type='client'` half of `unifiedPageScope()`. Page-scoped reads join
    * `conversations` and filter on `contextId` OR this column, so the second
@@ -226,9 +226,9 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
     fields: [conversations.userId],
     references: [users.id],
   }),
-  session: one(agentSessions, {
-    fields: [conversations.sessionId],
-    references: [agentSessions.id],
+  workspace: one(agentWorkspaces, {
+    fields: [conversations.workspaceId],
+    references: [agentWorkspaces.id],
   }),
   messages: many(messages),
 }));

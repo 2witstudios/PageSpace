@@ -16,17 +16,17 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
-vi.mock('@pagespace/db/schema/agent-sessions', () => ({
-  agentSessions: {
-    id: 'agent_sessions.id',
-    driveId: 'agent_sessions.driveId',
-    ownerId: 'agent_sessions.ownerId',
-    sandboxId: 'agent_sessions.sandboxId',
-    spriteTornDownAt: 'agent_sessions.spriteTornDownAt',
-    storageLastBilledAt: 'agent_sessions.storageLastBilledAt',
-    storageMeasuredBytes: 'agent_sessions.storageMeasuredBytes',
-    storageMeasuredAt: 'agent_sessions.storageMeasuredAt',
-    lastActiveAt: 'agent_sessions.lastActiveAt',
+vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
+  agentWorkspaces: {
+    id: 'agent_workspaces.id',
+    driveId: 'agent_workspaces.driveId',
+    ownerId: 'agent_workspaces.ownerId',
+    sandboxId: 'agent_workspaces.sandboxId',
+    spriteTornDownAt: 'agent_workspaces.spriteTornDownAt',
+    storageLastBilledAt: 'agent_workspaces.storageLastBilledAt',
+    storageMeasuredBytes: 'agent_workspaces.storageMeasuredBytes',
+    storageMeasuredAt: 'agent_workspaces.storageMeasuredAt',
+    lastActiveAt: 'agent_workspaces.lastActiveAt',
   },
 }));
 
@@ -54,7 +54,7 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
   it("selects each session's own measurement/watermark, driveId and ownerId directly — no join, no de-fan needed", async () => {
     const rows = [
       {
-        sessionId: 'session-1',
+        workspaceId: 'session-1',
         driveId: 'agent-page-1',
         ownerId: 'owner-1',
         storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
@@ -80,13 +80,13 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
     await expect(defaultReconcileSandboxStorageDeps.listAgentSessionSprites()).resolves.toEqual(rows);
 
     expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
-      ['driveId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'ownerId', 'sessionId', 'storageLastBilledAt'].sort(),
+      ['driveId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'ownerId', 'workspaceId', 'storageLastBilledAt'].sort(),
     );
     expect(whereArg).toEqual({
       op: 'and',
       parts: [
-        { op: 'isNotNull', a: 'agent_sessions.sandboxId' },
-        { op: 'isNull', a: 'agent_sessions.spriteTornDownAt' },
+        { op: 'isNotNull', a: 'agent_workspaces.sandboxId' },
+        { op: 'isNull', a: 'agent_workspaces.spriteTornDownAt' },
       ],
     });
   });
@@ -96,7 +96,7 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
       from: () => ({
         where: async () => [
           {
-            sessionId: 'session-1',
+            workspaceId: 'session-1',
             driveId: null,
             ownerId: 'owner-1',
             storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
@@ -134,7 +134,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      sessionId: 'session-1',
+      workspaceId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -149,6 +149,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
       costSource: 'list_price',
       // First-class attribution — top-level columns, not just metadata forensics.
       driveId: 'drive-1',
+      // `AIUsageData.sessionId` is the shared analytics column many sources
+      // write; the workspace id is mapped onto it at the boundary.
       sessionId: 'session-1',
     });
     expect(call.holdId).toBeUndefined();
@@ -161,7 +163,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      sessionId: 'session-1',
+      workspaceId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -175,7 +177,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      sessionId: 'session-1',
+      workspaceId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -191,7 +193,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: undefined,
-      sessionId: 'session-1',
+      workspaceId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -213,12 +215,12 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
     });
 
     await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
-      sessionId: 'session-3',
+      workspaceId: 'session-3',
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
-    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_sessions.id', b: 'session-3' }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_workspaces.id', b: 'session-3' }]);
   });
 });
 

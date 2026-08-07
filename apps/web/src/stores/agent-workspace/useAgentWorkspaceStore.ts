@@ -5,7 +5,7 @@ import {
   persistedColumnStateSchema,
   type PaneScope,
   type PersistedColumnState,
-} from '@pagespace/lib/agent-sessions/contract';
+} from '@pagespace/lib/agent-workspaces/contract';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import {
@@ -120,7 +120,7 @@ interface AgentWorkspaceState {
    *
    * `options.liveConversationIds`, when supplied, additionally protects a
    * chat pane whose target is NOT in that set — e.g. a conversation the user
-   * closed out of this session (`closedInSessionAt`) — AND any page pane (a
+   * closed out of this session (`closedInWorkspaceAt`) — AND any page pane (a
    * deliberate, persisted artifact; a reload's seed effect used to silently
    * evict agent-opened pages this way) from an unrelated later selection
    * (issue #2295); both fall through to the split fallback instead, exactly
@@ -418,7 +418,7 @@ function enqueueVerb(sessionId: string, verb: WorkspaceLayoutVerb): void {
 }
 
 function workspaceUrl(sessionId: string): string {
-  return `/api/agent-sessions/${encodeURIComponent(sessionId)}/workspace`;
+  return `/api/agent-workspaces/${encodeURIComponent(sessionId)}/workspace`;
 }
 
 /**

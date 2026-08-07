@@ -161,7 +161,7 @@ export async function validateData(
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
     // Mirrors the export's rule: the sessions the migrated conversations are
     // bound to, owned by a migrated user.
-    agent_sessions: sql.raw(`SELECT id FROM agent_sessions WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "sessionId" FROM conversations WHERE "userId" IN (${userIn}) AND "sessionId" IS NOT NULL)`),
+    agent_workspaces: sql.raw(`SELECT id FROM agent_workspaces WHERE "ownerId" IN (${userIn}) AND id IN (SELECT "workspaceId" FROM conversations WHERE "userId" IN (${userIn}) AND "workspaceId" IS NOT NULL)`),
     // Mirrors the export's rule exactly: owned by a migrated user, OR
     // attached to a migrated page (`type='page'` names it in `contextId`,
     // `type='client'` in `agentPageId`).

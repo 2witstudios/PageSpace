@@ -14,7 +14,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import { sessionRoom } from '@pagespace/lib/realtime/rooms';
-import type { WorkspaceLayoutGridDTO } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
+import type { WorkspaceLayoutGridDTO } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const realtimeLogger = browserLoggers.realtime.child({ module: 'agent-workspace-events' });
@@ -27,7 +27,7 @@ const getEnvVar = (name: string, fallback = '') => {
 };
 
 export interface WorkspaceUpdatedPayload {
-  /** The session whose grid changed (`agent_sessions.id`). */
+  /** The session whose grid changed (`agent_workspaces.id`). */
   workspaceId: string;
   /** The post-write rev — subscribers apply on `watermark + 1`, refetch on a gap. */
   rev: number;

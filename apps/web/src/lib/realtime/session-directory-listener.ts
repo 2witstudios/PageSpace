@@ -22,7 +22,7 @@ import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-
  * all. The server now emits `conversation:created/updated/closed/reopened/
  * deleted` and `session:*` to the owner's own `user:<id>:sessions` room — joined
  * automatically at connect, no subscription call needed — and this translates
- * them into targeted SWR surgery on the `/api/agent-sessions**` listings.
+ * them into targeted SWR surgery on the `/api/agent-workspaces**` listings.
  *
  * MOUNTED EXACTLY ONCE, from `GlobalChatProvider` (which wraps the whole
  * Layout), for the same reason `DerivedStreamingRegistrations` is: the directory
@@ -90,9 +90,9 @@ export function useSessionDirectoryListener(): void {
         revalidateSessionListings(mutate);
         return;
       }
-      // `closedInSessionAt` moving is a listing membership change in either
+      // `closedInWorkspaceAt` moving is a listing membership change in either
       // direction; the listing query owns that predicate, so re-read.
-      if (changes.closedInSessionAt !== undefined) {
+      if (changes.closedInWorkspaceAt !== undefined) {
         revalidateSessionListings(mutate);
         return;
       }

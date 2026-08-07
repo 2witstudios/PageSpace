@@ -131,8 +131,8 @@ export interface SandboxBillingDeps {
     pageId?: string;
     /** The session's own drive — first-class attribution so the usage breakdown can group terminal spend by drive without JSON forensics. Undefined for a global-assistant session. */
     driveId?: string;
-    /** The `agent_sessions.id` this run belongs to — first-class attribution, mirroring `driveId`. */
-    sessionId?: string;
+    /** The `agent_workspaces.id` this run belongs to — first-class attribution, mirroring `driveId`. */
+    workspaceId?: string;
   }) => Promise<void>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
@@ -145,7 +145,7 @@ export interface SandboxBillingDeps {
  */
 export interface ShellActivityNotification {
   /**
-   * The session whose sandbox the agent acted on — `agent_sessions.id`, NOT
+   * The session whose sandbox the agent acted on — `agent_workspaces.id`, NOT
    * the conversation id (post-unconflation the two are different namespaces:
    * one session hosts many conversations).
    *
@@ -154,7 +154,7 @@ export interface ShellActivityNotification {
    * at all: those have a null agent page, so the tuple's `pageId` gate silently
    * excluded them from the feed. Every session has this id.
    */
-  sessionId: string;
+  workspaceId: string;
   command: string;
   output: string;
   exitCode: number;
@@ -201,7 +201,7 @@ export interface AcquireSandboxRequest {
    * (contract.ts invariant 1: a session hosts MANY conversations, and the two
    * are different id namespaces post-unconflation). The session-anchored
    * `acquireSandbox` implementation resolves this conversation's session row
-   * (`conversations.sessionId`) and folds the Sprite key off THAT row's own
+   * (`conversations.workspaceId`) and folds the Sprite key off THAT row's own
    * id, never off this one.
    */
   conversationId?: string;
@@ -213,14 +213,14 @@ export type SandboxAcquireResult =
       sandboxId: string;
       resumed: boolean;
       /**
-       * The SESSION the sandbox belongs to (`agent_sessions.id`) — required,
+       * The SESSION the sandbox belongs to (`agent_workspaces.id`) — required,
        * because every post-run hook (storage measurement, shell-activity
        * notification) is keyed by it. The conversation id is NOT a substitute:
        * post-unconflation they are different namespaces, and keying the hooks
        * on the conversation silently no-oped measurement (underbilling) and
        * mis-addressed activity (codex review, P1).
        */
-      sessionId: string;
+      workspaceId: string;
       pageId?: string;
     }
   | {
@@ -261,7 +261,7 @@ export interface SandboxRunDeps {
   billing?: SandboxBillingDeps;
   /**
    * Cheap resolve of the CALLER's session identity for billing attribution — a
-   * read of the session row only (`agent_sessions.driveId`/`ownerId`/`id`), no
+   * read of the session row only (`agent_workspaces.driveId`/`ownerId`/`id`), no
    * sandbox provisioning. Called BEFORE the gate whenever `billing` is set, so
    * a credit-exhausted payer is denied without ever waking a hibernating
    * sandbox — the same fail-fast property the old (surface-derived, ctx-only)
@@ -288,7 +288,7 @@ export interface SandboxRunDeps {
    *   second pass, chatgpt-codex-connector).
    */
   resolveBillingSession?: (ctx: SandboxActorContext) => Promise<
-    | { sessionId: string; driveId: string | null; ownerId: string }
+    | { workspaceId: string; driveId: string | null; ownerId: string }
     | { deny: SandboxToolDenialReason }
     | null
   >;
@@ -299,7 +299,7 @@ export interface SandboxRunDeps {
    * MEASURED usage without ever waking a paused sprite. Best-effort — a failure
    * must never affect the tool result; omitting it disables measurement.
    */
-  measureStorage?: (input: { sandbox: ExecutableSandbox; sessionId: string }) => Promise<void>;
+  measureStorage?: (input: { sandbox: ExecutableSandbox; workspaceId: string }) => Promise<void>;
   /**
    * Optional pre-batch checkpoint seam (Sprites Platform Alignment 5-2). Omitted
    * → no checkpointing (the seam is fully optional, matching every other
@@ -577,7 +577,7 @@ export async function withMachineBilling<S>(
         // payer source, which is resolved from the session above.
         pageId: ctx.agentPageId,
         driveId: billingSession.driveId ?? undefined,
-        sessionId: billingSession.sessionId,
+        workspaceId: billingSession.workspaceId,
       });
     }
     return result;
@@ -600,7 +600,7 @@ export async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; sessionId: string; release: () => void; pageId?: string }
+  | { ok: true; sandbox: ExecutableSandbox; workspaceId: string; release: () => void; pageId?: string }
   | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
@@ -634,7 +634,7 @@ export async function openSession(
     return {
       ok: true,
       sandbox,
-      sessionId: acquired.sessionId,
+      workspaceId: acquired.workspaceId,
       release: () => {
         deps.quota.releaseSlot({ userId: ctx.userId });
         // Opportunistic, throttled, best-effort storage measurement. Fired from
@@ -648,10 +648,10 @@ export async function openSession(
         // the conversation: both are different namespaces, and each has
         // silently excluded a class of sessions from measurement before).
         if (deps.measureStorage) {
-          const sessionId = acquired.sessionId;
-          void deps.measureStorage({ sandbox, sessionId }).catch((error) => {
+          const workspaceId = acquired.workspaceId;
+          void deps.measureStorage({ sandbox, workspaceId }).catch((error) => {
             safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
-              sessionId,
+              workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
           });
@@ -880,7 +880,7 @@ export async function runBashInSandbox({
       // not depend on it. safeNotifyShellActivity already swallows its own
       // errors, so this can never surface as an unhandled rejection.
       void safeNotifyShellActivity(deps, {
-        sessionId: session.sessionId,
+        workspaceId: session.workspaceId,
         command,
         output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
         exitCode: run.exitCode,

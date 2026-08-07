@@ -45,13 +45,13 @@ import {
   type ShellReadResult,
   type ShellSendPayload,
   type ShellSendResult,
-} from '@pagespace/lib/agent-sessions/contract';
+} from '@pagespace/lib/agent-workspaces/contract';
 import { resumeBillingClock } from './shell-handler';
 import {
   MAX_SCROLLBACK_TAIL_BYTES,
   scrollbackLines,
   tailOfLines,
-} from '@pagespace/lib/services/agent-sessions/session-scrollback';
+} from '@pagespace/lib/services/agent-workspaces/session-scrollback';
 
 /**
  * How much scrollback one read may ship back. The ring itself holds 64 KiB;

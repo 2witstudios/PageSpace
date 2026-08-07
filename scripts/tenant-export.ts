@@ -264,10 +264,10 @@ export async function exportData(
 
   /**
    * Agent sessions — the working contexts the exported conversations are bound
-   * to (`conversations.sessionId`).
+   * to (`conversations.workspaceId`).
    *
    * Carried because the binding is otherwise unrecoverable: a session owns a
-   * thread's filesystem and its pane layout, and `sessionId` is write-once by
+   * thread's filesystem and its pane layout, and `workspaceId` is write-once by
    * design (moving a thread is a fork, never a rebind), so a migration that
    * drops it cannot be repaired afterwards. Only the sessions an exported
    * conversation actually names are pulled — a session is never empty, so
@@ -277,12 +277,12 @@ export async function exportData(
    */
   const referencedSessionIds = new Set(
     conversationsData
-      .map((r) => r.sessionId as string | null)
+      .map((r) => r.workspaceId as string | null)
       .filter((id): id is string => Boolean(id)),
   );
   const agentSessionsDataRaw = referencedSessionIds.size > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM agent_sessions WHERE id IN (${toSqlInList(referencedSessionIds)})`,
+        `SELECT * FROM agent_workspaces WHERE id IN (${toSqlInList(referencedSessionIds)})`,
       ))
     : [];
   const agentSessionsData = agentSessionsDataRaw.filter(
@@ -295,7 +295,7 @@ export async function exportData(
   // Threads bound to a session that did not make the cut become plain history
   // — exactly what `ON DELETE SET NULL` on this column already means.
   const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
-  nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'sessionId');
+  nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'workspaceId');
 
   // `conversations.agentPageId` FKs `pages` (ON DELETE SET NULL) and is a
   // `type='client'` thread's only page link. A thread whose agent page is
@@ -384,9 +384,9 @@ export async function exportData(
     buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
     buildInsert('tags', cols('tags'), tagsData),
     buildInsert('page_tags', cols('page_tags'), pageTagsData),
-    // `agent_sessions` precedes `conversations`: `conversations.sessionId`
+    // `agent_workspaces` precedes `conversations`: `conversations.workspaceId`
     // FKs it, and a session row also needs its drive and owner, both above.
-    buildInsert('agent_sessions', cols('agent_sessions'), agentSessionsData),
+    buildInsert('agent_workspaces', cols('agent_workspaces'), agentSessionsData),
     // `conversations` MUST precede `messages`: the latter has a real
     // (non-deferrable) FK onto the former, and the whole bundle replays inside
     // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
@@ -420,7 +420,7 @@ export async function exportData(
     channelMessages: channelMessagesData.length,
     channelMessageReactions: channelReactionsData.length,
     channelReadStatus: channelReadStatusData.length,
-    agentSessions: agentSessionsData.length,
+    agentWorkspaces: agentSessionsData.length,
     conversations: conversationsData.length,
     messages: messagesData.length,
     files: filesData.length,

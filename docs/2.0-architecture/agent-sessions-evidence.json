@@ -34,14 +34,13 @@
         "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
       }
     },
-    "scripts-hand-listed": {
-      "runner": "vitest in scripts/ — the workflow names every file explicitly; an unlisted file never runs",
+    "scripts-vitest": {
+      "runner": "vitest in scripts/ — the workflow runs the whole context; scripts/vitest.config.ts's `include` patterns are the one declaration of the file set",
       "pathPrefixes": ["scripts/__tests__/"],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
         "contains": "cd scripts && bunx vitest run"
-      },
-      "requiresFileListedInCi": true
+      }
     }
   },
   "guarantees": [
@@ -92,7 +91,7 @@
           "suite": "web-unit"
         },
         {
-          "file": "apps/web/src/lib/agent-sessions/__tests__/create-conversation-in-session.test.ts",
+          "file": "apps/web/src/lib/agent-workspaces/__tests__/create-conversation-in-session.test.ts",
           "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
           "suite": "web-unit"
         }
@@ -205,17 +204,17 @@
           "suite": "web-unit"
         },
         {
-          "file": "apps/web/src/app/api/agent-sessions/[sessionId]/__tests__/route.test.ts",
+          "file": "apps/web/src/app/api/agent-workspaces/[workspaceId]/__tests__/route.test.ts",
           "name": "given a denial, should answer { session: null } — SAME as not-found, but still audit it (review #2261/5)",
           "suite": "web-unit"
         },
         {
-          "file": "apps/web/src/app/api/agent-sessions/[sessionId]/shells/[shellId]/__tests__/route.test.ts",
+          "file": "apps/web/src/app/api/agent-workspaces/[workspaceId]/shells/[shellId]/__tests__/route.test.ts",
           "name": "given a shell under a DIFFERENT session than the URL claims, should 404 without leaking the pairing",
           "suite": "web-unit"
         },
         {
-          "file": "packages/lib/src/agent-sessions/__tests__/decide-session-access.test.ts",
+          "file": "packages/lib/src/agent-workspaces/__tests__/decide-session-access.test.ts",
           "name": "denies an UNRESOLVED membership — unknown is never a grant",
           "suite": "lib-unit"
         }
@@ -247,10 +246,10 @@
     },
     {
       "id": "gdpr-export-covers-agent-session-tables",
-      "guarantee": "GDPR export includes the agent-session tables a user's work now lives in (agent_sessions, agent_session_shells, ai_stream_sessions).",
+      "guarantee": "GDPR export includes the agent-session tables a user's work now lives in (agent_workspaces, agent_workspace_shells, ai_stream_sessions).",
       "status": "gap",
-      "gap": "TODO(agent-sessions-epic): NOT IMPLEMENTED, therefore no evidence. packages/lib/src/compliance/export/gdpr-export.ts has no collector for agent_sessions, agent_session_shells or ai_stream_sessions, so GET /api/account/export cannot return them; the epic moved user-visible work into tables the subject access request does not read. The existing route test ('appends all data categories to archive') asserts the current category list and therefore locks the omission in rather than catching it. There is also no 'every table is accounted for' drift guard for the GDPR export — the only such guard in the repo covers the separate tenant export.",
-      "notes": "Related and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_sessions but not agent_session_shells or ai_stream_sessions, so the tenant export has an adjacent (different) hole."
+      "gap": "TODO(agent-sessions-epic): NOT IMPLEMENTED, therefore no evidence. packages/lib/src/compliance/export/gdpr-export.ts has no collector for agent_workspaces, agent_workspace_shells or ai_stream_sessions, so GET /api/account/export cannot return them; the epic moved user-visible work into tables the subject access request does not read. The existing route test ('appends all data categories to archive') asserts the current category list and therefore locks the omission in rather than catching it. There is also no 'every table is accounted for' drift guard for the GDPR export — the only such guard in the repo covers the separate tenant export.",
+      "notes": "Related and worth not conflating: scripts/lib/migration-types.ts TABLE_IMPORT_ORDER carries agent_workspaces but not agent_workspace_shells or ai_stream_sessions, so the tenant export has an adjacent (different) hole."
     },
     {
       "id": "erasure-reaches-stream-session-content",
@@ -306,15 +305,15 @@
         {
           "file": "scripts/__tests__/tenant-export-columns.test.ts",
           "name": "covers exactly the tables in TABLE_IMPORT_ORDER",
-          "suite": "scripts-hand-listed"
+          "suite": "scripts-vitest"
         },
         {
           "file": "scripts/__tests__/tenant-export-columns.test.ts",
           "name": "states a reason for every deliberately excluded column",
-          "suite": "scripts-hand-listed"
+          "suite": "scripts-vitest"
         }
       ],
-      "notes": "Found by writing this manifest: these 64 tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI. Adding the citation forced the file into the list — which is exactly the UNRUN_SUITE check doing its job."
+      "notes": "Found independently twice: these 64 tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI — and the drift they guard had in fact already reached a pushed branch (the agent_workspaces rename left spriteKey unaccounted). PR #2358 closed it by deleting that hand-list so the step runs the whole scripts vitest context, which is why this suite no longer sets requiresFileListedInCi: there is no list left for a file to be missing from."
     }
   ]
 }

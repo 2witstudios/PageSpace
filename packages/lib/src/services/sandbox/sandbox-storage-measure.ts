@@ -4,7 +4,7 @@
  * The platform bills the bytes a sandbox has ACTUALLY written to its persistent
  * filesystem (TRIM-friendly — deleting files lowers the bill), NOT the
  * provisioned volume size. To bill measured usage the storage reconcile cron
- * needs a persisted byte figure on `agent_sessions` — but it must NEVER wake a
+ * needs a persisted byte figure on `agent_workspaces` — but it must NEVER wake a
  * hibernating Sprite to get one (that would recreate the keep-awake billing
  * bug). So measurement is captured HERE, opportunistically, only while a Sprite
  * is ALREADY awake for real work, and throttled so a burst of real work costs at
@@ -93,12 +93,12 @@ export function shouldRefreshMeasurement(input: {
 }
 
 export type PersistSessionStorageMeasurement = (input: {
-  /** The `agent_sessions` PK (the workspace row id) whose row receives the measurement. */
-  sessionId: string;
+  /** The `agent_workspaces` PK (the workspace row id) whose row receives the measurement. */
+  workspaceId: string;
   /**
    * The Sprite INSTANCE these bytes were read from, for the writer to CAS on.
    * Carried because the measurement is fire-and-forget: it can land after its
-   * generation is gone and a new one has taken the row, and `sessionId` alone
+   * generation is gone and a new one has taken the row, and `workspaceId` alone
    * cannot tell the writer which disk the number describes.
    */
   spriteInstanceId: string | null;
@@ -109,7 +109,7 @@ export type PersistSessionStorageMeasurement = (input: {
 export interface RefreshSessionStorageMeasurementInput {
   /** An ALREADY-AWAKE sandbox handle (real work just happened on it) — measurement never provisions or wakes. */
   handle: Pick<SandboxHandle, 'exec'>;
-  sessionId: string;
+  workspaceId: string;
   /** The instance being measured, passed straight through to `persist` for its CAS. */
   spriteInstanceId: string | null;
   /** Last persisted measurement time for this session (null = never measured). */
@@ -163,7 +163,7 @@ export async function refreshSessionStorageMeasurement(
   if (bytes === null) return { measured: false };
 
   await input.persist({
-    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
     spriteInstanceId: input.spriteInstanceId,
     measuredBytes: bytes,
     measuredAt: input.now,
