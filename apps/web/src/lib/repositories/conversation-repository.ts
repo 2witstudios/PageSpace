@@ -170,6 +170,36 @@ export const conversationRepository = {
    * result exactly as before.
    */
 
+  /**
+   * The API's conversation creator (`POST /api/v1/conversations`), which is a
+   * different animal from `createConversation` below: `type='client'` with a
+   * DRIVE in `contextId` (what a drive-scoped MCP token is authorized against),
+   * not `type='page'` with a page.
+   *
+   * It exists so that creator emits too. It was a bare `db.insert` in the
+   * route, making it the only one of the three creation paths that announced
+   * nothing — routes never decide whether to broadcast (SSoT §3), and a fourth
+   * creator appearing later should not have to rediscover that.
+   *
+   * The emit is a genuine no-op for today's sidebars: `session-directory-
+   * listener` drops a `created` event carrying no `workspaceId`, and these rows
+   * always have `workspaceId: null`. Emitting anyway costs one broadcast and
+   * buys consistency across all three creators — the alternative is a silent
+   * exception that the next in-app viewer for API threads would have to find.
+   */
+  async createApiConversation(values: {
+    id: string;
+    userId: string;
+    title: string | null;
+    type: string;
+    contextId: string | null;
+    updatedAt: Date;
+  }): Promise<void> {
+    const [inserted] = await db.insert(conversations).values(values).returning();
+    if (!inserted) return;
+    emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) });
+  },
+
   async createConversation(
     conversationId: string,
     userId: string,

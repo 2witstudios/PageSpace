@@ -99,6 +99,16 @@ export function useSessionDirectoryListener(): void {
       if (changes.lastMessageAt !== undefined) {
         touchConversationInCache(mutate, payload.conversationId, changes.lastMessageAt);
       }
+      // The plan binding is not a listing field, so there is no row to patch —
+      // but it IS rendered, by the plan chip on every pane open on this
+      // conversation, from its own `/plan` key. Without this the chip only
+      // refreshes when a `set_plan`/`clear_plan` TOOL CALL lands in the message
+      // stream, so the one path that writes no message — the user clicking the
+      // chip's X, which goes straight to DELETE /plan — left every other pane
+      // showing a plan that is no longer bound.
+      if (changes.planPageId !== undefined) {
+        void mutate(`/api/ai/conversations/${payload.conversationId}/plan`);
+      }
       // A rename or a share-state flip changes what a row RENDERS, and the
       // listing rows carry those fields — but only for a row already present,
       // so a plain re-read is both correct and cheap enough at this frequency.

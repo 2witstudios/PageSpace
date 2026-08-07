@@ -69,6 +69,9 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: vi.fn().mockResolvedValue(null),
     softDeleteConversationById: vi.fn().mockResolvedValue(undefined),
+    // The POST writes through the repository rather than `db.insert` directly,
+    // so that this creator emits `conversation:created` like the other two.
+    createApiConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -214,15 +217,23 @@ describe('POST /api/v1/conversations', () => {
     });
   });
 
-  test('inserts a conversations row', async () => {
-    const insertValues = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.insert).mockReturnValue({ values: insertValues } as unknown as ReturnType<typeof db.insert>);
+  test('creates the conversation through the repository, not with a bare insert', async () => {
+    // Asserted at the repository rather than at `db.insert`, because that is
+    // where the write moved — and the reason it moved is that the repository
+    // emits `conversation:created`. A route writing the row itself is a
+    // creation nobody hears about, which is what this path used to be.
     await POST(makePostRequest({}));
     assert({
       given: 'a valid create request',
-      should: 'call db.insert once',
-      actual: vi.mocked(db.insert).mock.calls.length,
+      should: 'call the repository creator once',
+      actual: vi.mocked(conversationRepository.createApiConversation).mock.calls.length,
       expected: 1,
+    });
+    assert({
+      given: 'a valid create request',
+      should: 'never write the row directly',
+      actual: vi.mocked(db.insert).mock.calls.length,
+      expected: 0,
     });
   });
 });
