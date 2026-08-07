@@ -164,6 +164,7 @@
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
+        "src/test/require-db.ts",
         "src/transactions/auth-transactions.ts"
       ],
       "project": [

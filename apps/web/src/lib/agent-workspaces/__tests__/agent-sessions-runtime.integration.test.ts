@@ -13,8 +13,10 @@
  * the count before either wrote, and both succeed — exceeding the cap.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors `agent-sessions-conversations-runtime.integration.test.ts` in this
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors `agent-sessions-conversations-runtime.integration.test.ts` in this
  * same directory.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -34,6 +36,7 @@ import {
   MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-sessions-runtime';
 import { SessionFullError } from '../create-conversation-in-session';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -42,7 +45,8 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('agent-sessions-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });
@@ -149,7 +153,8 @@ describe('claim — real concurrency (the guarded UPDATE, not the advisory lock,
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('agent-sessions-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });
@@ -335,7 +340,8 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('agent-sessions-runtime.integration.test.ts', error);
       dbAvailable = false;
     }
   });

@@ -7,17 +7,17 @@
  *   bun run --filter '@pagespace/db' test -- src/__tests__/accessible-page-ids.integration.test.ts
  *
  * The function is the canonical "what pages can this user view?" primitive that
- * collapses the (owner | drive-admin | explicit-grant) authorization graph into
- * one DB-side call. Trashed pages, trashed drives, and expired explicit grants
- * are all excluded by the function definition.
+ * collapses the (owner | drive-admin | explicit-grant | accepted-member-on-a-
+ * non-private-page) authorization graph into one DB-side call. Trashed pages,
+ * trashed drives, and expired explicit grants are all excluded by the function
+ * definition. The current rule set is `drizzle/0133_default_member_read.sql`.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { factories } from '../test/factories';
 import { db } from '../db';
 import { sql } from '../operators';
+import { inArray } from 'drizzle-orm';
 import { users } from '../schema/auth';
-import { drives, pages } from '../schema/core';
-import { driveMembers, pagePermissions } from '../schema/members';
 
 async function callFunction(uid: string): Promise<string[]> {
   const result = await db.execute<{ page_id: string }>(
@@ -41,17 +41,38 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     expect(hasSearchPath, 'search_path should be pinned on the function').toBe(true);
   });
 
-  beforeEach(async () => {
-    // Delete in FK order to avoid cascade contention.
-    await db.delete(pagePermissions);
-    await db.delete(pages);
-    await db.delete(driveMembers);
-    await db.delete(drives);
-    await db.delete(users);
+  /**
+   * Row-scoped cleanup. This replaces an unqualified
+   *   DELETE FROM page_permissions; DELETE FROM pages; DELETE FROM drive_members;
+   *   DELETE FROM drives; DELETE FROM users;
+   * in `beforeEach`, which emptied the whole app database — including rows
+   * belonging to whatever else was running against the shared CI Postgres. It
+   * was only ever safe because this suite was pinned to the last step of the
+   * job, i.e. by sequencing luck, and it made that pinning permanent.
+   *
+   * Nothing here needs an empty table: every assertion is already scoped to a
+   * user this test just created, so foreign rows are invisible to it. And every
+   * fixture below hangs off such a user through a cascading FK
+   * (drives.ownerId → pages.driveId → page_permissions.pageId /
+   * drive_members.driveId), so deleting the seeded users deletes exactly this
+   * file's rows and nothing else.
+   */
+  const seededUserIds: string[] = [];
+
+  async function seedUser(overrides?: Parameters<typeof factories.createUser>[0]) {
+    const user = await factories.createUser(overrides);
+    seededUserIds.push(user.id);
+    return user;
+  }
+
+  afterEach(async () => {
+    if (seededUserIds.length === 0) return;
+    await db.delete(users).where(inArray(users.id, seededUserIds));
+    seededUserIds.length = 0;
   });
 
   it('grants drive owner access to every non-trashed page in their non-trashed drive', async () => {
-    const owner = await factories.createUser();
+    const owner = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const p1 = await factories.createPage(drive.id);
     const p2 = await factories.createPage(drive.id);
@@ -62,8 +83,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('grants drive ADMIN member access to every non-trashed page in the drive', async () => {
-    const owner = await factories.createUser();
-    const admin = await factories.createUser();
+    const owner = await seedUser();
+    const admin = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const p1 = await factories.createPage(drive.id);
     const p2 = await factories.createPage(drive.id);
@@ -78,8 +99,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('does NOT grant access to an ADMIN member whose invitation has not been accepted', async () => {
-    const owner = await factories.createUser();
-    const pending = await factories.createUser();
+    const owner = await seedUser();
+    const pending = await seedUser();
     const drive = await factories.createDrive(owner.id);
     await factories.createPage(drive.id);
     await factories.createDriveMember(drive.id, pending.id, {
@@ -92,11 +113,32 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     expect(accessible).toEqual([]);
   });
 
-  it('does NOT grant regular MEMBER access to pages without explicit grants', async () => {
-    const owner = await factories.createUser();
-    const member = await factories.createUser();
+  /**
+   * Migration 0133 (`0133_default_member_read.sql`) added rule 4 — "Discord-style
+   * open-by-default": an ACCEPTED drive member of any role reads every page in the
+   * drive that is not explicitly `isPrivate`. This file asserted the pre-0133
+   * closed-by-default rule and kept asserting it for 120+ migrations, because the
+   * suite ran in no job. `packages/lib/src/permissions/permissions.ts` (the TS leg
+   * of the same decision) has agreed with 0133 the whole time; only these two
+   * assertions were stale.
+   */
+  it('grants an accepted regular MEMBER read on NON-private pages (0133 rule 4)', async () => {
+    const owner = await seedUser();
+    const member = await seedUser();
     const drive = await factories.createDrive(owner.id);
-    await factories.createPage(drive.id);
+    const open = await factories.createPage(drive.id);
+    await factories.createDriveMember(drive.id, member.id, { role: 'MEMBER' });
+
+    const accessible = await callFunction(member.id);
+
+    expect(accessible).toEqual([open.id]);
+  });
+
+  it('does NOT grant a regular MEMBER access to an isPrivate page without an explicit grant', async () => {
+    const owner = await seedUser();
+    const member = await seedUser();
+    const drive = await factories.createDrive(owner.id);
+    await factories.createPage(drive.id, { isPrivate: true });
     await factories.createDriveMember(drive.id, member.id, { role: 'MEMBER' });
 
     const accessible = await callFunction(member.id);
@@ -105,8 +147,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('grants explicit-permission holder access only to the permitted page (canView=true)', async () => {
-    const owner = await factories.createUser();
-    const grantee = await factories.createUser();
+    const owner = await seedUser();
+    const grantee = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const grantedPage = await factories.createPage(drive.id);
     const otherPage = await factories.createPage(drive.id);
@@ -124,8 +166,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('excludes pages whose explicit grant has canView=false', async () => {
-    const owner = await factories.createUser();
-    const grantee = await factories.createUser();
+    const owner = await seedUser();
+    const grantee = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const page = await factories.createPage(drive.id);
     await factories.createPagePermission(page.id, grantee.id, {
@@ -141,8 +183,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('excludes pages whose explicit grant has expired', async () => {
-    const owner = await factories.createUser();
-    const grantee = await factories.createUser();
+    const owner = await seedUser();
+    const grantee = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const page = await factories.createPage(drive.id);
     await factories.createPagePermission(page.id, grantee.id, {
@@ -159,8 +201,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('includes pages whose explicit grant expires in the future', async () => {
-    const owner = await factories.createUser();
-    const grantee = await factories.createUser();
+    const owner = await seedUser();
+    const grantee = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const page = await factories.createPage(drive.id);
     await factories.createPagePermission(page.id, grantee.id, {
@@ -177,7 +219,7 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('excludes trashed pages even from the drive owner', async () => {
-    const owner = await factories.createUser();
+    const owner = await seedUser();
     const drive = await factories.createDrive(owner.id);
     const live = await factories.createPage(drive.id);
     await factories.createPage(drive.id, { isTrashed: true, trashedAt: new Date() });
@@ -188,7 +230,7 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('excludes pages in trashed drives even from the drive owner', async () => {
-    const owner = await factories.createUser();
+    const owner = await seedUser();
     const drive = await factories.createDrive(owner.id, {
       isTrashed: true,
       trashedAt: new Date(),
@@ -201,8 +243,8 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('returns empty for a user with no relationships at all', async () => {
-    const owner = await factories.createUser();
-    const stranger = await factories.createUser();
+    const owner = await seedUser();
+    const stranger = await seedUser();
     const drive = await factories.createDrive(owner.id);
     await factories.createPage(drive.id);
 
@@ -212,14 +254,15 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
   });
 
   it('combines drive ownership, ADMIN membership, and explicit grants for a single user', async () => {
-    const owner = await factories.createUser();
-    const second = await factories.createUser();
-    const adminTarget = await factories.createUser();
+    const owner = await seedUser();
+    const second = await seedUser();
+    const adminTarget = await seedUser();
     const ownDrive = await factories.createDrive(owner.id);
     const adminDrive = await factories.createDrive(adminTarget.id);
     const grantDrive = await factories.createDrive(adminTarget.id);
 
     const ownPage = await factories.createPage(ownDrive.id);
+    const ownPrivatePage = await factories.createPage(ownDrive.id, { isPrivate: true });
     const adminPage = await factories.createPage(adminDrive.id);
     const grantedPage = await factories.createPage(grantDrive.id);
     const blockedPage = await factories.createPage(grantDrive.id);
@@ -235,10 +278,13 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
 
     const accessible = await callFunction(second.id);
 
-    // Owns nothing, ADMIN of adminDrive (sees adminPage), explicit grant for grantedPage,
-    // MEMBER of ownDrive without explicit grants (does NOT see ownPage).
-    expect(accessible).toEqual(sorted([adminPage.id, grantedPage.id]));
-    expect(accessible).not.toContain(ownPage.id);
+    // Owns nothing, ADMIN of adminDrive (sees adminPage), explicit grant for
+    // grantedPage, and — since 0133 rule 4 — accepted MEMBER of ownDrive, so the
+    // NON-private ownPage is readable while the isPrivate one is not.
+    expect(accessible).toEqual(sorted([adminPage.id, grantedPage.id, ownPage.id]));
+    expect(accessible).not.toContain(ownPrivatePage.id);
+    // blockedPage lives in a drive where `second` is neither owner, admin, nor
+    // member — no membership, so rule 4 cannot reach it.
     expect(accessible).not.toContain(blockedPage.id);
   });
 });
