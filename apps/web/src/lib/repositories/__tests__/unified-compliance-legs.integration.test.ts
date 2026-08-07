@@ -12,7 +12,7 @@
  *            COMPLETE: every message appears EXACTLY ONCE (no duplicate from
  *            double-reading, no omission).
  *   RULE 2 — erasure and retention still reach BOTH legs, including rows the
- *            FK graph only started reaching at 0248/0249.
+ *            FK graph only started reaching at 0249/0250.
  *   RULE 3 — the new cascades (conversations → chat_messages,
  *            conversations → ai_stream_sessions) delete what they claim to.
  *
@@ -281,7 +281,7 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
       expect(unifiedLeft).toEqual([]);
     });
 
-    it('deleting the user takes the stream checkpoints in their own conversation with it (0249 cascade)', async () => {
+    it('deleting the user takes the stream checkpoints in their own conversation with it (0250 cascade)', async () => {
       if (!dbAvailable) return;
 
       const subject = await factories.createUser();
@@ -405,7 +405,7 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
 
       // The age-based sweep got the soft-deleted row; the conversations
       // delete cascaded into the still-active one and into the stream
-      // checkpoints (0249). Nothing that was condemned survived.
+      // checkpoints (0250). Nothing that was condemned survived.
       expect(unifiedLeft).toEqual([]);
       expect(conversationLeft).toEqual([]);
       expect(streamLeft).toEqual([]);

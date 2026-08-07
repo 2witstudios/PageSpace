@@ -508,7 +508,7 @@ describe('chat mutation matrix — one message table', () => {
     /**
      * Everything that must be gone once a page or drive is permanently
      * deleted. `chat_messages.pageId REFERENCES pages ON DELETE CASCADE` was
-     * the physical net under all of this until migration 0252 dropped the
+     * the physical net under all of this until migration 0253 dropped the
      * table; what replaced it reaches none of it, because
      * `conversations.contextId` is not a foreign key and `agentPageId`'s is
      * ON DELETE SET NULL. Verified against a migrated database: before this

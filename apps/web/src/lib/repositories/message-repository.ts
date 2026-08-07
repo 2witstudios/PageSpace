@@ -29,7 +29,7 @@
  *
  * ── ONE TABLE (Phase 4, D6) ───────────────────────────────────────────────
  * `chat_messages` was merged into `messages` and DROPPED at PR 15 (migration
- * 0252). There is one message table, and this module is its writer: page rows
+ * 0253). There is one message table, and this module is its writer: page rows
  * go through the shared page writer (`unified-message-leg.ts`), global rows
  * are written here directly, as they always were, with an explicit
  * `sourceAgentId: null`.
@@ -621,7 +621,7 @@ export const messageRepository = {
    * An ABSENT conversations row used to be "tolerated" here (the eager
    * createConversation call is best-effort — see the route's review history on
    * PR #2299). It no longer can be, and has not really been since migration
-   * 0248 gave BOTH message tables an enforced FK to `conversations`: the
+   * 0249 gave BOTH message tables an enforced FK to `conversations`: the
    * INSERT below raises 23503 and the transaction aborts. That is the honest
    * outcome — a placeholder under no conversation is a row no reader can ever
    * reach.

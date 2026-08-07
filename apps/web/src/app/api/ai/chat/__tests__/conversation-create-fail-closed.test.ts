@@ -7,7 +7,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 //
 // The eager `conversationRepository.createConversation(...)` used to be
 // `.catch(() => {})`. That was defensible while nothing downstream needed the
-// row — but migration 0249 gave `ai_stream_sessions.conversationId` a real FK
+// row — but migration 0250 gave `ai_stream_sessions.conversationId` a real FK
 // to `conversations`, so a swallowed failure stopped degrading gracefully: it
 // re-emerged ~900 lines later as an FK violation inside `createStreamLifecycle`,
 // under the advisory lock, where it reads as lock-machinery failure. This suite

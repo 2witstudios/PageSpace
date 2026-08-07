@@ -12,7 +12,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 //       !existingConversation.contextId || existingConversation.contextId === chatId;
 //
 // A `type='global'` conversation ALWAYS has `contextId IS NULL` — that is a
-// database CHECK (`conversations_global_context_null_chk`, migration 0249) —
+// database CHECK (`conversations_global_context_null_chk`, migration 0250) —
 // so the first disjunct made every global conversation "belong to" every page.
 // `POST /api/ai/chat` with your own global `conversationId` plus any `chatId`
 // you can edit therefore wrote a page-agent turn (your prompt AND the model's

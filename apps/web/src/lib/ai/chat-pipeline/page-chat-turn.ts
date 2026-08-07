@@ -672,7 +672,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         //
         // It used to be `!contextId || contextId === chatId`. A `type='global'`
         // conversation ALWAYS has `contextId IS NULL` — the database enforces
-        // it (`conversations_global_context_null_chk`, migration 0249) — so
+        // it (`conversations_global_context_null_chk`, migration 0250) — so
         // that first disjunct said every global conversation belongs to every
         // page, and this route would happily append a page-agent turn to the
         // global-assistant transcript (CodeQL `js/user-controlled-bypass`;
@@ -799,7 +799,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // FAIL-CLOSED (was `.catch(() => {})` — carry-forward fix from PR #2344's
     // review). This used to be best-effort because nothing downstream strictly
     // needed the row: the message write creates it itself if missing, and a
-    // failed broadcast gate just meant no broadcast. Migration 0249 changed
+    // failed broadcast gate just meant no broadcast. Migration 0250 changed
     // that — `ai_stream_sessions.conversationId` now has a real FK to
     // `conversations`, so a swallowed failure here no longer degrades
     // gracefully: it resurfaces ~900 lines later as a FK violation inside

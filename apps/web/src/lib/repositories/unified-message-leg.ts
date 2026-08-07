@@ -3,7 +3,7 @@
  * a page-chat row (epic "Agent-Session Single Source of Truth", Phase 4 / D6).
  *
  * `chat_messages` was merged INTO `messages` across Phase 4 and DROPPED at
- * PR 15 (migration 0252). There is ONE message table and this module holds the
+ * PR 15 (migration 0253). There is ONE message table and this module holds the
  * page-chat statements against it; global-assistant rows do not come through
  * here — their leg has always been `messages` itself, written directly by
  * message-repository.ts.
@@ -22,7 +22,7 @@
  *
  *   2. "A MUTATION THAT MATCHES NOTHING IS NORMAL" still holds, for a
  *      narrower reason: the historical corpus was carried across before the
- *      drop (`scripts/backfill-unify-messages.ts`, and migration 0252's own
+ *      drop (`scripts/backfill-unify-messages.ts`, and migration 0253's own
  *      final sweep and completeness guard), so a zero-row edit/soft-delete now
  *      means the message id does not exist at all. It is still silent rather
  *      than fatal — the callers' own reads decide whether a missing message is

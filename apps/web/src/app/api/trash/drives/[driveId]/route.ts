@@ -57,7 +57,7 @@ export async function DELETE(
     // foreign key, and once `pages.driveId` cascades the drive's pages away
     // there is nothing left to trace the page-scoped threads through. The
     // `chat_messages.pageId` cascade that used to make this automatic was
-    // dropped with the table in migration 0252.
+    // dropped with the table in migration 0253.
     await db.transaction(async (tx) => {
       await deleteConversationsForDrive(tx, drive.id);
       await tx.delete(drives).where(eq(drives.id, drive.id));

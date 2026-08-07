@@ -302,7 +302,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
   const toUIMessage = (row: {
     id: string;
     conversationId: string;
-    // Nullable since migration 0248 (agent-authored rows); the converter never
+    // Nullable since migration 0249 (agent-authored rows); the converter never
     // reads it.
     userId: string | null;
     role: string;
@@ -355,7 +355,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
           )
         )
         .limit(1);
-      // `userId === null` (possible on `messages` since 0248) means the row has
+      // `userId === null` (possible on `messages` since 0249) means the row has
       // no author to re-persist AS, so it is not resumable. No writer produces
       // that shape yet — the guard is what keeps this path honest once one does.
       if (!row || row.role !== 'assistant' || row.userId === null) return null;
