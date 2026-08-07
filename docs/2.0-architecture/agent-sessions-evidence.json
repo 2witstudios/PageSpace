@@ -382,7 +382,7 @@
         },
         {
           "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
-          "name": "deleting the user takes the stream checkpoints in their own conversation with it (0249 cascade)",
+          "name": "deleting the user takes the stream checkpoints in their own conversation with it (0250 cascade)",
           "suite": "web-unit"
         }
       ],
