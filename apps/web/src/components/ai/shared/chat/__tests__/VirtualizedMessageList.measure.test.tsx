@@ -181,6 +181,31 @@ describe('VirtualizedMessageList measurement stability', () => {
       expect(getItemKey()(2)).toBe('m3');
     });
 
+    it('given a new messages array every render, should keep the same getItemKey identity', () => {
+      // `messages` gets a new array identity on every streamed part. If that reached
+      // virtual-core as a new getItemKey, it would invalidate getMeasurementOptions
+      // and null `pendingMin`, forcing a full O(count) measurements rebuild per part
+      // instead of the incremental tail update. Hence the ref.
+      const messages = makeMessages(['m1', 'm2', 'm3']);
+      const { rerenderWith } = renderList(messages, makeScrollElement(800));
+      const first = getItemKey();
+
+      rerenderWith([...messages]);
+      rerenderWith([...messages, ...makeMessages(['m4'])]);
+
+      expect(getItemKey()).toBe(first);
+    });
+
+    it('given a stable getItemKey identity, should still read the latest messages through it', () => {
+      // The other half of the ref: stable identity must not mean stale data.
+      const messages = makeMessages(['m1', 'm2']);
+      const { rerenderWith } = renderList(messages, makeScrollElement(800));
+
+      rerenderWith([...messages, ...makeMessages(['m3'])]);
+
+      expect(getItemKey()(2)).toBe('m3');
+    });
+
     it('given a prepended older page, should still map each existing message to its own id', () => {
       const messages = makeMessages(['m1', 'm2', 'm3']);
       const { rerenderWith } = renderList(messages, makeScrollElement(800));
