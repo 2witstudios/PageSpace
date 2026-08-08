@@ -23,7 +23,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authorizePageConversation } from '@/lib/ai/core/authorize-page-conversation';
+import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -152,6 +152,43 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
   }
 
   return providerResult;
+}
+
+/**
+ * Resolve a caller-supplied conversationId to the ONE decision that governs
+ * reading it here — `authorizePageConversation`: owned-or-shared AND
+ * belongs-to-this-page, plus the history-deleted refusal. Fetch and decision in
+ * one step, so no call site can take the row without also taking the decision.
+ *
+ * `null` for an id that names no row, which the caller answers exactly as it
+ * answers a refusal (see the 404 at the call site): an id-guessing caller must
+ * not learn which of the two it hit.
+ *
+ * WHY THIS IS A FUNCTION rather than three lines inline at the call site:
+ * CodeQL's `js/user-controlled-bypass` reports any request-derived branch
+ * selector whose basic block dominates a call whose CALLEE NAME matches
+ * /login|auth|verify/ — here `if (conversationId)` dominating
+ * `authorizePageConversation` (alert #277). It is a name-and-dominance
+ * heuristic, not a proof of a bypass, and there is no bypass to prove: the
+ * decision is computed from the FETCHED row plus the session `userId`, the
+ * caller controls only WHICH conversation is named, and `pageId` is the agent
+ * page `canPrincipalViewPage` has already cleared. Dominance is per
+ * control-flow graph, so giving the call its own function is what settles the
+ * finding without weakening the check by a single condition.
+ *
+ * Two consequences worth keeping: this name must stay free of `auth`, `login`
+ * and `verify` (the heuristic reads the callee name, so renaming this to
+ * `authorize…` re-raises the alert while changing no behaviour), and the
+ * decision itself must stay in `authorize-page-conversation.ts` — inlining it
+ * back into the route would re-raise it too.
+ */
+async function resolveRequestedConversation(
+  conversationId: string,
+  { userId, pageId }: { userId: string; pageId: string },
+): Promise<PageConversationAccess | null> {
+  const requested = await conversationRepository.getConversation(conversationId);
+  if (!requested) return null;
+  return authorizePageConversation(requested, { userId, pageId });
 }
 
 /**
@@ -304,11 +341,9 @@ export async function POST(request: Request) {
     if (conversationId) {
       // The same decision `page-chat-turn` runs before it will append a turn to
       // a caller-supplied conversation: owned-or-shared AND belongs-to-this-page.
-      const requested = await conversationRepository.getConversation(conversationId);
-      const access = requested
-        ? authorizePageConversation(requested, { userId, pageId: agentId })
-        : null;
-      if (!requested || !access?.allowed) {
+      // `null` here means the id named no row — refused identically, see below.
+      const access = await resolveRequestedConversation(conversationId, { userId, pageId: agentId });
+      if (!access?.allowed) {
         auditRequest(request, {
           eventType: 'authz.access.denied',
           userId,
