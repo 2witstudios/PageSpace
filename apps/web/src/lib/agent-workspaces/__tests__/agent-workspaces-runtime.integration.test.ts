@@ -613,11 +613,19 @@ describe('createConversationInSession — the placeInGrid gate', () => {
     };
 
     await createConversationInSession(input);
-    // A retry of the same creation. The opId derives from the CONVERSATION id
-    // precisely so the verb engine's op memory replays it instead of opening a
-    // second pane — the property the old `toolCallId`-keyed opId could not give
-    // when the SDK supplied no call id.
-    await createConversationInSession(input).catch(() => {});
+    // A retry of the same creation, which must RESOLVE — no `.catch` swallowing
+    // it (review finding — CodeRabbit). Suppressing a rejection here would let
+    // the pane count stay at 1 because the retry never reached placement at
+    // all, which is a pass for the wrong reason. It does resolve; I checked.
+    //
+    // On the mechanism, stated carefully because I got it wrong first: this
+    // does NOT demonstrate the verb engine's op memory. Making the opId unique
+    // per call still leaves the count at 1, because `resolveOpenPlacement`
+    // finds a pane already showing this conversation and FOCUSES it rather
+    // than splitting. Op memory is the guard for a retry that arrives before
+    // the first placement lands; the focus branch covers the case here. What
+    // is asserted is the invariant both exist to protect.
+    await createConversationInSession(input);
 
     expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
   });
