@@ -47,7 +47,7 @@ import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import type { AuthResult } from '@/lib/auth';
+import { getAllowedDriveIds, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -836,7 +836,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     );
 
     const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation);
+    // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
+    // ceiling is always empty here. Passed explicitly anyway so this stays correct
+    // by construction if the allowed auth methods ever widen.
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation, getAllowedDriveIds(auth));
 
     const locationPrompt = buildLocationTurnPrompt(locationContext ? {
       currentPage: locationContext.currentPage,

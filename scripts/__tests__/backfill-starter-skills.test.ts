@@ -25,12 +25,16 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId', kind: 'kind' },
 }));
+vi.mock('@pagespace/db/schema/commands', () => ({
+  commands: { userId: 'userId', trigger: 'trigger' },
+}));
 vi.mock('@pagespace/db/operators', () => ({
   and: (...a: unknown[]) => ({ and: a }),
   eq: (...a: unknown[]) => ({ eq: a }),
   isNull: (...a: unknown[]) => ({ isNull: a }),
   asc: (...a: unknown[]) => ({ asc: a }),
   gt: (...a: unknown[]) => ({ gt: a }),
+  inArray: (...a: unknown[]) => ({ inArray: a }),
   count: () => ({ count: true }),
 }));
 vi.mock('@pagespace/lib/commands/starter-skill-installer', () => ({ installStarterSkills }));
@@ -45,6 +49,12 @@ let batches: Row[][];
 let remainingCount: number;
 /** Every `gt(users.id, cursor)` the walk issued — the pagination evidence. */
 let cursors: unknown[];
+/**
+ * Commands the scanned users ALREADY own, as the dry run's per-batch collision
+ * probe would find them. Live runs never issue that query — `installStarterSkills`
+ * reports its own skips — so this stays empty for them.
+ */
+let existingCommands: Array<{ userId: string | null; trigger: string }>;
 
 const dbStub = {
   select: vi.fn((projection?: Record<string, unknown>) => {
@@ -53,6 +63,14 @@ const dbStub = {
       const stub: Record<string, unknown> = {};
       stub.from = () => stub;
       stub.where = () => Promise.resolve([{ total: remainingCount }]);
+      return stub;
+    }
+    // The dry run's collision probe: `select({ userId, trigger })` over
+    // `commands`, terminating at `.where()` with no cursor and no limit.
+    if (projection && 'trigger' in projection) {
+      const stub: Record<string, unknown> = {};
+      stub.from = () => stub;
+      stub.where = () => Promise.resolve(existingCommands);
       return stub;
     }
     const stub: Record<string, unknown> = {};
@@ -80,6 +98,7 @@ beforeEach(() => {
   batches = [];
   remainingCount = 0;
   cursors = [];
+  existingCommands = [];
   installStarterSkills.mockResolvedValue(ok());
 });
 
@@ -101,6 +120,39 @@ describe('runBackfill — dry run', () => {
     remainingCount = 999;
 
     expect((await runBackfill({ dryRun: true })).unstampedRemaining).toBe(0);
+  });
+
+  // The whole point of a dry run is to size the rollout. Counting every trigger
+  // as an install ignores the ones the real run will skip because the user
+  // already owns that trigger — so the operator is told "6 installs" and gets 5,
+  // which reads as a partial failure of the real run rather than as the dry run
+  // having been wrong.
+  it('predicts the real run: a trigger the user already owns counts as skipped, not installed', async () => {
+    batches = [[{ userId: 'u1', driveId: 'd1' }], []];
+    existingCommands = [{ userId: 'u1', trigger: '/task' }];
+
+    const summary = await runBackfill({ dryRun: true });
+
+    expect(summary).toMatchObject({ scanned: 1, installed: 1, skippedCollision: 1 });
+    expect(dbStub.transaction).not.toHaveBeenCalled();
+  });
+
+  // A command row with a null userId is a drive-scoped command, not a personal
+  // one. It cannot collide with a personal starter trigger, so folding it into
+  // the collision set would under-predict the installs.
+  it('ignores a driveless command row when predicting collisions', async () => {
+    batches = [[{ userId: 'u1', driveId: 'd1' }], []];
+    existingCommands = [{ userId: null, trigger: '/task' }];
+
+    expect(await runBackfill({ dryRun: true })).toMatchObject({ installed: 2, skippedCollision: 0 });
+  });
+
+  it('does not probe for collisions on a live run — the installer reports its own skips', async () => {
+    batches = [[{ userId: 'u1', driveId: 'd1' }], []];
+
+    await runBackfill();
+
+    expect(dbStub.select.mock.calls.some(([p]) => p && 'trigger' in p)).toBe(false);
   });
 });
 

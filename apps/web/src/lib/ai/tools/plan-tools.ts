@@ -34,14 +34,42 @@ const planLogger = loggers.ai.child({ module: 'plan-tools' });
  * synthesize an ephemeral id (`workflow-<id>-<ts>`, see workflow-executor) that
  * has no row, so the UPDATE would silently match nothing — say so instead of
  * reporting a success that didn't happen.
+ *
+ * Writability mirrors the turn's own gate (owner OR `isShared`, then an explicit
+ * history-delete refusal) — see `authorizePageConversation` in
+ * `lib/ai/core/authorize-page-conversation.ts`. Requiring strict ownership here
+ * would mean a collaborator the pipeline explicitly lets post to a shared
+ * conversation could run /plan, watch the agent write the plan page, and then be
+ * told the binding failed — leaving exactly the lost-after-compaction hole this
+ * feature exists to close.
+ *
+ * Mirrored rather than called: `authorizePageConversation` also demands the
+ * conversation belong to a specific `pageId`, which a global conversation never
+ * does and which this tool has no id for. `isActive === false` (never
+ * `!isActive`) matches that module's rule for the same reason it gives — a row
+ * that simply does not carry the column must read as live, not as deleted.
+ *
+ * The two page/global pipelines already refuse a history-deleted conversation
+ * before any tool runs, so this arm is unreachable from them. It is not dead
+ * code: `set_plan` ships in `pageSpaceTools`, so it is also reachable from
+ * `/api/v1/chat/completions`, the page-agents routes and workflow runs, which do
+ * not all share that pre-check.
  */
-async function loadOwnedConversation(conversationId: string, userId: string) {
+async function loadWritableConversation(conversationId: string, userId: string) {
   const [row] = await db
-    .select({ id: conversations.id, userId: conversations.userId })
+    .select({
+      id: conversations.id,
+      userId: conversations.userId,
+      isShared: conversations.isShared,
+      isActive: conversations.isActive,
+    })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1);
-  return row && row.userId === userId ? row : null;
+  if (!row) return null;
+  if (row.userId !== userId && row.isShared !== true) return null;
+  if (row.isActive === false) return null;
+  return row;
 }
 
 export const planTools = {
@@ -93,7 +121,7 @@ export const planTools = {
           };
         }
 
-        const conversation = await loadOwnedConversation(conversationId, userId);
+        const conversation = await loadWritableConversation(conversationId, userId);
         if (!conversation) {
           return {
             success: false,
@@ -137,7 +165,7 @@ export const planTools = {
       if (!conversationId) return { success: false, error: 'This context has no conversation.' };
 
       try {
-        const conversation = await loadOwnedConversation(conversationId, userId);
+        const conversation = await loadWritableConversation(conversationId, userId);
         if (!conversation) return { success: false, error: 'This conversation cannot hold a plan binding.' };
 
         // Same single writer as `set_plan` — the clear is just as much a
