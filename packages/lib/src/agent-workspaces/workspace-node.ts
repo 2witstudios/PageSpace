@@ -168,8 +168,11 @@ export function descendantsOf(nodes: readonly WorkspaceNode[], id: string): Work
   const collected: WorkspaceNode[] = [];
   const seen = new Set<string>([id]);
   const queue = [id];
-  while (queue.length > 0) {
-    const parentId = queue.shift() as string;
+  // Drained by the `undefined` `shift()` actually returns when empty, rather
+  // than by a length check plus a cast that asserts what the check implied —
+  // this model's whole thesis is that a cast is a lie the type checker vouches
+  // for, and the boundary should not spend one on its own loop.
+  for (let parentId = queue.shift(); parentId !== undefined; parentId = queue.shift()) {
     for (const child of childrenOf(nodes, parentId)) {
       if (seen.has(child.id)) continue;
       seen.add(child.id);

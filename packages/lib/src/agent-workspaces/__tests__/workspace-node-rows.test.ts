@@ -378,6 +378,40 @@ describe('buildRenderTree', () => {
     expect(tree.detached.map((pane) => pane.id)).toEqual([]);
   });
 
+  it('should report a whole orphaned SUBTREE, not only the node whose parent went missing', () => {
+    // The pane's OWN parent resolves perfectly well — it is the container above
+    // it that dangles. An implementation that decided orphanhood one node at a
+    // time would report the container and then lose the pane entirely, which is
+    // the partition quietly breaking on exactly the input that needs it most.
+    const nodes: WorkspaceNode[] = [
+      rootNode(),
+      paneNode({ id: 'onscreen', position: 0 }),
+      splitNode({ id: 'lost-col', parentId: 'no-such-container' }),
+      paneNode({ id: 'lost-pane', parentId: 'lost-col' }),
+    ];
+    const tree = buildRenderTree(nodes);
+    expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
+    expect(tree.orphaned.map((node) => node.id)).toEqual(['lost-col', 'lost-pane']);
+    expect(tree.detached.map((pane) => pane.id)).toEqual([]);
+  });
+
+  it('should orphan a node parented under a detached pane, while the pane itself stays parked', () => {
+    // `detached` is the SIDEBAR's list, and the sidebar lists parked panes, not
+    // trees. So the descent stops at a parked pane and whatever claims it as a
+    // parent is placed nowhere. A later change that descended into detached
+    // panes to render them would start filing these under `detached` instead —
+    // putting a node the user never parked into the parked list.
+    const nodes: WorkspaceNode[] = [
+      rootNode(),
+      paneNode({ id: 'parked', parentId: null, position: 0 }),
+      paneNode({ id: 'under-parked', parentId: 'parked', position: 0 }),
+    ];
+    const tree = buildRenderTree(nodes);
+    expect(tree.root && outline(tree.root)).toBe('root-1');
+    expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
+    expect(tree.orphaned.map((node) => node.id)).toEqual(['under-parked']);
+  });
+
   it('should count every node exactly once across the tree, the parked list and the orphans', () => {
     // The three fields partition the list. That is what makes the flat list safe
     // to keep canonical: a projection that could lose a node would put "in the

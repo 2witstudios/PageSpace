@@ -280,12 +280,19 @@ export interface RenderTree {
   /** In the workspace, off the grid. Ordered, because the sidebar lists them. */
   detached: PaneNode[];
   /**
-   * Nodes that claim a parent the list cannot resolve. Reported, never
-   * repaired: re-parenting one onto the root would put a pane somewhere the
-   * user never placed it, and a projection has no business inventing a
-   * location. Empty for every well-formed workspace — a non-empty list means
-   * the read or the write that produced it is broken, and the point of
-   * surfacing it is that this is visible instead of merely plausible.
+   * Everything the projection could place NOWHERE: not reached from the root,
+   * and not parked. Usually that is a node claiming a parent the list cannot
+   * resolve, plus anything beneath it — but it is not only those. A SECOND root
+   * claims no parent at all and still lands here, because `rootOf` returns one
+   * node and the descent starts from that one; so does a node parented under a
+   * detached pane, and so does the row a duplicated id made unplaceable. The
+   * rule is the absence of a place, not the presence of a dangling pointer.
+   *
+   * Reported, never repaired: re-parenting one onto the root would put a pane
+   * somewhere the user never placed it, and a projection has no business
+   * inventing a location. Empty for every well-formed workspace — a non-empty
+   * list means the read or the write that produced it is broken, and the point
+   * of surfacing it is that this is visible instead of merely plausible.
    */
   orphaned: WorkspaceNode[];
 }
