@@ -9,6 +9,7 @@ import {
   assessBackupFreshness,
   resolveBackupMaxAgeHours,
   type BackupObject,
+  type BackupFreshnessResult,
 } from '@/lib/backup/backup-freshness';
 
 /**
@@ -101,7 +102,7 @@ async function listBackupObjects(): Promise<BackupListing> {
  * which is precisely the kind of gap hand-copied literals produce.
  */
 function summarize(
-  result: ReturnType<typeof assessBackupFreshness>,
+  result: BackupFreshnessResult,
   objectsSeen: number,
   truncated: boolean,
   ok: boolean
