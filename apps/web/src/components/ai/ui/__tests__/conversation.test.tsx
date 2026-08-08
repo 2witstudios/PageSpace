@@ -36,21 +36,25 @@ const { Conversation } = await import('../conversation');
 describe('Conversation scroll behaviour', () => {
   it('given a freshly mounted conversation, should land at the bottom instantly rather than animating down the thread', () => {
     capturedProps.length = 0;
-    render(<Conversation />);
+    render(<Conversation><span /></Conversation>);
 
     expect(capturedProps[0]?.initial).toBe('instant');
   });
 
   it('given content growing after mount, should follow smoothly', () => {
     capturedProps.length = 0;
-    render(<Conversation />);
+    render(<Conversation><span /></Conversation>);
 
     expect(capturedProps[0]?.resize).toBe('smooth');
   });
 
   it('given a caller that overrides them, should let the call site win', () => {
     capturedProps.length = 0;
-    render(<Conversation initial="smooth" resize="instant" />);
+    render(
+      <Conversation initial="smooth" resize="instant">
+        <span />
+      </Conversation>
+    );
 
     expect(capturedProps[0]?.initial).toBe('smooth');
     expect(capturedProps[0]?.resize).toBe('instant');

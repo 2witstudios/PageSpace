@@ -120,7 +120,7 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   // as the response lands, and hasMoreOlder is store-driven.
   const shouldVirtualize = useVirtualizationMode(
     messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD || hasMoreOlder === true,
-    displayIsStreaming || (remoteStreams?.length ?? 0) > 0
+    displayIsStreaming || remoteStreams.length > 0
   );
   // Streams whose messageId already landed in `messages` are filtered out so
   // we don't render the same message twice during the brief window between
