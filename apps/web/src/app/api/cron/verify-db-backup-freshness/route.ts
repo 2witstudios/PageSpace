@@ -188,9 +188,21 @@ export async function GET(request: Request) {
   // being feature-restricted; the asserted infrastructure simply does not exist in
   // those topologies. That tenants have no DB backup at all is a real gap, tracked
   // separately, not something this check should paper over by alerting nightly.)
+  //
+  // IF TENANT OR ONPREM EVER GAIN A BACKUP JOB, REVISIT THIS GATE — otherwise their
+  // backups would go unmonitored silently, which is this endpoint's own failure mode
+  // turned inward. The gate encodes "no such job exists here", not "we don't care".
   if (!isCloud()) {
+    // `ok` means "a good backup is affirmed", so it is FALSE here — nothing was
+    // affirmed, and on these topologies no backup exists to affirm. Reporting
+    // ok:true because the run was uneventful would be a false affirmation of the
+    // one thing this endpoint exists to establish, and `skipped` is what marks it
+    // as not-an-incident. A consumer that naively reads `ok` therefore errs toward
+    // "not verified" rather than toward false confidence, which is the correct
+    // bias for a backup monitor. The 200 is what tells an uptime probe this is
+    // not a failure.
     const skipped = {
-      ok: true,
+      ok: false,
       skipped: true,
       reason: 'not_cloud_deployment' as const,
       deploymentMode: process.env.DEPLOYMENT_MODE ?? null,

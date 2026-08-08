@@ -460,6 +460,11 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
         expect(body.skipped).toBe(true);
         expect(body.reason).toBe('not_cloud_deployment');
         expect(body.deploymentMode).toBe(mode);
+        // `ok` means "a good backup is affirmed" — nothing was, so it must not
+        // claim otherwise. 200 marks not-an-incident; `skipped` explains why.
+        // A consumer reading only `ok` errs toward "not verified", never toward
+        // false confidence.
+        expect(body.ok).toBe(false);
         // Never touches the bucket, and above all never pages: an empty prefix
         // here is expected, not an incident.
         expect(mockSend).not.toHaveBeenCalled();
