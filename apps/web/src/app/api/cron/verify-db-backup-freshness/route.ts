@@ -47,12 +47,17 @@ const MAX_LIST_PAGES = 20;
 interface BackupListing {
   objects: BackupObject[];
   /**
-   * True when MAX_LIST_PAGES was exhausted while S3 still reported more keys.
-   * Must never be swallowed: keys are returned in lexicographic order and the
-   * date-stamped naming means the NEWEST object sorts LAST, so a truncated
-   * listing systematically hides the newest backup and would report a
-   * false `stale`. A bounded scan that silently drops coverage reads as "all
-   * clear" — the exact failure mode this endpoint exists to prevent.
+   * True when the listing could not be completed, from either cause:
+   *   - MAX_LIST_PAGES was exhausted while S3 still reported more keys, or
+   *   - S3 reported `IsTruncated` but returned no `NextContinuationToken`, so
+   *     there is no cursor to continue with.
+   *
+   * Must never be swallowed. Keys come back in lexicographic order and the
+   * date-stamped naming means the NEWEST object sorts LAST, so an incomplete
+   * listing systematically hides the newest backup and would report a false
+   * `stale` — or, if it stopped without being flagged, a false pass. A bounded
+   * scan that silently drops coverage reads as "all clear", which is the exact
+   * failure mode this endpoint exists to prevent.
    */
   truncated: boolean;
 }
@@ -77,6 +82,18 @@ async function listBackupObjects(): Promise<BackupListing> {
       // A key with no LastModified cannot be aged, so it cannot satisfy a
       // freshness assertion — skip it rather than treat undefined as "now".
       if (!item.Key || !item.LastModified) continue;
+
+      // Only the DAILY ROTATION counts. The job writes direct children
+      // (db-backups/pagespace-<date>.dump.enc); anything nested under a
+      // sub-prefix was put there by a human, and counting those lets a manual
+      // copy suppress a real outage. Concretely: db-backups/preserved/ holds the
+      // pre-0253 dump, and re-preserving anything would give that object a fresh
+      // lastModified and a `.enc` suffix — satisfying this check for 36h while
+      // the daily job was dead. Also drops the `db-backups/` directory marker
+      // some clients create, which has no date and no body.
+      const relativeKey = item.Key.slice(BACKUP_PREFIX.length);
+      if (!relativeKey || relativeKey.includes('/')) continue;
+
       objects.push({
         key: item.Key,
         lastModified: item.LastModified,
@@ -85,8 +102,16 @@ async function listBackupObjects(): Promise<BackupListing> {
     }
 
     if (!response.IsTruncated) break;
+
     continuationToken = response.NextContinuationToken;
-    if (!continuationToken) break;
+    if (!continuationToken) {
+      // S3 said there is more but gave us no cursor to fetch it. We cannot
+      // complete the listing, so this is truncated coverage — not a clean end.
+      // Breaking without flagging it here would let the route answer 200 from an
+      // incomplete listing, which is the whole failure mode being guarded.
+      truncated = true;
+      break;
+    }
 
     // Ran out of page budget with more keys still outstanding.
     if (page === MAX_LIST_PAGES - 1) truncated = true;

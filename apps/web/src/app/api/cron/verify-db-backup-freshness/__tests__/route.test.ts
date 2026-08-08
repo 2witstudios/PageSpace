@@ -377,6 +377,72 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     );
   });
 
+  it('flags truncation when S3 reports more keys but returns no continuation token', async () => {
+    // Without this the loop breaks with truncated=false and the route can answer
+    // 200 from a listing it knows is incomplete.
+    mockSend.mockResolvedValue({
+      Contents: [FRESH_ENC],
+      IsTruncated: true,
+      NextContinuationToken: undefined,
+    });
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(body.listingTruncated).toBe(true);
+    expect(response.status).toBe(503);
+    expect(body.failureReason).toBe('listing_truncated');
+    expect(
+      mockCaptureException.mock.calls.some(([, c]) => c?.tags?.reason === 'listing_truncated')
+    ).toBe(true);
+  });
+
+  it('ignores objects nested under a sub-prefix so a preserved copy cannot mask a dead job', async () => {
+    // db-backups/preserved/ holds the pre-0253 dump. Re-preserving anything would
+    // give it a fresh lastModified and a .enc suffix; counting it would satisfy
+    // this check for 36h while the daily rotation was dead.
+    mockSend.mockResolvedValue(
+      page([
+        {
+          key: 'db-backups/preserved/pagespace-2026-08-08-pre-0253.dump.enc',
+          Key: 'db-backups/preserved/pagespace-2026-08-08-pre-0253.dump.enc',
+          LastModified: hoursAgo(1),
+          Size: 458_494_064,
+        },
+        {
+          Key: 'db-backups/pagespace-2026-06-25.dump.enc',
+          LastModified: hoursAgo(1067),
+          Size: 226_050_458,
+        },
+      ])
+    );
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    // Only the daily object counted, so the dead rotation is still reported.
+    expect(body.objectsSeen).toBe(1);
+    expect(response.status).toBe(503);
+    expect(body.reason).toBe('stale');
+    expect(body.newestKey).toBe('db-backups/pagespace-2026-06-25.dump.enc');
+  });
+
+  it('ignores a bare directory-marker key for the prefix itself', async () => {
+    mockSend.mockResolvedValue(
+      page([
+        { Key: 'db-backups/', LastModified: hoursAgo(0.1), Size: 0 },
+        FRESH_ENC,
+      ])
+    );
+
+    const body = await (await GET(request)).json();
+
+    expect(body.objectsSeen).toBe(1);
+    expect(body.newestKey).toBe(FRESH_ENC.Key);
+    expect(body.ok).toBe(true);
+  });
+
   it('skips keys with no LastModified rather than aging them as "now"', async () => {
     mockSend.mockResolvedValue(
       page([
