@@ -745,14 +745,21 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
-      fireEvent.contextMenu(pane1Row);
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
-      // The listing survives: the conversation is still shown in pane-2.
+      // Assert the RESET, not merely the absence of a DELETE (review finding —
+      // CodeRabbit): a bare early return on `shownElsewhere` would leave the
+      // clicked pane still bound and pass a no-DELETE-only assertion. The
+      // clicked pane must be emptied and its sibling left alone, which is also
+      // what proves the fix seated the grid — an unseated one cannot see
+      // pane-2, so it would have taken the DELETE branch instead.
       await waitFor(() => {
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0].panes;
+        expect(panes?.find((p) => p.id === 'pane-1')?.scope).toBeNull();
       });
+      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
+      expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
       expect(mockDel).not.toHaveBeenCalled();
     });
 
@@ -779,10 +786,11 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      // Both panes show the identical label (same shared conversation) —
-      // pane-1 renders first, matching `columns[0].panes` order.
-      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
-      fireEvent.contextMenu(pane1Row);
+      // ONE row, though the thread occupies two panes — `findByText` throws on
+      // a second match, so this also pins the property the pane-keyed rows
+      // could not give: the sidebar lists THREADS. The row acts on the thread's
+      // first placement (pane-1), which is what the annotator records.
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() => {
@@ -1699,7 +1707,15 @@ describe('AgentsSidebar', () => {
     });
 
     test('typing filters the drive\'s sessions by name, and clearing the query restores the rest', async () => {
-      respondWithSessions([SESSION, { ...SESSION, sessionId: 'ses-2', name: 'design review' }]);
+      // Override BOTH ids. `sessionId` is only the rolling-deploy compat twin;
+      // the sidebar keys rows on the canonical `workspaceId`, so overriding
+      // the twin alone gave two rows keyed `ses-1` — React warned about the
+      // duplicate key and this "two sessions" test was really rendering one
+      // session twice.
+      respondWithSessions([
+        SESSION,
+        { ...SESSION, workspaceId: 'ses-2', sessionId: 'ses-2', name: 'design review' },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
