@@ -283,9 +283,10 @@ async function openConsole(
 }> {
   const user = await seedUser();
   // Session A is opened in the grid; session B is the one under test and is
-  // never opened, so it keeps `workspace: null` in the listing and the sidebar
-  // renders its expansion from the flat conversation list — the branch the
-  // directory events feed.
+  // never opened, so it keeps `workspace: null` in the listing. That used to
+  // decide WHICH row shape the sidebar rendered; since issue #2373 there is
+  // only one, and B stays unopened because an unopened session is the honest
+  // test of a DIRECTORY event — no pane surface of its own to refetch.
   const displayed = await createSession(request, user, 'displayed session');
   const target = await createSession(request, user, 'target session');
 
@@ -460,6 +461,13 @@ test.describe('session directory — a server-created conversation reaches the s
     // selector. Both facts are now gone: there is one row shape, every row
     // carries the testId, and a session's own threads legitimately count. Zero
     // would now fail for a reason that has nothing to do with leakage.
+    //
+    // Settle it FIRST. `count()` takes a snapshot and does not auto-retry, so
+    // reading it mid-render would capture 0, and the auto-retrying assertion
+    // below would then fail the moment the bystander's own row arrived —
+    // flaky, and for the opposite reason to the one under test. One row,
+    // because `createSession` gives each session exactly one conversation.
+    await expect(bystanderRows).toHaveCount(1, { timeout: 30_000 });
     const bystanderBefore = await bystanderRows.count();
 
     await spawnConversationServerSide(request, user, target.sessionId);
