@@ -61,13 +61,6 @@
   ],
   "globalEnv": [
     "DATABASE_URL",
-    // The scratch Admin PG. Turbo STRIPS anything not listed here, so setting
-    // it on the workflow step is not enough — every `turbo run test:coverage`
-    // task saw it as unset, and the suites gating on it (the GDPR eraser's
-    // pseudonymization path, the audit hash-chainer, SIEM delivery) reported
-    // SKIPPED while the job went green. `require-db.ts` turning that skip into
-    // a loud failure is what finally surfaced it. It belongs in the cache key
-    // too: a test task's result genuinely depends on whether it is set.
     "ADMIN_DATABASE_URL",
     "CSRF_SECRET",
     "ENCRYPTION_KEY",

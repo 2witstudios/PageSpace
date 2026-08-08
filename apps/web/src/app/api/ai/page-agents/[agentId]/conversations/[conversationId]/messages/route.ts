@@ -98,7 +98,23 @@ export async function GET(
       );
     }
 
-    // Conversation access gate: private conversations are only visible to their owner
+    // Conversation access gate: private conversations are only visible to their owner.
+    //
+    // NOT `canAccessConversation`, and deliberately not — but only because the
+    // composition here already lands inside it. That predicate is
+    // `owner OR (isShared AND page access)`; this route runs page access as a
+    // hard 403 ABOVE (`canPrincipalViewPage`) and then `owner OR isShared`
+    // here, which is `page access AND (owner OR isShared)`. Strictly a subset:
+    // identical for every non-owner, and stricter for an OWNER who has lost
+    // access to the agent page — who is refused here and would be admitted by
+    // the shared predicate.
+    //
+    // So this is safe, and it is also the second spelling of a rule
+    // `conversation-access.ts` exists to keep in one place. Left as-is rather
+    // than consolidated because collapsing it would WIDEN owner access on a
+    // page-scoped route, which is a product decision and not a refactor. Said
+    // here so the next person to notice the asymmetry does not make that
+    // change believing it to be a no-op.
     const conversationRow = await conversationRepository.getConversation(conversationId);
     if (conversationRow && conversationRow.userId !== auth.userId && !conversationRow.isShared) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'private_conversation', agentId, method: 'GET' }, riskScore: 0.5 });

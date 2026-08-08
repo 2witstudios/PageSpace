@@ -29,14 +29,33 @@
  * edited copies do not register — which is the right direction for a ratchet.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 
 const DIR = path.resolve(__dirname, '..');
 const PAGE = path.join(DIR, 'page-chat-turn.ts');
 const GLOBAL = path.join(DIR, 'global-chat-turn.ts');
 const ENTRY = path.join(DIR, 'handle-chat-turn.ts');
-const SPEC = path.resolve(__dirname, '../../../../../../../docs/2.0-architecture/agent-sessions.md');
+/**
+ * The repo root, found by walking up to the directory that holds `docs/`,
+ * rather than counting seven `..` segments — that count is invisible to a
+ * reader and silently wrong the moment this file moves. Throws with a usable
+ * message if the walk fails, instead of an ENOENT from inside an assertion.
+ */
+const repoRoot = (): string => {
+  let dir = __dirname;
+  for (let i = 0; i < 12; i += 1) {
+    if (existsSync(path.join(dir, 'docs', '2.0-architecture'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(
+    'turn-duplication-ratchet: could not locate the repo root from ' +
+      `${__dirname}. If the docs moved, update this test's SPEC path.`,
+  );
+};
+const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
 
 /**
  * The recorded ceiling. LOWER THIS when you remove duplication — the drift
@@ -82,10 +101,19 @@ describe('page/global turn duplication', () => {
 
   it('is described accurately by the entry docblock and the epic spec', () => {
     const identical = identicalSubstantiveLines();
-    // Only meaningful while the ratchet is at its ceiling; once someone lowers
-    // the duplication the prose is what must follow, and that is the next
-    // assertion's job, not this one's.
-    expect(identical.length).toBe(RECORDED_IDENTICAL_LINES);
+    // Exact, not `<=`, and the direction that surprises people is DOWN: if you
+    // just removed duplication, this fails on purpose. Lower
+    // RECORDED_IDENTICAL_LINES and the two prose figures together — that is
+    // the whole mechanism keeping the docs from overstating a gap someone
+    // already closed.
+    expect(
+      identical.length,
+      `The measurement is ${identical.length} but this file records ` +
+        `${RECORDED_IDENTICAL_LINES}. If you REDUCED the duplication: lower ` +
+        `RECORDED_IDENTICAL_LINES here, and update the figure in ` +
+        `handle-chat-turn.ts and docs/2.0-architecture/agent-sessions.md to ` +
+        `match. If you added some, the ratchet above already told you.`,
+    ).toBe(RECORDED_IDENTICAL_LINES);
 
     for (const [label, file] of [
       ['handle-chat-turn.ts', ENTRY],

@@ -78,6 +78,16 @@ jobs:
       # on this variable, so without it the pseudonymization path that GDPR
       # erasure depends on reported SKIPPED on every single CI run while the job
       # went green.
+      #
+      # SETTING IT HERE IS NOT SUFFICIENT ON ITS OWN — it must ALSO be listed in
+      # turbo.json's `globalEnv`, because turbo STRIPS any variable not declared
+      # there before running a task. It was set here and not declared there, so
+      # every `turbo run` task below still saw it unset and the suites gating on
+      # it (this one, the audit hash-chainer, SIEM delivery) went on reporting
+      # SKIPPED. What finally surfaced it was `packages/db/src/test/require-db.ts`
+      # turning that silent skip into a hard failure — which is exactly what it
+      # was added to do. If you add another variable to a step below and the
+      # tests still cannot see it, this is why.
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test

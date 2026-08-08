@@ -10,6 +10,18 @@
  * provider. Nothing errored: the rev-gated protocol just stopped advancing the
  * survivor's watermark, which is the epic's own canonical bug arriving through
  * its own subscription primitive.
+ *
+ * WHERE THE COVERAGE ACTUALLY LIVES, because it is not where a reader would
+ * assume. The closest E2E user story — "two windows on one conversation both
+ * see both sides of a dispatched turn live"
+ * (`apps/e2e/tests/16-dispatch-multiplayer.spec.ts`) — opens two browser
+ * CONTEXTS, so it is two sockets and two module scopes with independent
+ * counts. It cannot see this bug and could never have caught it: the failure
+ * needs two subscribers sharing ONE socket, which is the single-tab case.
+ *
+ * So this suite plus the two tests in `useConversationSubscription`'s own
+ * suite are the whole of it — this one for the refcount, those for the hook
+ * driving it, since either can regress without the other.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
