@@ -405,7 +405,6 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     mockSend.mockResolvedValue(
       page([
         {
-          key: 'db-backups/preserved/pagespace-2026-08-08-pre-0253.dump.enc',
           Key: 'db-backups/preserved/pagespace-2026-08-08-pre-0253.dump.enc',
           LastModified: hoursAgo(1),
           Size: 458_494_064,
