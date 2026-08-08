@@ -23,6 +23,7 @@ import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode'
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
 import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
+import { useVirtualizationMode } from './useVirtualizationMode';
 import {
   Conversation,
   ConversationContent,
@@ -123,8 +124,16 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     const spinnerRotation = isPullUpRefreshing ? 0 : (pullDistance / 60) * 360;
     const spinnerScale = Math.min(0.5 + (pullDistance / 60) * 0.5, 1);
 
-    // Whether to use virtualization based on message count
-    const shouldVirtualize = messages.length >= VIRTUALIZATION_THRESHOLD;
+    // Whether to use virtualization based on message count. Held across renders so
+    // the crossing never lands mid-stream: the swap discards every height measured
+    // against the plain rows and restarts the virtualizer from `estimateSize`, which
+    // collapses the container and clamps scrollTop. It is the streaming message that
+    // pushes the count over, so without this the one unavoidable re-measure always
+    // happens while the user is watching content arrive.
+    const shouldVirtualize = useVirtualizationMode(
+      messages.length >= VIRTUALIZATION_THRESHOLD,
+      isStreaming || (remoteStreams?.length ?? 0) > 0
+    );
 
     // Handler for undo from here button
     const handleUndoFromHere = useCallback((messageId: string) => {
