@@ -142,31 +142,20 @@ describe('VirtualizedMessageList measurement stability', () => {
       expect(measure).not.toHaveBeenCalled();
     });
 
-    it('given a pane resized to a new width, should not reset it', () => {
-      // Mounted rows re-measure through virtual-core's own observer, and stale
-      // heights beat the flat estimate a wipe would install for unmounted rows.
+    it('given a pane resized, dragged and collapsed, should not reset it at any point', () => {
+      // Mounted rows re-measure through virtual-core's own observer, and for
+      // unmounted rows a stale real height beats the flat estimate a wipe installs.
+      // One sequence rather than three cases, because each width shape only
+      // distinguishes between reintroductions that do not exist yet: a settled
+      // resize catches an immediate wipe, the drag catches a debounced one, and the
+      // zero width catches a wipe that measures against a collapsed pane.
       const element = makeScrollElement(800);
       renderList(makeMessages(['m1', 'm2', 'm3']), element);
 
       resizeTo(element, 500);
-
-      expect(measure).not.toHaveBeenCalled();
-    });
-
-    it('given a pane dragged across many widths, should not reset it', () => {
-      const element = makeScrollElement(800);
-      renderList(makeMessages(['m1', 'm2', 'm3']), element);
-
-      [780, 740, 700, 660, 620].forEach((width) => resizeTo(element, width));
-
-      expect(measure).not.toHaveBeenCalled();
-    });
-
-    it('given a pane collapsed to zero width, should not reset it', () => {
-      const element = makeScrollElement(800);
-      renderList(makeMessages(['m1', 'm2', 'm3']), element);
-
+      [480, 440, 400, 360].forEach((width) => resizeTo(element, width));
       resizeTo(element, 0);
+      resizeTo(element, 640);
 
       expect(measure).not.toHaveBeenCalled();
     });
