@@ -44,8 +44,10 @@ export async function register() {
     // processor registers the same handler in its own composition root
     // (apps/processor/src/server.ts) for the worker-side alerts it raises.
     const { setChainAlertHandler } = await import('@pagespace/lib/audit/security-audit-alerting');
-    const { buildSentryChainAlertHandler } = await import('@/lib/observability/chain-alert-sentry');
-    setChainAlertHandler(buildSentryChainAlertHandler());
+    const { buildChainAlertHandler } = await import('@pagespace/lib/audit/chain-alert-payload');
+    setChainAlertHandler(
+      buildChainAlertHandler((error, context) => Sentry.captureException(error, context), 'web')
+    );
     console.log('[Instrumentation] Security-audit chain alert handler initialized (Sentry)');
 
     if (

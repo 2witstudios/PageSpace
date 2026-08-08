@@ -17,10 +17,17 @@
  * no-op, which is the exact class of gap that let the daily database backup
  * fail unnoticed for 44 days.
  *
- * The two processes use different Sentry SDKs (@sentry/nextjs vs @sentry/node),
- * so the payload is built here, once, and each app's thin adapter hands it to
- * its own `captureException`. Keeping this pure means the alert shape cannot
- * drift between the two runtimes.
+ * THREE processes write audit events and can therefore raise these alerts:
+ * apps/web, apps/processor, and apps/admin (which calls `audit()` from 19 call
+ * sites; `audit()` → `securityAudit.logEvent()` → the break-glass bind point →
+ * notifyAdminDbBreakGlass). Each must register its own handler.
+ *
+ * They do not share a Sentry SDK (@sentry/nextjs in the two Next apps,
+ * @sentry/node in the processor), so this module owns the payload AND the
+ * handler, taking `captureException` as a parameter. That keeps one tested
+ * implementation instead of a near-identical adapter per app, and means the
+ * alert shape cannot drift between runtimes. Deliberately no Sentry import
+ * here — lib stays SDK-agnostic.
  */
 
 import type { ChainVerificationAlert } from './security-audit-alerting';
@@ -40,10 +47,12 @@ export interface ChainAlertSentryPayload {
   extra: Record<string, unknown>;
 }
 
+/** Which process is reporting — tagged so Sentry shows the origin. */
+export type ChainAlertProcess = 'web' | 'processor' | 'admin';
+
 export function buildChainAlertPayload(
   alert: ChainVerificationAlert,
-  /** Which process is reporting — distinguishes web from processor in Sentry. */
-  process: 'web' | 'processor'
+  process: ChainAlertProcess
 ): ChainAlertSentryPayload {
   const { result, source, triggeredAt } = alert;
   const description = result.breakPoint?.description ?? 'Chain verification reported invalid.';
@@ -68,5 +77,38 @@ export function buildChainAlertPayload(
       lastEntryId: result.lastEntryId,
       durationMs: result.durationMs,
     },
+  };
+}
+
+/**
+ * A Sentry `captureException`, narrowed to what this bridge passes it. Typed
+ * structurally rather than against a Sentry SDK so lib takes no SDK dependency
+ * and both @sentry/nextjs and @sentry/node satisfy it.
+ */
+export type ChainAlertCapture = (
+  error: Error,
+  context: Omit<ChainAlertSentryPayload, 'message'>
+) => unknown;
+
+/**
+ * Build the handler to hand to `setChainAlertHandler` in a process's
+ * composition root:
+ *
+ *   setChainAlertHandler(
+ *     buildChainAlertHandler((e, c) => Sentry.captureException(e, c), 'web')
+ *   );
+ *
+ * Register this in EVERY process that raises trust-plane alerts. `alertHandler`
+ * in security-audit-alerting.ts is a module-local variable, so one process's
+ * registration does nothing for another — the original fix wired only the web
+ * app and left every processor-side worker alert a silent no-op.
+ */
+export function buildChainAlertHandler(
+  capture: ChainAlertCapture,
+  process: ChainAlertProcess
+): (alert: ChainVerificationAlert) => void {
+  return (alert: ChainVerificationAlert) => {
+    const { message, ...context } = buildChainAlertPayload(alert, process);
+    capture(new Error(message), context);
   };
 }

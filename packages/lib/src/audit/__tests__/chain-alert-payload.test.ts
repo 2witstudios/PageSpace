@@ -7,8 +7,8 @@
  * which process reported a trust-plane failure.
  */
 
-import { describe, it, expect } from 'vitest';
-import { buildChainAlertPayload } from '../chain-alert-payload';
+import { describe, it, expect, vi } from 'vitest';
+import { buildChainAlertPayload, buildChainAlertHandler } from '../chain-alert-payload';
 import type { ChainVerificationAlert } from '../security-audit-alerting';
 
 const TRIGGERED_AT = new Date('2026-08-08T02:00:00.000Z');
@@ -103,5 +103,64 @@ describe('buildChainAlertPayload', () => {
     expect(payload.message).toContain('Chain verification reported invalid.');
     expect(payload.extra.breakPointEntryId).toBeNull();
     expect(payload.extra.breakPointPosition).toBeNull();
+  });
+});
+
+describe('buildChainAlertHandler', () => {
+  it('captures the alert as an Error through the injected capture function', () => {
+    const capture = vi.fn();
+
+    buildChainAlertHandler(capture, 'web')(alert());
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    const [error, context] = capture.mock.calls[0];
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      '[SECURITY ALERT] periodic: Hash mismatch at entry-42'
+    );
+    expect(context.level).toBe('fatal');
+    expect(context.fingerprint).toEqual(['security-audit-chain', 'periodic']);
+  });
+
+  it('does not pass `message` through as a context key', () => {
+    const capture = vi.fn();
+
+    buildChainAlertHandler(capture, 'web')(alert());
+
+    // The message becomes the Error; leaving it in the capture context too
+    // would be dead weight Sentry ignores.
+    expect(capture.mock.calls[0][1]).not.toHaveProperty('message');
+  });
+
+  it('works for all three registering processes and tags each one', () => {
+    for (const proc of ['web', 'processor', 'admin'] as const) {
+      const capture = vi.fn();
+      buildChainAlertHandler(capture, proc)(alert());
+      expect(capture.mock.calls[0][1].tags.process).toBe(proc);
+    }
+  });
+
+  it('groups the same fault identically whichever process reports it', () => {
+    const fingerprints = (['web', 'processor', 'admin'] as const).map((proc) => {
+      const capture = vi.fn();
+      buildChainAlertHandler(capture, proc)(alert({ source: 'anchor_verify' }));
+      return capture.mock.calls[0][1].fingerprint;
+    });
+
+    expect(fingerprints[0]).toEqual(['security-audit-chain', 'anchor_verify']);
+    expect(new Set(fingerprints.map((f) => f.join('|'))).size).toBe(1);
+  });
+
+  it('propagates a throwing capture to the caller rather than swallowing it', () => {
+    // security-audit-alerting.ts already wraps every handler call in try/catch
+    // and logs, so swallowing here too would hide a broken alert transport
+    // twice over.
+    const capture = vi.fn(() => {
+      throw new Error('sentry transport down');
+    });
+
+    expect(() => buildChainAlertHandler(capture, 'web')(alert())).toThrow(
+      'sentry transport down'
+    );
   });
 });

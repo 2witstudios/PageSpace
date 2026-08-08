@@ -23,7 +23,7 @@ import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
 import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
 import { setupErrorHandlers } from '@pagespace/lib/logging/logger-config';
 import { setChainAlertHandler } from '@pagespace/lib/audit/security-audit-alerting';
-import { buildSentryChainAlertHandler } from './observability/chain-alert-sentry';
+import { buildChainAlertHandler } from '@pagespace/lib/audit/chain-alert-payload';
 import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
@@ -402,7 +402,9 @@ async function start() {
     // notifyChainAppendVerificationFailure and notifyAnchorPublishFailure.
     // Without this they all hit `if (!alertHandler) return` and a detected
     // chain tamper reaches nobody.
-    setChainAlertHandler(buildSentryChainAlertHandler());
+    setChainAlertHandler(
+      buildChainAlertHandler((error, context) => Sentry.captureException(error, context), 'processor')
+    );
     console.log('✓ Security-audit chain alert handler initialized (Sentry)');
 
     // Initialize content store
