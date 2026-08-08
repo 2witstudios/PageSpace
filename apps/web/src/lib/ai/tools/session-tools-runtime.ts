@@ -1023,7 +1023,6 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true, workspaceId };
     },
 
-
     // The layout family's two seams (issue #2208). The read is the SAME
     // label-joining snapshot the layout GET serves, so a model and a browser
     // never see different names for the same pane; the write is the same

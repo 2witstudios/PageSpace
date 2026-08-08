@@ -1019,15 +1019,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
           };
         }
 
-        // Placement happens inside `createWorkerSession` now, for every caller
-        // rather than for this tool alone (issue #2373). It used to sit here,
-        // gated on `deps.placeWorkerPane && toolCallId` — so the three route
-        // callers never placed at all, and even this path silently skipped it
-        // whenever the SDK gave no `toolCallId`. The op key derives from the
-        // conversation id, which is both always available and idempotent on
-        // the fact that matters: one pane per thread.
+        // Placement moved inside `createWorkerSession`, which this tool asks
+        // for with `placeInGrid` (issue #2373). It used to sit here, gated on
+        // `deps.placeWorkerPane && toolCallId`, and silently skipped placement
+        // whenever the SDK gave no call id. The op key now derives from the
+        // conversation id, which is always available and idempotent on the
+        // fact that matters: one pane per thread.
         //
-        // It still lands BEFORE the dispatch below, so the worker's first token
+        // Still opt-in per caller, not universal — the pane-picker routes
+        // deliberately don't ask, because a browser pane is already waiting to
+        // be bound and a second server placement would race it (codex P1).
+        // Their threads are findable regardless: visibility stopped depending
+        // on placement the moment the read model became one list.
+        //
+        // It lands BEFORE the dispatch below, so the worker's first token
         // streams into a pane the user is already watching.
 
         const dispatched = await deps.dispatch({
