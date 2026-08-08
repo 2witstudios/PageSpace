@@ -106,9 +106,16 @@ export async function GET(request: Request) {
     const { objects, truncated } = await listBackupObjects();
     const result = assessBackupFreshness({ objects, now: new Date(), maxAgeHours });
 
-    // A truncated listing cannot support a "fresh" verdict: the newest object
-    // sorts last, so what got dropped is exactly what the check needs. Report it
-    // loudly rather than letting a bounded scan masquerade as full coverage.
+    // A truncated listing cannot support a pass, so it fails the endpoint
+    // outright rather than only logging beside a 200: the newest object sorts
+    // last, so what got dropped is exactly what the check depends on, and a
+    // check that cannot see its own subject must not report success. Kept out of
+    // assessBackupFreshness deliberately — truncation is a property of the
+    // listing I/O, not of the backups, so the pure verdict stays about the data
+    // and the route owns the HTTP contract ("200 only if we can affirm a good
+    // backup").
+    const ok = result.ok && !truncated;
+
     if (truncated) {
       loggers.security.error(
         `[BACKUP ALERT] Backup listing hit the ${MAX_LIST_PAGES}-page cap with more keys outstanding — ` +
@@ -135,7 +142,7 @@ export async function GET(request: Request) {
       resourceType: 'cron_job',
       resourceId: 'verify_db_backup_freshness',
       details: {
-        ok: result.ok,
+        ok,
         reason: result.reason,
         ageHours: result.ageHours,
         maxAgeHours: result.maxAgeHours,
@@ -145,47 +152,59 @@ export async function GET(request: Request) {
       },
     });
 
-    if (!result.ok) {
-      loggers.security.error(`[BACKUP ALERT] ${result.message}`, {
-        reason: result.reason,
-        ageHours: result.ageHours,
-        maxAgeHours: result.maxAgeHours,
-        encrypted: result.encrypted,
-        newestKey: result.newest?.key ?? null,
-        objectsSeen: objects.length,
-      });
-
-      // Fingerprint by reason, not by message: the message embeds a changing
-      // age, which would otherwise open a brand-new Sentry issue every single
-      // day and bury the alert in noise instead of escalating one issue.
-      Sentry.captureException(new Error(`[BACKUP ALERT] ${result.message}`), {
-        level: 'fatal',
-        fingerprint: ['db-backup-freshness', result.reason],
-        tags: {
-          check: 'db_backup_freshness',
+    if (!ok) {
+      // Gated on the FRESHNESS verdict, not on `ok`. A truncated listing alone
+      // must not fire this: `result.message` would read "Newest database backup
+      // is 0.12h old" and it would be captured at `fatal` under a `fresh`
+      // fingerprint — alerting that the backup is fine, as an emergency. The
+      // truncation alert above is the correct signal for that case.
+      if (!result.ok) {
+        loggers.security.error(`[BACKUP ALERT] ${result.message}`, {
           reason: result.reason,
-          encrypted: String(result.encrypted),
-        },
-        extra: {
           ageHours: result.ageHours,
           maxAgeHours: result.maxAgeHours,
+          encrypted: result.encrypted,
           newestKey: result.newest?.key ?? null,
-          newestSize: result.newest?.size ?? null,
           objectsSeen: objects.length,
-        },
-      });
+        });
+
+        // Fingerprint by reason, not by message: the message embeds a changing
+        // age, which would otherwise open a brand-new Sentry issue every single
+        // day and bury the alert in noise instead of escalating one issue.
+        Sentry.captureException(new Error(`[BACKUP ALERT] ${result.message}`), {
+          level: 'fatal',
+          fingerprint: ['db-backup-freshness', result.reason],
+          tags: {
+            check: 'db_backup_freshness',
+            reason: result.reason,
+            encrypted: String(result.encrypted),
+          },
+          extra: {
+            ageHours: result.ageHours,
+            maxAgeHours: result.maxAgeHours,
+            newestKey: result.newest?.key ?? null,
+            newestSize: result.newest?.size ?? null,
+            objectsSeen: objects.length,
+          },
+        });
+      }
 
       // This alert is the entire point of the endpoint, and the fault it
       // reports has already gone unnoticed for 44 days once. Flush before
       // responding so a container recycled right after the cron call cannot
-      // drop the event in its transport buffer.
+      // drop the event in its transport buffer. Truncation now lands on this
+      // path too, so its capture is covered by the same flush.
       await Sentry.flush(2000);
 
       return NextResponse.json(
         {
           success: false,
           ok: false,
+          // The freshness verdict, and separately why the endpoint failed. When
+          // a truncated listing is the only fault these differ — reason stays
+          // 'fresh' while failureReason explains the 503.
           reason: result.reason,
+          failureReason: truncated ? 'listing_truncated' : result.reason,
           ageHours: result.ageHours,
           maxAgeHours: result.maxAgeHours,
           encrypted: result.encrypted,

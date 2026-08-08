@@ -290,6 +290,66 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     expect(mockLoggers.security.error).toHaveBeenCalled();
   });
 
+  it('fails the endpoint on truncation even when the objects it did see look fresh', async () => {
+    // A check that cannot see its own subject must not report success.
+    mockSend.mockResolvedValue({
+      Contents: [FRESH_ENC],
+      IsTruncated: true,
+      NextContinuationToken: 'more',
+    });
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.ok).toBe(false);
+    // The freshness verdict itself is still reported honestly...
+    expect(body.reason).toBe('fresh');
+    // ...while failureReason explains why the endpoint failed anyway.
+    expect(body.failureReason).toBe('listing_truncated');
+    expect(mockFlush).toHaveBeenCalled();
+  });
+
+  it('does NOT fire the freshness alert when truncation is the only fault', async () => {
+    // Regression guard: gating the freshness alert on the combined decision
+    // instead of the verdict would capture "Newest database backup is 2h old" at
+    // `fatal` under a `fresh` fingerprint — paging someone to say it is fine.
+    mockSend.mockResolvedValue({
+      Contents: [FRESH_ENC],
+      IsTruncated: true,
+      NextContinuationToken: 'more',
+    });
+
+    await GET(request);
+
+    const reasons = mockCaptureException.mock.calls.map(([, c]) => c?.tags?.reason);
+    expect(reasons).toContain('listing_truncated');
+    expect(reasons).not.toContain('fresh');
+    expect(
+      mockCaptureException.mock.calls.some(([, c]) => c?.level === 'fatal')
+    ).toBe(false);
+  });
+
+  it('reports both faults when the listing is truncated AND the verdict is stale', async () => {
+    mockSend.mockResolvedValue({
+      Contents: [{ ...FRESH_ENC, LastModified: hoursAgo(1067) }],
+      IsTruncated: true,
+      NextContinuationToken: 'more',
+    });
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.reason).toBe('stale');
+    // Truncation takes precedence in failureReason: the verdict is unreliable,
+    // so "fix the listing first" is the actionable instruction.
+    expect(body.failureReason).toBe('listing_truncated');
+    const reasons = mockCaptureException.mock.calls.map(([, c]) => c?.tags?.reason);
+    expect(reasons).toContain('listing_truncated');
+    expect(reasons).toContain('stale');
+  });
+
   it('reports listingTruncated=false on a complete listing', async () => {
     mockSend.mockResolvedValue(page([FRESH_ENC]));
 
