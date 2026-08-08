@@ -9,7 +9,6 @@ import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown, PlanChip } from '@/components/ai/shared';
 import { UndoAiChangesDialog, VirtualizedMessageList } from '@/components/ai/shared/chat';
-import { useVirtualizationMode } from '@/components/ai/shared/chat/useVirtualizationMode';
 import {
   Conversation,
   ConversationContent,
@@ -115,13 +114,7 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   // the regular branch below has no scroll listener of its own, so "load older" would
   // otherwise be unreachable for a conversation with more history than the cache
   // currently holds but fewer than SIDEBAR_VIRTUALIZATION_THRESHOLD rendered messages.
-  // Held across renders so the crossing never lands mid-stream — see
-  // selectVirtualizationMode. Both inputs can flip during a stream: the count grows
-  // as the response lands, and hasMoreOlder is store-driven.
-  const shouldVirtualize = useVirtualizationMode(
-    messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD || hasMoreOlder === true,
-    displayIsStreaming || remoteStreams.length > 0
-  );
+  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD || hasMoreOlder === true;
   // Streams whose messageId already landed in `messages` are filtered out so
   // we don't render the same message twice during the brief window between
   // server-confirm and store-removal.

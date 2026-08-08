@@ -47,13 +47,22 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
     // over (the virtualizer instance is never remounted). Keying by message id makes
     // the cache content-addressed, which is what makes measuring incrementally —
     // rather than wiping the cache wholesale — correct.
+    //
+    // Read through a ref so the callback identity is STABLE. `messages` gets a new
+    // array identity on every streamed part; if that reached virtual-core as a new
+    // `getItemKey`, it would invalidate getMeasurementOptions and null `pendingMin`
+    // on every part, forcing a full O(count) measurements rebuild instead of the
+    // incremental tail update the virtualizer is built around. (It would not clear
+    // itemSizeCache, so no collapse — purely wasted work.) Mirroring a prop into a
+    // ref during render is safe here because the ref is only ever read as a lookup
+    // table: it accumulates no state, so a render React discards cannot leave it in
+    // a position a committed render would not also reach.
+    const messagesRef = useRef(messages);
+    messagesRef.current = messages;
     // `||` rather than `??` so a blank id degrades to the index instead of
     // collapsing every such row onto one cache entry — matching what the row's
     // React key did before.
-    const getItemKey = useCallback(
-      (index: number) => messages[index]?.id || index,
-      [messages]
-    );
+    const getItemKey = useCallback((index: number) => messagesRef.current[index]?.id || index, []);
 
     const virtualizer = useVirtualizer({
       count: messages.length,

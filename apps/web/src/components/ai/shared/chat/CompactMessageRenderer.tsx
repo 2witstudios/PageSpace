@@ -248,7 +248,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
             return (
               <CompactTextBlock
-                key={`${message.id}-${group.groupId}`}
+                key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 senderName={message.userName ?? user?.name ?? 'Unknown'}
@@ -267,7 +267,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
           } else if (isFileGroupPart(group)) {
             return (
               <ImageMessageContent
-                key={`${message.id}-${group.groupId}`}
+                key={`${message.id}-file-${index}`}
                 parts={group.parts}
                 compact
               />
@@ -285,9 +285,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              // The index fallback is namespaced so a (degenerate) empty toolCallId
-              // can never collide with a real one that happens to look like a number.
-              <div key={`${message.id}-tool-${group.toolCallId || `idx-${index}`}`} className="mt-1">
+              <div key={`${message.id}-tool-${index}`} className="mt-1">
                 <CompactToolCallRenderer
                   part={{
                     type: group.type,
@@ -304,7 +302,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isCommandExecutionPart(group)) {
             return (
-              <div key={`${message.id}-${group.groupId}`} className="mt-1">
+              <div key={`${message.id}-command-${index}`} className="mt-1">
                 <CommandExecutionIndicator data={group.data} />
               </div>
             );
