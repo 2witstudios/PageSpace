@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useGroupedParts } from '../useGroupedParts';
-import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart } from '../message-types';
+import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart, isCommandExecutionPart } from '../message-types';
 
 type Parts = UIMessage['parts'];
 
@@ -465,6 +465,36 @@ describe('useGroupedParts stable group ids', () => {
 
     const group = result.current[0];
     if (isTextGroupPart(group)) expect(group.groupId).toBe('text:1');
+  });
+
+  it('given two command parts with blank ids, should still give them distinct ids', () => {
+    // `id` is optional on a data part, so deriving the group id from it would
+    // collapse every blank-id command onto one React key.
+    const parts = asMessageParts([
+      { type: 'data-command-execution', id: '', data: { label: 'first', status: 'used' } },
+      { type: 'data-command-execution', id: '', data: { label: 'second', status: 'used' } },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(2);
+    const ids = result.current.map((group) =>
+      isCommandExecutionPart(group) ? group.groupId : null
+    );
+    expect(ids).toEqual(['cmd:0', 'cmd:1']);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('given command parts with no id at all, should still give them distinct ids', () => {
+    const parts = asMessageParts([
+      { type: 'data-command-execution', data: { label: 'first', status: 'used' } },
+      { type: 'data-command-execution', data: { label: 'second', status: 'used' } },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    const ids = result.current.map((group) =>
+      isCommandExecutionPart(group) ? group.groupId : null
+    );
+    expect(ids).toEqual(['cmd:0', 'cmd:1']);
   });
 
   it('given a later tool call appended mid-stream, should leave the earlier text group id untouched', () => {

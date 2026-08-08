@@ -4,22 +4,21 @@ import { render, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 
 /**
- * Two halves of one invariant about when the virtualizer's size cache may be
- * thrown away.
+ * One invariant: this component never throws away the virtualizer's size cache.
  *
- * NEVER on a `messages` change. That array gets a brand-new identity on every
- * streamed part, and `virtualizer.measure()` clears the ENTIRE itemSizeCache:
- * every row falls back to `estimateSize`, `getTotalSize()` collapses, and —
- * because the container is `contain: strict` with height = getTotalSize() — the
- * browser clamps scrollTop upward by the full delta, dumping the viewport near
- * the top of the thread. That was the "chat jumps to the top on every tool
- * call" bug.
+ * `virtualizer.measure()` clears the ENTIRE itemSizeCache, so every row falls
+ * back to `estimateSize`, `getTotalSize()` collapses, and — because the
+ * container is `contain: strict` with height = getTotalSize() — the browser
+ * clamps scrollTop upward by the full delta, dumping the viewport near the top
+ * of the thread. That was the "chat jumps to the top on every tool call" bug,
+ * fired by a `messages` array that gets a new identity on every streamed part.
  *
- * ALWAYS on a settled width change. The chat lives inside a ResizablePanelGroup,
- * so dragging a sidebar handle reflows every message. Rows that are currently
- * mounted self-correct through their own ResizeObserver, but rows outside the
- * render window have no observer and would keep their pre-resize heights
- * indefinitely.
+ * A pane resize is the case that looks like it deserves a wipe — a width change
+ * reflows rows that are unmounted and have no observer of their own. It doesn't:
+ * mounted rows re-measure themselves through virtual-core's observer, and for
+ * unmounted rows a stale real height is a better estimate than the flat fallback
+ * a wipe would install. Wiping there reproduces the same jump, so these tests
+ * pin the width path shut too.
  */
 
 const measure = vi.fn();
@@ -61,37 +60,27 @@ function makeMessages(ids: string[]): UIMessage[] {
   })) as unknown as UIMessage[];
 }
 
-/** A scroll element whose clientWidth the test controls. */
 function makeScrollElement(width: number) {
   const element = document.createElement('div');
-  setWidth(element, width);
+  Object.defineProperty(element, 'clientWidth', { value: width, configurable: true });
   return element;
 }
 
-function setWidth(element: HTMLElement, width: number) {
-  Object.defineProperty(element, 'clientWidth', { value: width, configurable: true });
-}
-
-/** Mimics a pane resize: change the width, then let the observer fire. */
+/** Mimics a pane resize: change the width, then let any observer fire. */
 function resizeTo(element: HTMLElement, width: number) {
-  setWidth(element, width);
+  Object.defineProperty(element, 'clientWidth', { value: width, configurable: true });
   act(() => {
     observerCallbacks.forEach((fire) => fire());
-  });
-}
-
-function settle() {
-  act(() => {
-    vi.advanceTimersByTime(500);
+    // Long enough to clear any settle/debounce window a future change might add.
+    vi.advanceTimersByTime(2000);
   });
 }
 
 function renderList(messages: UIMessage[], element: HTMLElement) {
-  const scrollRef = { current: element as HTMLElement | null };
   const props = {
     messages,
     renderMessage: (m: UIMessage) => <div key={m.id}>{m.id}</div>,
-    scrollRef,
+    scrollRef: { current: element as HTMLElement | null },
     estimatedRowHeight: 100,
   };
   const view = render(<VirtualizedMessageList {...props} />);
@@ -118,84 +107,57 @@ describe('VirtualizedMessageList measurement stability', () => {
     vi.unstubAllGlobals();
   });
 
-  describe('on a messages change', () => {
-    it('given a new array identity with unchanged ids, should not reset the size cache', () => {
+  describe('never resets the size cache', () => {
+    it('given a new messages array identity with unchanged ids, should not reset it', () => {
       const messages = makeMessages(['m1', 'm2', 'm3']);
       const { rerenderWith } = renderList(messages, makeScrollElement(800));
 
       // What a stream tick does: same messages, brand-new array.
       rerenderWith([...messages]);
-      settle();
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
 
       expect(measure).not.toHaveBeenCalled();
     });
 
-    it('given an appended message, should not reset the size cache', () => {
+    it('given an appended message, should not reset it', () => {
       const messages = makeMessages(['m1', 'm2', 'm3']);
       const { rerenderWith } = renderList(messages, makeScrollElement(800));
 
       rerenderWith([...messages, ...makeMessages(['m4'])]);
-      settle();
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
 
       expect(measure).not.toHaveBeenCalled();
     });
-  });
 
-  describe('on a width change', () => {
-    it('given the pane settled at a new width, should reset the size cache once', () => {
+    it('given a pane resized to a new width, should not reset it', () => {
+      // Mounted rows re-measure through virtual-core's own observer, and stale
+      // heights beat the flat estimate a wipe would install for unmounted rows.
       const element = makeScrollElement(800);
       renderList(makeMessages(['m1', 'm2', 'm3']), element);
 
       resizeTo(element, 500);
-      settle();
-
-      expect(measure).toHaveBeenCalledTimes(1);
-    });
-
-    it('given a width still being dragged, should not reset the size cache until it settles', () => {
-      const element = makeScrollElement(800);
-      renderList(makeMessages(['m1', 'm2', 'm3']), element);
-
-      resizeTo(element, 700);
-      act(() => {
-        vi.advanceTimersByTime(50);
-      });
 
       expect(measure).not.toHaveBeenCalled();
     });
 
-    it('given many widths during one drag, should reset the size cache only once', () => {
+    it('given a pane dragged across many widths, should not reset it', () => {
       const element = makeScrollElement(800);
       renderList(makeMessages(['m1', 'm2', 'm3']), element);
 
-      [780, 740, 700, 660, 620].forEach((width) => {
-        resizeTo(element, width);
-        act(() => {
-          vi.advanceTimersByTime(20);
-        });
-      });
-      settle();
-
-      expect(measure).toHaveBeenCalledTimes(1);
-    });
-
-    it('given a height-only change, should not reset the size cache', () => {
-      const element = makeScrollElement(800);
-      renderList(makeMessages(['m1', 'm2', 'm3']), element);
-
-      // Observer fires (the element resized vertically) but the width is the same.
-      resizeTo(element, 800);
-      settle();
+      [780, 740, 700, 660, 620].forEach((width) => resizeTo(element, width));
 
       expect(measure).not.toHaveBeenCalled();
     });
 
-    it('given the pane collapsed to zero width, should not reset the size cache against a hidden element', () => {
+    it('given a pane collapsed to zero width, should not reset it', () => {
       const element = makeScrollElement(800);
       renderList(makeMessages(['m1', 'm2', 'm3']), element);
 
       resizeTo(element, 0);
-      settle();
 
       expect(measure).not.toHaveBeenCalled();
     });

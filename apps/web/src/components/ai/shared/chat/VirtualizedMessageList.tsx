@@ -1,15 +1,7 @@
-import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo } from 'react';
+import React, { useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo } from 'react';
 import { useVirtualizer, VirtualItem } from '@tanstack/react-virtual';
 import { UIMessage } from 'ai';
 import { computeScrollAnchorAdjustment } from '@/lib/ai/streams/computeScrollAnchorAdjustment';
-
-/**
- * How long the pane width must hold still before every cached row height is
- * invalidated. While a resize handle is being dragged the mounted rows are
- * already self-correcting through their own ResizeObserver, so the wipe only
- * needs to land once the drag settles.
- */
-const WIDTH_SETTLE_MS = 150;
 
 export interface VirtualizedMessageListRef {
   scrollToIndex: (index: number, options?: { align?: 'start' | 'center' | 'end' | 'auto' }) => void;
@@ -123,72 +115,31 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
       }
     }, [messages, scrollRef]);
 
-    // The scroll element is an ancestor owned by StickToBottom and can still be null
-    // on our first render (see useConversationScrollRef), so mirror it into state to
-    // get an effect re-run at the moment it appears.
-    const [scrollElement, setScrollElement] = useState<HTMLElement | null>(scrollRef.current);
-    // Intentionally no dependency array. `scrollRef.current` is populated by an
-    // ancestor and is not reactive, so the only reliable moment to notice it is after
-    // every render. Taking the rule's suggestion of [scrollRef, scrollElement] would
-    // skip precisely the render where the element first appears: the ref object's
-    // identity never changes, and scrollElement is still null at that point. The
-    // setState is guarded by an inequality check, so it cannot loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    useEffect(() => {
-      if (scrollRef.current !== scrollElement) setScrollElement(scrollRef.current);
-    });
-
-    // A width change reflows every message, so every cached row height goes stale —
-    // including those of rows that are currently unmounted and therefore have no
-    // ResizeObserver of their own to report the reflow. Invalidating the whole size
-    // cache is exactly right here, and exactly wrong on a `messages` change (see the
-    // note below): the width is what determines the heights.
+    // NOTE: nothing in this component may call `virtualizer.measure()` — not on a
+    // `messages` change, and not on a pane resize either.
     //
-    // `measure()` alone would not be enough. The rows that are still mounted never
-    // re-measure after it — their DOM size does not change a second time, so no
-    // ResizeObserver fires, and React will not re-invoke a stable function ref on an
-    // element that never unmounted — which would leave the visible window pinned at
-    // `estimateSize`. Bumping `widthEpoch` into each row's key remounts just that
-    // window (a handful of rows), so `measureElement` runs fresh for it.
-    const [widthEpoch, setWidthEpoch] = useState(0);
-
-    useEffect(() => {
-      if (!scrollElement || typeof ResizeObserver === 'undefined') return;
-
-      let lastWidth = scrollElement.clientWidth;
-      let settleTimer: ReturnType<typeof setTimeout> | undefined;
-
-      const observer = new ResizeObserver(() => {
-        const width = scrollElement.clientWidth;
-        // 0 means the pane is collapsed or hidden: nothing has reflowed to a usable
-        // width yet, and measuring against it would cache garbage heights.
-        if (width === 0 || width === lastWidth) return;
-        lastWidth = width;
-        clearTimeout(settleTimer);
-        settleTimer = setTimeout(() => {
-          virtualizer.measure();
-          setWidthEpoch((epoch) => epoch + 1);
-        }, WIDTH_SETTLE_MS);
-      });
-
-      observer.observe(scrollElement);
-      return () => {
-        clearTimeout(settleTimer);
-        observer.disconnect();
-      };
-    }, [scrollElement, virtualizer]);
-
-    // NOTE: do NOT add a `virtualizer.measure()` effect here. `measure()` clears the
-    // entire itemSizeCache (virtual-core 3.15.0), so every row falls back to
-    // `estimateSize` and `getTotalSize()` collapses. Because this container is
-    // `contain: strict` with height = getTotalSize(), the scroller's scrollHeight IS
-    // that value, so the browser clamps scrollTop upward by the full delta and the
-    // viewport lands near the top — then use-stick-to-bottom animates the long way
-    // back down. Since `messages` gets a new array identity on every stream part,
-    // that fired on every tool call: the "chat jumps to the top" bug.
-    // Per-row growth during streaming is already handled incrementally and correctly
-    // by the `ref={virtualizer.measureElement}` ResizeObserver below, which updates
-    // just the row that changed and compensates scrollTop for above-viewport resizes.
+    // `measure()` clears the entire itemSizeCache (virtual-core 3.15.0), so every row
+    // falls back to `estimateSize` and `getTotalSize()` collapses. Because this
+    // container is `contain: strict` with height = getTotalSize(), the scroller's
+    // scrollHeight IS that value, so the browser clamps scrollTop upward by the full
+    // delta and the viewport lands near the top — then use-stick-to-bottom animates
+    // the long way back down. `messages` gets a new array identity on every stream
+    // part, so doing it there fired on every tool call: the "chat jumps to the top"
+    // bug this component exists to not have.
+    //
+    // A pane resize (the chat sits inside Layout.tsx's ResizablePanelGroup) is the
+    // one case where wiping looks justified, since a width change reflows rows that
+    // are unmounted and so have no observer of their own to report it. It isn't:
+    //   - Mounted rows already re-measure themselves. virtual-core observes each one
+    //     via `ref={virtualizer.measureElement}` and calls resizeItem when it
+    //     resizes, compensating scrollTop for above-viewport changes.
+    //   - For unmounted rows, a stale real height — measured at a slightly different
+    //     width — is a far better estimate than the flat estimateSize the wipe would
+    //     replace it with. Invalidating makes getTotalSize() *less* accurate, and
+    //     collapses it hard enough to reproduce the jump above.
+    // So stale heights are left in place and corrected per-row as rows scroll back
+    // into view. The cost is a scrollbar that is slightly off until then; the
+    // alternative is the bug.
 
     if (messages.length === 0) {
       return null;
@@ -210,9 +161,8 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
             <div
               // Same identifier the virtualizer caches this row's height under
               // (see getItemKey above), so React's identity and the size cache's
-              // can never disagree. The widthEpoch suffix is what forces the
-              // mounted window to re-measure after a pane resize — see above.
-              key={`${virtualRow.key}:${widthEpoch}`}
+              // can never disagree.
+              key={virtualRow.key}
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               className="absolute top-0 left-0 w-full"

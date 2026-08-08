@@ -83,7 +83,11 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
         const dataPart = part as { type: 'data-command-execution'; id?: string; data?: unknown };
         groups.push({
           type: 'data-command-execution',
-          groupId: `cmd:${dataPart.id ?? partIndex}`,
+          // The raw part index, never dataPart.id: an id is optional and could be
+          // blank, which would collapse every such part onto one React key. The
+          // index is always present and unique, and matches how the text and file
+          // groups above derive theirs.
+          groupId: `cmd:${partIndex}`,
           id: dataPart.id,
           data: dataPart.data,
         });
