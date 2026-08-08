@@ -60,7 +60,7 @@ interface PlaceableConversation {
  * a thread. FIRST placement wins: a conversation open in two panes of one grid
  * is legal, and the sidebar shows one row for the thread rather than two.
  */
-export function paneByConversationId(
+function paneByConversationId(
   grid: readonly PersistedColumnState[] | null | undefined,
 ): Map<string, ConversationPanePlacement> {
   const byConversation = new Map<string, ConversationPanePlacement>();

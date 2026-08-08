@@ -191,15 +191,15 @@ describe('resolveOpenPlacement', () => {
  */
 describe('a loading pane is not replaceable — the picker flow depends on it', () => {
   it('does not treat a chat pane awaiting its conversation as fillable', () => {
-    expect(isReplaceable({ id: 'pane-1', scope: { kind: 'chat', name: 'New conversation', targetId: null, agentPageId: null } } as never)).toBe(false);
+    expect(isReplaceable(pane('pane-1', chat(null, 'New conversation')))).toBe(false);
   });
 
   it('does treat an empty pane and a bound chat pane as fillable', () => {
-    expect(isReplaceable({ id: 'p', scope: null } as never)).toBe(true);
-    expect(isReplaceable({ id: 'p', scope: { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: null } } as never)).toBe(true);
+    expect(isReplaceable(pane('pane-1', null))).toBe(true);
+    expect(isReplaceable(pane('pane-1', chat('conv-1')))).toBe(true);
   });
 
   it('never treats a terminal as fillable — a shell is not a surface to evict', () => {
-    expect(isReplaceable({ id: 'p', scope: { kind: 'terminal', name: 'sh', targetId: 'sh-1' } } as never)).toBe(false);
+    expect(isReplaceable(pane('pane-1', terminal('sh-1')))).toBe(false);
   });
 });

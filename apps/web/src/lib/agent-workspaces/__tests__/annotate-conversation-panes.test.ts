@@ -16,21 +16,18 @@
  * `toolCallId` — but the list must not depend on that having worked.)
  */
 import { describe, it, expect } from 'vitest';
-import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
-import {
-  annotateConversationsWithPanes,
-  paneByConversationId,
-} from '../annotate-conversation-panes';
+import type { PersistedColumnState, PersistedPaneState } from '@pagespace/lib/agent-workspaces/contract';
+import { annotateConversationsWithPanes } from '../annotate-conversation-panes';
 
 const thread = (conversationId: string) => ({ conversationId, title: conversationId });
 
-const chatPane = (id: string, targetId: string) => ({
+const chatPane = (id: string, targetId: string): PersistedPaneState => ({
   id,
-  scope: { kind: 'chat' as const, targetId },
+  scope: { kind: 'chat', name: 'Conversation', targetId, agentPageId: null },
 });
 
-const grid = (columns: { id: string; panes: { id: string; scope: unknown }[] }[]) =>
-  columns as unknown as PersistedColumnState[];
+/** Named only so the fixtures read as grids; the literals are already typed. */
+const grid = (columns: PersistedColumnState[]): PersistedColumnState[] => columns;
 
 describe('annotateConversationsWithPanes', () => {
   it('keeps an UNPLACED thread in the list — the whole bug', () => {
@@ -78,8 +75,8 @@ describe('annotateConversationsWithPanes', () => {
         {
           id: 'col-1',
           panes: [
-            { id: 'term', scope: { kind: 'terminal', targetId: 'sh_1' } },
-            { id: 'page', scope: { kind: 'page', targetId: 'pg_1' } },
+            { id: 'term', scope: { kind: 'terminal', name: 'Shell', targetId: 'sh_1', agentPageId: null } },
+            { id: 'page', scope: { kind: 'page', name: 'Doc', targetId: 'pg_1', agentPageId: null } },
             { id: 'unbound', scope: null },
             chatPane('chat', 'c1'),
           ],
@@ -133,19 +130,5 @@ describe('annotateConversationsWithPanes', () => {
     const conversations = [thread('c1')];
     annotateConversationsWithPanes(conversations, grid([{ id: 'col', panes: [chatPane('p', 'c1')] }]));
     expect(conversations[0]).not.toHaveProperty('pane');
-  });
-});
-
-describe('paneByConversationId', () => {
-  it('indexes only chat panes, first wins', () => {
-    const index = paneByConversationId(
-      grid([
-        { id: 'c1', panes: [chatPane('p1', 'conv-a'), { id: 't', scope: { kind: 'terminal', targetId: 'sh' } }] },
-        { id: 'c2', panes: [chatPane('p2', 'conv-a'), chatPane('p3', 'conv-b')] },
-      ]),
-    );
-
-    expect([...index.keys()].sort()).toEqual(['conv-a', 'conv-b']);
-    expect(index.get('conv-a')?.paneId).toBe('p1');
   });
 });

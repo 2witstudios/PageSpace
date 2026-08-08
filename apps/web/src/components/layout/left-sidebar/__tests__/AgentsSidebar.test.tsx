@@ -115,6 +115,7 @@ import {
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
@@ -140,7 +141,12 @@ interface SessionFixture {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
-  /** Omitted (undefined) in most fixtures — the sidebar reads that as "fall back to the flat conversation list above." */
+  /**
+   * The saved pane grid, omitted in most fixtures. Since issue #2373 the
+   * sidebar no longer picks a row shape from this — it annotates the list
+   * above with it, exactly as the route does. Left `unknown` because the
+   * fixtures are deliberately loose literals; `gridOf` narrows it once.
+   */
   workspace?: unknown;
 }
 
@@ -166,12 +172,15 @@ const SESSION: SessionFixture = {
  * sidebar actually receives — a `workspace` grid and a `conversations` list
  * that disagreed about placement is precisely the bug this suite now guards.
  */
+const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
+  (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
+
 const respondWithSessions = (sessions: SessionFixture[]) => {
   const annotated = sessions.map((session) => ({
     ...session,
     conversations: annotateConversationsWithPanes(
       session.conversations,
-      (session.workspace as { columns?: unknown } | undefined)?.columns as never,
+      gridOf(session.workspace),
     ),
   }));
   mockFetchWithAuth.mockResolvedValue({
