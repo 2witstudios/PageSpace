@@ -8,9 +8,11 @@
  * whose pane row did not exist was therefore invisible, however correct its
  * conversation row.
  *
- * That is not an edge case. Placement is best-effort — `spawn_session` only
- * calls `placeWorkerPane` when it has a `toolCallId` — so "created but not
- * placed" is the ordinary state of a freshly spawned worker. Measured in
+ * That is not an edge case. This PR closes the worst source of it (placement
+ * used to be skipped entirely whenever the SDK handed `spawn_session` no
+ * `toolCallId`), but "created but not placed" remains a legitimate resting
+ * state, not a failure: placement is best-effort by design, and a thread
+ * created without `placeInGrid` is never placed at all. Measured in
  * production at the time of the bug: one workspace had 3 threads and 2 panes,
  * another had 10 threads and 4 panes. Six of that second workspace's threads
  * could not be seen or reached from the sidebar at all.
@@ -22,6 +24,17 @@
  * a row read — a pane may name a conversation that is not in this workspace's
  * listing (a cross-workspace target the label resolver gates separately), and
  * that pane simply annotates nothing.
+ *
+ * The annotation runs list-to-grid and never the reverse, which is a decision,
+ * not an oversight. The listing is capped at `MAX_SESSION_CONVERSATIONS` (100
+ * by `lastMessageAt`), so a pane whose thread ranks past that cap gets no
+ * sidebar row, where the deleted `PaneRow` path would have synthesised one. We
+ * accept that: the sidebar lists a workspace's THREADS, and inventing a row out
+ * of a pane is precisely the second source of truth this module exists to
+ * remove. The pane itself still renders in the grid, which reads the store's
+ * geometry rather than this listing, so the thread stays visible and closable
+ * where it is actually open. Trading a >100-thread edge for the ordinary
+ * freshly-spawned-worker case measured above is the right side of that bet.
  */
 
 import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';

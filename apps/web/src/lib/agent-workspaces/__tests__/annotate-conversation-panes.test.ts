@@ -8,9 +8,12 @@
  * however correct its conversation row.
  *
  * The measured production shape at the time of the bug is the first test
- * below: a workspace with more threads than panes. That is the ORDINARY state
- * of a freshly spawned worker, because placement is best-effort —
- * `spawn_session` calls `placeWorkerPane` only when it has a `toolCallId`.
+ * below: a workspace with more threads than panes. Placement is best-effort by
+ * design and a thread created without `placeInGrid` is never placed at all, so
+ * "more threads than panes" is a resting state the sidebar must render, not a
+ * transient to wait out. (This PR also closes the sharpest source of it — the
+ * old `spawn_session` gate skipped placement whenever the SDK supplied no
+ * `toolCallId` — but the list must not depend on that having worked.)
  */
 import { describe, it, expect } from 'vitest';
 import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
@@ -111,8 +114,12 @@ describe('annotateConversationsWithPanes', () => {
   });
 
   it('tolerates a pane naming a conversation this workspace does not list', () => {
-    // A cross-workspace target, gated separately by the label resolver. It
-    // annotates nothing here and must not invent a row.
+    // Two ways to reach this: a cross-workspace target (gated separately by the
+    // label resolver), or a thread ranked past MAX_SESSION_CONVERSATIONS, since
+    // the listing is capped at 100 by lastMessageAt. Either way the pane
+    // annotates nothing and must NOT invent a row — synthesising one out of the
+    // grid is the second source of truth this module deletes. Such a pane still
+    // renders in the grid, which reads geometry from the store, not this list.
     const annotated = annotateConversationsWithPanes(
       [thread('mine')],
       grid([{ id: 'col-1', panes: [chatPane('p', 'someone-elses')] }]),

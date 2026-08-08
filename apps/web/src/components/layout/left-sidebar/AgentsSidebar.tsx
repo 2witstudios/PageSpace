@@ -978,11 +978,11 @@ function SessionRow({
           {/* ONE LIST (issue #2373). This used to be
               `chatPanes ? … : session.conversations`, and an open workspace
               always has a grid — so the pane branch always won and a thread
-              with no pane row was invisible. Placement is best-effort
-              (`spawn_session` places only when it has a `toolCallId`), so
-              "created but not placed" is the ordinary state of a freshly
-              spawned worker: in production one workspace showed 2 of its 3
-              threads, another 4 of its 10.
+              with no pane row was invisible. Placement is best-effort by
+              design and a thread created without `placeInGrid` is never placed
+              at all, so "created but not placed" is a resting state this list
+              must render, not a transient: in production one workspace showed
+              2 of its 3 threads, another 4 of its 10.
 
               The THREAD is the row. `pane` is an attribute of it, deciding
               only which close verb applies — unbind the pane, or close the
