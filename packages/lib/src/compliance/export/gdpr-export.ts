@@ -15,6 +15,10 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
@@ -193,6 +197,24 @@ export interface UserDisplayPreferenceExport {
   updatedAt: Date;
 }
 
+/**
+ * The subject's own SETTINGS — hotkey bindings, automation opt-ins, toast level
+ * and per-type email opt-ins.
+ *
+ * These were excluded, on the reasoning that the subject "can read them in
+ * Settings at any time" (review finding). In-app visibility is not an Art 15
+ * basis: Art 15(3) gives a right to a COPY of the personal data undergoing
+ * processing, and being able to look at a screen does not discharge it. They
+ * are small, they are unambiguously the subject's, and exporting them removes
+ * the question entirely — which is cheaper than defending it.
+ */
+export interface UserSettingsExport {
+  hotkeys: { hotkeyId: string; binding: string; updatedAt: Date }[];
+  automation: { pulseEnabled: boolean; updatedAt: Date } | null;
+  toastNotifications: { level: string; updatedAt: Date } | null;
+  emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+}
+
 export interface UserPersonalizationExport {
   bio: string | null;
   writingStyle: string | null;
@@ -298,6 +320,7 @@ export interface AllUserData {
   sessions: UserSessionExport[];
   notifications: UserNotificationExport[];
   displayPreferences: UserDisplayPreferenceExport[];
+  settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
@@ -807,6 +830,36 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
     .where(eq(displayPreferences.userId, userId));
 }
 
+/** Every settings row the subject owns, in one Art 15 category. */
+export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
+  const [hotkeys, automation, toast, email] = await Promise.all([
+    database
+      .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
+      .from(userHotkeyPreferences)
+      .where(eq(userHotkeyPreferences.userId, userId)),
+    database
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled, updatedAt: userAutomationPreferences.updatedAt })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId)),
+    database
+      .select({ level: userToastNotificationPreferences.level, updatedAt: userToastNotificationPreferences.updatedAt })
+      .from(userToastNotificationPreferences)
+      .where(eq(userToastNotificationPreferences.userId, userId)),
+    database
+      .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
+      .from(emailNotificationPreferences)
+      .where(eq(emailNotificationPreferences.userId, userId)),
+  ]);
+  return {
+    hotkeys,
+    // Both are unique-per-user, so at most one row each; null means "never set",
+    // which is a different fact from the default and worth preserving.
+    automation: automation[0] ?? null,
+    toastNotifications: toast[0] ?? null,
+    emailNotifications: email,
+  };
+}
+
 export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
   const result = await database
     .select({
@@ -979,7 +1032,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData, userAgentWorkspaces, userStreamState] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userAgentWorkspaces, userStreamState] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
@@ -992,6 +1045,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserSessions(database, userId),
     collectUserNotifications(database, userId),
     collectUserDisplayPreferences(database, userId),
+    collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
@@ -1012,6 +1066,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     sessions: userSessions,
     notifications: userNotifications,
     displayPreferences: userDisplayPreferences,
+    settings: userSettings,
     personalization: userPersonalizationData,
     agentWorkspaces: userAgentWorkspaces,
     streamState: userStreamState,

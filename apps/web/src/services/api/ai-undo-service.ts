@@ -24,6 +24,8 @@ import {
 import type { ActivityActionPreview } from '@/types/activity-actions';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import type { BumpedConversationRow } from '@/lib/repositories/conversation-rev';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
+import type { ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
 
 /**
  * Preview of what will be undone
@@ -32,6 +34,13 @@ export interface AiUndoPreview {
   messageId: string;
   conversationId: string;
   pageId: string | null;
+  /**
+   * The conversation's own facts — owner, shared flag, type and page — so the
+   * route can run `canAccessConversation` on a DESTRUCTIVE conversation-scoped
+   * verb rather than gating on page permission alone (review finding). Null
+   * when the message has no conversation row, which the gate denies.
+   */
+  conversationAccess: ConversationAccessRow | null;
   driveId: string | null;
   source: MessageSource;
   createdAt: Date; // Message creation timestamp for undo cutoff
@@ -92,6 +101,8 @@ interface AiMessage {
   createdAt: Date;
   isActive: boolean;
   source: MessageSource;
+  /** The conversation's own facts, for the route's access decision. Null when the row has no conversation. */
+  conversationAccess: ConversationAccessRow | null;
 }
 
 /**
@@ -114,9 +125,14 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
 
   const row = await db.query.messages.findFirst({
     where: eq(messages.id, messageId),
-    // The conversation carries the two facts this lookup exists to derive:
-    // which KIND of thread it is, and (for a page thread) which page.
-    with: { conversation: { columns: { type: true, contextId: true, agentPageId: true } } },
+    // The conversation carries what this lookup exists to derive: which KIND
+    // of thread it is, which page it names, and — since undo is a DESTRUCTIVE
+    // conversation-scoped verb — the facts its access decision needs.
+    with: {
+      conversation: {
+        columns: { type: true, contextId: true, agentPageId: true, userId: true, isShared: true },
+      },
+    },
   });
 
   if (!row) {
@@ -124,16 +140,14 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
     return null;
   }
 
-  const conversationType = row.conversation?.type;
+  const conversation = row.conversation;
+  const conversationType = conversation?.type;
   const source: MessageSource = conversationType === 'global' ? 'global_chat' : 'page_chat';
-  // A global thread has no page (and its `contextId` is NULL by CHECK). A page
-  // thread's page IS `contextId`; a `type='client'` thread's is `agentPageId`
-  // — the same derivation `derivedPageId()` documents.
-  const pageId = source === 'global_chat'
-    ? null
-    : (conversationType === 'page'
-        ? (row.conversation?.contextId ?? null)
-        : (row.conversation?.agentPageId ?? null));
+  // THE shared derivation, not a local one. This used to read
+  // `type === 'page' ? contextId : agentPageId`, which mapped `type='drive'`
+  // onto `agentPageId` where `derivedPageId()` yields NULL — a third answer to
+  // a question the epic had already given one owner (review finding).
+  const pageId = conversationPageId(conversation);
 
   loggers.api.debug('[AiUndo:Preview] Message found', {
     messageId,
@@ -150,6 +164,17 @@ async function getMessage(messageId: string): Promise<AiMessage | null> {
     createdAt: row.createdAt,
     isActive: row.isActive,
     source,
+    // Carried out so the ROUTE can run the one conversation-access decision.
+    // Absent only when the row has no conversation, which the gate treats as
+    // "not accessible" — no row is not shared, so it denies every non-owner.
+    conversationAccess: conversation
+      ? {
+          userId: conversation.userId,
+          isShared: conversation.isShared === true,
+          type: conversation.type,
+          contextId: conversation.contextId,
+        }
+      : null,
   };
 }
 
@@ -365,6 +390,7 @@ export async function previewAiUndo(
       messageId,
       conversationId,
       pageId,
+      conversationAccess: message.conversationAccess,
       driveId,
       source,
       createdAt,

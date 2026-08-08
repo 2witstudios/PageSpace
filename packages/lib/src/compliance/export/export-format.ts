@@ -69,6 +69,10 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     { name: 'sessions.json', description: 'Authentication sessions', recordCount: data.sessions.length, data: data.sessions },
     { name: 'notifications.json', description: 'Notifications', recordCount: data.notifications.length, data: data.notifications },
     { name: 'display-preferences.json', description: 'Display preferences', recordCount: data.displayPreferences.length, data: data.displayPreferences },
+    // One file for the settings the subject owns — hotkeys, automation,
+    // toast level, per-type email opt-ins. Counted as the number of individual
+    // settings rows so an empty bundle reads as "none set", not "not carried".
+    { name: 'settings.json', description: 'Account settings', recordCount: data.settings.hotkeys.length + data.settings.emailNotifications.length + (data.settings.automation ? 1 : 0) + (data.settings.toastNotifications ? 1 : 0), data: data.settings },
     // The epic "Agent-Session Single Source of Truth" moved a large amount of
     // the subject's work into these two tables. They are first-class
     // categories, not an appendix: the shells' scrollback and the streams'
@@ -182,6 +186,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'sessions', value: data.sessions },
       { '@type': 'PropertyValue', name: 'notifications', value: data.notifications },
       { '@type': 'PropertyValue', name: 'displayPreferences', value: data.displayPreferences },
+      { '@type': 'PropertyValue', name: 'settings', value: data.settings },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },

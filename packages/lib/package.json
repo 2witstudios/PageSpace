@@ -1582,6 +1582,11 @@
       "import": "./dist/permissions/conversation-access.js",
       "require": "./dist/permissions/conversation-access.js"
     },
+    "./conversations/conversation-page": {
+      "types": "./dist/conversations/conversation-page.d.ts",
+      "import": "./dist/conversations/conversation-page.js",
+      "require": "./dist/conversations/conversation-page.js"
+    },
     "./permissions/enforced-context": {
       "types": "./dist/permissions/enforced-context.d.ts",
       "import": "./dist/permissions/enforced-context.js",

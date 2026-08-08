@@ -11,6 +11,15 @@ import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { canAccessConversation, type ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
+
+/**
+ * The fail-closed stand-in when a message has no conversation row. The
+ * predicate is `owner OR (isShared AND page access)`, so an empty owner matches
+ * nobody and `isShared: false` stops there — "no row" denies, which is the rule
+ * `conversation-access.ts` states for exactly this case.
+ */
+const NO_CONVERSATION: ConversationAccessRow = { userId: '', isShared: false, type: 'page', contextId: null };
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -34,8 +43,54 @@ async function checkUndoPermissions(
   operationType: 'preview' | 'execution'
 ): Promise<NextResponse | null> {
   if (preview.source === 'page_chat') {
+    // THE CONVERSATION DECIDES FIRST (review finding — MAJOR).
+    //
+    // This branch used to run `canPrincipalEditPage` and nothing else, while
+    // the sweep in `ai-undo-service` is scoped by `conversationId` alone. So
+    // any drive member with EDIT on a shared agent page could undo another
+    // member's PRIVATE conversation on that page — soft-deleting a range of
+    // their messages and rolling back the activities behind them. The GLOBAL
+    // branch below always checked ownership, so the weaker gate sat on the
+    // shared surface, not the private one.
+    //
+    // `conversation-access.ts` — added by this same epic — says it outright:
+    // "authorizing on 'can this user view the page' would hand one member's
+    // private conversation to every other member." That is this, with edit
+    // instead of view, on a DESTRUCTIVE verb. Every conversation-scoped READ
+    // was routed through the shared predicate; this was the one WRITE left on
+    // the old gate.
+    //
+    // Both gates now apply, and the composition is deliberate: the CONVERSATION
+    // decides who may touch this thread (owner, or a shared thread whose page
+    // they can see), and the PAGE decides whether they may mutate page state,
+    // which undo does when it rolls activities back. Strictly narrower than
+    // before — nothing that was allowed and legitimate becomes denied.
+    if (!(await canAccessConversation(userId, preview.conversationAccess ?? NO_CONVERSATION))) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_accessible', operationType, conversationId: preview.conversationId }, riskScore: 0.6 });
+      return NextResponse.json(
+        { error: 'You do not have permission to undo messages in this chat' },
+        { status: 403 }
+      );
+    }
+
     if (!preview.pageId) {
-      return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
+      // A conversation that names no page — `type='drive'`, or a row whose
+      // conversation is gone. It reached this branch because `source` is
+      // "anything that is not global", and there is no page permission to ask
+      // about (review finding — MINOR: this used to be a 500, which reads as a
+      // server fault for what is really "this verb does not apply here").
+      //
+      // 404, not 403: the caller has already passed the conversation gate, so
+      // this says nothing about a resource they cannot see, and matches how
+      // the page-scoped routes answer a message whose derived page is NULL.
+      loggers.api.warn(`Undo ${operationType} on a conversation that names no page`, {
+        messageId: maskIdentifier(messageId),
+        conversationId: maskIdentifier(preview.conversationId),
+      });
+      return NextResponse.json(
+        { error: 'This conversation does not support undo' },
+        { status: 404 }
+      );
     }
 
     // Check MCP page scope

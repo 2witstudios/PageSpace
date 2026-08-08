@@ -21,6 +21,7 @@ import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { pages } from '@pagespace/db/schema/core';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
 export interface PastConversationRow {
   conversationId: string;
@@ -270,7 +271,7 @@ export async function listAllConversationsPaginated(
       conversationId: row.conversationId,
       title: row.title,
       type: row.type,
-      agentPageId: row.type === 'page' ? row.contextId : null,
+      agentPageId: conversationPageId(row),
       pageTitle: row.pageTitle,
       lastMessageAt: row.lastMessageAt,
       createdAt: row.createdAt,

@@ -76,6 +76,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import {
   closeConversationInSessionWith,
   type CloseConversationOutcome,
@@ -833,7 +834,7 @@ export async function listSessionConversationsBulk(
     bucket.push({
       conversationId: row.conversationId,
       title: row.title,
-      agentPageId: row.type === 'page' ? row.contextId : null,
+      agentPageId: conversationPageId(row),
       lastMessageAt: row.lastMessageAt,
       ownerId: row.ownerId,
       isShared: row.isShared,

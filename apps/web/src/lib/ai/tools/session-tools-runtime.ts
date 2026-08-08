@@ -73,6 +73,7 @@ import {
   type TranscriptEntry,
 } from './session-tools';
 import { createShellIo, realtimeShellIoTransport } from './shell-io';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
 // ---------------------------------------------------------------------------
 // Worker dispatch through the standard chat pipeline
@@ -935,7 +936,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return {
         conversationId,
         ownerId: conversation.userId,
-        agentPageId: conversation.type === 'page' ? conversation.contextId : null,
+        agentPageId: conversationPageId(conversation),
         name: conversation.title ?? '',
         // The WORKSPACE this conversation is bound to (conversations.workspaceId
         // — the agent_workspaces.id FK), or null for a workspace-less thread.

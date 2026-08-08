@@ -53,6 +53,20 @@ export function derivedPageId(): SQL<string | null> {
 }
 
 /**
+ * The ROW-LEVEL twin of {@link derivedPageId}, re-exported here so the two
+ * renderings of one rule are reachable from the module that owns it.
+ *
+ * It lives in `@pagespace/lib/conversations/conversation-page` rather than in
+ * this file because the `'use client'` directory listener needs it too, and
+ * this module imports the schema and the operators — depending on it from a
+ * browser bundle would drag Drizzle in. See that module for why it exists at
+ * all (six call sites, three different answers).
+ *
+ * `parity.test.ts` beside this file asserts the two agree on every `type`.
+ */
+export { conversationPageId, type ConversationPageSubject } from '@pagespace/lib/conversations/conversation-page';
+
+/**
  * "This row belongs to page X" for a page-SCOPED reader, over the unified
  * table — the exact translation of the legacy `chat_messages.pageId = X`.
  *

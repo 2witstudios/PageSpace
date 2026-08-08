@@ -11,6 +11,7 @@ import {
   upsertConversationInCache,
 } from '@/components/agents/panes/workspace-conversations';
 import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-events';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
 /**
  * `useSessionDirectoryListener` — the DIRECTORY plane (Agent-Session Single
@@ -73,7 +74,7 @@ export function useSessionDirectoryListener(): void {
         conversationId: conversation.id,
         // The listing's `agentPageId` IS the conversation's `contextId` for a
         // page-anchored thread; a global-assistant thread has no agent page.
-        agentPageId: conversation.type === 'page' ? conversation.contextId : null,
+        agentPageId: conversationPageId(conversation),
         lastMessageAt: conversation.lastMessageAt,
         title: conversation.title,
         type: conversation.type,

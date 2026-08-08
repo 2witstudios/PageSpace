@@ -77,6 +77,13 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   notifications: 'notifications',
   display_preferences: 'displayPreferences',
   user_personalization: 'personalization',
+  // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
+  // the reasoning that the subject can read them in Settings — see the
+  // `settings` collector for why that was not a basis (review finding).
+  user_hotkey_preferences: 'settings',
+  user_automation_preferences: 'settings',
+  user_toast_notification_preferences: 'settings',
+  email_notification_preferences: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   agent_workspace_shells: 'agentWorkspaces',
@@ -246,19 +253,11 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   // Individually reasoned — these are the ones where a shared rationale would
   // have been an approximation.
   user_profiles:
-    'The public profile the subject publishes themselves — its fields (username, display name, bio, avatar) are visible to the subject in the app at all times and the identity fields are carried by the profile category.',
+    'The identity fields (username, display name, bio, avatar) are already carried in full by the `profile` category, which reads them from `users` — this table holds no personal data the export does not return. Deliberately NOT justified by the subject being able to see their profile in the app: Art 15(3) is a right to a copy, not to visibility, and that reasoning would excuse omitting almost anything.',
   favorites:
     'A pointer list into pages and drives that the export already carries in full; the ordering of a subject\'s own bookmarks conveys nothing the pages category does not.',
   user_dashboards:
     'Layout of the subject\'s dashboard widgets — display arrangement with no content of its own; every widget\'s underlying data is exported under its own category.',
-  user_hotkey_preferences:
-    'Keyboard shortcut bindings — a preference the subject can read in Settings at any time; carried nowhere else because there is nothing but the bindings.',
-  user_automation_preferences:
-    'Automation opt-in flags — settings the subject sets and reads directly in the app, alongside the display preferences category that already carries the same class of value.',
-  user_toast_notification_preferences:
-    'Per-category toast opt-in flags — the same class of in-app setting as display preferences, readable by the subject in Settings.',
-  email_notification_preferences:
-    'Email opt-in flags — the subject sets and reads these directly, and the messages they govern are exported under the notifications category.',
   email_notification_log:
     'Delivery ledger for transactional email (send/bounce/complaint outcomes). The CONTENT of every such message is exported under the notifications category; this table is the transport outcome, held for deliverability and abuse handling.',
   contact_submissions:
