@@ -52,6 +52,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isCloud: () => process.env.DEPLOYMENT_MODE !== 'tenant' && process.env.DEPLOYMENT_MODE !== 'onprem',
+}));
+
 vi.mock('@aws-sdk/client-s3', () => ({
   ListObjectsV2Command: class {
     input: Record<string, unknown>;
@@ -94,6 +98,7 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     mockValidate.mockReturnValue(null);
     mockFlush.mockResolvedValue(true);
     delete process.env.BACKUP_MAX_AGE_HOURS;
+    delete process.env.DEPLOYMENT_MODE;
   });
 
   it('rejects an unsigned request without touching S3', async () => {
@@ -440,6 +445,66 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     expect(body.objectsSeen).toBe(1);
     expect(body.newestKey).toBe(FRESH_ENC.Key);
     expect(body.ok).toBe(true);
+  });
+
+  describe('deployment-mode gating', () => {
+    for (const mode of ['tenant', 'onprem']) {
+      it(`skips without alerting on ${mode}, where no cloud backup job exists`, async () => {
+        process.env.DEPLOYMENT_MODE = mode;
+        mockSend.mockResolvedValue(page([]));
+
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.skipped).toBe(true);
+        expect(body.reason).toBe('not_cloud_deployment');
+        expect(body.deploymentMode).toBe(mode);
+        // Never touches the bucket, and above all never pages: an empty prefix
+        // here is expected, not an incident.
+        expect(mockSend).not.toHaveBeenCalled();
+        expect(mockCaptureException).not.toHaveBeenCalled();
+        expect(mockLoggers.security.error).not.toHaveBeenCalled();
+      });
+    }
+
+    it('still records an audit event when skipping, so the skip is not invisible', async () => {
+      process.env.DEPLOYMENT_MODE = 'tenant';
+
+      await GET(request);
+
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceId: 'verify_db_backup_freshness',
+          details: expect.objectContaining({ skipped: true, reason: 'not_cloud_deployment' }),
+        })
+      );
+    });
+
+    it('RUNS the check when DEPLOYMENT_MODE is unset — absence must never disable it', async () => {
+      // A misconfigured cloud deployment silently skipping its own backup
+      // monitoring is the exact failure class this endpoint exists to catch.
+      delete process.env.DEPLOYMENT_MODE;
+      mockSend.mockResolvedValue(page([]));
+
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(mockSend).toHaveBeenCalled();
+      expect(response.status).toBe(503);
+      expect(body.reason).toBe('no_objects');
+      expect(body.skipped).toBeUndefined();
+    });
+
+    it('RUNS the check on an unrecognised DEPLOYMENT_MODE', async () => {
+      process.env.DEPLOYMENT_MODE = 'staging-typo';
+      mockSend.mockResolvedValue(page([]));
+
+      const response = await GET(request);
+
+      expect(mockSend).toHaveBeenCalled();
+      expect(response.status).toBe(503);
+    });
   });
 
   it('skips keys with no LastModified rather than aging them as "now"', async () => {
