@@ -25,6 +25,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNull, count } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspacePanes } from '@pagespace/db/schema/agent-workspace-layout';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
@@ -474,5 +475,105 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
 
     const [stillUnbound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     expect(stillUnbound.workspaceId).toBeNull();
+  });
+});
+
+/**
+ * PLACEMENT IS OPT-IN, AND THE OPT-OUT IS THE LOAD-BEARING HALF (issue #2373,
+ * review finding — codex P1).
+ *
+ * `createConversationInSession` places a pane only when the caller asks with
+ * `placeInGrid`. Nothing tested the gate itself: `resolve-open-placement.test.ts`
+ * pins WHY an unconditional placement is wrong (a loading pane is not
+ * `isReplaceable`, so the placement resolves to `split` and the picker's own
+ * bind leaves one conversation in two panes), but deleting
+ * `if (!input.placeInGrid) return;` would leave every one of those assertions
+ * green while the duplicate-pane regression came straight back.
+ *
+ * Asserted against real pane ROWS rather than a mocked collaborator, because
+ * the fact under test is "did a pane get written", not "was a function called".
+ */
+describe('createConversationInSession — the placeInGrid gate', () => {
+  async function panesTargeting(workspaceId: string, conversationId: string) {
+    return db
+      .select({ id: agentWorkspacePanes.id })
+      .from(agentWorkspacePanes)
+      .where(
+        and(
+          eq(agentWorkspacePanes.workspaceId, workspaceId),
+          eq(agentWorkspacePanes.targetId, conversationId),
+        ),
+      );
+  }
+
+  async function seed() {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Gate Agent' });
+    const [workspace] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
+      .returning();
+    return { owner, agentPage, workspace };
+  }
+
+  it('does NOT write a pane when the caller does not ask — the pane-picker routes depend on this', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seed();
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(0);
+    // The thread still EXISTS and is listed — that is the whole point of the
+    // read-model fix. Unplaced is a resting state, not an invisible one.
+    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(row.workspaceId).toBe(workspace.id);
+    expect(row.isActive).toBe(true);
+  });
+
+  it('DOES write a pane when the caller asks — spawn_session, which has no browser pane waiting', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seed();
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+      placeInGrid: true,
+    });
+
+    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
+  });
+
+  it('places at most ONE pane per thread however often creation is retried', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seed();
+    const conversationId = createId();
+    const input = {
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+      placeInGrid: true,
+    };
+
+    await createConversationInSession(input);
+    // A retry of the same creation. The opId derives from the CONVERSATION id
+    // precisely so the verb engine's op memory replays it instead of opening a
+    // second pane — the property the old `toolCallId`-keyed opId could not give
+    // when the SDK supplied no call id.
+    await createConversationInSession(input).catch(() => {});
+
+    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
   });
 });
