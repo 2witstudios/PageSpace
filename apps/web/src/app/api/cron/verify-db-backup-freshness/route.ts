@@ -94,6 +94,51 @@ async function listBackupObjects(): Promise<BackupListing> {
   return { objects, truncated };
 }
 
+/**
+ * The single description of a run, shared by the audit event, both response
+ * bodies and the Sentry payloads. One source so they cannot drift — an earlier
+ * revision of this route omitted `objectsSeen` from the failure body only,
+ * which is precisely the kind of gap hand-copied literals produce.
+ */
+function summarize(
+  result: ReturnType<typeof assessBackupFreshness>,
+  objectsSeen: number,
+  truncated: boolean,
+  ok: boolean
+) {
+  return {
+    ok,
+    reason: result.reason,
+    ageHours: result.ageHours,
+    maxAgeHours: result.maxAgeHours,
+    encrypted: result.encrypted,
+    newestKey: result.newest?.key ?? null,
+    objectsSeen,
+    listingTruncated: truncated,
+  };
+}
+
+/**
+ * Send one alert to Sentry. Centralised so every alert from this endpoint is
+ * fingerprinted the same way — grouped by `reason`, never by message, since
+ * messages embed changing ages and ids and would otherwise open a fresh issue
+ * per occurrence and bury a recurring fault in noise.
+ */
+function captureAlert(
+  error: Error | unknown,
+  reason: string,
+  level: 'fatal' | 'error',
+  extra?: Record<string, unknown>,
+  extraTags?: Record<string, string>
+): void {
+  Sentry.captureException(error, {
+    level,
+    fingerprint: ['db-backup-freshness', reason],
+    tags: { check: 'db_backup_freshness', reason, ...extraTags },
+    ...(extra ? { extra } : {}),
+  });
+}
+
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);
   if (authError) {
@@ -115,6 +160,7 @@ export async function GET(request: Request) {
     // and the route owns the HTTP contract ("200 only if we can affirm a good
     // backup").
     const ok = result.ok && !truncated;
+    const summary = summarize(result, objects.length, truncated, ok);
 
     if (truncated) {
       loggers.security.error(
@@ -123,17 +169,14 @@ export async function GET(request: Request) {
           'Raise MAX_LIST_PAGES or prune the prefix.',
         { objectsSeen: objects.length, maxListPages: MAX_LIST_PAGES, reason: result.reason }
       );
-      Sentry.captureException(
+      captureAlert(
         new Error(
           `[BACKUP ALERT] db-backups/ listing truncated at ${MAX_LIST_PAGES} pages ` +
             `(${objects.length} keys seen); freshness verdict is unreliable`
         ),
-        {
-          level: 'error',
-          fingerprint: ['db-backup-freshness', 'listing_truncated'],
-          tags: { check: 'db_backup_freshness', reason: 'listing_truncated' },
-          extra: { objectsSeen: objects.length, maxListPages: MAX_LIST_PAGES },
-        }
+        'listing_truncated',
+        'error',
+        { objectsSeen: objects.length, maxListPages: MAX_LIST_PAGES }
       );
     }
 
@@ -141,15 +184,7 @@ export async function GET(request: Request) {
       eventType: 'data.read',
       resourceType: 'cron_job',
       resourceId: 'verify_db_backup_freshness',
-      details: {
-        ok,
-        reason: result.reason,
-        ageHours: result.ageHours,
-        maxAgeHours: result.maxAgeHours,
-        encrypted: result.encrypted,
-        objectsSeen: objects.length,
-        listingTruncated: truncated,
-      },
+      details: summary,
     });
 
     if (!ok) {
@@ -168,25 +203,13 @@ export async function GET(request: Request) {
           objectsSeen: objects.length,
         });
 
-        // Fingerprint by reason, not by message: the message embeds a changing
-        // age, which would otherwise open a brand-new Sentry issue every single
-        // day and bury the alert in noise instead of escalating one issue.
-        Sentry.captureException(new Error(`[BACKUP ALERT] ${result.message}`), {
-          level: 'fatal',
-          fingerprint: ['db-backup-freshness', result.reason],
-          tags: {
-            check: 'db_backup_freshness',
-            reason: result.reason,
-            encrypted: String(result.encrypted),
-          },
-          extra: {
-            ageHours: result.ageHours,
-            maxAgeHours: result.maxAgeHours,
-            newestKey: result.newest?.key ?? null,
-            newestSize: result.newest?.size ?? null,
-            objectsSeen: objects.length,
-          },
-        });
+        captureAlert(
+          new Error(`[BACKUP ALERT] ${result.message}`),
+          result.reason,
+          'fatal',
+          { ...summary, newestSize: result.newest?.size ?? null },
+          { encrypted: String(result.encrypted) }
+        );
       }
 
       // This alert is the entire point of the endpoint, and the fault it
@@ -199,22 +222,11 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          ok: false,
-          // The freshness verdict, and separately why the endpoint failed. When
-          // a truncated listing is the only fault these differ — reason stays
-          // 'fresh' while failureReason explains the 503.
-          reason: result.reason,
+          ...summary,
+          // `reason` is the freshness verdict; `failureReason` is why the
+          // endpoint failed. With a truncated listing as the only fault these
+          // differ — reason stays 'fresh' while failureReason explains the 503.
           failureReason: truncated ? 'listing_truncated' : result.reason,
-          ageHours: result.ageHours,
-          maxAgeHours: result.maxAgeHours,
-          encrypted: result.encrypted,
-          // Included on the failure path too: an operator triaging a stale
-          // alert needs to know whether the prefix holds 23 old objects or
-          // none at all before deciding between "job stopped" and "bucket
-          // wiped".
-          newestKey: result.newest?.key ?? null,
-          objectsSeen: objects.length,
-          listingTruncated: truncated,
           message: result.message,
           timestamp: new Date().toISOString(),
         },
@@ -226,14 +238,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
-      ok: true,
-      reason: result.reason,
-      ageHours: result.ageHours,
-      maxAgeHours: result.maxAgeHours,
-      encrypted: result.encrypted,
-      newestKey: result.newest?.key ?? null,
-      objectsSeen: objects.length,
-      listingTruncated: truncated,
+      ...summary,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -241,11 +246,7 @@ export async function GET(request: Request) {
     // not just log, or the check silently stops checking (the exact class of
     // bug this endpoint exists to prevent).
     loggers.api.error('[Cron] Error verifying db backup freshness:', { error });
-    Sentry.captureException(error, {
-      level: 'error',
-      fingerprint: ['db-backup-freshness', 'check_failed'],
-      tags: { check: 'db_backup_freshness', reason: 'check_failed' },
-    });
+    captureAlert(error, 'check_failed', 'error');
     await Sentry.flush(2000);
 
     return NextResponse.json(
