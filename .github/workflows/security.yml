@@ -52,7 +52,15 @@ on:
       - 'packages/lib/src/agent-workspaces/**'
       - 'apps/web/src/lib/agent-workspaces/**'
   pull_request:
-    branches: [master, pu/flash-sandbox, pu/broken-sessions]
+    # BASE branches, not head. This branch listed itself here and it bought
+    # nothing: its PR targets `master`, which is already listed, so the suite
+    # was already running on every push (and did — every commit shows one
+    # `event=pull_request` Security Tests run and no second one). The entry
+    # would only matter for a PR *targeting* this branch, and there are none.
+    # Removed rather than left as a line that provably does nothing in a
+    # security workflow. See test.yml, where the same misreading cost real
+    # capacity rather than merely being inert.
+    branches: [master, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'
