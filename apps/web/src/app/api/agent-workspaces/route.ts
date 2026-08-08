@@ -46,6 +46,7 @@ import {
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
+import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
@@ -121,20 +122,33 @@ export async function GET(request: Request) {
       listSessionConversationsBulk(workspaceIds),
       readWorkspaceGridsBulk(workspaceIds, auth.userId),
     ]);
-    const withChildren = sessions.map((session) => ({
-      ...session,
-      shells: shellsBySession.get(session.workspaceId) ?? [],
-      // The sidebar's expansion list: the threads living in this workspace.
-      conversations: conversationsBySession.get(session.workspaceId) ?? [],
-      // The sidebar's PANE-grouped expansion list, derived from the pane ROWS
-      // (labels joined at read time) — `null` for a session with no grid yet,
-      // which the sidebar reads as "fall back to the flat conversation list
-      // above."
-      workspace: workspaceListEntryFromGrid(
-        session.workspaceId,
-        gridBySession.get(session.workspaceId) ?? null,
-      ),
-    }));
+    const withChildren = sessions.map((session) => {
+      const grid = gridBySession.get(session.workspaceId) ?? null;
+      return {
+        ...session,
+        shells: shellsBySession.get(session.workspaceId) ?? [],
+        // THE list of threads in this workspace — one collection, every thread,
+        // each annotated with where it sits in the grid if it is placed at all
+        // (issue #2373).
+        //
+        // This and `workspace` below used to be two lists the client chose
+        // between, and the choice was wrong in the common case: an open
+        // workspace always has a grid, so `AgentsSidebar` always rendered the
+        // pane branch, and a thread with no pane row was invisible. Placement
+        // is best-effort by design, and a thread created without `placeInGrid`
+        // is never placed at all, so "created but not placed" is a resting
+        // state this list must serve, not a transient to wait out.
+        conversations: annotateConversationsWithPanes(
+          conversationsBySession.get(session.workspaceId) ?? [],
+          grid,
+        ),
+        // The grid's GEOMETRY — column widths, pane heights, ordering — for the
+        // pane surface to render. Deliberately no longer the sidebar's source
+        // for "which threads exist": that question has exactly one answer now,
+        // and it is the list above.
+        workspace: workspaceListEntryFromGrid(session.workspaceId, grid),
+      };
+    });
     return NextResponse.json({ sessions: withChildren });
   } catch (error) {
     loggers.api.error(

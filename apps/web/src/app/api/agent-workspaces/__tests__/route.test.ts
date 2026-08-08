@@ -132,7 +132,17 @@ describe('GET /api/agent-workspaces', () => {
     const response = await GET(new Request('http://localhost/api/agent-workspaces'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO], conversations: [CONVERSATION_ENTRY], workspace: null }],
+      // Every thread carries its placement (issue #2373). `pane: null` here
+      // because this session has no grid — the point being that the thread is
+      // LISTED regardless, which is what the sidebar renders from now.
+      sessions: [
+        {
+          ...SESSION_DTO,
+          shells: [SHELL_DTO],
+          conversations: [{ ...CONVERSATION_ENTRY, pane: null }],
+          workspace: null,
+        },
+      ],
     });
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
     // ONE bulk call each, however many sessions — the poll must not be 1+3N.
@@ -157,6 +167,54 @@ describe('GET /api/agent-workspaces', () => {
       activePaneId: 'pane-1',
       pendingPickerPaneId: null,
     });
+  });
+
+  /**
+   * ONE LIST, NOT TWO (issue #2373). The route used to hand back the flat
+   * conversations AND the grid and let the client choose; `AgentsSidebar` chose
+   * the grid, so a thread with no pane row was invisible. Placement is
+   * best-effort, so that was the ordinary state of a freshly created thread —
+   * production carried 1 of 3 and 6 of 10 such threads.
+   */
+  it('annotates each thread with its pane, and LISTS a thread that has none', async () => {
+    mockListSessionConversationsBulk.mockResolvedValue(
+      new Map([['ses-1', [CONVERSATION_ENTRY, { ...CONVERSATION_ENTRY, conversationId: 'conv-unplaced' }]]]),
+    );
+    mockReadWorkspaceGridsBulk.mockResolvedValue(
+      new Map([
+        [
+          'ses-1',
+          [
+            {
+              id: 'col-1',
+              panes: [
+                { id: 'pane-1', scope: { kind: 'chat', targetId: CONVERSATION_ENTRY.conversationId } },
+              ],
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+    const conversations = body.sessions[0].conversations;
+
+    expect(conversations).toHaveLength(2);
+    expect(conversations[0].pane).toEqual({ paneId: 'pane-1', columnId: 'col-1', orderIndex: 0 });
+    // The one the old shape dropped on the floor.
+    expect(conversations[1].conversationId).toBe('conv-unplaced');
+    expect(conversations[1].pane).toBeNull();
+
+    // The annotation and the geometry AGREE, because both derive from one
+    // grid read (`route.ts` reads `grid` once and passes it to both). Their
+    // disagreeing is the shape of the original bug — two views of placement
+    // that could drift — so it is worth an assertion even though the geometry
+    // itself is already covered by 'should attach the grid as `workspace`'
+    // above, which predates this PR. (An earlier revision of this test claimed
+    // that coverage did not exist. It did; I had searched for it badly.)
+    const placedPaneId = conversations[0].pane.paneId;
+    expect(body.sessions[0].workspace.columns[0].panes[0].id).toBe(placedPaneId);
+    expect(body.sessions[0].workspace.columns[0].id).toBe(conversations[0].pane.columnId);
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {

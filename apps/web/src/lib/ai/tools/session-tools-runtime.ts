@@ -48,7 +48,7 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
-import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
+import { applyLayoutVerbForWorkspace } from '@/lib/agent-workspaces/workspace-placement';
 import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import {
   AgentNotInSessionDriveError,
@@ -977,6 +977,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           userId: ownerId,
           agentPageId,
           workspaceId,
+          // The spawning conversation shares this grid when the worker lands in
+          // the caller's own workspace — never evicted by its own spawn.
+          excludeTargetId: callerConversationId,
+          // An agent minting a worker has no browser pane waiting to be filled,
+          // so the server places it. The pane-picker routes deliberately do not
+          // ask for this — see `placeInGrid`'s doc.
+          placeInGrid: true,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -1015,8 +1022,6 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       }
       return { ok: true, workspaceId };
     },
-
-    placeWorkerPane,
 
     // The layout family's two seams (issue #2208). The read is the SAME
     // label-joining snapshot the layout GET serves, so a model and a browser

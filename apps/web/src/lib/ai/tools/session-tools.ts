@@ -428,27 +428,6 @@ export interface SessionToolsDeps {
     | { ok: false; reason: string; detail?: string }
   >;
   /**
-   * Give the freshly spawned worker a PANE in its workspace's grid (epic
-   * Phase 3) — placement the blob era could not express at all, because the
-   * grid's only writer was a browser's debounced PUT. Applied as a real
-   * layout verb, so it lands in the pane rows (visible whenever that grid is
-   * next opened) and broadcasts to any grid already open.
-   *
-   * A courtesy on top of the spawn, never a precondition: the implementation
-   * swallows its own failures, and this dep is OPTIONAL so a test harness (or
-   * any surface with no grid to place into) simply omits it.
-   */
-  placeWorkerPane?: (input: {
-    workspaceId: string;
-    conversationId: string;
-    name: string;
-    agentPageId: string | null;
-    /** Derived from the tool call id — a retried spawn must not place twice. */
-    opId: string;
-    /** The spawning conversation: never evicted by its own spawn. */
-    excludeTargetId?: string;
-  }) => Promise<void>;
-  /**
    * Dispatch one turn into a worker's conversation THROUGH THE STANDARD CHAT
    * PIPELINE (the `ai_stream_sessions` background-run machinery normal
    * conversations use) — never a second engine. `wait` blocks for the reply.
@@ -521,8 +500,8 @@ export interface SessionToolsDeps {
    *
    * `applied: false` is a real, successful answer: the reducer is total, so a
    * stale pane id or a resize that resolves to the size already in force
-   * changes nothing rather than failing. OPTIONAL, like `placeWorkerPane` —
-   * a harness with no grid simply omits it and the tools say so.
+   * changes nothing rather than failing. OPTIONAL — a harness with no grid
+   * simply omits it and the tools say so.
    */
   applyLayoutVerb?: (input: {
     workspaceId: string;
@@ -1040,22 +1019,21 @@ export function createSessionTools(deps: SessionToolsDeps): {
           };
         }
 
-        // Place the worker's pane BEFORE dispatching: the first token of its
-        // reply should stream into a pane the user is already watching, not
-        // arrive before the surface it belongs to exists. `toolCallId` keys
-        // the placement so an SDK retry of this one call replays through the
-        // verb engine's op memory instead of opening a second pane.
-        const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
-        if (deps.placeWorkerPane && toolCallId) {
-          await deps.placeWorkerPane({
-            workspaceId: created.workspaceId,
-            conversationId,
-            name: plan.name,
-            agentPageId,
-            opId: `spawn_session:${toolCallId}`,
-            excludeTargetId: callerConversationId,
-          });
-        }
+        // Placement moved inside `createWorkerSession`, which this tool asks
+        // for with `placeInGrid` (issue #2373). It used to sit here, gated on
+        // `deps.placeWorkerPane && toolCallId`, and silently skipped placement
+        // whenever the SDK gave no call id. The op key now derives from the
+        // conversation id, which is always available and idempotent on the
+        // fact that matters: one pane per thread.
+        //
+        // Still opt-in per caller, not universal — the pane-picker routes
+        // deliberately don't ask, because a browser pane is already waiting to
+        // be bound and a second server placement would race it (codex P1).
+        // Their threads are findable regardless: visibility stopped depending
+        // on placement the moment the read model became one list.
+        //
+        // It lands BEFORE the dispatch below, so the worker's first token
+        // streams into a pane the user is already watching.
 
         const dispatched = await deps.dispatch({
           conversationId,

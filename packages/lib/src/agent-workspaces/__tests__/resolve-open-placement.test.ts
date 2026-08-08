@@ -12,7 +12,7 @@
  * refusals, rather than a merged predicate neither caller can read.
  */
 import { describe, it, expect } from 'vitest';
-import { resolveOpenPlacement, type PaneState, type WorkspaceState } from '../workspace-layout-verbs';
+import { isReplaceable, resolveOpenPlacement, type PaneState, type WorkspaceState } from '../workspace-layout-verbs';
 import type { PaneScope } from '../contract';
 
 const chat = (targetId: string | null, name = 'Conversation'): PaneScope => ({
@@ -170,5 +170,36 @@ describe('resolveOpenPlacement', () => {
         paneId: 'pane-1',
       });
     });
+  });
+});
+
+/**
+ * WHY A SERVER-SIDE PLACEMENT MUST NOT RACE THE PANE PICKER (issue #2373,
+ * review finding — codex P1).
+ *
+ * `AgentPanes.handlePickAgent` binds its pane to a LOADING scope
+ * (`{ kind: 'chat', targetId: null }`), POSTs the creation, then binds that
+ * same pane to the new conversation. If the creation ALSO placed server-side,
+ * the placement would run against a grid whose only candidate pane is that
+ * loading one — and a loading pane is deliberately not replaceable, so the
+ * placement resolves to `split` and opens a SECOND pane. The client's own bind
+ * then leaves one conversation displayed twice.
+ *
+ * The rule below is what makes that true, so it is pinned here: creation places
+ * only for callers with no client pane in flight (`placeInGrid`, see
+ * `agent-workspaces-runtime.ts`).
+ */
+describe('a loading pane is not replaceable — the picker flow depends on it', () => {
+  it('does not treat a chat pane awaiting its conversation as fillable', () => {
+    expect(isReplaceable(pane('pane-1', chat(null, 'New conversation')))).toBe(false);
+  });
+
+  it('does treat an empty pane and a bound chat pane as fillable', () => {
+    expect(isReplaceable(pane('pane-1', null))).toBe(true);
+    expect(isReplaceable(pane('pane-1', chat('conv-1')))).toBe(true);
+  });
+
+  it('never treats a terminal as fillable — a shell is not a surface to evict', () => {
+    expect(isReplaceable(pane('pane-1', terminal('sh-1')))).toBe(false);
   });
 });

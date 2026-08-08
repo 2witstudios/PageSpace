@@ -25,6 +25,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
+import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -114,6 +115,7 @@ import {
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
@@ -139,7 +141,12 @@ interface SessionFixture {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
-  /** Omitted (undefined) in most fixtures — the sidebar reads that as "fall back to the flat conversation list above." */
+  /**
+   * The saved pane grid, omitted in most fixtures. Since issue #2373 the
+   * sidebar no longer picks a row shape from this — it annotates the list
+   * above with it, exactly as the route does. Left `unknown` because the
+   * fixtures are deliberately loose literals; `gridOf` narrows it once.
+   */
   workspace?: unknown;
 }
 
@@ -158,10 +165,27 @@ const SESSION: SessionFixture = {
   shells: [],
 };
 
+/**
+ * Serve a listing the way the ROUTE serves one (issue #2373): each thread
+ * annotated with its pane placement, using the server's own
+ * `annotateConversationsWithPanes`. Fixtures cannot drift from the shape the
+ * sidebar actually receives — a `workspace` grid and a `conversations` list
+ * that disagreed about placement is precisely the bug this suite now guards.
+ */
+const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
+  (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
+
 const respondWithSessions = (sessions: SessionFixture[]) => {
+  const annotated = sessions.map((session) => ({
+    ...session,
+    conversations: annotateConversationsWithPanes(
+      session.conversations,
+      gridOf(session.workspace),
+    ),
+  }));
   mockFetchWithAuth.mockResolvedValue({
     ok: true,
-    json: async () => ({ sessions }),
+    json: async () => ({ sessions: annotated }),
   });
 };
 
@@ -256,9 +280,13 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  test('falls back to a flat conversation list when the session has no saved pane grid', async () => {
-    // SESSION carries no `workspace` — a session never opened under
-    // `useWorkspaceServerSync` (or opened only by an older client).
+  // Named for the deleted fork ("falls back to a flat conversation list") until
+  // issue #2373. There is no fallback now — there is one list, and a session
+  // with no grid is just the case where every thread in it is unplaced. Keeping
+  // the old name would have implied the branch still exists.
+  test('lists a session\'s threads when it has no saved pane grid at all', async () => {
+    // SESSION carries no `workspace` — a session never opened in the grid (or
+    // opened only by a client old enough to predate the layout sync).
     const user = userEvent.setup();
     renderSidebar();
 
@@ -300,6 +328,65 @@ describe('AgentsSidebar', () => {
       // Two panes, each showing its own conversation — two sibling rows.
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
       expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    /**
+     * THE BUG (issue #2373). The expansion used to be
+     * `chatPanes ? … : session.conversations`, and an open workspace always
+     * has a grid — so the pane branch always won and a thread with no pane row
+     * simply did not render. Placement is best-effort, so that is the ordinary
+     * state of a freshly spawned worker: production showed one workspace with
+     * 3 threads and 2 panes, another with 10 threads and 4 panes. Six threads
+     * were unreachable from the sidebar entirely.
+     *
+     * Fails on the pre-fix component: only the two placed rows appear.
+     */
+    test('renders a thread that has NO pane, alongside the placed ones', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [
+            ...SESSION.conversations,
+            // Spawned, claimed, never placed — the "hi" conversation from the
+            // production repro.
+            { conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' },
+          ],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+      expect(screen.getByText('Researcher — hi')).toBeDefined();
+      expect(screen.getAllByTestId('sidebar-conversation-row')).toHaveLength(3);
+    });
+
+    test('an unplaced thread closes the THREAD — there is no pane to unbind', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [{ conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' }],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — hi'));
+      await user.click(await screen.findByText('Close'));
+
+      // The conversation DELETE, not a layout verb: an unplaced thread has no
+      // pane binding to reset.
+      await waitFor(() => {
+        expect(mockDel).toHaveBeenCalledWith(
+          expect.stringContaining('/conversations/conv-unplaced'),
+        );
+      });
     });
 
     test('clicking a pane row selects its conversation', async () => {
@@ -354,7 +441,7 @@ describe('AgentsSidebar', () => {
 
     test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
       // Deliberately NO local grid: the session isn't the displayed one, so
-      // `AgentPanes`/`useWorkspaceServerSync` never hydrated it. The click
+      // `AgentPanes` and its layout sync never hydrated it. The click
       // must seat the row's own server-listing snapshot before focusing —
       // `selectPane` no-ops on a session the store has never seen (review
       // P1, chatgpt-codex-connector).
@@ -632,6 +719,63 @@ describe('AgentsSidebar', () => {
       });
     });
 
+    /**
+     * THE SAME CASE, FROM A SESSION THE STORE HAS NEVER SEEN (review finding —
+     * CodeRabbit).
+     *
+     * A sidebar row can act on a session that is not the displayed one, and for
+     * that session `AgentPanes` — and the layout sync that seats its grid — was
+     * never mounted. `closePaneConversation` read the store raw, got undefined,
+     * defaulted `shownElsewhere` to FALSE, and turned "close this pane" into
+     * "DELETE this conversation" for a thread still open in another pane.
+     *
+     * The test above pre-hydrates the store, which is exactly why it could not
+     * see this. Here the store is deliberately left empty: the fix seats the
+     * row's own `session.workspace` snapshot through `ensureLocalWorkspace`
+     * first, so the second pane is visible and only the clicked pane resets.
+     *
+     * Fails on the pre-fix component with a DELETE.
+     */
+    test('closing a shared pane in an UNHYDRATED session still resets locally — never DELETEs', async () => {
+      const sharedWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      // NO hydrateWorkspace — this session was never opened in the grid.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      // Assert the RESET, not merely the absence of a DELETE (review finding —
+      // CodeRabbit): a bare early return on `shownElsewhere` would leave the
+      // clicked pane still bound and pass a no-DELETE-only assertion. The
+      // clicked pane must be emptied and its sibling left alone, which is also
+      // what proves the fix seated the grid — an unseated one cannot see
+      // pane-2, so it would have taken the DELETE branch instead.
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0].panes;
+        expect(panes?.find((p) => p.id === 'pane-1')?.scope).toBeNull();
+      });
+      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
+      expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      expect(mockDel).not.toHaveBeenCalled();
+    });
+
     test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
       const sharedWorkspace = {
         id: 'ses-1',
@@ -655,10 +799,11 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      // Both panes show the identical label (same shared conversation) —
-      // pane-1 renders first, matching `columns[0].panes` order.
-      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
-      fireEvent.contextMenu(pane1Row);
+      // ONE row, though the thread occupies two panes — `findByText` throws on
+      // a second match, so this also pins the property the pane-keyed rows
+      // could not give: the sidebar lists THREADS. The row acts on the thread's
+      // first placement (pane-1), which is what the annotator records.
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() => {
@@ -1575,7 +1720,15 @@ describe('AgentsSidebar', () => {
     });
 
     test('typing filters the drive\'s sessions by name, and clearing the query restores the rest', async () => {
-      respondWithSessions([SESSION, { ...SESSION, sessionId: 'ses-2', name: 'design review' }]);
+      // Override BOTH ids. `sessionId` is only the rolling-deploy compat twin;
+      // the sidebar keys rows on the canonical `workspaceId`, so overriding
+      // the twin alone gave two rows keyed `ses-1` — React warned about the
+      // duplicate key and this "two sessions" test was really rendering one
+      // session twice.
+      respondWithSessions([
+        SESSION,
+        { ...SESSION, workspaceId: 'ses-2', sessionId: 'ses-2', name: 'design review' },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 

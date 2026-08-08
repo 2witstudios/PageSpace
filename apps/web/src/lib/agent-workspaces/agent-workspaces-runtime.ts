@@ -76,6 +76,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import {
   closeConversationInSessionWith,
@@ -409,8 +410,34 @@ export async function createConversationInSession(input: {
   workspaceId: string;
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
+  /**
+   * The spawning conversation, when it shares this grid — never evicted by its
+   * own spawn. Only `spawn_session` has one.
+   */
+  excludeTargetId?: string;
+  /**
+   * Put the new thread in the workspace's grid.
+   *
+   * OPT-IN, and the opt-out is the important half. A caller that already has a
+   * pane in mind must NOT ask for this: the pane picker
+   * (`AgentPanes.handlePickAgent`) binds its pane to a LOADING scope
+   * (`{ kind: 'chat', targetId: null }`), POSTs the creation, then binds that
+   * same pane to the new conversation. A loading pane is not `isReplaceable`
+   * (`workspace-layout-verbs.ts:861` — `targetId !== null` fails), so a server
+   * placement resolves to `split` and opens a SECOND pane; the client's own
+   * bind then leaves one conversation displayed twice (review finding — codex
+   * P1).
+   *
+   * So this is for creators with no client pane to fill: `spawn_session`, where
+   * an agent mints a worker and nothing in a browser is waiting to place it.
+   *
+   * Not placing is safe. A thread's VISIBILITY no longer depends on having a
+   * pane — the listing carries unplaced threads and the sidebar renders them
+   * (issue #2373). Placement is about the grid, not about being findable.
+   */
+  placeInGrid?: boolean;
 }): Promise<void> {
-  return withSessionListingLock(input.workspaceId, () =>
+  await withSessionListingLock(input.workspaceId, () =>
     createConversationInSessionWith(
       {
         ...buildClaimDeps(),
@@ -427,6 +454,35 @@ export async function createConversationInSession(input: {
       input,
     ),
   );
+
+  if (!input.placeInGrid) return;
+
+  // The opId derives from the CONVERSATION id, not a caller-supplied
+  // `toolCallId`. The old gate in `spawn_session` was
+  // `if (deps.placeWorkerPane && toolCallId)`, which silently skipped placement
+  // whenever the SDK handed it no call id. A conversation-keyed op is always
+  // available and idempotent on the fact that matters: one pane per thread,
+  // however many times creation is retried.
+  //
+  // Best-effort, and AFTER the listing lock: a grid that cannot be written must
+  // not fail a conversation that already exists. Degrading is safe because the
+  // thread is listed either way now — unplaced rather than invisible.
+  try {
+    await placeWorkerPane({
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      name: input.title ?? 'New conversation',
+      agentPageId: input.agentPageId,
+      opId: `create_conversation:${input.conversationId}`,
+      ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
+    });
+  } catch (error) {
+    loggers.api.warn('conversation created but its pane could not be placed', {
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
 }
 
 /**
