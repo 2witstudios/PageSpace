@@ -40,10 +40,35 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
     const prevMessageIdsRef = useRef<string[]>(messages.map((m) => m.id));
     const prevScrollHeightRef = useRef(0);
 
+    // Identity-based item keys. Without this, virtual-core defaults to
+    // `getItemKey = (index) => index`, so its itemSizeCache maps POSITION -> height:
+    // a "load older" prepend silently reassigns every measured height to the wrong
+    // message, and switching conversations carries the previous thread's heights
+    // over (the virtualizer instance is never remounted). Keying by message id makes
+    // the cache content-addressed, which is what makes measuring incrementally —
+    // rather than wiping the cache wholesale — correct.
+    //
+    // Read through a ref so the callback identity is STABLE. `messages` gets a new
+    // array identity on every streamed part; if that reached virtual-core as a new
+    // `getItemKey`, it would invalidate getMeasurementOptions and null `pendingMin`
+    // on every part, forcing a full O(count) measurements rebuild instead of the
+    // incremental tail update the virtualizer is built around. (It would not clear
+    // itemSizeCache, so no collapse — purely wasted work.) Mirroring a prop into a
+    // ref during render is safe here because the ref is only ever read as a lookup
+    // table: it accumulates no state, so a render React discards cannot leave it in
+    // a position a committed render would not also reach.
+    const messagesRef = useRef(messages);
+    messagesRef.current = messages;
+    // `||` rather than `??` so a blank id degrades to the index instead of
+    // collapsing every such row onto one cache entry — matching what the row's
+    // React key did before.
+    const getItemKey = useCallback((index: number) => messagesRef.current[index]?.id || index, []);
+
     const virtualizer = useVirtualizer({
       count: messages.length,
       getScrollElement: () => scrollRef.current,
       estimateSize: () => estimatedRowHeight,
+      getItemKey,
       overscan,
       gap,
     });
@@ -99,12 +124,31 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
       }
     }, [messages, scrollRef]);
 
-    useEffect(() => {
-      const rafId = requestAnimationFrame(() => {
-        virtualizer.measure();
-      });
-      return () => cancelAnimationFrame(rafId);
-    }, [messages, virtualizer]);
+    // NOTE: nothing in this component may call `virtualizer.measure()` — not on a
+    // `messages` change, and not on a pane resize either.
+    //
+    // `measure()` clears the entire itemSizeCache (virtual-core 3.15.0), so every row
+    // falls back to `estimateSize` and `getTotalSize()` collapses. Because this
+    // container is `contain: strict` with height = getTotalSize(), the scroller's
+    // scrollHeight IS that value, so the browser clamps scrollTop upward by the full
+    // delta and the viewport lands near the top — then use-stick-to-bottom animates
+    // the long way back down. `messages` gets a new array identity on every stream
+    // part, so doing it there fired on every tool call: the "chat jumps to the top"
+    // bug this component exists to not have.
+    //
+    // A pane resize (the chat sits inside Layout.tsx's ResizablePanelGroup) is the
+    // one case where wiping looks justified, since a width change reflows rows that
+    // are unmounted and so have no observer of their own to report it. It isn't:
+    //   - Mounted rows already re-measure themselves. virtual-core observes each one
+    //     via `ref={virtualizer.measureElement}` and calls resizeItem when it
+    //     resizes, compensating scrollTop for above-viewport changes.
+    //   - For unmounted rows, a stale real height — measured at a slightly different
+    //     width — is a far better estimate than the flat estimateSize the wipe would
+    //     replace it with. Invalidating makes getTotalSize() *less* accurate, and
+    //     collapses it hard enough to reproduce the jump above.
+    // So stale heights are left in place and corrected per-row as rows scroll back
+    // into view. The cost is a scrollbar that is slightly off until then; the
+    // alternative is the bug.
 
     if (messages.length === 0) {
       return null;
@@ -124,7 +168,10 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
 
           return (
             <div
-              key={message.id || virtualRow.index}
+              // Same identifier the virtualizer caches this row's height under
+              // (see getItemKey above), so React's identity and the size cache's
+              // can never disagree.
+              key={virtualRow.key}
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               className="absolute top-0 left-0 w-full"
