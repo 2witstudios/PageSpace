@@ -27,19 +27,19 @@ import {
 } from '../workspace-node';
 
 function root(): RootNode {
-  return { nodeType: 'root', id: 'root-1', parentId: null, orderIndex: 0, axis: 'row' };
+  return { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row' };
 }
 
-function split(id: string, parentId: string, orderIndex: number): SplitNode {
-  return { nodeType: 'split', id, parentId, orderIndex, axis: 'column' };
+function split(id: string, parentId: string, position: number): SplitNode {
+  return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, orderIndex: number): PaneNode {
-  return { nodeType: 'pane', id, parentId, orderIndex, target: { kind: 'chat', id: `conv-${id}` } };
+function pane(id: string, parentId: string | null, position: number): PaneNode {
+  return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 
 describe('childrenOf', () => {
-  it('should return a parent’s children ordered by orderIndex, whatever order the list is in', () => {
+  it('should return a parent’s children ordered by position, whatever order the list is in', () => {
     const nodes = [root(), pane('b', 'root-1', 1), pane('c', 'root-1', 2), pane('a', 'root-1', 0)];
     expect(childrenOf(nodes, 'root-1').map((n) => n.id)).toEqual(['a', 'b', 'c']);
   });
@@ -71,7 +71,7 @@ describe('detachedOf', () => {
     expect(detachedOf(nodes).map((n) => n.id)).toEqual(['parked']);
   });
 
-  it('should order parked panes by orderIndex, so the sidebar has a stable list', () => {
+  it('should order parked panes by position, so the sidebar has a stable list', () => {
     const nodes = [root(), pane('second', null, 1), pane('first', null, 0)];
     expect(detachedOf(nodes).map((n) => n.id)).toEqual(['first', 'second']);
   });
@@ -99,8 +99,8 @@ describe('descendantsOf', () => {
     // must stay total even on input `validateTree` would reject, because this
     // helper is what the validator itself walks with.
     const cyclic: WorkspaceNode[] = [
-      { nodeType: 'split', id: 'a', parentId: 'b', orderIndex: 0, axis: 'row' },
-      { nodeType: 'split', id: 'b', parentId: 'a', orderIndex: 0, axis: 'row' },
+      { nodeType: 'split', id: 'a', parentId: 'b', position: 0, axis: 'row' },
+      { nodeType: 'split', id: 'b', parentId: 'a', position: 0, axis: 'row' },
     ];
     expect(descendantsOf(cyclic, 'a').map((n) => n.id)).toEqual(['b']);
   });
@@ -119,10 +119,10 @@ describe('findNode', () => {
 describe('upsertNodes', () => {
   it('should replace a node by id and leave its siblings alone', () => {
     const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
-    const moved: PaneNode = { ...pane('a', 'root-1', 0), orderIndex: 5 };
+    const moved: PaneNode = { ...pane('a', 'root-1', 0), position: 5 };
     const after = upsertNodes(before, [moved]);
-    expect(findNode(after, 'a')?.orderIndex).toBe(5);
-    expect(findNode(after, 'b')?.orderIndex).toBe(1);
+    expect(findNode(after, 'a')?.position).toBe(5);
+    expect(findNode(after, 'b')?.position).toBe(1);
   });
 
   it('should append a node whose id is not already present', () => {
@@ -132,8 +132,8 @@ describe('upsertNodes', () => {
 
   it('should leave the input untouched', () => {
     const before = [root(), pane('a', 'root-1', 0)];
-    upsertNodes(before, [{ ...pane('a', 'root-1', 0), orderIndex: 9 }]);
-    expect(findNode(before, 'a')?.orderIndex).toBe(0);
+    upsertNodes(before, [{ ...pane('a', 'root-1', 0), position: 9 }]);
+    expect(findNode(before, 'a')?.position).toBe(0);
   });
 
   it('should give the same result applied twice as applied once — a replayed write must be a no-op', () => {

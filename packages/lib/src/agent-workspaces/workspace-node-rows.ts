@@ -65,7 +65,7 @@ export interface WorkspaceNodeRow {
   rootId: string;
   /** `null` is the root OR a detached pane; `nodeType` is what tells them apart. */
   parentId: string | null;
-  orderIndex: number;
+  position: number;
   nodeType: WorkspaceNode['nodeType'];
   /** Containers only. Null on a pane. */
   axis: NodeAxis | null;
@@ -102,30 +102,30 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
       // root is the row whose TYPE says so, and its null parent is then a
       // consequence the schema insists on rather than a definition.
       parentId: z.null(),
-      orderIndex: z.literal(0),
+      position: z.literal(0),
       axis: nodeAxisSchema,
       fraction: z.null(),
       targetKind: z.null(),
       targetId: z.null(),
     })
-    .transform(({ id, axis }) => ({ nodeType: 'root' as const, id, parentId: null, orderIndex: 0 as const, axis })),
+    .transform(({ id, axis }) => ({ nodeType: 'root' as const, id, parentId: null, position: 0 as const, axis })),
   z
     .object({
       nodeType: z.literal('split'),
       id: z.string().min(1),
       /** Never null: a split has no durable target, so a parked one is garbage. */
       parentId: z.string().min(1),
-      orderIndex: z.number().int(),
+      position: z.number().int(),
       axis: nodeAxisSchema,
       fraction: z.number().nullable(),
       targetKind: z.null(),
       targetId: z.null(),
     })
-    .transform(({ id, parentId, orderIndex, axis, fraction }) => ({
+    .transform(({ id, parentId, position, axis, fraction }) => ({
       nodeType: 'split' as const,
       id,
       parentId,
-      orderIndex,
+      position,
       axis,
       ...(fraction === null ? {} : { fraction }),
     })),
@@ -135,7 +135,7 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
       id: z.string().min(1),
       /** Null here means DETACHED — in the workspace, off the screen. */
       parentId: z.string().min(1).nullable(),
-      orderIndex: z.number().int(),
+      position: z.number().int(),
       axis: z.null(),
       fraction: z.number().nullable(),
       targetKind: paneTargetKindSchema.nullable(),
@@ -147,11 +147,11 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
     .refine((row) => (row.targetKind === null) === (row.targetId === null), {
       message: 'a pane target needs both a kind and an id, or neither',
     })
-    .transform(({ id, parentId, orderIndex, fraction, targetKind, targetId }) => ({
+    .transform(({ id, parentId, position, fraction, targetKind, targetId }) => ({
       nodeType: 'pane' as const,
       id,
       parentId,
-      orderIndex,
+      position,
       ...(fraction === null ? {} : { fraction }),
       target: targetKind === null || targetId === null ? null : { kind: targetKind, id: targetId },
     })),
@@ -213,7 +213,7 @@ export function nodesFromRows(rows: readonly WorkspaceNodeRow[], rootId: string)
  * that could be wrong.
  */
 export function rowFromNode(node: WorkspaceNode, rootId: string): WorkspaceNodeRow {
-  const scope = { id: node.id, rootId, orderIndex: node.orderIndex };
+  const scope = { id: node.id, rootId, position: node.position };
   switch (node.nodeType) {
     case 'root':
       return {
@@ -295,6 +295,13 @@ export interface RenderTree {
  * canonical and every write goes to it, so there is deliberately no inverse
  * here — a tree that could be written back would be a second source of truth,
  * which is the whole disease.
+ *
+ * Not `content/tree-utils.ts`'s `buildTree`, though `position` now makes a
+ * `WorkspaceNode` satisfy its constraint. That builder answers a different
+ * question: it returns a FOREST, and it treats a node whose parent it cannot
+ * resolve as a root — which is precisely the re-parenting refused below. The
+ * shared field name buys the kinship in the types; it does not buy the
+ * semantics a workspace needs.
  *
  * Total on any list, including one no validator has seen. The visited set is
  * for a duplicated id specifically: a repeated id makes one parent pointer

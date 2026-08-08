@@ -27,7 +27,7 @@ function rootRow(overrides: Partial<WorkspaceNodeRow> = {}): WorkspaceNodeRow {
     id: 'root-1',
     rootId: 'root-1',
     parentId: null,
-    orderIndex: 0,
+    position: 0,
     nodeType: 'root',
     axis: 'row',
     fraction: null,
@@ -42,7 +42,7 @@ function splitRow(overrides: Partial<WorkspaceNodeRow> = {}): WorkspaceNodeRow {
     id: 'split-1',
     rootId: 'root-1',
     parentId: 'root-1',
-    orderIndex: 0,
+    position: 0,
     nodeType: 'split',
     axis: 'column',
     fraction: null,
@@ -57,7 +57,7 @@ function paneRow(overrides: Partial<WorkspaceNodeRow> = {}): WorkspaceNodeRow {
     id: 'pane-1',
     rootId: 'root-1',
     parentId: 'root-1',
-    orderIndex: 0,
+    position: 0,
     nodeType: 'pane',
     axis: null,
     fraction: null,
@@ -73,17 +73,17 @@ describe('nodeFromRow', () => {
       nodeType: 'root',
       id: 'root-1',
       parentId: null,
-      orderIndex: 0,
+      position: 0,
       axis: 'row',
     });
   });
 
   it('should read a split row as a split node', () => {
-    expect(nodeFromRow(splitRow({ id: 'col', orderIndex: 2 }))).toStrictEqual({
+    expect(nodeFromRow(splitRow({ id: 'col', position: 2 }))).toStrictEqual({
       nodeType: 'split',
       id: 'col',
       parentId: 'root-1',
-      orderIndex: 2,
+      position: 2,
       axis: 'column',
     });
   });
@@ -93,7 +93,7 @@ describe('nodeFromRow', () => {
       nodeType: 'pane',
       id: 'pane-1',
       parentId: 'root-1',
-      orderIndex: 0,
+      position: 0,
       target: { kind: 'terminal', id: 'shell-9' },
     });
   });
@@ -103,7 +103,7 @@ describe('nodeFromRow', () => {
       nodeType: 'pane',
       id: 'pane-1',
       parentId: 'root-1',
-      orderIndex: 0,
+      position: 0,
       target: null,
     });
   });
@@ -113,7 +113,7 @@ describe('nodeFromRow', () => {
       nodeType: 'pane',
       id: 'pane-1',
       parentId: null,
-      orderIndex: 0,
+      position: 0,
       target: { kind: 'chat', id: 'conv-1' },
     });
   });
@@ -131,7 +131,7 @@ describe('nodeFromRow', () => {
       nodeType: 'split',
       id: 'split-1',
       parentId: 'root-1',
-      orderIndex: 0,
+      position: 0,
       axis: 'column',
       fraction: 0,
     });
@@ -142,7 +142,7 @@ describe('nodeFromRow', () => {
   });
 
   it('should reject a root row ordered anywhere but first', () => {
-    expect(() => nodeFromRow(rootRow({ orderIndex: 3 }))).toThrow();
+    expect(() => nodeFromRow(rootRow({ position: 3 }))).toThrow();
   });
 
   it('should reject a split row with no axis, because a container with no direction cannot render', () => {
@@ -172,7 +172,7 @@ describe('nodeFromRow', () => {
 
 describe('nodesFromRows', () => {
   it('should read a workspace’s rows as nodes, in the order they arrived', () => {
-    const rows = [rootRow(), paneRow({ id: 'a' }), paneRow({ id: 'b', orderIndex: 1 })];
+    const rows = [rootRow(), paneRow({ id: 'a' }), paneRow({ id: 'b', position: 1 })];
     expect(nodesFromRows(rows, 'root-1').map((node) => node.id)).toEqual(['root-1', 'a', 'b']);
   });
 
@@ -205,11 +205,11 @@ describe('nodesFromRows', () => {
 });
 
 function rootNode(overrides: Partial<RootNode> = {}): RootNode {
-  return { nodeType: 'root', id: 'root-1', parentId: null, orderIndex: 0, axis: 'row', ...overrides };
+  return { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row', ...overrides };
 }
 
 function splitNode(overrides: Partial<SplitNode> = {}): SplitNode {
-  return { nodeType: 'split', id: 'split-1', parentId: 'root-1', orderIndex: 0, axis: 'column', ...overrides };
+  return { nodeType: 'split', id: 'split-1', parentId: 'root-1', position: 0, axis: 'column', ...overrides };
 }
 
 function paneNode(overrides: Partial<PaneNode> = {}): PaneNode {
@@ -217,7 +217,7 @@ function paneNode(overrides: Partial<PaneNode> = {}): PaneNode {
     nodeType: 'pane',
     id: 'pane-1',
     parentId: 'root-1',
-    orderIndex: 0,
+    position: 0,
     target: { kind: 'chat', id: 'conv-1' },
     ...overrides,
   };
@@ -229,7 +229,7 @@ describe('rowFromNode', () => {
       id: 'root-1',
       rootId: 'root-1',
       parentId: null,
-      orderIndex: 0,
+      position: 0,
       nodeType: 'root',
       axis: 'row',
       fraction: null,
@@ -239,11 +239,11 @@ describe('rowFromNode', () => {
   });
 
   it('should write a split’s axis and leave every leaf column null', () => {
-    expect(rowFromNode(splitNode({ id: 'col', orderIndex: 2, fraction: 0.25 }), 'root-1')).toStrictEqual({
+    expect(rowFromNode(splitNode({ id: 'col', position: 2, fraction: 0.25 }), 'root-1')).toStrictEqual({
       id: 'col',
       rootId: 'root-1',
       parentId: 'root-1',
-      orderIndex: 2,
+      position: 2,
       nodeType: 'split',
       axis: 'column',
       fraction: 0.25,
@@ -267,7 +267,7 @@ describe('rowFromNode', () => {
       id: 'pane-1',
       rootId: 'root-1',
       parentId: 'root-1',
-      orderIndex: 0,
+      position: 0,
       nodeType: 'pane',
       axis: null,
       fraction: null,
@@ -311,21 +311,21 @@ describe('buildRenderTree', () => {
   it('should nest each node under its parent, at any depth', () => {
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      splitNode({ id: 'col', orderIndex: 0 }),
-      paneNode({ id: 'top', parentId: 'col', orderIndex: 0 }),
-      paneNode({ id: 'bottom', parentId: 'col', orderIndex: 1 }),
-      paneNode({ id: 'right', parentId: 'root-1', orderIndex: 1 }),
+      splitNode({ id: 'col', position: 0 }),
+      paneNode({ id: 'top', parentId: 'col', position: 0 }),
+      paneNode({ id: 'bottom', parentId: 'col', position: 1 }),
+      paneNode({ id: 'right', parentId: 'root-1', position: 1 }),
     ];
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(col(top,bottom),right)');
   });
 
-  it('should order siblings by orderIndex, whatever order the flat list is in', () => {
+  it('should order siblings by position, whatever order the flat list is in', () => {
     const nodes: WorkspaceNode[] = [
-      paneNode({ id: 'c', orderIndex: 2 }),
+      paneNode({ id: 'c', position: 2 }),
       rootNode(),
-      paneNode({ id: 'a', orderIndex: 0 }),
-      paneNode({ id: 'b', orderIndex: 1 }),
+      paneNode({ id: 'a', position: 0 }),
+      paneNode({ id: 'b', position: 1 }),
     ];
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(a,b,c)');
@@ -337,19 +337,19 @@ describe('buildRenderTree', () => {
     // tree and forget the sidebar — which is the bug this replaces.
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      paneNode({ id: 'onscreen', orderIndex: 0 }),
-      paneNode({ id: 'parked', parentId: null, orderIndex: 0 }),
+      paneNode({ id: 'onscreen', position: 0 }),
+      paneNode({ id: 'parked', parentId: null, position: 0 }),
     ];
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
     expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
   });
 
-  it('should order detached panes by orderIndex, so the sidebar list is stable', () => {
+  it('should order detached panes by position, so the sidebar list is stable', () => {
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      paneNode({ id: 'second', parentId: null, orderIndex: 1 }),
-      paneNode({ id: 'first', parentId: null, orderIndex: 0 }),
+      paneNode({ id: 'second', parentId: null, position: 1 }),
+      paneNode({ id: 'first', parentId: null, position: 0 }),
     ];
     expect(buildRenderTree(nodes).detached.map((pane) => pane.id)).toEqual(['first', 'second']);
   });
@@ -357,7 +357,7 @@ describe('buildRenderTree', () => {
   it('should return a null tree for a list with no root, and still report what is parked', () => {
     // A workspace mid-hydration has nodes but no root yet. The renderer draws
     // nothing rather than guessing which node is the top.
-    const tree = buildRenderTree([paneNode({ id: 'parked', parentId: null, orderIndex: 0 })]);
+    const tree = buildRenderTree([paneNode({ id: 'parked', parentId: null, position: 0 })]);
     expect(tree.root).toBeNull();
     expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
   });
@@ -369,8 +369,8 @@ describe('buildRenderTree', () => {
     // instead, so a corrupt read is visible rather than plausible.
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      paneNode({ id: 'onscreen', orderIndex: 0 }),
-      paneNode({ id: 'lost', parentId: 'no-such-container', orderIndex: 0 }),
+      paneNode({ id: 'onscreen', position: 0 }),
+      paneNode({ id: 'lost', parentId: 'no-such-container', position: 0 }),
     ];
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
@@ -408,8 +408,8 @@ describe('buildRenderTree', () => {
     // that discovers it.
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      paneNode({ id: 'dup', parentId: 'root-1', orderIndex: 0 }),
-      paneNode({ id: 'dup', parentId: 'dup', orderIndex: 0 }),
+      paneNode({ id: 'dup', parentId: 'root-1', position: 0 }),
+      paneNode({ id: 'dup', parentId: 'dup', position: 0 }),
     ];
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(dup)');
@@ -465,7 +465,7 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
       id: rootId,
       rootId,
       parentId: null,
-      orderIndex: 0,
+      position: 0,
       nodeType: 'root',
       axis: pick(AXES),
       fraction: null,
@@ -476,7 +476,7 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
 
   const containers = [rootId];
   const childCount = new Map<string, number>();
-  const nextOrderIndex = (parentId: string): number => {
+  const nextPosition = (parentId: string): number => {
     const next = childCount.get(parentId) ?? 0;
     childCount.set(parentId, next + 1);
     return next;
@@ -492,7 +492,7 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
         id,
         rootId,
         parentId,
-        orderIndex: nextOrderIndex(parentId),
+        position: nextPosition(parentId),
         nodeType: 'split',
         axis: pick(AXES),
         fraction: maybeFraction(),
@@ -506,7 +506,7 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
       id,
       rootId,
       parentId,
-      orderIndex: nextOrderIndex(parentId),
+      position: nextPosition(parentId),
       nodeType: 'pane',
       axis: null,
       fraction: maybeFraction(),
@@ -524,7 +524,7 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
       id: `d-${seed}-${n}`,
       rootId,
       parentId: null,
-      orderIndex: n,
+      position: n,
       nodeType: 'pane',
       axis: null,
       fraction: maybeFraction(),

@@ -20,8 +20,26 @@
  * left with exactly the invariants a type cannot state — one root, no cycles,
  * no dangling parent, depth and count caps, fractions that settle.
  *
+ * **Why `position` and not `orderIndex`.** PageSpace already has a tree — the
+ * page tree — and it already names this field `position` (`pages.position` in
+ * `packages/db/src/schema/core.ts`). The generic builder in
+ * `content/tree-utils.ts` is constrained on `{id, parentId, position?}`, so
+ * under this name a `WorkspaceNode` satisfies it structurally and the kinship
+ * with the page tree is visible in the types instead of being something a
+ * reader has to notice. One concept called two names in one codebase is the
+ * drift this model exists to remove.
+ *
+ * **Why it stays a contiguous integer.** Deliberately NOT pages' fractional
+ * `real` positioning. Sibling groups here are tiny, so renumbering is
+ * O(siblings) inside the same locked transaction that made the edit — and
+ * contiguity is an invariant `validateTree` can assert, which is exactly what
+ * fractional ordering gives up in exchange for avoiding a renumbering cost
+ * this model does not have.
+ *
  * Successor to the two-level `columns[].panes[]` model in
- * `workspace-layout-verbs.ts`; both exist during the migration window.
+ * `workspace-layout-verbs.ts`, which keeps its own `orderIndex` — it is on its
+ * way out, and renaming there would be churn. Both exist during the migration
+ * window.
  */
 
 /** A container's split direction. A row of columns; a column of stacked panes. */
@@ -48,7 +66,7 @@ export interface RootNode {
   nodeType: 'root';
   id: string;
   parentId: null;
-  orderIndex: 0;
+  position: 0;
   axis: NodeAxis;
 }
 
@@ -62,7 +80,7 @@ export interface SplitNode {
   nodeType: 'split';
   id: string;
   parentId: string;
-  orderIndex: number;
+  position: number;
   axis: NodeAxis;
   /**
    * This node's share of its parent. ABSENT when the parent is unsized (its
@@ -82,7 +100,7 @@ export interface PaneNode {
   nodeType: 'pane';
   id: string;
   parentId: string | null;
-  orderIndex: number;
+  position: number;
   fraction?: number;
   target: PaneTarget | null;
 }
@@ -108,7 +126,7 @@ export function findNode(nodes: readonly WorkspaceNode[], id: string): Workspace
 export function childrenOf(nodes: readonly WorkspaceNode[], parentId: string): WorkspaceNode[] {
   return nodes
     .filter((node) => node.parentId === parentId)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    .sort((a, b) => a.position - b.position);
 }
 
 /**
@@ -132,7 +150,7 @@ export function rootOf(nodes: readonly WorkspaceNode[]): RootNode | undefined {
 export function detachedOf(nodes: readonly WorkspaceNode[]): PaneNode[] {
   return nodes
     .filter((node): node is PaneNode => node.nodeType === 'pane' && node.parentId === null)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    .sort((a, b) => a.position - b.position);
 }
 
 /**
