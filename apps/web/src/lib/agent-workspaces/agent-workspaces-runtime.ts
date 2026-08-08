@@ -76,6 +76,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import {
   closeConversationInSessionWith,
@@ -409,8 +410,13 @@ export async function createConversationInSession(input: {
   workspaceId: string;
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
+  /**
+   * The spawning conversation, when it shares this grid — never evicted by its
+   * own spawn. Only `spawn_session` has one.
+   */
+  excludeTargetId?: string;
 }): Promise<void> {
-  return withSessionListingLock(input.workspaceId, () =>
+  await withSessionListingLock(input.workspaceId, () =>
     createConversationInSessionWith(
       {
         ...buildClaimDeps(),
@@ -427,6 +433,42 @@ export async function createConversationInSession(input: {
       input,
     ),
   );
+
+  // PLACEMENT BELONGS TO CREATION, for every caller (issue #2373).
+  //
+  // It used to live in `spawn_session` alone, behind
+  // `if (deps.placeWorkerPane && toolCallId)`. The three ROUTE callers — the
+  // session spawn, the per-workspace conversation POST, and the page-agent
+  // conversation POST — created threads that were never placed at all. Paired
+  // with the sidebar's old `chatPanes ?? conversations` fork, that made every
+  // UI-created thread invisible in any workspace that already had a grid.
+  // Production carried 1 of 3 and 6 of 10 such threads.
+  //
+  // The opId is derived from the conversation id rather than a caller-supplied
+  // `toolCallId`, so it is (a) always available — the old gate silently skipped
+  // placement whenever it was not — and (b) idempotent on the fact that
+  // matters: one placement per thread, however many times creation is retried.
+  //
+  // Best-effort by design, and AFTER the lock: a grid that cannot be written
+  // must not fail a conversation that already exists. The thread is listed
+  // either way now — unplaced instead of invisible — which is exactly what
+  // makes degrading here safe.
+  try {
+    await placeWorkerPane({
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      name: input.title ?? 'New conversation',
+      agentPageId: input.agentPageId,
+      opId: `create_conversation:${input.conversationId}`,
+      ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
+    });
+  } catch (error) {
+    loggers.api.warn('conversation created but its pane could not be placed', {
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
 }
 
 /**
