@@ -546,6 +546,52 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     expect(body.reason).toBe('stale');
   });
 
+  it('reports alertDelivered=false and logs when Sentry.flush says the queue did not drain', async () => {
+    // flush() resolves false when the queue does not drain OR when no client is
+    // defined — and in that second case captureException was a no-op too, so the
+    // alert vanished. Discarding this boolean would be an alerting path reporting
+    // success while delivering nothing: the original incident, one layer down.
+    mockSend.mockResolvedValue(page([]));
+    mockFlush.mockResolvedValue(false);
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.alertDelivered).toBe(false);
+    // The logger is a separate channel, so a Sentry outage still leaves evidence.
+    expect(
+      mockLoggers.security.error.mock.calls.some(([msg]) =>
+        String(msg).includes('did not drain')
+      )
+    ).toBe(true);
+  });
+
+  it('reports alertDelivered=true when the flush succeeds', async () => {
+    mockSend.mockResolvedValue(page([]));
+    mockFlush.mockResolvedValue(true);
+
+    const body = await (await GET(request)).json();
+
+    expect(body.alertDelivered).toBe(true);
+  });
+
+  it('survives Sentry.flush throwing, and still answers 503', async () => {
+    mockSend.mockResolvedValue(page([]));
+    mockFlush.mockRejectedValue(new Error('transport closed'));
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.alertDelivered).toBe(false);
+    expect(
+      mockLoggers.security.error.mock.calls.some(([msg]) =>
+        String(msg).includes('Sentry.flush threw')
+      )
+    ).toBe(true);
+  });
+
   it('alerts (not just logs) when the listing itself fails', async () => {
     mockSend.mockRejectedValue(new Error('Tigris unreachable'));
 

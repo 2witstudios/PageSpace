@@ -166,6 +166,41 @@ function captureAlert(
   });
 }
 
+/**
+ * Flush queued Sentry events and report whether they actually left the process.
+ *
+ * `flush()` resolves false when the queue does not drain within the timeout OR
+ * when **no client is defined** — and that second case is the dangerous one: if
+ * Sentry was never initialised, `captureException` is also a no-op, so the alert
+ * this endpoint exists to raise would vanish with no trace. Discarding this
+ * boolean would reproduce the original incident one layer down: an alerting path
+ * that reports success while delivering nothing.
+ *
+ * The logger is a deliberately separate channel here, so a Sentry outage still
+ * leaves evidence somewhere, and the caller surfaces the result in the response
+ * body so an HTTP monitor can see it without Sentry being involved at all.
+ */
+async function flushAlerts(): Promise<boolean> {
+  let delivered = false;
+  try {
+    delivered = await Sentry.flush(2000);
+  } catch (flushError) {
+    loggers.security.error(
+      '[BACKUP ALERT] Sentry.flush threw — the alert was almost certainly not delivered',
+      { error: flushError }
+    );
+    return false;
+  }
+  if (!delivered) {
+    loggers.security.error(
+      '[BACKUP ALERT] Sentry.flush reported the queue did not drain — the alert may NOT have ' +
+        'been delivered. Either the transport is failing or no Sentry client is initialised, ' +
+        'in which case captureException was a no-op too. Check SENTRY_DSN and the transport.'
+    );
+  }
+  return delivered;
+}
+
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);
   if (authError) {
@@ -292,12 +327,15 @@ export async function GET(request: Request) {
       // responding so a container recycled right after the cron call cannot
       // drop the event in its transport buffer. Truncation now lands on this
       // path too, so its capture is covered by the same flush.
-      await Sentry.flush(2000);
+      const alertDelivered = await flushAlerts();
 
       return NextResponse.json(
         {
           success: false,
           ...summary,
+          // Surfaced so an HTTP monitor can tell "we alerted" from "we tried to
+          // alert": false means the Sentry event may never have left the process.
+          alertDelivered,
           // `reason` is the freshness verdict; `failureReason` is why the
           // endpoint failed. With a truncated listing as the only fault these
           // differ — reason stays 'fresh' while failureReason explains the 503.
@@ -322,7 +360,7 @@ export async function GET(request: Request) {
     // bug this endpoint exists to prevent).
     loggers.api.error('[Cron] Error verifying db backup freshness:', { error });
     captureAlert(error, 'check_failed', 'error');
-    await Sentry.flush(2000);
+    await flushAlerts();
 
     return NextResponse.json(
       {
