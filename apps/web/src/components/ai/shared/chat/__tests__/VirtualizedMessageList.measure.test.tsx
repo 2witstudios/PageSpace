@@ -41,7 +41,16 @@ vi.mock('@tanstack/react-virtual', () => ({
 // Imported after the mock so the component picks up the mocked hook.
 const { VirtualizedMessageList } = await import('../VirtualizedMessageList');
 
-/** jsdom has no ResizeObserver; this one lets a test fire the callback by hand. */
+/**
+ * jsdom has no ResizeObserver; this one lets a test fire the callback by hand.
+ *
+ * The component deliberately installs none of its own, so in the current code
+ * `observerCallbacks` stays empty and the resize tests below fire nothing. That
+ * is the point: they are regression guards, not exercises of a live path. If
+ * someone reintroduces a width-driven `measure()` — the shape that looks
+ * obviously right and reproduces the jump — it will construct through this stub,
+ * `resizeTo` will drive it, and those tests go red.
+ */
 const observerCallbacks: Array<() => void> = [];
 class TestResizeObserver {
   constructor(callback: () => void) {
