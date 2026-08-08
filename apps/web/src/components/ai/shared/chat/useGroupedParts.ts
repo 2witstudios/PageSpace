@@ -31,21 +31,27 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
 
     const groups: GroupedPart[] = [];
     let currentTextGroup: TextPart[] = [];
+    // Raw part index of each open group's first member — its stable identity.
+    // See GroupId in message-types.ts for why position in `groups` won't do.
+    let currentTextGroupStart = -1;
     let currentFileGroup: FilePart[] = [];
+    let currentFileGroupStart = -1;
     let currentToolRun: ProcessedToolPart[] = [];
     let currentRunKey: string | undefined;
 
     const flushTextGroup = () => {
       if (currentTextGroup.length > 0) {
-        groups.push({ type: 'text-group', parts: currentTextGroup });
+        groups.push({ type: 'text-group', groupId: `text:${currentTextGroupStart}`, parts: currentTextGroup });
         currentTextGroup = [];
+        currentTextGroupStart = -1;
       }
     };
 
     const flushFileGroup = () => {
       if (currentFileGroup.length > 0) {
-        groups.push({ type: 'file-group', parts: currentFileGroup });
+        groups.push({ type: 'file-group', groupId: `file:${currentFileGroupStart}`, parts: currentFileGroup });
         currentFileGroup = [];
+        currentFileGroupStart = -1;
       }
     };
 
@@ -66,6 +72,7 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
       if (part.type === 'text') {
         flushFileGroup();
         flushToolRun();
+        if (currentTextGroup.length === 0) currentTextGroupStart = partIndex;
         currentTextGroup.push(part as TextPart);
       } else if (part.type === 'data-command-execution') {
         // Universal Commands execution indicator (UX spec §7) — rendered
@@ -74,11 +81,17 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
         flushFileGroup();
         flushToolRun();
         const dataPart = part as { type: 'data-command-execution'; id?: string; data?: unknown };
-        groups.push({ type: 'data-command-execution', id: dataPart.id, data: dataPart.data });
+        groups.push({
+          type: 'data-command-execution',
+          groupId: `cmd:${dataPart.id ?? partIndex}`,
+          id: dataPart.id,
+          data: dataPart.data,
+        });
       } else if (part.type === 'file') {
         flushTextGroup();
         flushToolRun();
         const filePart = part as FilePart & Record<string, unknown>;
+        if (currentFileGroup.length === 0) currentFileGroupStart = partIndex;
         currentFileGroup.push({
           type: 'file',
           url: typeof filePart.url === 'string' ? filePart.url : '',

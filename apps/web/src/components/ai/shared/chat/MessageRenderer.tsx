@@ -253,7 +253,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
 
             return (
               <TextBlock
-                key={`${message.id}-text-${index}`}
+                key={`${message.id}-${group.groupId}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 senderName={message.userName ?? user?.name ?? 'Unknown'}
@@ -272,7 +272,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
           } else if (isFileGroupPart(group)) {
             return (
               <ImageMessageContent
-                key={`${message.id}-file-${index}`}
+                key={`${message.id}-${group.groupId}`}
                 parts={group.parts}
               />
             );
@@ -289,7 +289,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
+              <div key={`${message.id}-tool-${group.toolCallId || index}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer
                   part={{
                     type: group.type,
@@ -306,7 +306,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             );
           } else if (isCommandExecutionPart(group)) {
             return (
-              <div key={`${message.id}-command-${index}`} className="mr-2 sm:mr-8">
+              <div key={`${message.id}-${group.groupId}`} className="mr-2 sm:mr-8">
                 <CommandExecutionIndicator data={group.data} />
               </div>
             );

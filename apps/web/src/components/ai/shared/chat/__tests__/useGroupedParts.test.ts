@@ -419,3 +419,112 @@ describe('useGroupedParts', () => {
     expect(isToolRunGroupPart(result.current[3])).toBe(true);
   });
 });
+
+/**
+ * A group's position in this hook's output is not a stable identity: a later
+ * group can vanish (a tool resolving to a hidden one) or split (a tool
+ * resolving to a standalone one), shifting every following index. Keying React
+ * subtrees on that position remounts them mid-stream — re-parsing markdown and
+ * reflowing row heights while the user watches. groupId is derived from the raw
+ * part index of the group's first member instead, which never moves because
+ * part accumulation is append-only.
+ */
+describe('useGroupedParts stable group ids', () => {
+  it('given a text group, should derive its id from the raw index of its first part', () => {
+    const parts = asMessageParts([
+      { type: 'text', text: 'Hello' },
+      { type: 'text', text: ' world' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    const group = result.current[0];
+    expect(isTextGroupPart(group)).toBe(true);
+    if (isTextGroupPart(group)) expect(group.groupId).toBe('text:0');
+  });
+
+  it('given text, a file, and more text, should give each group an id fixed to its own first part', () => {
+    const parts = asMessageParts([
+      { type: 'text', text: 'Check this:' },
+      { type: 'file', url: 'data:image/png;base64,abc', mediaType: 'image/png' },
+      { type: 'text', text: 'What do you think?' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    const [first, second, third] = result.current;
+    if (isTextGroupPart(first)) expect(first.groupId).toBe('text:0');
+    if (isFileGroupPart(second)) expect(second.groupId).toBe('file:1');
+    if (isTextGroupPart(third)) expect(third.groupId).toBe('text:2');
+  });
+
+  it('given a skipped step-start before the text, should still index the text group by its own raw position', () => {
+    const parts = asMessageParts([
+      { type: 'step-start' },
+      { type: 'text', text: 'Hello' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    const group = result.current[0];
+    if (isTextGroupPart(group)) expect(group.groupId).toBe('text:1');
+  });
+
+  it('given a later tool call appended mid-stream, should leave the earlier text group id untouched', () => {
+    const before = asMessageParts([
+      { type: 'text', text: 'Working on it' },
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result, rerender } = renderHook(({ parts }) => useGroupedParts(parts), {
+      initialProps: { parts: before },
+    });
+
+    const firstIdBefore = isTextGroupPart(result.current[0]) ? result.current[0].groupId : null;
+
+    rerender({
+      parts: asMessageParts([
+        { type: 'text', text: 'Working on it' },
+        { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+        { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      ]),
+    });
+
+    const firstIdAfter = isTextGroupPart(result.current[0]) ? result.current[0].groupId : null;
+    expect(firstIdAfter).toBe(firstIdBefore);
+  });
+
+  it('given a hidden tool between two text runs, should keep the leading text group id stable across the merge', () => {
+    // While `input` is still streaming the tool reads as an ordinary call and
+    // splits the text; once it resolves to tool_search it is dropped and the
+    // two text runs merge. The leading group must not be remounted by that.
+    const streaming = asMessageParts([
+      { type: 'text', text: 'Let me look.' },
+      { type: 'tool-execute_tool', toolCallId: 'tc-1', toolName: 'execute_tool', state: 'input-streaming', input: {} },
+      { type: 'text', text: 'Found it.' },
+    ]);
+    const { result, rerender } = renderHook(({ parts }) => useGroupedParts(parts), {
+      initialProps: { parts: streaming },
+    });
+
+    const leadingIdBefore = isTextGroupPart(result.current[0]) ? result.current[0].groupId : null;
+    expect(leadingIdBefore).toBe('text:0');
+
+    rerender({
+      parts: asMessageParts([
+        { type: 'text', text: 'Let me look.' },
+        {
+          type: 'tool-execute_tool',
+          toolCallId: 'tc-1',
+          toolName: 'execute_tool',
+          state: 'output-available',
+          input: { tool_name: 'tool_search' },
+          output: 'ok',
+        },
+        { type: 'text', text: 'Found it.' },
+      ]),
+    });
+
+    const leadingGroup = result.current[0];
+    expect(isTextGroupPart(leadingGroup)).toBe(true);
+    if (isTextGroupPart(leadingGroup)) {
+      expect(leadingGroup.groupId).toBe(leadingIdBefore);
+    }
+  });
+});

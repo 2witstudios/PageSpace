@@ -56,10 +56,30 @@ export interface ToolPart {
 }
 
 /**
+ * Stable identity for React keying, derived from the raw index of a group's
+ * FIRST member in `UIMessage['parts']`.
+ *
+ * Safe because part accumulation is strictly append-only (see
+ * lib/ai/streams/appendPart.ts — tool parts replace in place by toolCallId and
+ * text deltas merge into the last text part; nothing is ever inserted or
+ * removed mid-array), so a group's first-member index never moves.
+ *
+ * Consumers MUST key on this rather than on the group's position in
+ * useGroupedParts' output: that position shifts whenever a later group splits
+ * or vanishes mid-stream (a tool's effective name only resolves once its input
+ * has streamed in, at which point it can turn out to be hidden or standalone),
+ * which would remount every following subtree — re-parsing markdown and
+ * reflowing row heights while the user is watching.
+ */
+export type GroupId = string;
+
+/**
  * A group of consecutive text parts
  */
 export interface TextGroupPart {
   type: 'text-group';
+  /** See {@link GroupId}. */
+  groupId: GroupId;
   parts: TextPart[];
 }
 
@@ -68,6 +88,8 @@ export interface TextGroupPart {
  */
 export interface FileGroupPart {
   type: 'file-group';
+  /** See {@link GroupId}. */
+  groupId: GroupId;
   parts: FilePart[];
 }
 
@@ -90,6 +112,8 @@ export interface ProcessedToolPart {
  */
 export interface CommandExecutionPart {
   type: 'data-command-execution';
+  /** See {@link GroupId}. */
+  groupId: GroupId;
   id?: string;
   data: unknown;
 }

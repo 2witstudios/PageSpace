@@ -248,7 +248,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
             return (
               <CompactTextBlock
-                key={`${message.id}-text-${index}`}
+                key={`${message.id}-${group.groupId}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 senderName={message.userName ?? user?.name ?? 'Unknown'}
@@ -267,7 +267,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
           } else if (isFileGroupPart(group)) {
             return (
               <ImageMessageContent
-                key={`${message.id}-file-${index}`}
+                key={`${message.id}-${group.groupId}`}
                 parts={group.parts}
                 compact
               />
@@ -285,7 +285,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              <div key={`${message.id}-tool-${index}`} className="mt-1">
+              <div key={`${message.id}-tool-${group.toolCallId || index}`} className="mt-1">
                 <CompactToolCallRenderer
                   part={{
                     type: group.type,
@@ -302,7 +302,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isCommandExecutionPart(group)) {
             return (
-              <div key={`${message.id}-command-${index}`} className="mt-1">
+              <div key={`${message.id}-${group.groupId}`} className="mt-1">
                 <CommandExecutionIndicator data={group.data} />
               </div>
             );
