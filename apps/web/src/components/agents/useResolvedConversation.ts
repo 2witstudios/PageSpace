@@ -82,12 +82,12 @@ export async function createPageConversation({
 
   if (canUseSessions) {
     try {
-      const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-        '/api/agent-sessions',
+      const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
+        '/api/agent-workspaces',
         { driveId, agentPageId: agentId },
       );
       conversationMessagesActions.seedConversation(created.conversationId);
-      return { conversationId: created.conversationId, sessionId: created.session.sessionId };
+      return { conversationId: created.conversationId, sessionId: created.session.workspaceId };
     } catch (error) {
       // The role gate is a cheap client-side approximation; the server's
       // access decision (drive membership + code-execution) is the truth.

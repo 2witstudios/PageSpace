@@ -12,7 +12,7 @@ import { dispatchThroughChatPipeline } from '../session-tools-runtime';
 vi.mock('next/headers', () => ({ headers: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ canUserViewPage: vi.fn() }));
-vi.mock('@pagespace/lib/services/agent-sessions/session-status', () => ({ deriveSandboxStatus: vi.fn() }));
+vi.mock('@pagespace/lib/services/agent-workspaces/workspace-status', () => ({ deriveSandboxStatus: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => {
   const silent = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
   return { loggers: { ai: silent, auth: silent } };
@@ -20,20 +20,20 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: { validateSession: vi.fn() },
 }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   createConversationInSession: vi.fn(),
   ensureGlobalSandboxSession: vi.fn(),
   findSessionForConversation: vi.fn(),
   provisionSessionSandbox: vi.fn(),
   getAgentSessionStore: vi.fn(),
 }));
-vi.mock('@/lib/agent-sessions/create-conversation-in-session', () => ({
+vi.mock('@/lib/agent-workspaces/create-conversation-in-workspace', () => ({
   ConversationUnavailableError: class ConversationUnavailableError extends Error {},
   AgentNotInSessionDriveError: class AgentNotInSessionDriveError extends Error {},
   SessionFullError: class SessionFullError extends Error {},
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({ conversationRepository: {} }));
-vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   getSessionShellStore: vi.fn(),
   killShellById: vi.fn(),
   listShells: vi.fn(),
@@ -72,7 +72,7 @@ function sentHeaders(fetchMock: ReturnType<typeof vi.fn>): Record<string, string
 }
 
 const DISPATCH_INPUT = {
-  sessionId: 'worker-conversation-1',
+  conversationId: 'worker-conversation-1',
   agentPageId: 'agent-page-1',
   input: 'hello',
   userId: 'user-1',
@@ -211,6 +211,29 @@ describe('dispatchThroughChatPipeline credentials (issue #2333)', () => {
       detail: 'the calling request carries no session credentials to dispatch with',
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('targets ONE internal path whether or not the worker has an agent page', async () => {
+    // The acceptance signal for the chat route consolidation (epic
+    // "Agent-Session Single Source of Truth", Phase 5): this used to branch on
+    // `agentPageId === null` to choose between `/api/ai/chat` and
+    // `/api/ai/global/<id>/messages`, because two message tables forced two
+    // routes. One pipeline now stands behind both public URLs and picks the
+    // page-agent or global-assistant strategy from the CONVERSATION, so
+    // dispatch names the pipeline once. The page worker still carries `chatId`;
+    // the global worker carries none and the entry resolves its conversation.
+    incomingHeaders({ cookie: SESSION_COOKIE });
+    const fetchMock = fetchAdmitted();
+
+    await dispatchThroughChatPipeline(DISPATCH_INPUT);
+    await dispatchThroughChatPipeline({ ...DISPATCH_INPUT, agentPageId: null });
+
+    const [pageCall, globalCall] = fetchMock.mock.calls as Array<[string, { body: string }]>;
+    expect(pageCall[0]).toBe('http://localhost:3000/api/ai/chat');
+    expect(globalCall[0]).toBe('http://localhost:3000/api/ai/chat');
+    expect(JSON.parse(pageCall[1].body).chatId).toBe('agent-page-1');
+    expect(JSON.parse(globalCall[1].body)).not.toHaveProperty('chatId');
+    expect(JSON.parse(globalCall[1].body).conversationId).toBe('worker-conversation-1');
   });
 
   it('surfaces the chat route\'s error body verbatim on a non-ok answer', async () => {

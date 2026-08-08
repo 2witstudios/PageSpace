@@ -31,6 +31,7 @@ const { mockTable } = vi.hoisted(() => {
     content: `${name}.content`,
     pageId: `${name}.pageId`,
     conversationId: `${name}.conversationId`,
+    contextId: `${name}.contextId`,
     sizeBytes: `${name}.sizeBytes`,
     mimeType: `${name}.mimeType`,
     storagePath: `${name}.storagePath`,
@@ -90,7 +91,6 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
-  chatMessages: mockTable('chatMessages'),
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: mockTable('activityLogs'),
@@ -137,6 +137,7 @@ vi.mock('drizzle-orm', () => ({
   or: (...conditions: unknown[]) => ({ _op: 'or', conditions }),
   and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
   ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
+  isNull: (col: unknown) => ({ _op: 'isNull', col }),
 }));
 
 import {
@@ -278,25 +279,53 @@ describe('collectUserPages', () => {
 });
 
 describe('collectUserMessages', () => {
+  /**
+   * The ladder is now FOUR queries, not five: channel, unified conversation
+   * messages, sent DMs, dm-conversation ids (+ a fifth for received DMs when
+   * that lookup is non-empty). The legacy `chat_messages` query is GONE —
+   * Phase 4 PR 13 cut the export over to the unified `messages` table alone,
+   * because the dual-write + backfill made it a superset under the same
+   * primary keys and reading both duplicated every page-chat row.
+   */
   it('given_messagesInAllSources_aggregatesWithCorrectSourceLabels', async () => {
-    const aiMsg = { id: 'm1', content: 'AI msg', role: 'user', pageId: 'p1', conversationId: 'c1', createdAt: new Date() };
     const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
-    const convMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date() };
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'p1' };
+    const globalMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date(), conversationType: 'global', conversationContextId: null };
     const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
-    // 5th call: dmConversations lookup returns [] so no 6th call for received DMs
-    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg], []]);
+    // 4th call: dmConversations lookup returns [] so no 5th call for received DMs
+    const db = createChainDb([[channelMsg], [pageChatMsg, globalMsg], [dmMsg], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
     expect(result).toHaveLength(4);
     expect(result.map(r => r.source)).toEqual([
-      'ai_chat', 'channel', 'conversation', 'direct_message',
+      'channel', 'ai_chat', 'conversation', 'direct_message',
     ]);
   });
 
+  it('labels a page thread ai_chat and takes its pageId from conversations.contextId, not the transitional messages.pageId', async () => {
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'assistant', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'agent-page-1' };
+    const db = createChainDb([[], [pageChatMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ source: 'ai_chat', pageId: 'agent-page-1' }));
+  });
+
+  it('reports no pageId for a type=client thread — its contextId is a DRIVE id, and a wrong page is worse than none', async () => {
+    const clientMsg = { id: 'm1', content: 'API thread msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'client', conversationContextId: 'drive-1' };
+    const db = createChainDb([[], [clientMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].source).toBe('ai_chat');
+    expect(result[0].pageId).toBeUndefined();
+  });
+
   it('given_noMessages_returnsEmptyArray', async () => {
-    // 5 calls: ai, channel, conv, sentDms, dmConversations
-    const db = createChainDb([[], [], [], [], []]);
+    // 4 calls: channel, conv, sentDms, dmConversations
+    const db = createChainDb([[], [], [], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -305,8 +334,8 @@ describe('collectUserMessages', () => {
 
   it('given_userHasSentDMs_setsDirectionSent', async () => {
     const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
-    const db = createChainDb([[], [], [], [sentDm], []]);
+    // channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
+    const db = createChainDb([[], [], [sentDm], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -325,7 +354,7 @@ describe('collectUserMessages', () => {
       isActive: false,
       deletedAt,
     };
-    const db = createChainDb([[], [], [], [sentDm], []]);
+    const db = createChainDb([[], [], [sentDm], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -343,8 +372,8 @@ describe('collectUserMessages', () => {
   it('given_userHasReceivedDMs_includesThemWithDirectionReceived', async () => {
     const convId = { id: 'conv-1' };
     const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
-    const db = createChainDb([[], [], [], [], [convId], [receivedDm]]);
+    // channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [], [convId], [receivedDm]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -358,8 +387,8 @@ describe('collectUserMessages', () => {
     const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
     const convId = { id: 'conv-1' };
     const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[convId], receivedDms=[receivedDm]
-    const db = createChainDb([[], [], [], [sentDm], [convId], [receivedDm]]);
+    // channel=[], conv=[], sentDms=[sentDm], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [sentDm], [convId], [receivedDm]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -796,6 +825,7 @@ describe('collectAllUserData', () => {
         return emptyWithLimit();
       }),
       innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
     };
 
     const result = await collectAllUserData(db as never, 'user-1');
@@ -816,6 +846,11 @@ describe('collectAllUserData', () => {
     expect(Array.isArray(result!.sessions)).toBe(true);
     expect(Array.isArray(result!.notifications)).toBe(true);
     expect(Array.isArray(result!.displayPreferences)).toBe(true);
+    // The agent-session epic's categories. Aggregated here for the same reason
+    // as every other one: a collector nobody calls from `collectAllUserData`
+    // reaches nobody's export.
+    expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.streamState)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

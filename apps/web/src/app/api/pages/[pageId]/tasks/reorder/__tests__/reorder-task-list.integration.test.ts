@@ -12,8 +12,10 @@
  * the route reports success) while its position was silently never written.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
- * mirrors packages/lib/src/services/reorder/__tests__/locked-batch-reorder.integration.test.ts.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors packages/lib/src/services/reorder/__tests__/locked-batch-reorder.integration.test.ts.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
@@ -23,6 +25,7 @@ import { taskItems } from '@pagespace/db/schema/tasks';
 import { factories } from '@pagespace/db/test/factories';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from '../reorder-task-list';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -59,7 +62,8 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('reorder-task-list.integration.test.ts', error);
       dbAvailable = false;
     }
   });

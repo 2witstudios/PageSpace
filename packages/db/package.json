@@ -47,9 +47,13 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
-    "./schema/agent-sessions": {
-      "types": "./dist/schema/agent-sessions.d.ts",
-      "default": "./dist/schema/agent-sessions.js"
+    "./schema/agent-workspaces": {
+      "types": "./dist/schema/agent-workspaces.d.ts",
+      "default": "./dist/schema/agent-workspaces.js"
+    },
+    "./schema/agent-workspace-layout": {
+      "types": "./dist/schema/agent-workspace-layout.d.ts",
+      "default": "./dist/schema/agent-workspace-layout.js"
     },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
@@ -235,6 +239,10 @@
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"
     },
+    "./test/require-db": {
+      "types": "./dist/test/require-db.d.ts",
+      "default": "./dist/test/require-db.js"
+    },
     "./transactions/auth-transactions": {
       "types": "./dist/transactions/auth-transactions.d.ts",
       "default": "./dist/transactions/auth-transactions.js"
@@ -280,6 +288,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",

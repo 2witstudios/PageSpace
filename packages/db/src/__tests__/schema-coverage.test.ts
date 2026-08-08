@@ -32,12 +32,20 @@ describe('schema.ts exports', () => {
   it('schema object contains core tables', () => {
     expect(schemaModule.schema.drives).toBeDefined();
     expect(schemaModule.schema.pages).toBeDefined();
-    expect(schemaModule.schema.chatMessages).toBeDefined();
     expect(schemaModule.schema.tags).toBeDefined();
     expect(schemaModule.schema.pageTags).toBeDefined();
     expect(schemaModule.schema.favorites).toBeDefined();
     expect(schemaModule.schema.mentions).toBeDefined();
     expect(schemaModule.schema.userMentions).toBeDefined();
+  });
+
+  it('no longer exposes the dropped legacy chat_messages table', () => {
+    // Merged INTO `messages` across Phase 4 of the epic "Agent-Session Single
+    // Source of Truth" and dropped at PR 15 (migration 0253). One message
+    // table, so a second name in the schema object would only invite a query
+    // against a table that no longer exists.
+    expect('chatMessages' in schemaModule.schema).toBe(false);
+    expect(schemaModule.schema.messages).toBeDefined();
   });
 
   it('no longer exposes the dropped legacy permissions table (#2160)', () => {

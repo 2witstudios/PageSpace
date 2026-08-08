@@ -28,7 +28,7 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   };
 });
 
-// Spies on the shared `/api/agent-sessions**` invalidation only — `useSWR`
+// Spies on the shared `/api/agent-workspaces**` invalidation only — `useSWR`
 // and `SWRConfig` stay real so this component's own data fetching (via the
 // isolated per-test Map provider below) is unaffected.
 const mockMutate = vi.hoisted(() => vi.fn());
@@ -49,7 +49,7 @@ vi.mock('sonner', () => ({ toast: { error: mockToastError, info: mockToastInfo }
 import AgentsPastConversationsList from '../AgentsPastConversationsList';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import { isAgentSessionsKey } from '../panes/session-conversations';
+import { isAgentWorkspacesKey } from '../panes/workspace-conversations';
 
 interface Row {
   conversationId: string;
@@ -148,14 +148,14 @@ describe('AgentsPastConversationsList', () => {
 
   test('a session-less page row claims into a freshly spawned session and selects it', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     renderList();
     const user = userEvent.setup();
 
     await user.click(await screen.findByText('Page chat'));
 
     await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         firstThing: 'claim',
         conversationId: 'conv-page',
         driveId: 'drive-1',
@@ -169,13 +169,13 @@ describe('AgentsPastConversationsList', () => {
 
   test('a successful claim invalidates the shared sessions cache so the sidebar picks it up', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     renderList();
     const user = userEvent.setup();
 
     await user.click(await screen.findByText('Page chat'));
 
-    await waitFor(() => expect(mockMutate).toHaveBeenCalledWith(isAgentSessionsKey));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledWith(isAgentWorkspacesKey));
   });
 
   test('a failed claim does NOT invalidate the shared sessions cache', async () => {
@@ -192,14 +192,14 @@ describe('AgentsPastConversationsList', () => {
 
   test('a session-less global row claims with the surface\'s own (absent) drive scope', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([GLOBAL_ROW]));
-    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-global' });
+    mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-global' });
     renderList();
     const user = userEvent.setup();
 
     await user.click(await screen.findByText('Global assistant chat'));
 
     await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         firstThing: 'claim',
         conversationId: 'conv-global',
         driveId: undefined,
@@ -251,7 +251,7 @@ describe('AgentsPastConversationsList', () => {
     await user.click(row);
 
     expect(mockPost).toHaveBeenCalledTimes(1);
-    resolveClaim({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    resolveClaim({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'));
   });
 });

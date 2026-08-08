@@ -15,8 +15,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { migrateAdminDb } from '../migrate-admin';
+import { requireDbUrl } from '../test/require-db';
 
 const url = process.env.ADMIN_DATABASE_URL;
+// `describe.skipIf(!url)` below is a genuine skip, not a silent pass — but a skip
+// nobody looks at is how this suite stayed dark. CI always provisions the scratch
+// Admin PG, so a missing ADMIN_DATABASE_URL there is an environment failure and is
+// reported as one; local runs opt out explicitly with ALLOW_SKIP_DB_TESTS=1.
+requireDbUrl(url, 'ADMIN_DATABASE_URL', 'admin-grants.integration.test.ts');
 
 const ROLES = [
   'admin_app',

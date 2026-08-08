@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
 
@@ -24,25 +24,29 @@ export async function GET(request: Request) {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const chatMessagesPurged = await chatMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
-    const globalMessagesPurged = await globalConversationRepository.purgeInactiveMessages(thirtyDaysAgo);
+    // `globalMessagesPurged` is the ONE `messages` table — page rows as well
+    // as global ones since the message-table merge (epic "Agent-Session Single
+    // Source of Truth", Phase 4 / D6). The separate `chatMessagesPurged` leg
+    // went with `chat_messages` when PR 15 dropped it; the field name here is
+    // kept as-is so the audit-detail and response shapes stay stable for
+    // anything consuming them, and the merge is described here instead.
+    const globalMessagesPurged = await messageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const directMessagesPurged = await dmMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const conversationsPurged = await globalConversationRepository.purgeInactiveConversations(thirtyDaysAgo);
 
     console.log(
-      `[Cron] Purged deleted messages: chat=${chatMessagesPurged}, global=${globalMessagesPurged}, direct=${directMessagesPurged}, conversations=${conversationsPurged}`
+      `[Cron] Purged deleted messages: messages=${globalMessagesPurged}, direct=${directMessagesPurged}, conversations=${conversationsPurged}`
     );
 
     audit({
       eventType: 'data.delete',
       resourceType: 'cron_job',
       resourceId: 'purge_deleted_messages',
-      details: { chatMessagesPurged, globalMessagesPurged, directMessagesPurged, conversationsPurged },
+      details: { globalMessagesPurged, directMessagesPurged, conversationsPurged },
     });
 
     return NextResponse.json({
       success: true,
-      chatMessagesPurged,
       globalMessagesPurged,
       directMessagesPurged,
       conversationsPurged,

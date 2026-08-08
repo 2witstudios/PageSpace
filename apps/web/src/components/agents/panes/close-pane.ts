@@ -20,8 +20,8 @@
  * `AgentPanes`.
  */
 
-import type { PaneState } from '@/stores/agent-workspace/pane-reducer';
-import { mostRecentlyActive, type SessionConversationSummary } from './session-conversations';
+import type { PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import { mostRecentlyActive, type SessionConversationSummary } from './workspace-conversations';
 
 export type { SessionConversationSummary };
 

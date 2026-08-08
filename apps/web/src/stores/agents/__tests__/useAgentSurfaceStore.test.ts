@@ -74,7 +74,7 @@ afterEach(() => {
 
 describe('hydrateFromSearch', () => {
   test('a deep link becomes the selection', () => {
-    setLocation('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    setLocation('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     useAgentSurfaceStore.getState().hydrateFromSearch();
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
@@ -84,36 +84,36 @@ describe('hydrateFromSearch', () => {
   test('reads the live location when given no explicit search', () => {
     // What the `popstate` handler does: the browser has already changed the URL
     // by the time the event fires, so the store reads it rather than being told.
-    setLocation('/dashboard/agents?session=ses-2');
+    setLocation('/dashboard/agents?workspace=ses-2');
     useAgentSurfaceStore.getState().hydrateFromSearch();
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
   });
 
   test('accepts an explicit search string', () => {
-    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?session=ses-3&c=conv-3&agent=agent-3' });
+    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?workspace=ses-3&c=conv-3&agent=agent-3' });
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-3');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-3');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-3');
   });
 
   test('records the drive the surface is mounted under', () => {
-    useAgentSurfaceStore.getState().hydrateFromSearch({ driveId: 'drive-1', search: '?session=ses-1' });
+    useAgentSurfaceStore.getState().hydrateFromSearch({ driveId: 'drive-1', search: '?workspace=ses-1' });
     expect(useAgentSurfaceStore.getState().driveId).toBe('drive-1');
   });
 
   test('a bare re-read keeps the drive scope', () => {
     // `popstate` hydrates without naming the drive; that must not silently
     // reset the surface to global mode.
-    useAgentSurfaceStore.getState().hydrateFromSearch({ driveId: 'drive-1', search: '?session=ses-1' });
-    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?session=ses-2' });
+    useAgentSurfaceStore.getState().hydrateFromSearch({ driveId: 'drive-1', search: '?workspace=ses-1' });
+    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?workspace=ses-2' });
     expect(useAgentSurfaceStore.getState().driveId).toBe('drive-1');
   });
 
   test('never writes history — hydrating is reading, not selecting', () => {
     // Critical for `popstate`: pushing during hydration would append a NEW entry
     // for the entry the user just went Back to, and Back would stop working.
-    setLocation('/dashboard/agents?session=ses-1&c=conv-1');
+    setLocation('/dashboard/agents?workspace=ses-1&c=conv-1');
     useAgentSurfaceStore.getState().hydrateFromSearch();
     expect(pushSpy).not.toHaveBeenCalled();
   });
@@ -142,7 +142,7 @@ describe('selectSession', () => {
   test('selects the session and mirrors it to the URL', () => {
     useAgentSurfaceStore.getState().selectSession('ses-1');
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?session=ses-1');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?workspace=ses-1');
   });
 
   test('clears the conversation — it belonged to the old workspace', () => {
@@ -154,7 +154,7 @@ describe('selectSession', () => {
     useAgentSurfaceStore.getState().selectSession('ses-2');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?session=ses-2');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?workspace=ses-2');
   });
 
   test('re-selecting the open session keeps its conversation and writes no history entry', () => {
@@ -165,7 +165,7 @@ describe('selectSession', () => {
       selectedConversationId: 'conv-1',
       selectedAgentId: 'agent-1',
     });
-    setLocation('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    setLocation('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     useAgentSurfaceStore.getState().selectSession('ses-1');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
     expect(pushSpy).not.toHaveBeenCalled();
@@ -178,7 +178,7 @@ describe('selectSession', () => {
       selectedConversationId: 'conv-1',
       selectedAgentId: 'agent-1',
     });
-    setLocation('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    setLocation('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     useAgentSurfaceStore.getState().selectSession(null);
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
@@ -188,7 +188,7 @@ describe('selectSession', () => {
   test('stays inside the drive-scoped surface when mounted under a drive', () => {
     useAgentSurfaceStore.setState({ driveId: 'drive-1' });
     useAgentSurfaceStore.getState().selectSession('ses-1');
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/drive-1/agents?session=ses-1');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/drive-1/agents?workspace=ses-1');
   });
 });
 
@@ -202,7 +202,7 @@ describe('selectConversation', () => {
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     expect(pushSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -217,7 +217,7 @@ describe('selectConversation', () => {
       agentId: 'agent-9',
     });
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-9');
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?session=ses-9&c=conv-9&agent=agent-9');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?workspace=ses-9&c=conv-9&agent=agent-9');
     expect(pushSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -229,7 +229,7 @@ describe('selectConversation', () => {
       agentId: null,
     });
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
-    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?session=ses-1&c=conv-1');
+    expect(lastPushedUrl(pushSpy)).toBe('/dashboard/agents?workspace=ses-1&c=conv-1');
   });
 
   test('re-selecting the open conversation writes no history entry', () => {
@@ -238,7 +238,7 @@ describe('selectConversation', () => {
       selectedConversationId: 'conv-1',
       selectedAgentId: 'agent-1',
     });
-    setLocation('/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    setLocation('/dashboard/agents?workspace=ses-1&c=conv-1&agent=agent-1');
     useAgentSurfaceStore.getState().selectConversation({
       sessionId: 'ses-1',
       conversationId: 'conv-1',
@@ -307,7 +307,7 @@ describe('tab sync', () => {
 
   test('selecting a session updates the active tab', () => {
     useAgentSurfaceStore.getState().selectSession('ses-1');
-    expect(activeTabSearch()).toBe('session=ses-1');
+    expect(activeTabSearch()).toBe('workspace=ses-1');
   });
 
   test('selecting a conversation updates the active tab', () => {
@@ -316,12 +316,12 @@ describe('tab sync', () => {
       conversationId: 'conv-1',
       agentId: 'agent-1',
     });
-    expect(activeTabSearch()).toBe('session=ses-1&c=conv-1&agent=agent-1');
+    expect(activeTabSearch()).toBe('workspace=ses-1&c=conv-1&agent=agent-1');
   });
 
   test('re-selecting the same session (a no-op push) leaves the active tab search untouched', () => {
     useAgentSurfaceStore.getState().selectSession('ses-1');
-    setLocation('/dashboard/agents?session=ses-1');
+    setLocation('/dashboard/agents?workspace=ses-1');
     const tabsBefore = useTabsStore.getState().tabs;
     useAgentSurfaceStore.getState().selectSession('ses-1');
     expect(useTabsStore.getState().tabs).toBe(tabsBefore);
@@ -372,7 +372,7 @@ describe('mobile sheet', () => {
     // Deep-linking into a conversation is not a click; the user may have opened
     // the sheet deliberately after landing.
     asSheetBreakpoint();
-    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?session=ses-1&c=conv-1&agent=agent-1' });
+    useAgentSurfaceStore.getState().hydrateFromSearch({ search: '?workspace=ses-1&c=conv-1&agent=agent-1' });
     expect(useLayoutStore.getState().leftSheetOpen).toBe(true);
   });
 });

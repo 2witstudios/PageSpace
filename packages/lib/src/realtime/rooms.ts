@@ -86,6 +86,34 @@ export const driveCalendarRoom = (driveId: string): string => `drive:${driveId}:
 /** Direct-message conversation room. */
 export const dmRoom = (conversationId: string): string => `dm:${conversationId}`;
 
+/**
+ * Agent-session workspace room (`session:<agent_workspaces.id>`) — the layout
+ * plane for one workspace: `workspace:updated` (rev-carrying pane-grid
+ * events) fan out here (epic Phase 3). Join sites arrive with the client
+ * store rewrite PR; the shape is in the grammar now so the server's verb
+ * writes are broadcastable from day one.
+ */
+export const sessionRoom = (workspaceId: string): string => `session:${workspaceId}`;
+
+/**
+ * AI conversation content room (`conv:<conversationId>`) — the content plane
+ * of the Agent-Session Single Source of Truth epic (Phase 2). Joined on pane
+ * open via the `join_conversation` handler, which authorizes with
+ * `canAccessConversation` (owner OR isShared + page access). Carries the
+ * authoritative `conversation:message_*` / `conversation:undo_applied` events
+ * plus the transitional `chat:stream_start/complete` mirror.
+ */
+export const conversationRoom = (conversationId: string): string => `conv:${conversationId}`;
+
+/**
+ * Per-user session/conversation directory room (`user:<id>:sessions`) —
+ * the directory plane. Auto-joined on connect alongside the other personal
+ * rooms; carries id-level `conversation:created/updated/closed/reopened/
+ * deleted` events so sidebars and session lists can update without joining
+ * every conversation's own room.
+ */
+export const userSessionsRoom = (userId: string): string => `user:${userId}:sessions`;
+
 /** Drive activity feed room. */
 export const driveActivityRoom = (driveId: string): string => `activity:drive:${driveId}`;
 
@@ -103,9 +131,12 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
   userCalendarRoom,
   userDrivesRoom,
   userGlobalRoom,
+  userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
   dmRoom,
+  sessionRoom,
+  conversationRoom,
   driveActivityRoom,
   pageActivityRoom,
 ];
@@ -115,7 +146,7 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
 // ---------------------------------------------------------------------------
 
 /** Suffix-keyed `user:<cuid>:<suffix>` rooms. */
-const USER_SUFFIXES = new Set(['tasks', 'calendar', 'drives', 'global']);
+const USER_SUFFIXES = new Set(['tasks', 'calendar', 'drives', 'global', 'sessions']);
 
 /** `activity:<scope>:<cuid>` scopes. */
 const ACTIVITY_SCOPES = new Set(['drive', 'page']);
@@ -132,8 +163,15 @@ export function isKnownRoomId(roomId: string): boolean {
     return isCUID2(roomId);
   }
 
-  // notifications:<cuid> | dm:<cuid> | drive:<cuid>
-  if (segments.length === 2 && (segments[0] === 'notifications' || segments[0] === 'dm' || segments[0] === 'drive')) {
+  // notifications:<cuid> | dm:<cuid> | drive:<cuid> | session:<cuid> | conv:<cuid>
+  if (
+    segments.length === 2 &&
+    (segments[0] === 'notifications' ||
+      segments[0] === 'dm' ||
+      segments[0] === 'drive' ||
+      segments[0] === 'session' ||
+      segments[0] === 'conv')
+  ) {
     return isCUID2(segments[1]);
   }
 
@@ -159,6 +197,26 @@ export function isKnownRoomId(roomId: string): boolean {
 // Kick room sets — the rooms a revocation must evict a user from
 // ---------------------------------------------------------------------------
 
+/**
+ * The kick sets come in two shapes, and the difference is load-bearing
+ * (security review HIGH 3).
+ *
+ * A DRIVE or PAGE revocation names one id, and the drive/page/activity rooms
+ * are all DERIVABLE from it — one pure function, no IO. The rooms the
+ * agent-session epic added are not: `conv:<conversationId>` and
+ * `session:<workspaceId>` are keyed by ids the revocation does not know, so
+ * they can only be reached by ENUMERATING what the revoked grant covered.
+ * That is why they are separate builders, fed by the enumeration in
+ * ../permissions/revocation-kick.ts, rather than extra entries below.
+ *
+ * The trap that produced the finding: because the two static sets were the
+ * ONLY sets, adding a room shape that these functions could not express meant
+ * silently adding a room no revocation kicked. `rooms.test.ts` now asserts
+ * that every shape in {@link ALL_ROOM_BUILDERS} is either covered by some
+ * kick set or explicitly personal, so a future shape cannot slip through the
+ * same gap.
+ */
+
 /** Every drive-scoped room a user must leave when their drive access is revoked. */
 export const roomsForDriveKick = (driveId: string): string[] => [
   driveRoom(driveId),
@@ -171,3 +229,24 @@ export const roomsForPageKick = (pageId: string): string[] => [
   pageRoom(pageId),
   pageActivityRoom(pageId),
 ];
+
+/**
+ * The content room of ONE conversation a revocation reached. Enumerated, not
+ * derived: a page revocation must find the conversations that page carried,
+ * because `conv:<id>` is keyed by conversation and the page id cannot produce
+ * it. Pre-epic this room did not exist and page-chat content rode the page
+ * room, which {@link roomsForPageKick} already covers — moving the content
+ * plane here without extending revocation is exactly what left a revoked
+ * member receiving full `conversation:message_created` payloads.
+ */
+export const roomsForConversationKick = (conversationId: string): string[] => [
+  conversationRoom(conversationId),
+];
+
+/**
+ * The layout room of ONE agent workspace a revocation reached. Enumerated for
+ * the same reason: `session:<workspaceId>` carries `workspace:updated` grids
+ * for a workspace in the drive whose membership was just revoked, and the
+ * drive id alone cannot name it.
+ */
+export const roomsForWorkspaceKick = (workspaceId: string): string[] => [sessionRoom(workspaceId)];

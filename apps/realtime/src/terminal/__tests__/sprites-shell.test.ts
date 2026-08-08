@@ -1652,7 +1652,7 @@ describe('openPtyShell', () => {
       // Sprite paused: the persisted 'sess-dead' is dangling. Initial attach
       // errors; reconnect must verify against listSessions, see it's gone, and
       // fall back to a fresh session — whose id comes from ITS OWN session_info
-      // frame, overwriting the stale streamSessionId.
+      // frame, overwriting the stale spriteExecId.
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
       const sprite = buildFakeSprite(freshCmd);

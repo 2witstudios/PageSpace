@@ -5,10 +5,11 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildTimestampSystemPrompt, getUserTimeOfDay, getStartOfTodayInTimezone, isValidTimezone, normalizeTimezone, formatDateInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { BACKGROUND_LIGHT_PROVIDER, BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { decryptField, decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto'
-import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
+import { pages, drives, userMentions } from '@pagespace/db/schema/core'
+import { conversations, messages } from '@pagespace/db/schema/conversations'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
@@ -430,28 +431,36 @@ export async function POST(req: Request) {
     // ========================================
     // 6. PAGE CHAT DISCUSSIONS
     // ========================================
+    // Unified `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). The page is
+    // reached through `conversations.contextId` (the end-state authority,
+    // indexed) rather than the transitional `messages.pageId`.
     const recentPageChatsRaw = driveIds.length > 0 ? await db
       .select({
-        pageId: chatMessages.pageId,
+        // Non-null by construction: `type = 'page'` conversations always carry
+      // a contextId (`conversations_page_context_present_chk`, migration 0250).
+      pageId: sql<string>`${conversations.contextId}`,
         pageTitle: pages.title,
         senderName: users.name,
         senderEmail: users.email,
-        content: chatMessages.content,
-        createdAt: chatMessages.createdAt,
+        content: messages.content,
+        createdAt: messages.createdAt,
       })
-      .from(chatMessages)
-      .leftJoin(pages, eq(pages.id, chatMessages.pageId))
-      .leftJoin(users, eq(users.id, chatMessages.userId))
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .leftJoin(pages, eq(pages.id, conversations.contextId))
+      .leftJoin(users, eq(users.id, messages.userId))
       .where(
         and(
+          eq(conversations.type, 'page'),
           inArray(pages.driveId, driveIds),
-          eq(chatMessages.role, 'user'),
-          eq(chatMessages.isActive, true),
-          gte(chatMessages.createdAt, twentyFourHoursAgo),
-          ne(chatMessages.userId, userId)
+          eq(messages.role, 'user'),
+          eq(messages.isActive, true),
+          gte(messages.createdAt, twentyFourHoursAgo),
+          ne(messages.userId, userId)
         )
       )
-      .orderBy(desc(chatMessages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(15) : [];
     // Decrypt PII at the edge so page-chat sender names in the prompt are
     // plaintext — batched once per unique stored value, not once per row.

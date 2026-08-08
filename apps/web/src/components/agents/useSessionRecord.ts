@@ -5,7 +5,7 @@
  * session's drive from a hosted page's own drive, or a UI's mount-time drive
  * context: a session can be global (`driveId` null) while hosting a
  * drive-scoped agent's conversation, or drive-scoped while hosting the global
- * assistant (`create-conversation-in-session.ts`) — the two can diverge, and
+ * assistant (`create-conversation-in-workspace.ts`) — the two can diverge, and
  * only the session's own record is truthful about which.
  *
  * `session: null` means the id doesn't resolve to one the caller may see
@@ -46,7 +46,7 @@ async function sessionFetcher(url: string): Promise<SessionRecordResponse> {
 
 export function useSessionRecord(sessionId: string | null) {
   return useSWR(
-    sessionId ? `/api/agent-sessions/${encodeURIComponent(sessionId)}` : null,
+    sessionId ? `/api/agent-workspaces/${encodeURIComponent(sessionId)}` : null,
     sessionFetcher,
     { revalidateOnFocus: false, dedupingInterval: 30_000 },
   );

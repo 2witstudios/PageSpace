@@ -1,8 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -18,12 +15,37 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
  *  - non-admin callers are rejected by withAdminAuth;
  *  - malformed bodies are rejected by the shared Zod schema.
  *
- * Auth follows the gift-subscription test style: a real admin row in the DB
- * (validateAdminAccess reads it), a mocked sessionService, a real CSRF token.
- * The repository, audience count, and enqueue helper are mocked — content
- * resolution and email rendering run REAL so previewHtml is evidence about the
- * exact email the worker would ship.
+ * AUTH IS MOCKED ALL THE WAY DOWN, AND MUST STAY THAT WAY.
+ * This suite used to follow the gift-subscription style — insert a real admin
+ * row and let `validateAdminAccess` read it back. That style belongs to a file
+ * vitest.config.ts EXCLUDES as an integration test; here it made these tests
+ * depend on a row in the SHARED test database surviving the request. It does
+ * not. `turbo run test:coverage` declares no ordering between packages, so
+ * `apps/admin` and `@pagespace/db` run at the same time against one database,
+ * and packages/db/src/test/activity-logs-compliance.test.ts ends every one of
+ * its eight tests with
+ *
+ *     TRUNCATE TABLE activity_logs, page_permissions, pages, drive_members,
+ *                    drives, users CASCADE
+ *
+ * Land one of those between this suite's insert and its request and
+ * `validateAdminAccess` reports `user_not_found` → 403. That is exactly how
+ * `templates > GET lists active templates` failed CI on PR #2365, a PR that
+ * touches no admin file. Mocking `@/lib/auth/admin-role` removes the shared row
+ * from the picture entirely. `withAdminAuth` itself — session-type scoping, CSRF,
+ * and every `validateAdminAccess` denial reason — is covered without a database
+ * in src/lib/auth/__tests__/auth.test.ts.
+ *
+ * A mocked sessionService and a real CSRF token complete the picture. The
+ * repository, audience count, and enqueue helper are mocked — content resolution
+ * and email rendering run REAL so previewHtml is evidence about the exact email
+ * the worker would ship.
  */
+
+vi.mock('@/lib/auth/admin-role', () => ({
+  validateAdminAccess: vi.fn(async () => ({ isValid: true })),
+  updateUserRole: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/repositories/broadcast-repository', () => ({
   broadcastRepository: {
@@ -67,6 +89,7 @@ vi.mock('@/lib/broadcast/enqueue', async () => {
 import { POST, GET } from '../route';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
 import { countAudience } from '@pagespace/lib/services/broadcast/audience';
+import { validateAdminAccess } from '@/lib/auth/admin-role';
 import {
   BroadcastEnqueueUnconfirmedError,
   BroadcastNotEnqueuedError,
@@ -99,19 +122,8 @@ describe('/api/admin/broadcasts', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
 
-    const [adminUser] = await db
-      .insert(users)
-      .values({
-        id: createId(),
-        name: 'Broadcast Admin',
-        email: `broadcast-admin-${Date.now()}-${createId().slice(0, 6)}@example.com`,
-        provider: 'email',
-        role: 'admin',
-        tokenVersion: 1,
-        adminRoleVersion: 0,
-      })
-      .returning();
-    adminUserId = adminUser.id;
+    adminUserId = createId();
+    vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: true });
 
     vi.spyOn(sessionService, 'validateSession').mockResolvedValue({
       sessionId: mockSessionId,
@@ -127,14 +139,6 @@ describe('/api/admin/broadcasts', () => {
 
     // The live path consults the active-duplicate guard before creating.
     mockRepo.listByStatus.mockResolvedValue([]);
-  });
-
-  afterEach(async () => {
-    try {
-      await db.delete(users).where(eq(users.id, adminUserId));
-    } catch {
-      // Swallow cleanup errors to avoid masking test failures
-    }
   });
 
   describe('POST — dry run', () => {

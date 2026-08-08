@@ -11,6 +11,7 @@ const baseEntry = {
   pendingMutationsSinceLoad: [],
   loadStatus: 'loaded' as const,
   isLoadingOlder: true,
+  rev: null,
 };
 
 describe('applyOlderPage', () => {
@@ -84,7 +85,7 @@ describe('applyOlderPage', () => {
 
   it('should clear isLoadingOlder on success', () => {
     const initial: ConversationMessagesById = {
-      c1: { ...baseEntry, messages: [msg('m1')], olderCursor: 'm1', hasMoreOlder: true, isLoadingOlder: true },
+      c1: { ...baseEntry, messages: [msg('m1')], olderCursor: 'm1', hasMoreOlder: true, isLoadingOlder: true, rev: null },
     };
     const result = applyOlderPage(initial, {
       conversationId: 'c1',

@@ -8,6 +8,7 @@ const {
   mockReturning,
   mockUpdateSet,
   mockUpdateWhere,
+  mockTxSelectLimit,
   mockFindPageById,
   mockGetConversation,
   mockBroadcastAiStreamComplete,
@@ -21,6 +22,7 @@ const {
   mockReturning: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockTxSelectLimit: vi.fn(),
   mockFindPageById: vi.fn(),
   mockGetConversation: vi.fn(),
   mockBroadcastAiStreamComplete: vi.fn(),
@@ -33,6 +35,34 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
+    // The repository choke point (SSoT Phase 2) wraps the CAS upsert + the
+    // conversations.rev bump in one transaction. The tx reuses the SAME
+    // insert spies (so every table-routing/setWhere assertion below still
+    // binds to the real repository SQL); the rev bump's update chain returns
+    // no row (legacy-conversation shape), which the repository tolerates.
+    //
+    // `select` is the unified leg's FK precheck (Phase 4 PR 10,
+    // unified-message-leg.ts): a page-chat terminal write now lands on BOTH
+    // `chat_messages` and `messages` in this same transaction, and it looks
+    // the `conversations` row up first because `messages`'s FK is validated.
+    // Defaults to "the conversation exists" — the only shape a materializable
+    // stream can have, since its placeholder was written through the same
+    // repository.
+    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({
+        insert: mockInsert,
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: mockTxSelectLimit })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })),
+          })),
+        })),
+      }),
+    ),
   },
 }));
 
@@ -41,6 +71,16 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ conds: args })),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  // Pulled in transitively by the message-repository module graph.
+  sql: vi.fn(),
+  ne: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
@@ -51,10 +91,6 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chat_messages.id',
-    status: 'chat_messages.status',
-  },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
@@ -62,10 +98,17 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'messages.id',
     status: 'messages.status',
   },
+  conversations: {
+    id: 'conversations.id',
+    rev: 'conversations.rev',
+  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
+  loggers: {
+    ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() },
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -84,9 +127,19 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation },
 }));
-vi.mock('@/lib/repositories/global-conversation-repository', () => ({
-  globalConversationRepository: { recomputeLastMessageAt: mockRecomputeLastMessageAt },
-}));
+// `recomputeLastMessageAt` moved from `global-conversation-repository` to
+// `message-repository` with the repository merge (epic "Agent-Session Single
+// Source of Truth", Phase 4 / D6, PR 12) — page conversations read from the
+// same table now, so the field they sort on has one writer for both kinds.
+// Only that method is redirected: the rest of the module (the materializer's
+// own CAS terminal writes) stays REAL, which is what these tests exercise.
+vi.mock('@/lib/repositories/message-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/repositories/message-repository')>();
+  return {
+    ...actual,
+    messageRepository: { ...actual.messageRepository, recomputeLastMessageAt: mockRecomputeLastMessageAt },
+  };
+});
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
 import type { UIMessagePart } from '../stream-multicast-registry';
@@ -133,6 +186,8 @@ beforeEach(() => {
   // gate needs it); the global chain awaits the upsert directly and ignores this shape.
   mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
   mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
+  // The unified leg's `conversations` precheck — present by default.
+  mockTxSelectLimit.mockResolvedValue([{ id: 'conv-1' }]);
   // Default the mention-gate lookups to "page gone" so tests not about notifications never
   // trip the notify path.
   mockFindPageById.mockResolvedValue(null);
@@ -147,22 +202,26 @@ beforeEach(() => {
 });
 
 describe('materializeInterruptedStream — table routing', () => {
-  it('given a page-chat channelId, writes to chat_messages with pageId = channelId', async () => {
+  it('given a page-chat channelId, writes to messages with no human author', async () => {
     await materializeInterruptedStream(pageRow({ channelId: 'page-abc123' }));
 
+    // Both kinds of channel land in `messages` — one table since PR 15
+    // dropped `chat_messages`. The routing that survives is in the VALUES, not
+    // the table: a page row carries no human author, a global one does. The
+    // page itself is the CONVERSATION's, so nothing here writes it.
     assert({
       given: 'a provably-dead page-chat stream row',
-      should: 'insert into chat_messages, not messages',
+      should: 'insert into messages — the one message table',
       actual: mockInsert.mock.calls[0][0],
-      expected: { id: 'chat_messages.id', status: 'chat_messages.status' },
+      expected: { id: 'messages.id', status: 'messages.status' },
     });
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
       given: 'a page-chat row',
-      should: 'set pageId from channelId, userId null, sourceAgentId null (mirrors the placeholder insert contract)',
-      actual: { pageId: values.pageId, userId: values.userId, sourceAgentId: values.sourceAgentId, status: values.status },
-      expected: { pageId: 'page-abc123', userId: null, sourceAgentId: null, status: 'interrupted' },
+      should: 'set userId null and sourceAgentId null (mirrors the placeholder insert contract), and carry no page column',
+      actual: { hasPageId: 'pageId' in values, userId: values.userId, sourceAgentId: values.sourceAgentId, status: values.status },
+      expected: { hasPageId: false, userId: null, sourceAgentId: null, status: 'interrupted' },
     });
   });
 
@@ -197,6 +256,67 @@ describe('materializeInterruptedStream — table routing', () => {
       should: 'include conversationId in the conflict update set clause',
       actual: setClause.conversationId,
       expected: 'conv-fresh',
+    });
+  });
+
+  // Materialization IS the terminal write for a recovered reply — a class of
+  // row no backfill re-derives — so a second INSERT appearing here would be a
+  // resurrected legacy writer silently forking the record.
+  it('writes the materialized page reply ONCE, to the one message table', async () => {
+    await materializeInterruptedStream(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
+
+    assert({
+      given: 'a materialized page-chat reply',
+      should: 'insert into messages exactly once',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
+    });
+
+    const written = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'the materialized page reply',
+      should: 'carry its id, status and conversation — the conversation is what names its page',
+      actual: {
+        id: written.id,
+        status: written.status,
+        conversationId: written.conversationId,
+        hasPageId: 'pageId' in written,
+      },
+      expected: {
+        id: 'msg-1',
+        status: 'interrupted',
+        conversationId: 'conv-1',
+        hasPageId: false,
+      },
+    });
+  });
+
+  // The CAS is the gate: it is what proves the row was still 'streaming'. A
+  // declined write must not be retried against anything, or it would clobber a
+  // terminal row the route's own onFinish already wrote correctly.
+  it('given the CAS wrote nothing, writes nothing else either', async () => {
+    mockReturning.mockResolvedValue([]);
+
+    await materializeInterruptedStream(pageRow());
+
+    assert({
+      given: 'a materialization whose compare-and-swap matched no streaming row',
+      should: 'attempt exactly one insert and mirror it nowhere',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
+    });
+  });
+
+  // Unchanged by the merge: the global assistant's table has always been
+  // `messages`, and a duplicate insert would be a real bug.
+  it('given a global-assistant row, writes messages exactly once', async () => {
+    await materializeInterruptedStream(globalRow());
+
+    assert({
+      given: 'a materialized global-assistant reply',
+      should: 'write the messages table once',
+      actual: mockInsert.mock.calls.map((call) => call[0]),
+      expected: [{ id: 'messages.id', status: 'messages.status' }],
     });
   });
 });
@@ -263,7 +383,7 @@ describe('materializeInterruptedStream — the #2022 invariant (compare-and-swap
       given: 'any materialization attempt',
       should: 'guard the conflict update with status == streaming',
       actual: mockOnConflictDoUpdate.mock.calls[0][0].setWhere,
-      expected: { field: 'chat_messages.status', value: 'streaming' },
+      expected: { field: 'messages.status', value: 'streaming' },
     });
   });
 

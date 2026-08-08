@@ -33,7 +33,7 @@ const CUID = 'tz4a98xxat96iws9zmbrgj3a';
 // Any room-prefix immediately following a quote or backtick is a hand-rolled
 // room name. Builders from @pagespace/lib/realtime/rooms are the only
 // sanctioned way to construct one.
-const ROOM_LITERAL = /[`'"](?:drive|notifications|dm|activity|user):/;
+const ROOM_LITERAL = /[`'"](?:drive|notifications|dm|activity|user|session):/;
 
 /**
  * Pure scan of one file's source for hand-rolled room-name literals, given

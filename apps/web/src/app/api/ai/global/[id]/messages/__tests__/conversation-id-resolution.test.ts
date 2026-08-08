@@ -136,7 +136,7 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: Object.assign(vi.fn(), { join: vi.fn() }),
 }));
 
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
@@ -306,7 +306,7 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
-import { resolveOrCreateConversation, ConversationHistoryDeletedError } from '../resolve-or-create-conversation';
+import { resolveOrCreateConversation, ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',

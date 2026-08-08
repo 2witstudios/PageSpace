@@ -148,7 +148,10 @@ test.describe('File uploads', () => {
 
   // ── Presigned URL redirect ───────────────────────────────────────────────────
 
-  test('file view redirects to presigned S3 URL (mocked)', async ({ page, driveId }) => {
+  // `driveId` was destructured here and never used. The fixture is a pure read of
+  // .seed-state.json (fixtures/auth.fixture.ts) with no setup side effect, so
+  // dropping it changes nothing but the lint result.
+  test('file view redirects to presigned S3 URL (mocked)', async ({ page }) => {
     const presignedUrl =
       `https://fly.storage.tigris.dev/pagespace-files/files/${FAKE_CONTENT_HASH}/original` +
       `?X-Amz-Signature=fakesig&X-Amz-Expires=900`;

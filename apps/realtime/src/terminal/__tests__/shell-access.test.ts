@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { assert } from './riteway';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import type { ShellDTO } from '@pagespace/lib/agent-sessions/contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
 import { buildShellCheckAuth, type ShellCheckAuthDeps } from '../shell-access';
 
 // A minimal, identity-carrying stand-in for a real Sprite instance — the access
@@ -10,7 +10,7 @@ const fakeSprite = { name: 'sprite-under-test' } as unknown as SpriteInstanceLik
 
 const shellRow: ShellDTO = {
   shellId: 'shl-1',
-  sessionId: 'conv-1',
+  workspaceId: 'conv-1',
   ownerId: 'owner-1',
   name: 'shell',
   agentType: 'shell',
@@ -18,7 +18,7 @@ const shellRow: ShellDTO = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-const sessionSubject = { sessionId: 'ses-1', ownerId: 'owner-1', driveId: 'drive-1' };
+const sessionSubject = { workspaceId: 'ses-1', ownerId: 'owner-1', driveId: 'drive-1' };
 
 type DepCalls = {
   checkSessionAccess: number;
@@ -38,7 +38,7 @@ function buildDeps(overrides: Partial<ShellCheckAuthDeps> = {}): {
 } {
   const calls: DepCalls = { checkSessionAccess: 0, resolvePayer: 0, ensureSessionSandbox: 0, getSprite: 0, getUser: 0 };
   const base: ShellCheckAuthDeps = {
-    resolveShell: async () => ({ ok: true, shell: shellRow, cwd: '/home/user', streamSessionId: null }),
+    resolveShell: async () => ({ ok: true, shell: shellRow, cwd: '/home/user', spriteExecId: null }),
     checkSessionAccess: async () => {
       calls.checkSessionAccess += 1;
       return { allowed: true, session: sessionSubject };
@@ -119,8 +119,8 @@ describe('buildShellCheckAuth — access half', () => {
   it('decides access against the session the SHELL ROW names — never a session id a client claims', async () => {
     const decidedAgainst: string[] = [];
     const { deps } = buildDeps({
-      checkSessionAccess: async ({ sessionId }) => {
-        decidedAgainst.push(sessionId);
+      checkSessionAccess: async ({ workspaceId }) => {
+        decidedAgainst.push(workspaceId);
         return { allowed: true, session: sessionSubject };
       },
     });
@@ -130,7 +130,7 @@ describe('buildShellCheckAuth — access half', () => {
 
     assert({
       given: 'a connect addressed by shellId alone',
-      should: "authorize against the resolved row's own sessionId",
+      should: "authorize against the resolved row's own workspaceId",
       actual: decidedAgainst,
       expected: ['conv-1'],
     });
@@ -189,7 +189,7 @@ describe('buildShellCheckAuth — access half', () => {
     const { deps } = buildDeps({
       checkSessionAccess: async () => ({
         allowed: true,
-        session: { sessionId: 'ses-1', ownerId: 'owner-1', driveId: null },
+        session: { workspaceId: 'ses-1', ownerId: 'owner-1', driveId: null },
       }),
       resolvePayer: async () => ({ payerId: 'owner-1', driveId: null }),
     });
@@ -345,27 +345,27 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
         ? {
             ok: sandbox.ok,
             shellId: sandbox.shellId,
-            sessionId: sandbox.sessionId,
+            workspaceId: sandbox.workspaceId,
             sandboxId: sandbox.sandboxId,
             cwd: sandbox.cwd,
             sprite: sandbox.sprite,
             command: sandbox.command,
             args: sandbox.args,
             commandOverride: sandbox.commandOverride,
-            streamSessionId: sandbox.streamSessionId,
+            spriteExecId: sandbox.spriteExecId,
           }
         : sandbox,
       expected: {
         ok: true,
         shellId: 'shl-1',
-        sessionId: 'conv-1',
+        workspaceId: 'conv-1',
         sandboxId: 'sbx-1',
         cwd: '/home/user',
         sprite: fakeSprite,
         command: 'shell',
         args: [],
         commandOverride: null,
-        streamSessionId: null,
+        spriteExecId: null,
       },
     });
   });
@@ -391,7 +391,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
         ok: true,
         shell: { ...shellRow, command: 'htop --tree' },
         cwd: '/home/user',
-        streamSessionId: 'sess-1',
+        spriteExecId: 'sess-1',
       }),
     });
     const checkAuth = buildShellCheckAuth(deps);
@@ -403,9 +403,9 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
       given: 'a resolved row with a command override and a persisted stream session id',
       should: 'expose the override plus the agentType launch command and the stored id',
       actual: sandbox.ok
-        ? { command: sandbox.command, commandOverride: sandbox.commandOverride, streamSessionId: sandbox.streamSessionId }
+        ? { command: sandbox.command, commandOverride: sandbox.commandOverride, spriteExecId: sandbox.spriteExecId }
         : sandbox,
-      expected: { command: 'shell', commandOverride: 'htop --tree', streamSessionId: 'sess-1' },
+      expected: { command: 'shell', commandOverride: 'htop --tree', spriteExecId: 'sess-1' },
     });
   });
 
@@ -532,7 +532,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
         ok: true,
         shell: { ...shellRow, command: 'claude --print' },
         cwd: '/home/user',
-        streamSessionId: null,
+        spriteExecId: null,
       }),
       writeAudit: ({ command, driveId }) => {
         audits.push({ command, driveId });

@@ -1,13 +1,27 @@
 /**
- * The store's own job: identity, idempotence, and not blowing up on a
- * transition aimed at a grid that is gone. The layout rules themselves are the
- * reducer's, and are tested there.
+ * The store's own job: identity, idempotence, the CLIENT-ONLY guards the
+ * server's reducer deliberately cannot evaluate (dirty panes, live
+ * conversations, the invoking pane), and not blowing up on a transition aimed
+ * at a grid that is gone. The layout rules themselves are the reducer's, and
+ * are tested there; the queue PROTOCOL is tested in
+ * `workspace-verb-queue.test.ts`.
+ *
+ * Every mutation here also mints a verb and posts it. This suite deliberately
+ * runs on a transport that never settles: what it pins is the OPTIMISTIC
+ * state — what the user sees the instant they click, before any server has
+ * answered — which is exactly the behavior the pre-verb store had and must
+ * keep having.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
-import { useAgentWorkspaceStore } from '../useAgentWorkspaceStore';
-import { panesOf } from '../pane-reducer';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
+import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { useEditingStore } from '@/stores/useEditingStore';
+
+const mockFetchWithAuth = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+}));
 
 const scope = (name = 'Planning'): PaneScope => ({
   kind: 'chat',
@@ -20,7 +34,12 @@ const store = () => useAgentWorkspaceStore.getState();
 const grid = (id = 'ses-1') => store().workspaces[id];
 
 beforeEach(() => {
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  mockFetchWithAuth.mockReset();
+  // A transport that never answers: every verb stays queued, so what these
+  // assertions read is purely the optimistic apply.
+  mockFetchWithAuth.mockImplementation(() => new Promise<Response>(() => {}));
+  __resetWorkspaceQueuesForTests();
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
 });
 
 describe('ensureWorkspace', () => {
@@ -503,33 +522,49 @@ describe('openConversation must not evict a page pane — the reload-seed shape'
   });
 });
 
-describe('persistence', () => {
-  it('is versioned, so a future shape change can migrate rather than silently misreading old storage', () => {
-    expect(useAgentWorkspaceStore.persist.getOptions().version).toBe(1);
+describe('persistence — the grid is gone from localStorage; only focus remains', () => {
+  it('is versioned past the grid era, so a v1 payload is retired rather than misread', () => {
+    expect(useAgentWorkspaceStore.persist.getOptions().version).toBe(2);
   });
 
-  it('drops a corrupted grid on rehydrate rather than letting it reach the store', async () => {
+  it('never persists the grid itself — the server is its only home now', () => {
+    store().ensureWorkspace('ses-1', scope());
+    const persisted = useAgentWorkspaceStore.persist.getOptions().partialize!(store());
+    expect(persisted).not.toHaveProperty('workspaces');
+    expect(persisted).not.toHaveProperty('sync');
+  });
+
+  it('persists the client-local focus, which no row owns', () => {
+    store().ensureWorkspace('ses-1', scope());
+    const persisted = useAgentWorkspaceStore.persist.getOptions().partialize!(store()) as {
+      focus: Record<string, { activePaneId: string }>;
+    };
+    expect(persisted.focus['ses-1'].activePaneId).toBe(grid().activePaneId);
+  });
+
+  it('drops a corrupted focus record on rehydrate rather than letting it reach the store', async () => {
     const storage = useAgentWorkspaceStore.persist.getOptions().storage;
     expect(storage).toBeDefined();
     await storage!.setItem('agent-workspace-storage', {
-      state: {
-        workspaces: {
-          'ses-corrupt': { id: 'ses-corrupt', columns: [], activePaneId: '', pendingPickerPaneId: null },
-          'ses-1': {
-            id: 'ses-1',
-            columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: scope() }] }],
-            activePaneId: 'pane-1',
-            pendingPickerPaneId: null,
-          },
-        },
-      },
-      version: 1,
+      state: { focus: { 'ses-1': { activePaneId: 42, pendingPickerPaneId: null } } },
+      version: 2,
+    } as never);
+
+    await useAgentWorkspaceStore.persist.rehydrate();
+
+    expect(store().focus).toEqual({});
+  });
+
+  it('restores a valid focus record', async () => {
+    const storage = useAgentWorkspaceStore.persist.getOptions().storage;
+    await storage!.setItem('agent-workspace-storage', {
+      state: { focus: { 'ses-1': { activePaneId: 'pane-x', pendingPickerPaneId: null } } },
+      version: 2,
     });
 
     await useAgentWorkspaceStore.persist.rehydrate();
 
-    expect(store().workspaces['ses-corrupt']).toBeUndefined();
-    expect(store().workspaces['ses-1']).toBeDefined();
+    expect(store().focus['ses-1']).toEqual({ activePaneId: 'pane-x', pendingPickerPaneId: null });
   });
 });
 

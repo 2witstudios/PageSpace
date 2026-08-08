@@ -134,6 +134,7 @@
         "src/schema/hotkeys.ts",
         "src/schema/incidents.ts",
         "src/schema/integrations.ts",
+        "src/schema/agent-workspace-layout.ts",
         "src/schema/machine-sprite-reclaims.ts",
         "src/schema/members.ts",
         "src/schema/monitoring.ts",
@@ -163,6 +164,7 @@
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
+        "src/test/require-db.ts",
         "src/transactions/auth-transactions.ts"
       ],
       "project": [
@@ -172,11 +174,13 @@
     },
     "packages/lib": {
       "entry": [
-        "src/agent-sessions/contract.ts",
-        "src/agent-sessions/decide-session-access.ts",
-        "src/agent-sessions/plan-session-lifecycle.ts",
-        "src/agent-sessions/plan-spawn-session.ts",
-        "src/agent-sessions/session-sprite-key.ts",
+        "src/agent-workspaces/contract.ts",
+        "src/agent-workspaces/decide-workspace-access.ts",
+        "src/agent-workspaces/plan-workspace-lifecycle.ts",
+        "src/agent-workspaces/plan-spawn-worker.ts",
+        "src/agent-workspaces/redact-conversation-listing.ts",
+        "src/agent-workspaces/workspace-sprite-key.ts",
+        "src/agent-workspaces/workspace-layout-verbs.ts",
         "src/ai/context-window.ts",
         "src/ai/global-channel-id.ts",
         "src/ai/model-defaults.ts",
@@ -396,16 +400,17 @@
         "src/security/jti-revocation.ts",
         "src/security/path-validator.ts",
         "src/security/url-validator.ts",
-        "src/services/agent-sessions/agent-session-access.ts",
-        "src/services/agent-sessions/agent-session-sprite.ts",
-        "src/services/agent-sessions/agent-session-tenant.ts",
-        "src/services/agent-sessions/agent-sessions-store.ts",
-        "src/services/agent-sessions/agent-sessions.ts",
-        "src/services/agent-sessions/session-scrollback.ts",
-        "src/services/agent-sessions/session-shells-store.ts",
-        "src/services/agent-sessions/session-shells.ts",
-        "src/services/agent-sessions/session-status.ts",
-        "src/services/agent-sessions/shell-types.ts",
+        "src/services/agent-workspaces/agent-workspace-access.ts",
+        "src/services/agent-workspaces/agent-workspace-sprite.ts",
+        "src/services/agent-workspaces/agent-workspace-tenant.ts",
+        "src/services/agent-workspaces/agent-workspaces-store.ts",
+        "src/services/agent-workspaces/agent-workspaces.ts",
+        "src/services/agent-workspaces/shell-scrollback.ts",
+        "src/services/agent-workspaces/workspace-shells-store.ts",
+        "src/services/agent-workspaces/workspace-shells.ts",
+        "src/services/agent-workspaces/workspace-status.ts",
+        "src/services/agent-workspaces/workspace-layout-store.ts",
+        "src/services/agent-workspaces/shell-types.ts",
         "src/services/attachment-upload-core.ts",
         "src/services/attachment-upload-repository.ts",
         "src/services/attachment-upload.ts",
@@ -552,7 +557,8 @@
     },
     "apps/e2e": {
       "ignore": [
-        "support/mock-server-main.ts"
+        "support/mock-server-main.ts",
+        "support/e2e-proxy.ts"
       ]
     }
   },

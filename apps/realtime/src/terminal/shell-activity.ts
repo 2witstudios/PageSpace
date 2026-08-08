@@ -2,21 +2,24 @@
  * Agent activity → live shell feed — the re-keyed successor to
  * `terminal-activity.ts` (Terminal Epic 1 T1.5, activity visibility).
  *
- * An agent's `bash` tool runs in its SESSION's one shared sandbox, but through
- * a separate one-off exec call — never through the interactive PTY a connected
- * human is watching. Without this, a human watching one of that session's
- * shells has no visibility into what the agent just did on their sandbox.
+ * An agent's `bash` tool runs in its WORKSPACE's one shared sandbox, but
+ * through a separate one-off exec call — never through the interactive PTY a
+ * connected human is watching. Without this, a human watching one of that
+ * workspace's shells has no visibility into what the agent just did on their
+ * sandbox.
  *
  * `apps/web` posts here (HMAC-signed, mirroring /api/broadcast and /api/kick)
- * after a successful bash run, addressed by **`sessionId`** — the conversation
- * id, the only address the tool layer holds; the `(tenantId, driveId, pageId)`
- * machine-session tuple has no successor. This handler resolves the session's
- * shells to their in-memory keys (an injected DB lookup — no Sprite is ever
- * touched), looks up any LIVE PTY sessions in the shared map, and — for each
- * one — injects an annotated line into its output feed (both the live sockets
- * and the scrollback), so it reads like PTY output to anyone watching or
- * reconnecting. Every live shell of the session gets the line: they all share
- * the sandbox the agent just acted on.
+ * after a successful bash run, addressed by the workspace
+ * (`agent_workspaces.id`) — the only address the tool layer holds; the
+ * `(tenantId, driveId, pageId)` machine-session tuple has no successor. The
+ * wire field carrying it is still spelled `sessionId`; see
+ * `ShellActivityPayload` for why that name is frozen. This handler resolves
+ * the workspace's shells to their in-memory keys (an injected DB lookup — no
+ * Sprite is ever touched), looks up any LIVE PTY sessions in the shared map,
+ * and — for each one — injects an annotated line into its output feed (both
+ * the live sockets and the scrollback), so it reads like PTY output to anyone
+ * watching or reconnecting. Every live shell of the workspace gets the line:
+ * they all share the sandbox the agent just acted on.
  *
  * A 200 with `delivered: false` (no live shell) is the expected common case —
  * most agent runs happen while nobody is watching a shell — and is NOT an
@@ -49,7 +52,20 @@ function stripControlChars(text: string): string {
 }
 
 export interface ShellActivityPayload {
-  /** ≡ the conversation id of the session whose sandbox the agent acted on. */
+  /**
+   * `agent_workspaces.id` — the workspace whose sandbox the agent acted on.
+   *
+   * The FIELD NAME is frozen at the old spelling on purpose: this is a
+   * cross-service wire contract and realtime deploys BEFORE web (pinned by
+   * `src/__tests__/deploy-order.guard.test.ts` — the workflow shipped the
+   * other way round while this comment already claimed otherwise), so a
+   * rename would spend a whole deploy window with new realtime reading a
+   * field old web does not send. It needs its own accept-both release.
+   * `apps/web` maps its
+   * `workspaceId` onto this name at the boundary
+   * (`sandbox-tools-runtime.ts`), the same way the sandbox billing and storage
+   * paths do for `AIUsageData.sessionId`.
+   */
   sessionId: string;
   command: string;
   output: string;
@@ -112,12 +128,12 @@ export function formatShellActivityLine(payload: Pick<ShellActivityPayload, 'com
 export interface ShellActivityDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
   /**
-   * Resolves the session's shells to their in-memory session-map keys — a
-   * DB-only listing of `agent_session_shells` composed with
-   * `deriveShellSessionKey`. An empty array means the session has no shells
+   * Resolves the workspace's shells to their in-memory session-map keys — a
+   * DB-only listing of `agent_workspace_shells` composed with
+   * `deriveShellSessionKey`. An empty array means the workspace has no shells
    * (nothing to look up — same as no live session). Never touches a Sprite.
    */
-  resolveShellKeys: (sessionId: string) => Promise<string[]>;
+  resolveShellKeys: (workspaceId: string) => Promise<string[]>;
 }
 
 export interface ShellActivityResult {

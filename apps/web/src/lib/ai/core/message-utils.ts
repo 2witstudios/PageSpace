@@ -5,12 +5,7 @@ import {
   type DynamicToolUIPart,
   type ToolUIPart,
 } from 'ai';
-import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
-import { chatMessages } from '@pagespace/db/schema/core'
-import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
@@ -68,7 +63,7 @@ function debugLogAI(message: string, data?: Record<string, unknown>): void {
   }
 }
 
-interface ToolCall {
+export interface ToolCall {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
@@ -77,7 +72,7 @@ interface ToolCall {
   state: ToolUIPart['state'];
 }
 
-interface ToolResult {
+export interface ToolResult {
   toolCallId: string;
   toolName: string;
   output: unknown;
@@ -103,7 +98,15 @@ type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: stri
 
 interface DatabaseMessage {
   id: string;
-  pageId: string;
+  /**
+   * Structural only — nothing in this module reads it (verified), and since
+   * the message-table merge (Phase 4 / D6) a page is DERIVED at read time from
+   * `conversations.contextId` and can legitimately be absent for the rare
+   * `type='client'` thread. Optional and nullable so the unified readers hand
+   * their rows straight in, exactly as `GlobalAssistantMessage.userId` was
+   * widened in the expand PR.
+   */
+  pageId?: string | null;
   userId: string | null;
   role: string;
   content: string;
@@ -121,7 +124,15 @@ interface DatabaseMessage {
 interface GlobalAssistantMessage {
   id: string;
   conversationId: string;
-  userId: string;
+  /**
+   * NULL for an agent/system-authored row. `messages.userId` became nullable
+   * in migration 0249 (Phase 4 expand — see the attribution rule on the
+   * `messages` table in packages/db/src/schema/conversations.ts). Nothing
+   * writes NULL yet; this type widening is what lets the readers keep
+   * compiling ahead of the dual-write PR. The field is structural here — this
+   * converter never reads it.
+   */
+  userId: string | null;
   role: string;
   content: string;
   toolCalls: unknown;
@@ -491,7 +502,9 @@ export async function extractStructuredContentFromParts(uiParts: UIMessage['part
 }
 
 /**
- * Thrown by `saveMessageToDatabase`/`saveGlobalAssistantMessageToDatabase` when a
+ * Thrown by the message repository's private raw savers
+ * (apps/web/src/lib/repositories/message-repository.ts — the savers moved
+ * there from this module in the Agent-Session SSoT epic, Phase 2) when a
  * client-supplied message id collides with a row that belongs to a DIFFERENT
  * conversation — the scoped upsert's `where` clause makes Postgres skip the
  * conflicting write entirely (never overwrite/re-parent it), and this is what
@@ -505,151 +518,6 @@ export class MessageConversationConflictError extends Error {
   ) {
     super(`Message id ${messageId} already belongs to a different conversation than ${conversationId}`);
     this.name = 'MessageConversationConflictError';
-  }
-}
-
-/**
- * Save a message with tool calls and results to the database
- * Supports both legacy format and new structured format with chronological ordering
- */
-export async function saveMessageToDatabase({
-  messageId,
-  pageId,
-  conversationId,
-  userId,
-  role,
-  content,
-  toolCalls,
-  toolResults,
-  uiMessage,
-  sourceAgentId,
-  mentionNotify,
-  status = 'complete',
-  dbClient = db,
-}: {
-  messageId: string;
-  pageId: string;
-  conversationId: string; // Group messages into conversation sessions
-  userId: string | null;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  toolCalls?: ToolCall[];
-  toolResults?: ToolResult[];
-  uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
-  sourceAgentId?: string | null; // ID of the AI agent that sent this message (for agent-to-agent communication)
-  mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
-  /**
-   * Terminal status for a formerly-'streaming' placeholder row. Defaults to 'complete' — every
-   * OTHER caller (ask_agent, consult, edits, ask-user-resume merges, etc.) persists a finished
-   * message, never a mid-flight one. The stream-lifecycle terminal writers (execute-end,
-   * onFinish) pass 'interrupted' explicitly when the run was aborted, so a stopped reply — with
-   * or without partial content — reads as terminal-but-cut-short rather than falsely 'complete'.
-   * See Server Stream Durability epic PR 2.
-   */
-  status?: 'complete' | 'interrupted';
-  /**
-   * Override the connection this write runs on — a caller that already
-   * opened a transaction (e.g. to hold a row lock across an active-
-   * conversation check and this insert, atomically) passes its `tx` here so
-   * the insert runs on the SAME connection/transaction rather than a second,
-   * unlocked one. Defaults to the plain module `db`.
-   */
-  dbClient?: typeof db;
-}) {
-  try {
-    let structuredContent = content;
-
-    // If we have the complete UIMessage, store structured content to preserve chronological order
-    if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-
-      debugLogAI('Saving structured content', {
-        textPartsCount: uiMessage.parts.filter(isTextPart).length,
-        filePartsCount: uiMessage.parts.filter(isFilePart).length,
-        totalPartsCount: uiMessage.parts.length
-      });
-    }
-
-    // Scoped upsert: `where` gates the ON CONFLICT DO UPDATE to a row already in the
-    // CALLER's own conversation AND under the same role. A client-supplied messageId
-    // (accepted unvalidated by both chat routes) can collide with a row that belongs to
-    // a DIFFERENT conversation — the id space is a single global primary key, not
-    // conversation-scoped. Without this, Postgres would run the update unconditionally:
-    // overwriting that row's content and re-parenting it into the caller's conversation
-    // via the `conversationId` write below. With the `where`, a cross-conversation
-    // collision makes Postgres skip the conflict action entirely for that row (no
-    // insert, no update — DO NOTHING in effect), which is why `conversationId` is no
-    // longer in `set`: it can only ever run when the row is already in this same
-    // conversation, where it would be a no-op anyway. `.returning()` reports which rows
-    // were actually touched, letting the caller detect (and log) a rejected collision
-    // instead of silently doing nothing.
-    //
-    // The `role` half of the gate (PR review finding) closes a narrower, same-conversation
-    // variant: `role` is never in `set` (a message's role is immutable), so without also
-    // requiring the EXISTING row's role to match, a 'user'-role save whose client id
-    // happens to equal an existing 'assistant' row's id in the SAME conversation would
-    // still pass the conversationId check and overwrite that assistant reply's content —
-    // content-spoofing an AI response within a conversation the client already has access
-    // to write to (ids aren't secret; they're visible in the conversation's own history).
-    const result = await dbClient.insert(chatMessages)
-      .values({
-        id: messageId,
-        pageId,
-        conversationId, // Group messages into conversation sessions
-        userId,
-        role,
-        content: structuredContent,
-        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-        toolResults: toolResults ? JSON.stringify(toolResults) : null,
-        createdAt: new Date(),
-        isActive: true,
-        sourceAgentId: sourceAgentId ?? null, // Track which AI agent sent this message
-        status,
-      })
-      .onConflictDoUpdate({
-        target: chatMessages.id,
-        set: {
-          content: structuredContent,
-          toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-          toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          sourceAgentId: sourceAgentId ?? null,
-          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'
-          // (never back to 'streaming' — this function is only ever called with a terminal
-          // status, per the param doc above).
-          status,
-        },
-        where: and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.role, role)),
-      })
-      .returning({ id: chatMessages.id });
-
-    if (result.length === 0) {
-      loggers.ai.warn(
-        'saveMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
-        { messageId, conversationId, pageId },
-      );
-      // MUST throw, not just log: a silent return here left every caller (both
-      // chat routes) falling through to bump conversations.lastMessageAt, audit-log
-      // the write, and fire mention notifications as though the message had been
-      // persisted — while the model still answers a "message" that was never saved.
-      // Caught by this function's own catch below, which both routes already turn
-      // into a user-visible failure response (never a silent 200).
-      throw new MessageConversationConflictError(messageId, conversationId);
-    }
-
-    // Fire-and-forget mention notifications for assistant messages only
-    if (mentionNotify && role === 'assistant' && content.trim()) {
-      void notifyMentionedUsers({
-        content,
-        pageId,
-        driveId: mentionNotify.driveId,
-        triggeredByUserId: mentionNotify.triggeredByUserId,
-        mentionerNameOverride: mentionNotify.mentionerName,
-      });
-    }
-
-  } catch (error) {
-    loggers.ai.error('Failed to save message to database', error as Error);
-    throw error;
   }
 }
 
@@ -693,98 +561,6 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     messageType: dbMessage.messageType || 'standard',
     status: dbMessage.status,
   } as ExtendedUIMessage;
-}
-
-/**
- * Save a Global Assistant message with tool calls and results to the database
- * Supports both legacy format and new structured format with chronological ordering
- */
-export async function saveGlobalAssistantMessageToDatabase({
-  messageId,
-  conversationId,
-  userId,
-  role,
-  content,
-  toolCalls,
-  toolResults,
-  uiMessage,
-  status = 'complete',
-  dbClient = db,
-}: {
-  messageId: string;
-  conversationId: string;
-  userId: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  toolCalls?: ToolCall[];
-  toolResults?: ToolResult[];
-  uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
-  /** Terminal status for a formerly-'streaming' placeholder row. See saveMessageToDatabase's
-   * param doc for the full rationale — same contract, mirrored for the global assistant table. */
-  status?: 'complete' | 'interrupted';
-  /** See saveMessageToDatabase's own doc — same override, same purpose. */
-  dbClient?: typeof db;
-}) {
-  try {
-    let structuredContent = content;
-
-    // If we have the complete UIMessage, store structured content to preserve chronological order
-    if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-
-      debugLogAI('Global Assistant: Saving structured content', {
-        textPartsCount: uiMessage.parts.filter(isTextPart).length,
-        filePartsCount: uiMessage.parts.filter(isFilePart).length,
-        totalPartsCount: uiMessage.parts.length
-      });
-    }
-
-    // Scoped upsert — see the comment on the equivalent chatMessages upsert above.
-    // This table never wrote conversationId in `set` (so it never re-parented), but it
-    // DID silently overwrite another conversation's content on a colliding id — the
-    // `where` closes that too, plus the same same-conversation role-spoofing gap
-    // (a 'user'-role save whose id collides with an existing 'assistant' row).
-    const result = await dbClient.insert(messages)
-      .values({
-        id: messageId,
-        conversationId,
-        userId,
-        role,
-        content: structuredContent,
-        toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-        toolResults: toolResults ? JSON.stringify(toolResults) : null,
-        createdAt: new Date(),
-        isActive: true,
-        status,
-      })
-      .onConflictDoUpdate({
-        target: messages.id,
-        set: {
-          content: structuredContent,
-          toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
-          toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'.
-          status,
-        },
-        where: and(eq(messages.conversationId, conversationId), eq(messages.role, role)),
-      })
-      .returning({ id: messages.id });
-
-    if (result.length === 0) {
-      loggers.ai.warn(
-        'saveGlobalAssistantMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
-        { messageId, conversationId },
-      );
-      // See saveMessageToDatabase's identical guard for the full rationale: must throw,
-      // not just log, or the caller proceeds as though an unpersisted message was saved.
-      throw new MessageConversationConflictError(messageId, conversationId);
-    }
-
-    debugLogAI('Global Assistant: Message saved to database with tools');
-  } catch (error) {
-    loggers.ai.error('Failed to save global assistant message to database', error as Error);
-    throw error;
-  }
 }
 
 /**

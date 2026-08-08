@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import EmptyState from './EmptyState';
 import { resolveNavigationTarget, type ConversationKind, type ClaimableFallback } from './resolveNavigationTarget';
 import { classifySpawnRefusal } from './spawn-refusal';
-import { isAgentSessionsKey } from './panes/session-conversations';
+import { isAgentWorkspacesKey } from './panes/workspace-conversations';
 
 const PAGE_SIZE = 20;
 
@@ -49,7 +49,7 @@ function buildKey(driveId: string | undefined, cursor: string | null): string {
   if (driveId) params.set('driveId', driveId);
   params.set('limit', String(PAGE_SIZE));
   if (cursor) params.set('cursor', cursor);
-  return `/api/agent-sessions/conversations?${params.toString()}`;
+  return `/api/agent-workspaces/conversations?${params.toString()}`;
 }
 
 function rowLabel(row: ConversationRowDTO): string {
@@ -144,16 +144,16 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
         if (claimingId) return;
         setClaimingId(target.conversationId);
         try {
-          const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-            '/api/agent-sessions',
+          const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
+            '/api/agent-workspaces',
             { firstThing: 'claim', conversationId: target.conversationId, driveId: target.driveId ?? undefined },
           );
           // The sidebar (and any other pane) reads this same shared listing —
           // without this, the freshly claimed session is invisible there until
           // its own 20s poll happens to fire.
-          void mutate(isAgentSessionsKey);
+          void mutate(isAgentWorkspacesKey);
           selectConversation({
-            sessionId: created.session.sessionId,
+            sessionId: created.session.workspaceId,
             conversationId: created.conversationId,
             agentId: target.agentPageId,
           });

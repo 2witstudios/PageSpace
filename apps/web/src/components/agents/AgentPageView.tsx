@@ -68,7 +68,7 @@ import { useResolvedAgent } from './useResolvedAgent';
 import { useSessionRecord } from './useSessionRecord';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
-import { agentSessionsKey, isAgentSessionsKey, type SessionListEntry } from './panes/session-conversations';
+import { agentWorkspacesKey, isAgentWorkspacesKey, type SessionListEntry } from './panes/workspace-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
 
@@ -88,7 +88,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
 
   // A deep link from the Agents surface's past-conversations list
   // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
-  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
+  // the Agents surface's own `?workspace=`/`?c=`/`?agent=`, so it's captured
   // once at mount and never re-read afterward (a later History-tab pick or
   // "new conversation" is not fighting a stale URL param).
   const searchParams = useSearchParams();
@@ -132,9 +132,9 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // The SESSION's own driveId — usually `page.driveId`, but NOT when this
   // conversation lives in a global-assistant session hosting a cross-drive
   // agent (a global session may now host any accessible agent's conversation;
-  // see create-conversation-in-session.ts). `AgentPanes` needs the SESSION's
+  // see create-conversation-in-workspace.ts). `AgentPanes` needs the SESSION's
   // real drive (null for global), never the agent page's fixed home drive, or
-  // its `agentSessionsKey`/picker scope to a workspace this session isn't in.
+  // its `agentWorkspacesKey`/picker scope to a workspace this session isn't in.
   // Defaults to `page.driveId` while unresolved — correct for every
   // pre-existing conversation, and self-corrects once the session record
   // loads for the new cross-drive case. Checked as `sessionData?.session ? : `
@@ -272,17 +272,17 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             // null going in) is always minted scoped to this page's own drive
             // (`createPageConversation`'s spawn branch). Using `page.driveId`
             // unconditionally here silently patched the wrong SWR cache entry
-            // for the reused-global case (`agentSessionsKey`'s own doc
+            // for the reused-global case (`agentWorkspacesKey`'s own doc
             // comment warns against exactly this drift) — the broader
-            // `mutate(isAgentSessionsKey)` below still catches it, just not
+            // `mutate(isAgentWorkspacesKey)` below still catches it, just not
             // instantly.
             void mutate(
-              agentSessionsKey(sessionId !== null ? panesDriveId : page.driveId),
+              agentWorkspacesKey(sessionId !== null ? panesDriveId : page.driveId),
               (current: { sessions: SessionListEntry[] } | undefined) => {
                 if (!current) return current;
                 return {
                   sessions: current.sessions.map((session) =>
-                    session.sessionId === insertedSessionId
+                    session.workspaceId === insertedSessionId
                       ? {
                           ...session,
                           conversations: [
@@ -297,10 +297,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               { revalidate: false },
             );
           }
-          // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+          // ...and a broader revalidate for every OTHER `/api/agent-workspaces**`
           // consumer (the sidebar, other panes) whose differently-scoped
           // cache key the local insert above doesn't touch.
-          void mutate(isAgentSessionsKey);
+          void mutate(isAgentWorkspacesKey);
           if (sessionId && staleConversationId) {
             // The grid's pane binding is repointed regardless: a pane still
             // showing the now-gone `staleConversationId` is a dangling reference

@@ -339,10 +339,25 @@ beforeEach(() => {
   delete process.env.CORS_ORIGIN;
   delete process.env.WEB_APP_URL;
   delete process.env.ADDITIONAL_ALLOWED_ORIGINS;
+  // This suite asserts the MAIN-pool SIEM routing, and said so only in a
+  // comment ("no ADMIN_DATABASE_URL in the test env") — an assumption about
+  // the ambient environment rather than something the suite established. The
+  // moment CI began providing ADMIN_DATABASE_URL, routing resolved to the
+  // admin pool, whose `getAdminPoolForWorker` is a bare stub here, and eight
+  // tests failed for a reason unrelated to what they assert.
+  //
+  // `stubEnv`, not `delete`: this package runs single-fork, so a raw delete
+  // leaks out of this file and the admin-DB integration suites then find the
+  // variable missing at module scope.
+  vi.stubEnv('ADMIN_DATABASE_URL', undefined as unknown as string);
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Hand ADMIN_DATABASE_URL back to whatever set it — under single-fork the
+  // next test FILE shares this process, and the admin-DB integration suites
+  // read it at module scope.
+  vi.unstubAllEnvs();
 });
 
 // ===========================================================================

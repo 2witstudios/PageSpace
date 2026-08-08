@@ -1,0 +1,458 @@
+{
+  "$comment": "Machine-checked evidence for the Agent-Session Single Source of Truth epic. Format and rules: docs/2.0-architecture/agent-sessions-evidence.md. Checked by scripts/check-evidence-manifest.ts in CI — do not hand-edit a citation without running it.",
+  "suites": {
+    "e2e-playwright": {
+      "runner": "playwright (apps/e2e), production web build + realtime behind a same-origin proxy",
+      "pathPrefixes": [
+        "apps/e2e/tests/"
+      ],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "playwright test"
+      },
+      "requiresFileListedInCi": true
+    },
+    "web-unit": {
+      "runner": "vitest project 'web' via turbo run test:coverage",
+      "pathPrefixes": [
+        "apps/web/src/"
+      ],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "lib-unit": {
+      "runner": "vitest project '@pagespace/lib' via turbo run test:coverage",
+      "pathPrefixes": [
+        "packages/lib/src/"
+      ],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "realtime-unit": {
+      "runner": "vitest project 'realtime' via turbo run test:coverage",
+      "pathPrefixes": [
+        "apps/realtime/src/"
+      ],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+      }
+    },
+    "scripts-vitest": {
+      "runner": "vitest in scripts/ — the workflow runs the whole context; scripts/vitest.config.ts's `include` patterns are the one declaration of the file set",
+      "pathPrefixes": [
+        "scripts/__tests__/"
+      ],
+      "ciEvidence": {
+        "workflow": ".github/workflows/ci.yml",
+        "contains": "cd scripts && bunx vitest run"
+      }
+    }
+  },
+  "guarantees": [
+    {
+      "id": "dispatch-renders-live-in-open-pane",
+      "guarantee": "A server-side dispatch renders live in an already-open pane, with no reload.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "a server dispatch into an open pane renders live without reload",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "a page-chat dispatch persists both sides of the turn (visible after reload)",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The epic's canonical bug written as an executable spec. The second citation is the harness pin: it proves the dispatch really wrote through the pipeline, so a green live-delivery assertion cannot be an artefact of a dispatch that did nothing. This spec only means what it says when realtime is same-origin — see the CSP note in the .md. Both citations pass in CI as of run 5, the first run carrying #2363's socket-churn fix; the live-delivery one failed in every run before it. See the RED GATE table in the .md for the full history — 'proven' still means cited, executing and gated, not green, and the CI job remains the thing that reports green."
+    },
+    {
+      "id": "two-windows-see-both-sides-live",
+      "guarantee": "Two windows open on one conversation both see both sides of a turn live.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/16-dispatch-multiplayer.spec.ts",
+          "name": "two windows on one conversation both see both sides of a dispatched turn live",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "This was the last assertion still failing everywhere — all four runs, local and CI — and it passes as of CI run 5 with #2363's socket-churn fix. See the RED GATE table in the .md."
+    },
+    {
+      "id": "server-created-conversation-reaches-sidebar",
+      "guarantee": "A server-created conversation appears in the sidebar without waiting for a poll tick.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
+          "name": "should write the new conversation straight into its session listing, with no request",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
+          "name": "given the row is already there (the originating surface wrote it optimistically), should MERGE not duplicate",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/agent-workspaces/__tests__/create-conversation-in-workspace.test.ts",
+          "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "These three prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. CAVEAT WORTH KEEPING, found by writing that spec: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted. Creation and session-binding are decoupled by design (`create-conversation-in-workspace.ts` — a sessionless conversation is an ordinary state), so `conversation:created` fires first with `workspaceId: null`, which the listener correctly declines to insert anywhere, and it is the CLAIM's `conversation:updated { workspaceId }` that updates the sidebar, via `revalidateWorkspaceListings`. So the no-round-trip property these tests pin is real for the branch they exercise, but the spawn story is served by one event-driven refetch rather than by that branch. Event-driven either way — which is the guarantee — but not request-free, and the difference is worth not overclaiming."
+    },
+    {
+      "id": "sidebar-renders-server-created-conversation-end-to-end",
+      "guarantee": "The sidebar component itself re-renders with a server-created conversation off the socket event (not merely the cache layer beneath it).",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "a server-spawned conversation reaches the sidebar off the directory plane, not off the backstop poll",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "a server-side close removes the row with the listing fetch cut off at the network",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/18-sidebar-directory-live.spec.ts",
+          "name": "the row lands in the spawning session only, not in every session listing",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The seam, closed against the real thing: a production build, a real socket on the shipped CSP (realtime same-origin behind the e2e proxy, `NEXT_PUBLIC_REALTIME_URL` unset — no `bypassCSP`), writes issued by a DIFFERENT HTTP client than the page (Playwright's API context, so the browser has no optimistic write and no pending request), and the real `AgentsSidebar` reading its own SWR key. That key is genuinely at risk of drifting, which is why this is not ceremony: the listener writes through the `isWorkspaceListingKey` / `isAgentWorkspacesKey` PREDICATES while the sidebar builds its key as an inline template literal instead of calling the shared `agentWorkspacesKey()` helper. WHY THREE CITATIONS AND NOT ONE, which is the honest part: the first covers the user story but CANNOT cut the network, because on the spawn path the refetch IS the mechanism (create and claim are decoupled — see the note on `server-created-conversation-reaches-sidebar`). It rules the poll out with a control instead: a quiet window the same length as the assertion window, asserted to contain zero listing fetches, so demoting the 120s refreshInterval fails the control loudly rather than letting the assertion pass for the wrong reason. The second citation is the seam at full strength — `conversation:closed` is answered by `forgetConversationInCache`, a genuinely request-free local write, so there the listing GET IS aborted for the whole window and the row still has to leave. The third covers the opposite error, an insert into every session's row rather than the spawning one. VERIFIED THEY CAN FAIL: diverging the listener's key predicates from the sidebar's key fails all three on the assertion (Expected 2, Received 1), not on setup. TWO HARNESS TRAPS THIS SPEC HAD TO SURVIVE, recorded because both made it green while proving nothing: the app registers `/sw.js`, and Playwright cannot intercept a fetch that goes through a Service Worker, so the block silently intercepted NOTHING until the context set `serviceWorkers: 'block'`; and a `'**/api/agent-workspaces**'` URL glob matched nothing where an exact-pathname URL predicate matches. A blocker that quietly blocks nothing turns a spec like this into a tautology — the failure-case run is what caught both."
+    },
+    {
+      "id": "pane-grid-converges-across-devices",
+      "guarantee": "Pane layout survives a reload and converges across two devices, in both directions.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "a split in one window appears in the other LIVE, with no reload",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "convergence is DURABLE: a window opened afterwards sees the same grid",
+          "suite": "e2e-playwright"
+        },
+        {
+          "file": "apps/e2e/tests/17-agent-workspace-grid.spec.ts",
+          "name": "converges in BOTH directions: a close in the second window reaches the first",
+          "suite": "e2e-playwright"
+        }
+      ],
+      "notes": "The durability citation is what separates 'the grid is server-authoritative' from 'both tabs happened to receive one message' — a fresh window reads the rows, not a broadcast. All three citations failed locally (the durability one flakily) and passed in CI even before the fix — the reconnect storm made delivery a race a faster machine often won, which is why the CI passes were not accepted as evidence at the time. All three pass as of CI run 5 with #2363's socket-churn fix. See the RED GATE table in the .md."
+    },
+    {
+      "id": "adversarial-delivery-converges-to-db-truth",
+      "guarantee": "An event delivered out of order, duplicated, or dropped converges to DB truth after the watermark check.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-convergence.property.test.ts",
+          "name": "given any adversarial delivery schedule, should equal DB truth after the watermark check",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-convergence.property.test.ts",
+          "name": "given a duplicated delivery of every event, should be indistinguishable from delivering each once",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-apply.test.ts",
+          "name": "drops a stale event (rev below the watermark)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/realtime/__tests__/conversation-apply.test.ts",
+          "name": "refetches on a large gap (a reconnect that missed a whole burst)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/stores/conversationMessages/__tests__/outOfOrderReplayConvergence.test.ts",
+          "name": "given update@3 delivered before update@2, with the rev-2 event landing while the gap-heal GET is in flight, should converge on rev 3 with the rev-3 content",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The property test is the load-bearing one — it drives seeded adversarial schedules (drops, reorders, duplicates, truncation, stale snapshots) rather than a handful of chosen cases. The rest pin the individual clauses it depends on."
+    },
+    {
+      "id": "every-message-write-bumps-the-rev",
+      "guarantee": "A pane the user is looking at never sits silently stale after a message write: every write bumps the conversation's rev in the same transaction, so the client's next rev sync notices even when the live event never arrives.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "executeAiUndo bumps the conversation rev in the same transaction as the soft-delete",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "a throwing emit does not cost the rev bump — the client can still detect staleness",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/undo-rev-atomicity.integration.test.ts",
+          "name": "an aborted undo takes the rev bump with it (no event for an uncommitted write)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/messages-write-site-classification.test.ts",
+          "name": "every `messages` write site is the repository choke point or a classified exemption",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/messages-write-site-classification.test.ts",
+          "name": "no exemption is stale (every classified file still writes `messages`)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The write-side counterpart to adversarial-delivery-converges-to-db-truth, and the reason that guarantee is worth anything: syncWatchedConversationRevs compares revs and nothing else, so a missed bump is worse than a missed emit — a missed emit self-heals on the next sync, a missed bump leaves server and client agreeing on a rev that no longer describes the data, stale until a manual reload. Added by #2366, which moved the undo write into messageRepository.softDeleteUndoRange; it previously bumped from a fire-and-forget block in the route, after commit, in a separate transaction, under a swallowing catch. The classification citations are what make this a claim about EVERY write rather than about undo: they enumerate every write site against the repository choke point and require each exemption to state a reason and still be real. Unlike the dbAvailable suites noted on gdpr-export-agent-authored-messages, the integration citations THROW when DATABASE_URL is absent rather than passing green with no assertions."
+    },
+    {
+      "id": "transcript-order-is-stable-across-reads",
+      "guarantee": "A conversation reads back in the same order every time — the last two turns cannot swap between reloads, and the model is not replayed a differently-ordered transcript.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "getMessagesByConversationId breaks createdAt ties deterministically",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
+          "name": "repeated reads of the same tied rows agree with each other",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window citation is the non-obvious one: a DESC reader must tiebreak DESC or LIMIT n selects a deterministic ordering of a nondeterministic set of rows."
+    },
+    {
+      "id": "no-wider-audience-than-pre-epic",
+      "guarantee": "No event reaches a wider audience than pre-epic behaviour, except the owner's own devices.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "messageCreated: PRIVATE conversation → rooms ⊆ {conv room, owner sessions room}; never the page room",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "enumerates EVERY method the emitter module exposes (completeness guard)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/websocket/__tests__/conversation-events-audience.test.ts",
+          "name": "no file outside conversation-events.ts emits a conversation:* event",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/realtime/src/__tests__/index.test.ts",
+          "name": "given a non-owner on a PRIVATE conversation (predicate denies), does not join and does not disconnect",
+          "suite": "realtime-unit"
+        },
+        {
+          "file": "apps/realtime/src/__tests__/rooms.test.ts",
+          "name": "given two users, user A should NOT be in user B global room",
+          "suite": "realtime-unit"
+        }
+      ],
+      "notes": "Two halves, both required: what the emitter targets (web), and who is allowed into the room it targets (realtime). The completeness guard and the emit-site scan are what stop the audience assertions being true of only the emitters someone remembered to list."
+    },
+    {
+      "id": "no-existence-oracle",
+      "guarantee": "A caller cannot distinguish 'exists but is not yours' from 'does not exist'.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-contract.test.ts",
+          "name": "no-row and foreign-owner refusals are byte-identical — anti-enumeration preserved",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/agent-workspaces/[workspaceId]/__tests__/route.test.ts",
+          "name": "given a denial, should answer { session: null } — SAME as not-found, but still audit it (review #2261/5)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/agent-workspaces/[workspaceId]/shells/[shellId]/__tests__/route.test.ts",
+          "name": "given a shell under a DIFFERENT session than the URL claims, should 404 without leaking the pairing",
+          "suite": "web-unit"
+        },
+        {
+          "file": "packages/lib/src/agent-workspaces/__tests__/decide-workspace-access.test.ts",
+          "name": "denies an UNRESOLVED membership — unknown is never a grant",
+          "suite": "lib-unit"
+        }
+      ],
+      "notes": "The tool-contract citation is the strongest form of the claim: the two refusal strings are asserted byte-identical, so the model-facing surface carries no oracle either. Route-level citations are a representative sample — every agent-session route has a paired denial-answers-like-not-found test."
+    },
+    {
+      "id": "gdpr-export-agent-authored-messages",
+      "guarantee": "GDPR export is complete for agent-authored message rows, and exports no one else's.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "is COMPLETE for the subject: their own page question, the AGENT reply in their thread, and both global rows",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "does NOT export another human's message from the subject's shared conversation (Art 15(4) — the subject's access must not affect others' rights)",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "exports every message EXACTLY ONCE — reading both legs would duplicate each page-chat row under its shared primary key",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The cited suite reaches a real Postgres or FAILS: its connection probe routes through `requireDb` (packages/db/src/test/require-db.ts), so an absent database is an environment error rather than a green, zero-assertion pass. This note previously recorded the opposite as an open caveat; that silent-green shape was closed and the note had gone stale."
+    },
+    {
+      "id": "gdpr-export-covers-agent-session-tables",
+      "guarantee": "GDPR export includes the agent-session tables a user's work now lives in (agent_workspaces, agent_workspace_shells, ai_stream_sessions).",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "carries the subject's workspace and their own shell inside it",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "withholds ANOTHER member's shell from the subject's own workspace (Art 15(4))",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/__tests__/agent-workspace-export.integration.test.ts",
+          "name": "carries the AGENT side of the subject's own thread — the leg that has no human author",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "carries the agent-session tables whose loss motivated this guard",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "has a recorded decision for every table in the schema",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/export/gdpr-export-coverage.test.ts",
+          "name": "reaches on Art 15 everything the Art 17 stream-state purge deletes",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "apps/web/src/app/api/account/export/__tests__/route.test.ts",
+          "name": "carries the agent-session categories the epic left out of the export",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 128 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. The adjacent TENANT-export hole this note used to flag as open — TABLE_IMPORT_ORDER carrying agent_workspaces but neither agent_workspace_shells nor ai_stream_sessions — is closed under `tenant-export-column-drift-guarded`, and closed with DIFFERENT answers on purpose: the shells now travel, ai_stream_sessions deliberately does not. Art 15 asks what data about you exists; a tenant bundle asks what a working instance should be reconstituted from, and a `status = streaming` checkpoint row answers the first question and not the second."
+    },
+    {
+      "id": "erasure-reaches-stream-session-content",
+      "guarantee": "Erasure reaches ai_stream_sessions content, including rows inside conversations the subject does not own.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "packages/lib/src/compliance/erasure/__tests__/erasure-plan.test.ts",
+          "name": "is FATAL — it is the ONLY eraser ai_stream_sessions has (no TTL, no retention sweep, and no cascade for a shared conversation the subject does not own), so a swallowed failure would complete an erasure with the subject's checkpointed message content still on disk",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "packages/lib/src/compliance/erasure/__tests__/erasure-plan.test.ts",
+          "name": "runs BEFORE delete-user, so the evidence lands on the DSR row while the subject still exists",
+          "suite": "lib-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "purge-stream-state removes the subject's stream rows inside SOMEONE ELSE'S conversation — no cascade reaches those, and nothing else in the codebase ever deletes them",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/repositories/__tests__/unified-compliance-legs.integration.test.ts",
+          "name": "deleting the user takes the stream checkpoints in their own conversation with it (0250 cascade)",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "The plan-level citations are pure and always execute; the behavioural ones run against a real Postgres, guarded by `requireDb` so a missing database fails loudly instead of passing green with zero assertions."
+    },
+    {
+      "id": "tool-contract-byte-identical",
+      "guarantee": "The model-facing tool contract (names, descriptions, JSON input schemas) is byte-identical to the pinned contract.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
+          "name": "every tool description and JSON input schema is byte-identical to the pinned contract",
+          "suite": "web-unit"
+        },
+        {
+          "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
+          "name": "exposes exactly the thirteen tool names",
+          "suite": "web-unit"
+        }
+      ],
+      "notes": "Pinned as explicit inline literals rather than a vitest .snap file, on purpose: a stray `--update` cannot silently re-pin a wire contract. The repo has no `toMatchSnapshot` calls and no `__snapshots__` directories at all, so 'schema snapshot' means literal pinning here."
+    },
+    {
+      "id": "tenant-export-column-drift-guarded",
+      "guarantee": "The tenant export carries every schema column or explicitly excuses it, and every table hanging off a migrated session or thread is a recorded carry-or-exclude decision — so neither a new column nor a whole new table can silently stop being exported.",
+      "status": "proven",
+      "evidence": [
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "covers exactly the tables in TABLE_IMPORT_ORDER",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "states a reason for every deliberately excluded column",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "records a carry-or-exclude decision for every table hanging off a session or a thread",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-export-columns.test.ts",
+          "name": "states a reason for every deliberately excluded table, and excludes nothing it also carries",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-import.test.ts",
+          "name": "carries the session's terminal AND its scrollback, without the source-fleet exec id",
+          "suite": "scripts-vitest"
+        },
+        {
+          "file": "scripts/__tests__/tenant-import.test.ts",
+          "name": "leaves ai_stream_sessions behind — a deliberate exclusion, not an omission",
+          "suite": "scripts-vitest"
+        }
+      ],
+      "notes": "Found independently twice: these tests existed and passed but were absent from the hand-maintained file list in ci.yml, so they had never run in CI — and the drift they guard had in fact already reached a pushed branch (the agent_workspaces rename left spriteKey unaccounted). PR #2358 closed it by deleting that hand-list so the step runs the whole scripts vitest context, which is why this suite no longer sets requiresFileListedInCi: there is no list left for a file to be missing from. THE COLUMN GUARD IS STRUCTURALLY BLIND TO A MISSING TABLE — a table absent from TABLE_IMPORT_ORDER has no columns to check, so dropping the whole thing tripped nothing, which is how agent_workspace_shells came to be carried by the GDPR export and silently dropped by the tenant one (losing `coldTail`, a shell's scrollback, which is overwritten in place on every teardown and has no other home in the bundle). The table-level citations close that class over the agent-session FK closure, derived from the Drizzle schema at runtime rather than hand-listed: every table transitively reachable by foreign key from agent_workspaces or conversations must be in TABLE_IMPORT_ORDER or in TENANT_EXPORT_EXCLUDED_TABLES with a reason. Bounded there on purpose — a 'you forgot this table' assertion only means something where the bundle already carries the parent row; that is where an omission is data loss for a user who did migrate rather than a feature the bundle was never scoped to. The two round-trip citations are the behavioural half: one proves the shell scrollback survives export→import while its source-fleet `spriteExecId` does not, the other proves ai_stream_sessions is absent from a bundle that was asked for everything. VERIFIED THEY CAN FAIL: removing agent_workspace_shells from TABLE_IMPORT_ORDER fails the decision guard by name, and moving `coldTail` from carried to excluded fails the round trip."
+    }
+  ]
+}

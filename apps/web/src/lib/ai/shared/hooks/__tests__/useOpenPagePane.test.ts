@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useOpenPagePane } from '../useOpenPagePane';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf } from '@/stores/agent-workspace/pane-reducer';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const store = () => useAgentWorkspaceStore.getState();
 const grid = (id = 'ses-1') => store().workspaces[id];
@@ -20,7 +23,7 @@ const msg = (id: string, role: UIMessage['role'], parts: unknown[] = []): UIMess
   ({ id, role, parts }) as UIMessage;
 
 beforeEach(() => {
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  __resetWorkspaceQueuesForTests();
 });
 
 describe('useOpenPagePane', () => {

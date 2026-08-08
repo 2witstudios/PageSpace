@@ -4,7 +4,7 @@
  * The successor to `agent-terminal-session-key.ts`, and what it LOST is the
  * point: the `{machineId, scope, name}` tuple (and the whole
  * machine|project|branch scope union) has no successor, because a shell has
- * exactly ONE address — its own `shellId` (`agent_session_shells.id`). The
+ * exactly ONE address — its own `shellId` (`agent_workspace_shells.id`). The
  * bridge resolves shell row → session → sandbox from that id alone.
  *
  * The key is still derived from the WIRE ADDRESS rather than the Sprite

@@ -55,7 +55,7 @@ test.describe('chat e2e harness smoke', () => {
     const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
-    const bubbles = page.getByTestId('ai-chat-view').getByTestId('chat-message');
+    const bubbles = page.getByTestId('session-chat').getByTestId('chat-message');
     await expect(bubbles.filter({ hasText: 'conversation B: user asks' })).toBeVisible();
     await expect(bubbles.filter({ hasText: 'conversation B: assistant answers' })).toBeVisible();
     await expect(bubbles.filter({ hasText: 'conversation B: user asks' })).toHaveAttribute(
@@ -85,7 +85,7 @@ test.describe('chat e2e harness smoke', () => {
     const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
-    await sendChatMessage(page.getByTestId('ai-chat-view'), 'hello');
+    await sendChatMessage(page.getByTestId('session-chat'), 'hello');
 
     // The request reached the model and is live — no sleep, no race. The ceiling exceeds
     // expect.poll's 5s default because a send does real work first (context resolution, DB
@@ -98,7 +98,7 @@ test.describe('chat e2e harness smoke', () => {
     // data-role is ON the chat-message element, not a descendant — so this must be an
     // attribute selector on the element itself, never a `has:` descendant filter.
     const assistant = page
-      .getByTestId('ai-chat-view')
+      .getByTestId('session-chat')
       .locator('[data-testid="chat-message"][data-role="assistant"]')
       .last();
     await expect(assistant).toBeVisible();
@@ -122,7 +122,7 @@ test.describe('chat e2e harness smoke', () => {
     const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
-    await sendChatMessage(page.getByTestId('ai-chat-view'), 'hold please');
+    await sendChatMessage(page.getByTestId('session-chat'), 'hold please');
 
     await expect
       .poll(() => mockStreams(request).then((s) => s.held), { timeout: 30_000 })

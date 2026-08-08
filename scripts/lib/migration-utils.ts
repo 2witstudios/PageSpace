@@ -60,11 +60,58 @@ export function toSqlInList(ids: string[] | Set<string> | readonly string[]): st
 }
 
 /**
+ * WHICH CONVERSATIONS A BUNDLE CARRIES — the exporter's selection rule, in one
+ * place so the validator cannot ask a narrower question than the export
+ * answered.
+ *
+ * Three arms, because the sets are gathered along different axes:
+ *  - owned by a requested user;
+ *  - `type='page'`, attached to an exported page via `contextId`;
+ *  - `type='client'` (API thread), attached via `agentPageId`.
+ *
+ * The last two are `unifiedPageScope`'s pair in SQL, and they are not optional:
+ * a page chat started by a drive member OUTSIDE `--user-ids` still belongs to
+ * an exported page, and `messages.conversationId` is NOT NULL and FK'd, so
+ * dropping it would abort the import.
+ *
+ * Extracted because `tenant-validate` open-coded only the FIRST arm when
+ * building the conversation id list it validates `messages` against. The
+ * exporter carried those extra conversations and all of their messages; the
+ * validator compared them on neither side, so `[PASS] messages` printed even
+ * if the import had dropped every one of them — a false PASS on exactly the
+ * row population the exporter's own comment says was the historical loss.
+ *
+ * Returns the WHERE predicate alone (no projection), so the exporter can
+ * `SELECT *` and the validator `SELECT id` off the identical rule.
+ */
+export function conversationSelectionWhere(userInList: string, pageInList: string): string {
+  return `"userId" IN (${userInList})`
+    + ` OR (type = 'page' AND "contextId" IN (${pageInList}))`
+    + ` OR (type = 'client' AND "agentPageId" IN (${pageInList}))`;
+}
+
+/**
+ * The workspaces a bundle carries: owned by an exported user AND bound to one
+ * of the exported conversations.
+ *
+ * `ownerInList` must be the set of ALL exported users — the requested ones plus
+ * the conversation owners DISCOVERED by `conversationSelectionWhere`'s page
+ * arms — not just the requested ones. The validator used the requested set
+ * alone, so a workspace (and its shells, which hold `coldTail` terminal
+ * scrollback) owned by a discovered user was carried and checked on neither
+ * side.
+ */
+export function workspaceSelectionWhere(ownerInList: string, conversationInList: string): string {
+  return `"ownerId" IN (${ownerInList})`
+    + ` AND id IN (SELECT "workspaceId" FROM conversations WHERE id IN (${conversationInList}) AND "workspaceId" IS NOT NULL)`;
+}
+
+/**
  * Build an INSERT statement with ON CONFLICT DO NOTHING for idempotency.
  */
 export function buildInsert(
   tableName: string,
-  columns: string[],
+  columns: readonly string[],
   rows: Record<string, unknown>[],
 ): string {
   if (rows.length === 0) return '';
@@ -82,6 +129,40 @@ export function buildInsert(
     'ON CONFLICT DO NOTHING;',
     '',
   ].join('\n');
+}
+
+/**
+ * Build `UPDATE ... SET <cols> WHERE "id" = ...` statements for columns that
+ * are carried but cannot ride in their own table's INSERT because they
+ * reference a table inserted LATER (a forward FK — `drives.homePageId` and
+ * `drives.not_found_page_id` point at `pages`, while `pages.driveId` points
+ * back at `drives`, so no insert order satisfies both).
+ *
+ * Emitted after the referenced table has landed. Rows whose deferred columns
+ * are all NULL produce no statement — there is nothing to set, and the INSERT
+ * already left them NULL. Re-running the bundle re-applies identical values,
+ * so this stays as idempotent as the `ON CONFLICT DO NOTHING` inserts around it.
+ */
+export function buildDeferredUpdate(
+  tableName: string,
+  columns: readonly string[],
+  rows: Record<string, unknown>[],
+): string {
+  if (columns.length === 0 || rows.length === 0) return '';
+
+  const statements: string[] = [];
+  for (const row of rows) {
+    if (columns.every((col) => row[col] === null || row[col] === undefined)) continue;
+    const assignments = columns
+      .map((col) => `"${col}" = ${escapeSqlValue(row[col])}`)
+      .join(', ');
+    statements.push(
+      `UPDATE "${tableName}" SET ${assignments} WHERE "id" = ${escapeSqlValue(row.id)};`,
+    );
+  }
+
+  if (statements.length === 0) return '';
+  return `${statements.join('\n')}\n`;
 }
 
 /**

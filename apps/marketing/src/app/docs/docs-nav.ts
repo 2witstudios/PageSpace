@@ -77,7 +77,7 @@ export const docsNav: NavSection[] = [
       { title: "Pages", href: "/docs/features/pages", icon: Layers },
       { title: "Drives & Workspaces", href: "/docs/features/drives", icon: HardDrive },
       { title: "AI in your Workspace", href: "/docs/features/ai", icon: Sparkles },
-      { title: "Agent Sessions & Sandbox", href: "/docs/features/agent-sessions", icon: Cpu },
+      { title: "Agent Sessions & Sandbox", href: "/docs/features/agent-workspaces", icon: Cpu },
       { title: "Sharing & Permissions", href: "/docs/features/sharing", icon: Users },
       { title: "Search", href: "/docs/features/search", icon: Search },
       { title: "Accounts & Sign In", href: "/docs/features/accounts", icon: KeyRound },

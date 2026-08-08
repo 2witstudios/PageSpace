@@ -65,24 +65,32 @@ function renderRowMenuItems(
  * on desktop via the row's own `group`) opens the same items as a dropdown.
  * `className` lands on the wrapping row element — the row's own layout
  * classes belong here, not on `children`.
+ *
+ * `testId` lands on that same wrapping element. A row is a composite (a
+ * disclosure button, a label button, a menu trigger) with no single element an
+ * end-to-end spec can address as "the row", and the label text is not a stable
+ * handle — a conversation row's label is the agent's name, which a user can
+ * rename. `18-sidebar-directory-live.spec.ts` counts these.
  */
 export function RowMenu({
   children,
   items,
   menuLabel,
   className,
+  testId,
 }: {
   children: ReactNode;
   items: RowMenuItem[];
   menuLabel: string;
   className?: string;
+  testId?: string;
 }) {
   const isTouchDevice = useTouchDevice();
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className={cn('group flex w-full items-center', className)}>
+        <div className={cn('group flex w-full items-center', className)} data-testid={testId}>
           {children}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

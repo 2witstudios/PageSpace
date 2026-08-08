@@ -49,7 +49,7 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
 // The bound-session lookup for payer-derived sandbox eligibility (review
 // #2326) hits the real DB through the agent-sessions runtime; this suite's
 // conversations are unbound, so the eligibility path takes the userId branch.
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: vi.fn().mockResolvedValue(null),
 }));
 
@@ -161,7 +161,31 @@ vi.mock('@pagespace/db/operators', () => ({
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2): forwards to the same spy the
+// route used to call directly, preserving this file's assertions.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    saveGlobalMessage: vi.fn(async (args: Record<string, unknown>) => {
+      const { beforeSave: _b, triggeredBy: _t, ...rest } = args as { beforeSave?: unknown; triggeredBy?: unknown };
+      await mockSaveGlobalAssistantMessageToDatabase(rest);
+      return { saved: true, rev: 1 };
+    }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
@@ -211,7 +235,6 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
-  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
 }));
 vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
@@ -336,7 +359,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
-import { resolveOrCreateConversation, ConversationOwnershipError } from '../resolve-or-create-conversation';
+import { resolveOrCreateConversation, ConversationOwnershipError } from '@/lib/repositories/resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -418,6 +441,20 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(response.status).toBe(404);
     expect(streamText).not.toHaveBeenCalled();
     expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('does NOT create the conversation row when the gate denies (gate runs before create)', async () => {
+    // The other half of R3, and the reason `resolveOrCreateConversation` moved
+    // below the gate. It INSERTs on a first message and emits
+    // `conversation:created`, so gating afterwards left an out-of-credits first
+    // message with a durable empty conversation and a broadcast announcing it —
+    // the same orphan the message-save case above describes, one table over.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
   });
 
 });

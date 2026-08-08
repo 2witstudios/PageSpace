@@ -1,8 +1,4 @@
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
-import { conversations } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -10,7 +6,7 @@ import {
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import {
   validateConversationAccess,
   serializeMessageRowToMessages,
@@ -45,7 +41,11 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   // epic PR 2.
   const { searchParams } = new URL(request.url);
   const includeStreaming = searchParams.get('includeStreaming') === '1';
-  const messages = await chatMessageRepository.getMessagesByConversationId(id, includeStreaming);
+  // Unified `messages` table since the message-table merge (epic
+  // "Agent-Session Single Source of Truth", Phase 4 / D6). Same
+  // conversationId-scoped, streaming-aware query the legacy repository ran —
+  // one table instead of two.
+  const messages = await messageRepository.getMessagesByConversationId(id, includeStreaming);
 
   auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
 
@@ -80,15 +80,10 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
     }
   }
 
-  await db
-    .update(conversations)
-    .set({ isActive: false, updatedAt: new Date() })
-    .where(eq(conversations.id, id));
-
-  await db
-    .update(chatMessages)
-    .set({ isActive: false })
-    .where(and(eq(chatMessages.conversationId, id), eq(chatMessages.isActive, true)));
+  // Repository-owned conversation soft-delete (same conversationId-scoped
+  // message sweep this route always did): bumps rev and emits
+  // `conversation:deleted` (Agent-Session SSoT epic, Phase 2).
+  await conversationRepository.softDeleteConversationById(id);
 
   auditRequest(request, { eventType: 'data.delete', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
 

@@ -143,7 +143,7 @@ describe('exportData', () => {
       dryRun: false,
     });
 
-    expect(result.manifest.tableCounts.chatMessages).toBe(2);
+    expect(result.manifest.tableCounts.messages).toBe(2);
   });
 
   it('exports files and copies blobs', async () => {
@@ -363,6 +363,93 @@ describe('exportData', () => {
         dryRun: false,
       }),
     ).rejects.toThrow('No drives found');
+  });
+
+  /**
+   * The bundle replays as ONE transaction, so its INSERT order has to be FK
+   * order. `messages.conversationId` FKs `conversations.id`, and the two sets
+   * are gathered along different axes — conversations by OWNER, pages by
+   * DRIVE — so the exporter has to select conversations by PAGE as well, or a
+   * page chat started by a drive member outside the export set arrives with no
+   * parent row and the import aborts.
+   */
+  describe('conversation parent rows', () => {
+    /** Reads the emitted bundle's statement order. */
+    function insertPosition(sqlStatements: string, table: string): number {
+      const at = sqlStatements.indexOf(`INSERT INTO "${table}"`);
+      expect(at, `expected the bundle to contain an INSERT INTO "${table}"`).toBeGreaterThan(-1);
+      return at;
+    }
+
+    it('emits conversations before the messages that reference them', async () => {
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: path.join(tmpDir, 'bundle-fk-order'),
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      const conversationsAt = insertPosition(result.sqlStatements, 'conversations');
+      expect(conversationsAt).toBeLessThan(insertPosition(result.sqlStatements, 'messages'));
+    });
+
+    it('exports the conversation behind an exported chat message even when its owner is not in the export set', async () => {
+      // A page chat on an exported page, started by a drive member who is NOT
+      // one of the requested users. The messages come along (they are selected
+      // by page); without their parent row the bundle cannot be imported.
+      const { sql: sqlFn } = await import('drizzle-orm');
+      await db.execute(sqlFn.raw(
+        `INSERT INTO conversations (id, "userId", title, type, "contextId", "createdAt", "updatedAt")
+         VALUES ('test_convo_outsider_001', '${FIXTURES.users.outsider.id}', 'Outsider thread', 'page', '${FIXTURES.pages.grandchild.id}', NOW(), NOW())`,
+      ));
+      await db.execute(sqlFn.raw(
+        `INSERT INTO messages (id, "conversationId", role, content, "userId", "createdAt")
+         VALUES ('test_chatmsg_outsider_001', 'test_convo_outsider_001', 'user', 'Hi from outside the export set', '${FIXTURES.users.outsider.id}', NOW())`,
+      ));
+
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: path.join(tmpDir, 'bundle-fk-orphan'),
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      expect(result.manifest.tableCounts.messages).toBe(3);
+      // Assert against the conversations statement specifically — the id also
+      // appears in the message row, which is exactly the half that was never
+      // in doubt.
+      const conversationsInsert = result.sqlStatements.slice(
+        insertPosition(result.sqlStatements, 'conversations'),
+        insertPosition(result.sqlStatements, 'messages'),
+      );
+      expect(conversationsInsert).toContain('test_convo_outsider_001');
+      // …and its owner is exported too, since conversations.userId is NOT NULL and FK'd.
+      expect(result.sqlStatements).toContain(FIXTURES.users.outsider.id);
+      expect(result.manifest.tableCounts.users).toBe(3);
+    });
+
+    it('exports agent-authored unified messages, whose userId is NULL since 0249', async () => {
+      const { sql: sqlFn } = await import('drizzle-orm');
+      await db.execute(sqlFn.raw(
+        `INSERT INTO messages (id, "conversationId", "userId", role, content, "createdAt")
+         VALUES ('test_msg_agent_001', '${FIXTURES.conversations.pageChat.id}', NULL, 'assistant', 'Agent-authored reply', NOW())`,
+      ));
+
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: path.join(tmpDir, 'bundle-agent-msg'),
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      // The two fixture rows plus this one — an agent reply carries no human
+      // author, so an `IN (userIds)` filter alone would silently drop it.
+      expect(result.manifest.tableCounts.messages).toBe(3);
+      expect(result.sqlStatements).toContain('test_msg_agent_001');
+    });
   });
 
   describe('path traversal protection', () => {

@@ -24,6 +24,7 @@ import {
 import { exportData } from '../tenant-export';
 import { runImport } from '../tenant-import';
 import { validateChecksums } from '../lib/migration-utils';
+import { TENANT_EXPORT_EXCLUDED_TABLES } from '../lib/tenant-export-columns';
 import type { DbClient, ExportManifest } from '../lib/migration-types';
 
 let db: TestDb;
@@ -104,6 +105,206 @@ describe('runImport', () => {
       `SELECT id, "parentId" FROM pages WHERE "driveId" = '${FIXTURES.drives.shared.id}' ORDER BY position`,
     ));
     expect(pagesResult.rows).toHaveLength(3);
+  });
+
+  /**
+   * Round-trip proof for the columns the hand-maintained export lists used to
+   * drop silently. Every value asserted here is seeded AWAY from its column
+   * default (see `seedFixtures`), so a passing assertion means the value
+   * travelled — not that the tenant's default happened to agree.
+   *
+   * The drift guard (`tenant-export-columns.test.ts`) keeps the LIST honest
+   * against the schema; this keeps the bundle honest against a real database.
+   */
+  describe('carries every column through a full round trip', () => {
+    async function reimport(label: string): Promise<void> {
+      await truncateAll(db);
+      const targetFilePath = path.join(tmpDir, `target-files-${label}`);
+      await mkdir(targetFilePath, { recursive: true });
+      await runImport({
+        bundleDir,
+        databaseUrl: getTestDatabaseUrl(),
+        fileStoragePath: targetFilePath,
+        dryRun: false,
+      });
+    }
+
+    it('restores the conversation⇄session binding, rev, closed-listing stamp and shared flag', async () => {
+      await reimport('conversation');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "workspaceId", rev, "closedInWorkspaceAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
+      expect(Number(rows[0].rev)).toBe(FIXTURES.conversations.pageChat.rev);
+      expect(rows[0].closedInWorkspaceAt).not.toBeNull();
+      expect(rows[0].isShared).toBe(true);
+    });
+
+    it('carries the agent session the conversation is bound to, without its source-fleet Sprite identity', async () => {
+      await reimport('session');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "driveId", "ownerId", name, "sandboxId", "spriteInstanceId", "spriteKey", "storageMeasuredBytes" FROM agent_workspaces WHERE id = '${FIXTURES.agentWorkspaces.workspace.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].driveId).toBe(FIXTURES.drives.shared.id);
+      expect(rows[0].ownerId).toBe(FIXTURES.users.owner.id);
+      expect(rows[0].name).toBe(FIXTURES.agentWorkspaces.workspace.name);
+      // The exclusion allowlist in scripts/lib/tenant-export-columns.ts: these
+      // name a VM in the SOURCE fleet and must NOT reach the tenant, which
+      // provisions its own on first use.
+      expect(rows[0].sandboxId).toBeNull();
+      expect(rows[0].spriteInstanceId).toBeNull();
+      expect(rows[0].spriteKey).toBeNull();
+      expect(rows[0].storageMeasuredBytes).toBeNull();
+    });
+
+    it("carries the session's terminal AND its scrollback, without the source-fleet exec id", async () => {
+      await reimport('shell');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "workspaceId", "ownerId", name, "agentType", command, "coldTail", "coldTailAt", "coldTailHasOutput", "spriteExecId" FROM agent_workspace_shells WHERE id = '${FIXTURES.agentWorkspaceShells.shell.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
+      expect(rows[0].ownerId).toBe(FIXTURES.users.owner.id);
+      expect(rows[0].name).toBe(FIXTURES.agentWorkspaceShells.shell.name);
+      expect(rows[0].agentType).toBe(FIXTURES.agentWorkspaceShells.shell.agentType);
+      expect(rows[0].command).toBe(FIXTURES.agentWorkspaceShells.shell.command);
+      // THE POINT OF CARRYING THIS TABLE. `coldTail` is the scrollback of the
+      // shell's last dead incarnation — overwritten in place on every teardown
+      // and present nowhere else in the bundle, so if it does not survive the
+      // round trip it is gone for good. `coldTailHasOutput` travels with it
+      // because an empty tail is ambiguous alone (a burst larger than the ring
+      // also empties it), and "was screaming" must not migrate as "was silent".
+      expect(rows[0].coldTail).toBe(FIXTURES.agentWorkspaceShells.shell.coldTail);
+      expect(rows[0].coldTailHasOutput).toBe(true);
+      expect(rows[0].coldTailAt).not.toBeNull();
+      // Same rule as the parent session's Sprite columns: this names an exec
+      // session inside a SOURCE-fleet VM the tenant does not own.
+      expect(rows[0].spriteExecId).toBeNull();
+    });
+
+    it('leaves ai_stream_sessions behind — a deliberate exclusion, not an omission', async () => {
+      // The Art 17 purge and the Art 15 export both reach this table (see
+      // `packages/lib/src/compliance/export/gdpr-export-coverage.ts`); the
+      // TENANT bundle deliberately does not, because a `status = streaming`
+      // row would import as a phantom live stream in an instance that has no
+      // worker producing it and no abort registry that can reach it. The
+      // durable half of the turn is in `messages`, which the bundle carries.
+      //
+      // Asserted as an absence FROM A BUNDLE THAT WAS ASKED FOR EVERYTHING, so
+      // this fails the moment someone adds the table to TABLE_IMPORT_ORDER
+      // without also deleting the recorded exclusion.
+      expect(TENANT_EXPORT_EXCLUDED_TABLES).toHaveProperty('ai_stream_sessions');
+      const sqlContent = await readFile(path.join(bundleDir, 'data.sql'), 'utf-8');
+      expect(sqlContent).not.toContain('ai_stream_sessions');
+      // …and the conversation whose rows they would have been is present, so
+      // the absence above is a decision about this table rather than an empty
+      // bundle trivially satisfying it.
+      expect(sqlContent).toContain(FIXTURES.conversations.pageChat.id);
+    });
+
+    it("restores the user's email blind index — the lookup key a migrated account logs in through", async () => {
+      await reimport('user');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "emailBidx" FROM users WHERE id = '${FIXTURES.users.owner.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows[0].emailBidx).toBe(FIXTURES.users.owner.emailBidx);
+    });
+
+    it("restores the drive's landing page, which FKs forward and rides a trailing UPDATE", async () => {
+      await reimport('drive');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "homePageId" FROM drives WHERE id = '${FIXTURES.drives.shared.id}'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows[0].homePageId).toBe(FIXTURES.pages.root.id);
+    });
+
+    it("restores the pages' agent settings, privacy flag, description and author", async () => {
+      await reimport('pages');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT id, description, "isPrivate", "createdBy", "toolExposureMode", "sandboxEnabled", "userScopedAccess" FROM pages WHERE "driveId" = '${FIXTURES.drives.shared.id}'`,
+      ))).rows as Record<string, unknown>[];
+      const byId = new Map(rows.map((r) => [r.id as string, r]));
+
+      const root = byId.get(FIXTURES.pages.root.id)!;
+      expect(root.description).toBe(FIXTURES.pages.root.description);
+      expect(root.isPrivate).toBe(true);
+      expect(root.createdBy).toBe(FIXTURES.users.owner.id);
+
+      const agent = byId.get(FIXTURES.pages.grandchild.id)!;
+      expect(agent.toolExposureMode).toBe('search');
+      expect(agent.sandboxEnabled).toBe(true);
+      expect(agent.userScopedAccess).toBe(true);
+    });
+
+    it('carries the unified messages\' agent attribution', async () => {
+      // A conversation-scoped agent reply: NULL userId + a sourceAgentId, the
+      // exact shape the attribution rule describes. There is no per-row page
+      // column any more — a message's page is its conversation's.
+      await db.execute(sql`
+        INSERT INTO messages (id, "conversationId", "userId", role, content, "sourceAgentId", "createdAt")
+        VALUES ('test_message_attrib_001', ${FIXTURES.conversations.pageChat.id}, NULL, 'assistant', 'Agent reply', ${FIXTURES.pages.grandchild.id}, ${new Date()})
+      `);
+      await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: bundleDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      await reimport('messages');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "userId", "sourceAgentId" FROM messages WHERE id = 'test_message_attrib_001'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].userId).toBeNull();
+      expect(rows[0].sourceAgentId).toBe(FIXTURES.pages.grandchild.id);
+    });
+
+    it('carries a type=client thread\'s agent page link', async () => {
+      // The `type='client'` page link Phase 4 PR 15 introduced. It is the ONLY
+      // thing naming an API thread's agent page now that `messages."pageId"`
+      // is gone, so a migration that dropped it would 404 that thread's own
+      // edit/delete route in the tenant.
+      await db.execute(sql`
+        INSERT INTO conversations (id, "userId", title, type, "contextId", "agentPageId", "createdAt", "updatedAt")
+        VALUES ('test_convo_client_001', ${FIXTURES.users.owner.id}, 'API thread', 'client', ${FIXTURES.drives.shared.id}, ${FIXTURES.pages.grandchild.id}, ${new Date()}, ${new Date()})
+      `);
+      await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir: bundleDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      await reimport('conversations');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT "contextId", "agentPageId" FROM conversations WHERE id = 'test_convo_client_001'`,
+      ))).rows as Record<string, unknown>[];
+
+      expect(rows).toHaveLength(1);
+      // `contextId` stays the DRIVE — it is what a drive-scoped MCP token is
+      // authorized against — and the page rides its own column.
+      expect(rows[0].contextId).toBe(FIXTURES.drives.shared.id);
+      expect(rows[0].agentPageId).toBe(FIXTURES.pages.grandchild.id);
+    });
   });
 
   it('preserves page tree structure (parent references)', async () => {

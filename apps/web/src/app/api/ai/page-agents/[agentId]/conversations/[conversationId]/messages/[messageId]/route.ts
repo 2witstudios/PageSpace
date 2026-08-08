@@ -3,14 +3,12 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
-import {
-  chatMessageRepository,
-  processMessageContentUpdate,
-} from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -65,7 +63,12 @@ export async function PATCH(
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -81,8 +84,17 @@ export async function PATCH(
     // Process content, preserving structured format if present
     const updatedContent = processMessageContentUpdate(message.content, content);
 
-    // Update the message content and set editedAt
-    await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+    // Update the message content via the repository choke point: one
+    // transaction with the rev bump, then the legacy chat:message_edited
+    // broadcast + authoritative conversation:message_updated event — both
+    // emitted from the repository, not this route (Agent-Session SSoT §3).
+    await messageRepository.editPageMessage({
+      messageId,
+      pageId: agentId,
+      conversationId,
+      updatedContent,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
     // Invalidate compaction if the edited message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
@@ -97,30 +109,6 @@ export async function PATCH(
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after agent message edit', err as Error);
     }
-
-    // Broadcast to remote viewers so their message bubble re-renders without a refetch.
-    // Failure to broadcast must never break the request — wrapped in catch.
-    void (async () => {
-      try {
-        const updated = await chatMessageRepository.getMessageById(messageId);
-        if (!updated) return;
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        const uiMessage = await convertDbMessageToUIMessage(updated);
-        await broadcastAiMessageEdited({
-          messageId,
-          pageId: agentId,
-          conversationId,
-          parts: uiMessage.parts,
-          editedAt: (updated.editedAt ?? new Date()).toISOString(),
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast agent message edit', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          agentId: maskIdentifier(agentId),
-        });
-      }
-    })();
 
     // Log activity for audit trail
     try {
@@ -209,7 +197,12 @@ export async function DELETE(
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -222,8 +215,14 @@ export async function DELETE(
     // Store content for audit trail before deletion
     const deletedContent = message.content;
 
-    // Soft delete the message
-    await chatMessageRepository.softDeleteMessage(messageId);
+    // Soft delete via the repository choke point (rev bump + legacy
+    // chat:message_deleted + authoritative conversation:message_deleted).
+    await messageRepository.softDeletePageMessage({
+      messageId,
+      pageId: agentId,
+      conversationId,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
     // Invalidate compaction if the deleted message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
@@ -238,24 +237,6 @@ export async function DELETE(
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after agent message delete', err as Error);
     }
-
-    // Broadcast to remote viewers. Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageDeleted({
-          messageId,
-          pageId: agentId,
-          conversationId,
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast agent message delete', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          agentId: maskIdentifier(agentId),
-        });
-      }
-    })();
 
     // Log activity for audit trail
     try {

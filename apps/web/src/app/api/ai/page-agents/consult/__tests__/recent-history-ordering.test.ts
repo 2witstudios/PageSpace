@@ -66,13 +66,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { __table: 'pages', id: 'id' },
   drives: { __table: 'drives', id: 'id' },
-  chatMessages: {
-    __table: 'chatMessages',
-    pageId: 'pageId',
-    createdAt: 'createdAt',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-  },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },
@@ -81,33 +74,26 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/db', () => {
   function makeBuilder() {
     let table: { __table?: string } | undefined;
-    let orderDesc = false;
-    let limitN: number | undefined;
     const builder = {
       from: vi.fn((t: { __table?: string }) => {
         table = t;
         return builder;
       }),
       where: vi.fn(() => builder),
-      orderBy: vi.fn((arg: { __desc?: boolean }) => {
-        orderDesc = !!arg?.__desc;
-        return builder;
-      }),
-      limit: vi.fn((n: number) => {
-        limitN = n;
-        return builder;
-      }),
+      // Ordering and limiting are no longer observed here: history comes from
+      // the mocked `messageRepository`, which is where the DESC-then-reverse
+      // contract now lives and is asserted. These stay only to keep the
+      // builder chainable for the remaining lookups (pages/users/drives).
+      orderBy: vi.fn(() => builder),
+      limit: vi.fn(() => builder),
       then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) => {
         try {
           if (table?.__table === 'pages') return resolve([AGENT_ROW]);
           if (table?.__table === 'users') return resolve([GATE_USER_ROW]);
           if (table?.__table === 'drives') return resolve([DRIVE_ROW]);
-          if (table?.__table === 'chatMessages') {
-            let rows = [...ALL_MESSAGES];
-            if (orderDesc) rows = rows.slice().reverse();
-            if (limitN !== undefined) rows = rows.slice(0, limitN);
-            return resolve(rows);
-          }
+          // The `chatMessages` branch that used to live here is gone: that
+          // table was DROPPED by migration 0253, and history now comes from
+          // the mocked `messageRepository` above, so nothing could reach it.
           return resolve([]);
         } catch (e) {
           return reject?.(e);
@@ -153,8 +139,20 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME:
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('@/lib/ai/core/message-utils', () => ({
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
+// reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+// PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// which read the unified `messages` table.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    getPageConversationMessages: vi.fn(async () => ALL_MESSAGES),
+    // The route asks for the newest 10 and expects them oldest-first; the
+    // repository is what orders DESC under the limit and reverses, so the mock
+    // reproduces that contract rather than the raw SQL that used to do it.
+    getRecentPageMessagesForUser: vi.fn(async (_pageId: string, _userId: string, limit: number) => ALL_MESSAGES.slice(-limit)),
+  },
 }));
 
 const convertToModelMessages = vi.fn().mockImplementation((msgs: unknown) => msgs);

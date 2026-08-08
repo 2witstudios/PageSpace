@@ -2,7 +2,7 @@ import { reconcileOrphanSprites } from '@pagespace/lib/services/sandbox/sprite-o
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
-import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-sessions/agent-session-orphan-reconcile-runtime';
+import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-workspaces/workspace-orphan-reconcile-runtime';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
@@ -21,7 +21,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  *       guard, which matters because Art. 17 erasure must never be blocked by a
  *       Sprite we failed to kill.
  *
- *   (B) `agent_sessions` rows whose teardown was REQUESTED but never confirmed —
+ *   (B) `agent_workspaces` rows whose teardown was REQUESTED but never confirmed —
  *       an "end session" whose kill failed (the "recoverable state a background
  *       reconciler can reclaim" its doc always promised). A session merely idle
  *       is deliberately left alone: its Sprite hibernates in place — a kill is

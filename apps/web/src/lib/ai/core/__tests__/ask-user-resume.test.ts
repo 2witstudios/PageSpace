@@ -9,6 +9,10 @@ let selectRows: unknown[] = [];
 function makeSelectChain() {
   const chain = {
     from: vi.fn(() => chain),
+    // The page adapter joins `conversations` since the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — page
+    // scope moved from `chat_messages.pageId` to `unifiedPageScope`.
+    innerJoin: vi.fn(() => chain),
     where: vi.fn(() => chain),
     orderBy: vi.fn(() => chain),
     limit: vi.fn(() => Promise.resolve(selectRows)),
@@ -25,10 +29,20 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   ne: vi.fn(),
   and: vi.fn(),
+  or: vi.fn(),
   desc: vi.fn(),
+  sql: vi.fn(),
+  exists: vi.fn(),
+  lt: vi.fn(),
+  gt: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/core', () => ({ chatMessages: {} }));
-vi.mock('@pagespace/db/schema/conversations', () => ({ messages: {} }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  messages: { pageId: 'messages.pageId' },
+  conversations: { type: 'conversations.type', contextId: 'conversations.contextId', id: 'conversations.id' },
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), info: vi.fn() } },
 }));
@@ -62,10 +76,20 @@ vi.mock('@/lib/ai/core/message-utils', async (importOriginal) => {
     ...actual,
     convertDbMessageToUIMessage: vi.fn(async (row: { id: string }) => uiMessagesById.get(row.id)),
     convertGlobalAssistantMessageToUIMessage: vi.fn(async (row: { id: string }) => uiMessagesById.get(row.id)),
-    saveMessageToDatabase,
-    saveGlobalAssistantMessageToDatabase,
   };
 });
+
+// The repository choke point (SSoT Phase 2): the persist closures now call
+// messageRepository.savePageMessage / saveGlobalMessage — forwarded to the
+// same spies these tests always asserted on.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: (args: Record<string, unknown>) =>
+      saveMessageToDatabase(args).then(() => ({ saved: true, rev: 1 })),
+    saveGlobalMessage: (args: Record<string, unknown>) =>
+      saveGlobalAssistantMessageToDatabase(args).then(() => ({ saved: true, rev: 1 })),
+  },
+}));
 
 import {
   extractClientAskUserResults,

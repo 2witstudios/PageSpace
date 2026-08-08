@@ -21,7 +21,7 @@ import { commandTools } from '../tools/command-tools';
 import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
-import { pagePaneTools } from '../tools/page-pane-tools';
+import { pagePaneTools } from '../tools/page-pane-tools-runtime';
 import { planTools } from '../tools/plan-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
@@ -118,7 +118,7 @@ export const WORKSPACE_TOOL_COUNT = WORKSPACE_TOOL_NAMES.length;
  * The CHAT-ONLY session family (list/spawn/send/read/kill_session) registers
  * on BOTH branches: those tools are conversation orchestration through the
  * standard chat pipeline — part of the free session surface this route family
- * opens to everyone (`/api/agent-sessions` route docs) — and never touch the
+ * opens to everyone (`/api/agent-workspaces` route docs) — and never touch the
  * sandbox, so gating them on the kill-switch hid a chat capability behind a
  * compute flag (review #2326). The split is `SANDBOX_COMPUTE_TOOL_NAMES`, the
  * same source of truth the payer-tier filter uses.

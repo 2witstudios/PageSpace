@@ -35,7 +35,7 @@ export type NavigationTarget =
   /**
    * A session-less `type: 'page'` or `type: 'global'` row — clicking it
    * should spawn a session and claim this SAME conversation into it (see
-   * `claim-conversation-in-session.ts`), landing it in the pane grid with a
+   * `claim-conversation-in-workspace.ts`), landing it in the pane grid with a
    * real sandbox, rather than opening it read-only outside any session.
    * `fallback` carries exactly what this row would have resolved to before
    * claiming existed — the old `page`/`global` target — so a failed claim
@@ -102,7 +102,7 @@ export function resolveNavigationTarget(
     // API-managed (POST /api/v1/conversations) — always session-less (confirmed:
     // nothing ever binds a `client` row to a session) and has no in-app chat
     // surface to open into, and no session claim can grant it one either
-    // (claim refuses `type: 'client'` — see `claim-conversation-in-session.ts`).
+    // (claim refuses `type: 'client'` — see `claim-conversation-in-workspace.ts`).
     case 'client':
       return { kind: 'unavailable' };
     case 'global':

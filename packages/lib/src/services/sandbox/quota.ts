@@ -128,7 +128,7 @@ export async function checkCodeExecutionQuota({
  * checkAgentSessionConcurrency — the agent-sessions twin of
  * `checkCodeExecutionQuota` above (Phase 7). Where that check is an in-process,
  * per-user semaphore over ACTIVE RUNS (acquired at run start, released at run
- * end), this is a DB-backed count of an owner's LIVE `agent_sessions` rows
+ * end), this is a DB-backed count of an owner's LIVE `agent_workspaces` rows
  * (`sandboxId` set, `spriteTornDownAt` still null) — a distinct axis: a
  * hibernating sandbox holds no active run yet still counts here, exactly as a
  * live Sprite still bills storage while idle. Per-tier ceilings are the SAME
@@ -240,15 +240,15 @@ function evictStaleSessionActivity(now: number): void {
  * caller who never records still reflects real elapsed time.
  */
 export function checkSessionRuntimeGuardrail({
-  sessionId,
+  workspaceId,
   now,
   maxActiveSeconds = getSessionMaxActiveSeconds(),
 }: {
-  sessionId: string;
+  workspaceId: string;
   now: number;
   maxActiveSeconds?: number;
 }): SessionRuntimeGuardrailDecision {
-  const state = sessionActivityByKey.get(sessionId);
+  const state = sessionActivityByKey.get(workspaceId);
   if (state && now - state.lastActiveAt <= SESSION_ACTIVITY_GRACE_MS) {
     const activeMs = now - state.firstActiveAt;
     if (activeMs >= maxActiveSeconds * 1000) {
@@ -263,14 +263,14 @@ export function checkSessionRuntimeGuardrail({
  * the continuous-activity window; a gap longer than the grace period starts
  * a fresh window instead of extending the old one.
  */
-export function recordSessionActivity({ sessionId, now }: { sessionId: string; now: number }): void {
+export function recordSessionActivity({ workspaceId, now }: { workspaceId: string; now: number }): void {
   // Opportunistic sweep: every acquisition is a natural checkpoint to reclaim
   // any OTHER session's entry that has gone idle, keeping the map bounded by
   // currently (or recently) active sessions rather than every session ever seen.
   evictStaleSessionActivity(now);
-  const state = sessionActivityByKey.get(sessionId);
+  const state = sessionActivityByKey.get(workspaceId);
   if (!state || now - state.lastActiveAt > SESSION_ACTIVITY_GRACE_MS) {
-    sessionActivityByKey.set(sessionId, { firstActiveAt: now, lastActiveAt: now });
+    sessionActivityByKey.set(workspaceId, { firstActiveAt: now, lastActiveAt: now });
   } else {
     state.lastActiveAt = now;
   }

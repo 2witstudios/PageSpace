@@ -102,9 +102,17 @@ interface PgPool extends PoolLike {
 }
 // @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
+import { requireDbUrl } from '@pagespace/db/test/require-db';
+import { createAdminTestPool } from './admin-test-pool';
 const { Pool } = pg as unknown as { Pool: new (config: Record<string, unknown>) => PgPool };
 
 const url = process.env.ADMIN_DATABASE_URL;
+// A missing ADMIN_DATABASE_URL is an ENVIRONMENT failure, not a reason to
+// quietly report green. This suite skipped silently on every CI run until the
+// variable was added to the workflow steps that run it; `requireDbUrl` makes
+// that state loud, with `ALLOW_SKIP_DB_TESTS=1` as the one explicit local
+// opt-out (which CI never sets).
+requireDbUrl(url, 'ADMIN_DATABASE_URL', 'audit-backfill-flip.integration.test.ts');
 const MAIN_DB_NAME = 'pagespace_main_bf_flip_it';
 
 const PASSWORDS = {
@@ -425,8 +433,8 @@ describe.skipIf(!url)('leaf-8 backfill flip with real chainer + SIEM workers (wi
     expect(result.provisioned).toEqual(['admin_app_user', 'admin_processor_user']);
 
     // Fresh pools/clients per reset — cached schema OIDs go stale otherwise.
-    appPool = new Pool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
-    procPool = new Pool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
+    appPool = createAdminTestPool(loginConfig('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD));
+    procPool = createAdminTestPool(loginConfig('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD));
     adminClient = createAdminAuditDbClient({ connectionString: url as string });
 
     await mainOwner.query(
@@ -436,11 +444,11 @@ describe.skipIf(!url)('leaf-8 backfill flip with real chainer + SIEM workers (wi
   }
 
   beforeAll(async () => {
-    adminOwner = new Pool({ connectionString: url, max: 4 });
+    adminOwner = createAdminTestPool({ connectionString: url, max: 4 });
     await adminOwner.query(`CREATE DATABASE ${MAIN_DB_NAME}`).catch((err: unknown) => {
       if ((err as { code?: string }).code !== '42P04') throw err;
     });
-    mainOwner = new Pool({ connectionString: mainDbUrl(), max: 4 });
+    mainOwner = createAdminTestPool({ connectionString: mainDbUrl(), max: 4 });
   });
 
   afterAll(async () => {

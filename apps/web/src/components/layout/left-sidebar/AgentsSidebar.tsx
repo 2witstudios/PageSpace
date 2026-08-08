@@ -24,18 +24,16 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { adoptServerWorkspaceAsHydrated } from '@/stores/agent-workspace/useWorkspaceServerSync';
-import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { panesOf, isLastPane, type PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
-import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
+import type { PersistedWorkspaceState } from '@pagespace/lib/agent-workspaces/contract';
 import {
-  isAgentSessionsKey,
-  isSessionListingKey,
-  forgetSessionInCache,
+  isAgentWorkspacesKey,
+  isWorkspaceListingKey,
+  forgetWorkspaceInCache,
   forgetConversationInCache,
-  restoreSessionInCache,
-} from '@/components/agents/panes/session-conversations';
+  restoreWorkspaceInCache,
+} from '@/components/agents/panes/workspace-conversations';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
@@ -49,17 +47,17 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  * PANES ARE listed here now — a reversal of this file's earlier stance (the
  * old sidebar's `WorkspaceLeaves` pattern was deliberately not restored, back
  * when a pane was purely local, ephemeral browser state with nothing
- * server-durable to show). Panes are now server-persisted
- * (`agent_sessions.workspaceState`, synced by `useWorkspaceServerSync`), so a
- * session's expansion shows one row per PANE, labelled by its own
- * conversation — this is what actually fixes "switching a pane's agent
- * spawns a new sidebar item instead of updating the one I was looking at":
- * the pane's OWN row now updates in place.
+ * server-durable to show). Panes are now server-persisted as
+ * `agent_workspace_panes` rows behind a rev — the only representation there
+ * is — so a session's expansion shows one row per PANE, labelled by its own
+ * conversation. This is what actually fixes "switching a pane's agent spawns
+ * a new sidebar item instead of updating the one I was looking at": the
+ * pane's OWN row now updates in place.
  *
- * `session.workspace` is `null` for a session never opened under this
- * feature (or opened only by an older client) — that session's expansion
- * falls back to the flat `session.conversations` list this sidebar always
- * rendered, unchanged.
+ * `session.workspace` arrives from the list GET as those rows projected into
+ * the whole-state shape (labels joined at read time). It is `null` for a
+ * session with no grid — that session's expansion falls back to the flat
+ * `session.conversations` list this sidebar always rendered, unchanged.
  *
  * Two modes, one component:
  * - **Drive-scoped** (`driveId` present): that drive's sessions.
@@ -67,7 +65,7 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  *   grouped under a drive header.
  *
  * **Clicking a row does not navigate.** Selection goes to
- * `useAgentSurfaceStore`, which mirrors it to `?session=&c=&agent=` via
+ * `useAgentSurfaceStore`, which mirrors it to `?workspace=&c=&agent=` via
  * `pushState`. The route never changes, so nothing above or beside this
  * component remounts, so live shells and streaming chats survive every click.
  */
@@ -93,8 +91,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
 
   const sessionsKey = isAuthenticated
     ? driveId
-      ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}`
-      : '/api/agent-sessions'
+      ? `/api/agent-workspaces?driveId=${encodeURIComponent(driveId)}`
+      : '/api/agent-workspaces'
     : null;
   const {
     data,
@@ -103,14 +101,20 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     mutate: retrySessions,
   } = useSWR<{ sessions: SessionListEntry[] }>(sessionsKey, sessionsFetcher, {
     revalidateOnFocus: false,
-    // Modest poll: session/conversation rows change on spawn and end, which
-    // other tabs and agents can do. The pane grid itself never lives here.
-    refreshInterval: 20_000,
+    // BACKSTOP, not the mechanism (Agent-Session SSoT epic, Phase 2 / plan PR 4).
+    // Session/conversation rows change on spawn and end, which other tabs and
+    // agents can do — and those changes now ARRIVE, as
+    // `conversation:created/updated/closed/reopened/deleted` and `session:*` on the
+    // owner's `user:<id>:sessions` room, applied to this cache by
+    // `session-directory-listener.ts`. The poll only catches a broadcast lost
+    // outright. Demoted from 20s to 120s; SLATED FOR DELETION at the epic's final
+    // contract PR.
+    refreshInterval: 120_000,
   });
 
   // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a
   // drive's sidebar can show a global-assistant session whose conversations
-  // are with agents from ANY accessible drive (agent-sessions-store.ts's
+  // are with agents from ANY accessible drive (agent-workspaces-store.ts's
   // `list()` now surfaces those), so `agentNamesById` below needs every
   // accessible agent's name, not just this drive's, to label them correctly
   // instead of falling back to the generic "Agent" (review: Codex P2 on
@@ -170,13 +174,19 @@ interface SessionConversationEntry {
 }
 
 interface SessionListEntry {
-  sessionId: string;
+  /**
+   * `agent_workspaces.id` — the CANONICAL field, not the `sessionId` compat
+   * twin the DTO still carries for the rolling-deploy window. That one is
+   * documented as "nothing new may read it", and this file held 38 of the
+   * reads.
+   */
+  workspaceId: string;
   driveId: string | null;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
   shells: Array<{ shellId: string; name: string }>;
-  /** The saved pane grid — `null` for a session never opened under `useWorkspaceServerSync`. */
+  /** The saved pane grid — `null` for a session with no grid persisted yet. */
   workspace: PersistedWorkspaceState | null;
 }
 
@@ -335,7 +345,7 @@ function SessionList({
   // rule as global mode), surfaces the caller's global sessions (driveId
   // null) — those aren't this drive's data, they're the user's, and the API
   // now includes them in every drive-scoped listing (see
-  // agent-sessions-store.ts's `list()`) — but ONLY when there's at least one:
+  // agent-workspaces-store.ts's `list()`) — but ONLY when there's at least one:
   // unlike global mode's Assistant group, this one has no `canSpawn`
   // always-show escape hatch, because "Global Assistant" already names a
   // different, unrelated affordance in drive mode: the new-session drive
@@ -412,7 +422,7 @@ function SessionList({
             />
           )}
           {group.sessions.map((session) => (
-            <SessionRow key={session.sessionId} session={session} agentNamesById={agentNamesById} />
+            <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
           ))}
         </div>
       ))}
@@ -515,18 +525,18 @@ function SessionRow({
   const closePane = useAgentWorkspaceStore((state) => state.closePane);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
-  const isSelected = selectedSessionId === session.sessionId;
+  const isSelected = selectedSessionId === session.workspaceId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
   const openConversation = useCallback(
     (conversation: SessionConversationEntry) => {
       selectConversation({
-        sessionId: session.sessionId,
+        sessionId: session.workspaceId,
         conversationId: conversation.conversationId,
         agentId: conversation.agentPageId,
       });
     },
-    [selectConversation, session.sessionId],
+    [selectConversation, session.workspaceId],
   );
 
   /**
@@ -547,26 +557,23 @@ function SessionRow({
   );
 
   // A row action can target a session that is NOT currently displayed — for
-  // it, `AgentPanes` (and the `useWorkspaceServerSync` it mounts) is not
-  // rendered, so the local store may have never seen its grid. Seat this
-  // row's own server-listing snapshot first. Never overwrite a grid the
-  // store already holds: it isn't necessarily fresher (zustand `persist`
-  // rehydrates every session's grid from localStorage at page load, which
-  // another tab or device may have since moved past — see `closePagePane`'s
-  // stale-row guard), but clobbering it here could just as easily destroy a
-  // NEWER local grid. Returns whatever the store holds afterwards.
+  // it, `AgentPanes` (and the layout sync it mounts) is not rendered, so the
+  // local store may have never seen its grid. Seat this row's own
+  // server-listing snapshot first, at an unknown rev. Never overwrite a grid
+  // the store already holds: it isn't necessarily fresher, and clobbering it
+  // could just as easily destroy a NEWER one.
+  //
+  // Seating at an unknown rev needs no latch any more (the deleted
+  // `adoptServerWorkspaceAsHydrated` call was exactly that latch): the first
+  // verb this click posts rebases on the server's truth via a single 409 and
+  // replays itself on top, so a stale seed self-corrects instead of having to
+  // be protected from a racing fetch.
   const ensureLocalWorkspace = useCallback(() => {
-    if (!useAgentWorkspaceStore.getState().workspaces[session.sessionId] && session.workspace) {
-      hydrateWorkspace(session.sessionId, session.workspace);
-      // The snapshot IS server state (this row was rendered from the
-      // listing), so it counts as this page load's hydration — without
-      // this, the sync hook's own mount-time GET lands server-wins one
-      // round-trip after the click and silently drops the very mutation
-      // the click makes (the pane focus, a freshly opened shell pane).
-      adoptServerWorkspaceAsHydrated(session.sessionId);
+    if (!useAgentWorkspaceStore.getState().workspaces[session.workspaceId] && session.workspace) {
+      hydrateWorkspace(session.workspaceId, session.workspace);
     }
-    return useAgentWorkspaceStore.getState().workspaces[session.sessionId];
-  }, [hydrateWorkspace, session.sessionId, session.workspace]);
+    return useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
+  }, [hydrateWorkspace, session.workspaceId, session.workspace]);
 
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
@@ -574,13 +581,13 @@ function SessionRow({
       // this, a click on a non-displayed session's shell row would mint a
       // fresh one-pane grid that server-wins hydration then overwrites.
       ensureLocalWorkspace();
-      selectSession(session.sessionId);
+      selectSession(session.workspaceId);
       // `session.conversations` is this row's own already-resolved live
       // listing (the row couldn't exist here otherwise) — protects a chat
       // pane showing a conversation closed out of the session from being
       // silently evicted by an unrelated shell reattach (issue #2295).
       useAgentWorkspaceStore.getState().openConversation(
-        session.sessionId,
+        session.workspaceId,
         {
           kind: 'terminal',
           name: shell.name,
@@ -590,7 +597,7 @@ function SessionRow({
         { liveConversationIds: new Set(session.conversations.map((c) => c.conversationId)) },
       );
     },
-    [ensureLocalWorkspace, selectSession, session.sessionId, session.conversations],
+    [ensureLocalWorkspace, selectSession, session.workspaceId, session.conversations],
   );
 
   const openSession = useCallback(() => {
@@ -619,8 +626,8 @@ function SessionRow({
         panes.find((p) => p.scope?.kind === 'page' && p.scope.targetId !== null);
       if (pagePane) {
         ensureLocalWorkspace();
-        selectSession(session.sessionId);
-        selectPane(session.sessionId, pagePane.id);
+        selectSession(session.workspaceId);
+        selectPane(session.workspaceId, pagePane.id);
         return;
       }
     }
@@ -631,7 +638,7 @@ function SessionRow({
     }
     const firstShell = session.shells[0];
     if (firstShell) openShell(firstShell);
-  }, [openConversation, openShell, conversationEntryForTarget, ensureLocalWorkspace, selectSession, selectPane, session.sessionId, session.workspace, session.conversations, session.shells]);
+  }, [openConversation, openShell, conversationEntryForTarget, ensureLocalWorkspace, selectSession, selectPane, session.workspaceId, session.workspace, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     // Snapshot for rollback, then assume success immediately — the row must
@@ -639,19 +646,19 @@ function SessionRow({
     // this DELETE triggers server-side actually takes. `session` (the prop)
     // IS this row's own current cache entry, so it doubles as the snapshot
     // to restore on failure — no separate cache peek needed.
-    const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.sessionId] ?? null;
-    const wasSelected = selectedSessionId === session.sessionId;
+    const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.workspaceId] ?? null;
+    const wasSelected = selectedSessionId === session.workspaceId;
     const previousConversationId = selectedConversationId;
     const previousAgentId = selectedAgentId;
     // The session leaves the sidebar; its conversations remain as history in
     // each agent's list. Drop the local grid too — its panes pointed at a
     // sandbox that no longer exists.
-    forgetWorkspace(session.sessionId);
+    forgetWorkspace(session.workspaceId);
     if (wasSelected) selectSession(null);
     setConfirmingEnd(false);
-    forgetSessionInCache(mutate, session.sessionId);
+    forgetWorkspaceInCache(mutate, session.workspaceId);
     try {
-      await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
+      await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
     } catch (error) {
       // The optimistic assumption was wrong. Restore the grid and the
       // session's row LOCALLY (from the snapshots above) — a real revalidate
@@ -671,16 +678,16 @@ function SessionRow({
       // the NOW-cleared `null`, so it would drop the previously-selected
       // conversation/agent even though nothing else claimed them (review
       // finding — chatgpt-codex-connector on PR #2318).
-      if (workspaceSnapshot) hydrateWorkspace(session.sessionId, workspaceSnapshot);
-      restoreSessionInCache(mutate, session);
+      if (workspaceSnapshot) hydrateWorkspace(session.workspaceId, workspaceSnapshot);
+      restoreWorkspaceInCache(mutate, session);
       if (wasSelected && useAgentSurfaceStore.getState().selectedSessionId === null) {
         selectConversation({
-          sessionId: session.sessionId,
+          sessionId: session.workspaceId,
           conversationId: previousConversationId,
           agentId: previousAgentId,
         });
       }
-      void mutate(isSessionListingKey);
+      void mutate(isWorkspaceListingKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
@@ -688,7 +695,7 @@ function SessionRow({
       return;
     }
     // Confirmed — background reconcile only; the grid and sidebar are already right.
-    void mutate(isSessionListingKey);
+    void mutate(isWorkspaceListingKey);
   }, [
     forgetWorkspace,
     hydrateWorkspace,
@@ -705,7 +712,7 @@ function SessionRow({
     async (conversationId: string) => {
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
@@ -727,10 +734,10 @@ function SessionRow({
       // network round trip on top of the DELETE that just resolved. A
       // background reconcile still follows, same as every other mutating
       // action here — it just no longer gates what the user sees.
-      forgetConversationInCache(mutate, session.sessionId, conversationId);
-      void mutate(isAgentSessionsKey);
+      forgetConversationInCache(mutate, session.workspaceId, conversationId);
+      void mutate(isAgentWorkspacesKey);
     },
-    [mutate, session.sessionId],
+    [mutate, session.workspaceId],
   );
 
   // Closing a pane's own conversation from the sidebar — a real DELETE
@@ -744,19 +751,19 @@ function SessionRow({
       // snapshot (polled every 20s), so a second pane opened on this same
       // conversation moments ago could be invisible to it (review finding,
       // carried over from this row's own tab-era close control).
-      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
       const shownElsewhere = liveWorkspace
         ? panesOf(liveWorkspace).some(
             (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversationId,
           )
         : false;
       if (shownElsewhere) {
-        resetPane(session.sessionId, paneId);
+        resetPane(session.workspaceId, paneId);
         return;
       }
       try {
         await del(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+          `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
         // The grid never empties (contract invariant 3): if this was the
         // grid's ONLY pane, prefer rebinding it to another open listing over
@@ -765,20 +772,20 @@ function SessionRow({
         // finding — chatgpt-codex-connector on PR #2308). Read the LIVE grid
         // again (not the snapshot above) — the DELETE's own round trip is
         // exactly the window a concurrent split/close could land in.
-        const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+        const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
         const rebindTarget =
           liveWorkspaceNow && isLastPane(liveWorkspaceNow, paneId)
             ? session.conversations.find((c) => c.conversationId !== conversationId)
             : undefined;
         if (rebindTarget) {
-          assignPane(session.sessionId, paneId, {
+          assignPane(session.workspaceId, paneId, {
             kind: 'chat',
             name: 'Conversation',
             targetId: rebindTarget.conversationId,
             agentPageId: rebindTarget.agentPageId,
           });
         } else {
-          resetPane(session.sessionId, paneId);
+          resetPane(session.workspaceId, paneId);
         }
         // Instant sidebar freshness — a local cache patch instead of a full
         // revalidate, so the row leaves the listing without a second,
@@ -786,8 +793,8 @@ function SessionRow({
         // resolved. A background reconcile still follows, same as every
         // other mutating action here — it just no longer gates what the
         // user sees.
-        forgetConversationInCache(mutate, session.sessionId, conversationId);
-        void mutate(isAgentSessionsKey);
+        forgetConversationInCache(mutate, session.workspaceId, conversationId);
+        void mutate(isAgentWorkspacesKey);
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
           setConfirmingEnd(true);
@@ -799,7 +806,7 @@ function SessionRow({
         });
       }
     },
-    [mutate, session.sessionId, session.conversations, resetPane, assignPane],
+    [mutate, session.workspaceId, session.conversations, resetPane, assignPane],
   );
 
   const conversationLabel = useCallback(
@@ -867,14 +874,14 @@ function SessionRow({
       // seen (hydration normally runs inside the very `AgentPanes` this
       // click is mounting).
       ensureLocalWorkspace();
-      selectSession(session.sessionId);
-      selectPane(session.sessionId, paneId);
+      selectSession(session.workspaceId);
+      selectPane(session.workspaceId, paneId);
     },
-    [ensureLocalWorkspace, selectSession, selectPane, session.sessionId],
+    [ensureLocalWorkspace, selectSession, selectPane, session.workspaceId],
   );
 
   const closePagePane = useCallback(
-    async (paneId: string) => {
+    (paneId: string) => {
       const workspace = ensureLocalWorkspace();
       if (!workspace) return;
       // Closing the LAST pane empties the session, which ends it — route
@@ -885,59 +892,37 @@ function SessionRow({
         return;
       }
       // Anything but 'closed' means the LOCAL grid didn't know this pane —
-      // the row (rendered from the server listing) and the store (possibly
-      // a stale localStorage rehydrate another tab has moved past) diverge.
-      // PUTting the local grid wholesale from here would clobber the
-      // server's newer layout with an unrelated one AND leave the clicked
-      // pane alive; refresh the listing instead and let it reconcile.
-      if (closePane(session.sessionId, paneId) !== 'closed') {
-        void mutate(isAgentSessionsKey);
+      // the row (rendered from the server listing) and the store diverge.
+      // Refresh the listing and let it reconcile rather than acting on a
+      // grid that doesn't contain what was clicked.
+      if (closePane(session.workspaceId, paneId) !== 'closed') {
+        void mutate(isAgentWorkspacesKey);
         return;
       }
-      const updated = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
-      if (!updated) return;
-      // Persist the close directly: `useWorkspaceServerSync` only observes
-      // the session AgentPanes is displaying, so a close on any OTHER row
-      // would otherwise reach Zustand/localStorage only and be resurrected
-      // by server-wins hydration the next time that session opens. When the
-      // session IS the displayed one, the sync hook debounce-PUTs the same
-      // grid — an idempotent duplicate, not a conflict. Registered with
-      // `useEditingStore` for the PUT's duration, same as the sync hook's
-      // own `performSave` — the repo's refresh-protection rule.
-      const editingId = `sidebar-pane-close:${session.sessionId}:${paneId}`;
-      useEditingStore.getState().startEditing(editingId, 'other', { componentName: 'sidebar-pane-close' });
-      try {
-        const response = await fetchWithAuth(
-          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/workspace`,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workspace: updated }),
-          },
-        );
-        if (!response.ok) throw new Error(`Failed to save the session layout (${response.status})`);
-        // Refresh the listing so this row's pane list reflects the close
-        // without waiting for the next poll.
-        void mutate(isAgentSessionsKey);
-      } catch (error) {
-        // The close already landed locally; a failed PUT leaves the pane
-        // alive on the server (and every other device), silently diverging
-        // until hydration resurrects it. Restore the row's own snapshot so
-        // what the user sees matches what is actually durable, then say so.
-        if (session.workspace) hydrateWorkspace(session.sessionId, session.workspace);
-        console.error('Failed to close this pane:', error);
-        toast.error('Could not close this pane', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-      } finally {
-        useEditingStore.getState().endEditing(editingId);
-      }
+      // Persistence is no longer this callback's business: `closePane` mints
+      // a `close_pane` verb and the store posts it, for ANY session — which
+      // is what retires the hand-rolled PUT that used to live here (the old
+      // debounced sync only observed the session `AgentPanes` was
+      // displaying, so a close on any other row reached localStorage only
+      // and got resurrected by the next hydration). The rollback-on-failure,
+      // the `useEditingStore` registration and the error toast go with it:
+      // the queue owns retry, the store owns the editing registration for as
+      // long as anything is unacked, and a give-up re-reads the server's own
+      // truth instead of guessing at a snapshot to restore.
+      //
+      // Refresh the listing so this row's pane list reflects the close
+      // without waiting for the next poll.
+      void mutate(isAgentWorkspacesKey);
     },
-    [ensureLocalWorkspace, closePane, hydrateWorkspace, mutate, session.sessionId, session.workspace],
+    [ensureLocalWorkspace, closePane, mutate, session.workspaceId],
   );
 
   return (
-    <div>
+    // Per-session test handle, wrapping BOTH the session's own row and its
+    // expanded children — so an end-to-end spec can scope "this session's
+    // conversation rows" without depending on which other sessions happen to
+    // be expanded. Used by `18-sidebar-directory-live.spec.ts`.
+    <div data-testid={`sidebar-session-${session.workspaceId}`}>
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
@@ -1008,6 +993,7 @@ function SessionRow({
                     },
                   ]}
                   menuLabel="Conversation actions"
+                  testId="sidebar-conversation-row"
                   className={cn(
                     'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
                     selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',

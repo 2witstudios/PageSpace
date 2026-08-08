@@ -37,6 +37,8 @@ const PLAN_TITLE_CHAR_LIMIT = 200;
 export interface ActivePlan {
   pageId: string;
   title: string;
+  /** The plan page's drive — unused by the prompt, needed by the chip's link. */
+  driveId: string;
 }
 
 /**
@@ -68,24 +70,49 @@ export async function getActivePlan(
 ): Promise<ActivePlan | null> {
   if (!conversationId) return null;
   try {
-    const [row] = await db
-      .select({
-        pageId: pages.id,
-        title: pages.title,
-        isTrashed: pages.isTrashed,
-      })
-      .from(conversations)
-      .innerJoin(pages, eq(conversations.planPageId, pages.id))
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
-
-    if (!row || row.isTrashed) return null;
-    if (!(await canView(row.pageId))) return null;
-
-    return { pageId: row.pageId, title: row.title };
+    return await resolveBoundPlan(conversationId, userId, canView);
   } catch {
     return null;
   }
+}
+
+/**
+ * THE RULE, without an error policy: join the conversation to its plan page,
+ * suppress it when trashed or when the caller cannot view it.
+ *
+ * Separate from {@link getActivePlan} because the two consumers need the same
+ * rule and DIFFERENT failure behaviour, and that difference is deliberate:
+ *
+ *  - the prompt section must never fail a turn, so it swallows (above);
+ *  - `GET /api/ai/conversations/:id/plan` must NOT swallow. A chip that renders
+ *    "no plan" because a query blew up is lying about durable state the user
+ *    can act on; a 500 lets the client show that it does not know.
+ *
+ * Before this split the route implemented the rule a second time, with its own
+ * join and its own null semantics. One rule, two edges, each explicit about
+ * what it does with a failure.
+ */
+export async function resolveBoundPlan(
+  conversationId: string,
+  userId: string,
+  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(userId, pageId),
+): Promise<ActivePlan | null> {
+  const [row] = await db
+    .select({
+      pageId: pages.id,
+      title: pages.title,
+      driveId: pages.driveId,
+      isTrashed: pages.isTrashed,
+    })
+    .from(conversations)
+    .innerJoin(pages, eq(conversations.planPageId, pages.id))
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+
+  if (!row || row.isTrashed) return null;
+  if (!(await canView(row.pageId))) return null;
+
+  return { pageId: row.pageId, title: row.title, driveId: row.driveId };
 }
 
 /**
