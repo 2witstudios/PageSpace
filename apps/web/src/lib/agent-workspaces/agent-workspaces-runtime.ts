@@ -415,6 +415,27 @@ export async function createConversationInSession(input: {
    * own spawn. Only `spawn_session` has one.
    */
   excludeTargetId?: string;
+  /**
+   * Put the new thread in the workspace's grid.
+   *
+   * OPT-IN, and the opt-out is the important half. A caller that already has a
+   * pane in mind must NOT ask for this: the pane picker
+   * (`AgentPanes.handlePickAgent`) binds its pane to a LOADING scope
+   * (`{ kind: 'chat', targetId: null }`), POSTs the creation, then binds that
+   * same pane to the new conversation. A loading pane is not `isReplaceable`
+   * (`workspace-layout-verbs.ts:861` — `targetId !== null` fails), so a server
+   * placement resolves to `split` and opens a SECOND pane; the client's own
+   * bind then leaves one conversation displayed twice (review finding — codex
+   * P1).
+   *
+   * So this is for creators with no client pane to fill: `spawn_session`, where
+   * an agent mints a worker and nothing in a browser is waiting to place it.
+   *
+   * Not placing is safe. A thread's VISIBILITY no longer depends on having a
+   * pane — the listing carries unplaced threads and the sidebar renders them
+   * (issue #2373). Placement is about the grid, not about being findable.
+   */
+  placeInGrid?: boolean;
 }): Promise<void> {
   await withSessionListingLock(input.workspaceId, () =>
     createConversationInSessionWith(
@@ -434,25 +455,18 @@ export async function createConversationInSession(input: {
     ),
   );
 
-  // PLACEMENT BELONGS TO CREATION, for every caller (issue #2373).
+  if (!input.placeInGrid) return;
+
+  // The opId derives from the CONVERSATION id, not a caller-supplied
+  // `toolCallId`. The old gate in `spawn_session` was
+  // `if (deps.placeWorkerPane && toolCallId)`, which silently skipped placement
+  // whenever the SDK handed it no call id. A conversation-keyed op is always
+  // available and idempotent on the fact that matters: one pane per thread,
+  // however many times creation is retried.
   //
-  // It used to live in `spawn_session` alone, behind
-  // `if (deps.placeWorkerPane && toolCallId)`. The three ROUTE callers — the
-  // session spawn, the per-workspace conversation POST, and the page-agent
-  // conversation POST — created threads that were never placed at all. Paired
-  // with the sidebar's old `chatPanes ?? conversations` fork, that made every
-  // UI-created thread invisible in any workspace that already had a grid.
-  // Production carried 1 of 3 and 6 of 10 such threads.
-  //
-  // The opId is derived from the conversation id rather than a caller-supplied
-  // `toolCallId`, so it is (a) always available — the old gate silently skipped
-  // placement whenever it was not — and (b) idempotent on the fact that
-  // matters: one placement per thread, however many times creation is retried.
-  //
-  // Best-effort by design, and AFTER the lock: a grid that cannot be written
-  // must not fail a conversation that already exists. The thread is listed
-  // either way now — unplaced instead of invisible — which is exactly what
-  // makes degrading here safe.
+  // Best-effort, and AFTER the listing lock: a grid that cannot be written must
+  // not fail a conversation that already exists. Degrading is safe because the
+  // thread is listed either way now — unplaced rather than invisible.
   try {
     await placeWorkerPane({
       workspaceId: input.workspaceId,

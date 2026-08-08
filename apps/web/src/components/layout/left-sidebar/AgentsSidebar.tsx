@@ -758,12 +758,27 @@ function SessionRow({
       // snapshot (polled every 20s), so a second pane opened on this same
       // conversation moments ago could be invisible to it (review finding,
       // carried over from this row's own tab-era close control).
-      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
-      const shownElsewhere = liveWorkspace
-        ? panesOf(liveWorkspace).some(
-            (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversationId,
-          )
-        : false;
+      //
+      // Through `ensureLocalWorkspace`, NOT a raw store read (review finding —
+      // CodeRabbit). A row can act on a session that is not the displayed one,
+      // and for that session `AgentPanes` — and the layout sync that seats its
+      // grid — was never mounted. A raw read then came back undefined,
+      // `shownElsewhere` defaulted to FALSE, and "close this pane" silently
+      // became "DELETE this conversation" for a thread still open in another
+      // pane. Seating the row's own listing snapshot first is what this helper
+      // is for, and a placed thread always has a `session.workspace` for it to
+      // seat from — the pane it is placed in is in that very grid.
+      const liveWorkspace = ensureLocalWorkspace();
+      if (!liveWorkspace) {
+        // Cannot prove the thread is NOT shown elsewhere, so do not destroy it.
+        // Re-read instead; the row re-renders with a grid and the next click
+        // decides properly.
+        void mutate(isAgentWorkspacesKey);
+        return;
+      }
+      const shownElsewhere = panesOf(liveWorkspace).some(
+        (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversationId,
+      );
       if (shownElsewhere) {
         resetPane(session.workspaceId, paneId);
         return;
@@ -813,7 +828,7 @@ function SessionRow({
         });
       }
     },
-    [mutate, session.workspaceId, session.conversations, resetPane, assignPane],
+    [ensureLocalWorkspace, mutate, session.workspaceId, session.conversations, resetPane, assignPane],
   );
 
   const conversationLabel = useCallback(

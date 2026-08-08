@@ -80,9 +80,17 @@ import { authedContext } from '../fixtures/chat.fixture';
  *
  * TWO sessions, and which one is which matters. Session A is opened in the pane
  * grid, only so the console is genuinely live. Session B — the one under test —
- * is NEVER opened, so it has no persisted grid, and the sidebar renders its
- * expansion from the flat `session.conversations` listing (the branch the
- * directory events feed) rather than from pane rows.
+ * is NEVER opened.
+ *
+ * That asymmetry used to be load-bearing for a second reason: the sidebar
+ * rendered PANE rows for a session with a grid and the flat conversation list
+ * for one without, and only the latter carried `sidebar-conversation-row` — so
+ * Session B had to be grid-less for this spec to see anything at all. That fork
+ * was the cause of issue #2373 and is gone: there is one row shape now, every
+ * row carries the testId, and these assertions hold whether or not a session has
+ * a grid. Session B stays unopened only because an unopened session is the
+ * honest test of a DIRECTORY event — nothing about it is being rendered by a
+ * pane surface that might refetch on its own.
  */
 
 // The shared storageState user belongs to a drive this spec does not control;
@@ -441,13 +449,26 @@ test.describe('session directory — a server-created conversation reaches the s
     const { conversationRows: bystanderRows } = await expandSession(page, displayed.sessionId);
     await expect(conversationRows).toHaveCount(1, { timeout: 30_000 });
 
+    // The bystander's own count BEFORE the spawn. Asserting "unchanged" rather
+    // than "zero" is what makes this test about leakage rather than about a
+    // render branch (issue #2373).
+    //
+    // It used to read `toHaveCount(0)`, and the reason was structural: the
+    // displayed session has a persisted grid, so the sidebar rendered PANE rows
+    // for it — and only the conversation branch carried
+    // `sidebar-conversation-row`, so its threads were invisible to this
+    // selector. Both facts are now gone: there is one row shape, every row
+    // carries the testId, and a session's own threads legitimately count. Zero
+    // would now fail for a reason that has nothing to do with leakage.
+    const bystanderBefore = await bystanderRows.count();
+
     await spawnConversationServerSide(request, user, target.sessionId);
     await expect(conversationRows).toHaveCount(2, { timeout: POLL_CONTROL_MS });
 
-    // The displayed session HAS a persisted grid (a window is open on it), so
-    // it renders PANE rows rather than the flat conversation list — which is
-    // precisely why the check is "no conversation row appeared here" rather
-    // than a count of its threads.
-    await expect(bystanderRows).toHaveCount(0);
+    // THE ASSERTION: the spawn moved the target's list and left the bystander's
+    // alone. A listener that inserted into every session — the mistake
+    // `upsertConversationInCache`'s `session.sessionId !== sessionId` guard
+    // exists to prevent — would move this too.
+    await expect(bystanderRows).toHaveCount(bystanderBefore);
   });
 });

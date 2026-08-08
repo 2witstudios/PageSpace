@@ -706,6 +706,56 @@ describe('AgentsSidebar', () => {
       });
     });
 
+    /**
+     * THE SAME CASE, FROM A SESSION THE STORE HAS NEVER SEEN (review finding —
+     * CodeRabbit).
+     *
+     * A sidebar row can act on a session that is not the displayed one, and for
+     * that session `AgentPanes` — and the layout sync that seats its grid — was
+     * never mounted. `closePaneConversation` read the store raw, got undefined,
+     * defaulted `shownElsewhere` to FALSE, and turned "close this pane" into
+     * "DELETE this conversation" for a thread still open in another pane.
+     *
+     * The test above pre-hydrates the store, which is exactly why it could not
+     * see this. Here the store is deliberately left empty: the fix seats the
+     * row's own `session.workspace` snapshot through `ensureLocalWorkspace`
+     * first, so the second pane is visible and only the clicked pane resets.
+     *
+     * Fails on the pre-fix component with a DELETE.
+     */
+    test('closing a shared pane in an UNHYDRATED session still resets locally — never DELETEs', async () => {
+      const sharedWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      // NO hydrateWorkspace — this session was never opened in the grid.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
+      fireEvent.contextMenu(pane1Row);
+      await user.click(await screen.findByText('Close'));
+
+      // The listing survives: the conversation is still shown in pane-2.
+      await waitFor(() => {
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      });
+      expect(mockDel).not.toHaveBeenCalled();
+    });
+
     test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
       const sharedWorkspace = {
         id: 'ses-1',

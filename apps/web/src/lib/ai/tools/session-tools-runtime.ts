@@ -980,6 +980,10 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           // The spawning conversation shares this grid when the worker lands in
           // the caller's own workspace — never evicted by its own spawn.
           excludeTargetId: callerConversationId,
+          // An agent minting a worker has no browser pane waiting to be filled,
+          // so the server places it. The pane-picker routes deliberately do not
+          // ask for this — see `placeInGrid`'s doc.
+          placeInGrid: true,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
