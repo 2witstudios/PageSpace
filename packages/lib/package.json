@@ -1262,6 +1262,11 @@
       "import": "./dist/audit/audit-query.js",
       "require": "./dist/audit/audit-query.js"
     },
+    "./audit/chain-alert-payload": {
+      "types": "./dist/audit/chain-alert-payload.d.ts",
+      "import": "./dist/audit/chain-alert-payload.js",
+      "require": "./dist/audit/chain-alert-payload.js"
+    },
     "./audit/security-audit-alerting": {
       "types": "./dist/audit/security-audit-alerting.d.ts",
       "import": "./dist/audit/security-audit-alerting.js",
@@ -2282,6 +2287,9 @@
       ],
       "audit/audit-query": [
         "./dist/audit/audit-query.d.ts"
+      ],
+      "audit/chain-alert-payload": [
+        "./dist/audit/chain-alert-payload.d.ts"
       ],
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
