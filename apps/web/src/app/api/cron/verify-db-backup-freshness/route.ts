@@ -43,11 +43,25 @@ const BACKUP_PREFIX = 'db-backups/';
  */
 const MAX_LIST_PAGES = 20;
 
-async function listBackupObjects(): Promise<BackupObject[]> {
+interface BackupListing {
+  objects: BackupObject[];
+  /**
+   * True when MAX_LIST_PAGES was exhausted while S3 still reported more keys.
+   * Must never be swallowed: keys are returned in lexicographic order and the
+   * date-stamped naming means the NEWEST object sorts LAST, so a truncated
+   * listing systematically hides the newest backup and would report a
+   * false `stale`. A bounded scan that silently drops coverage reads as "all
+   * clear" — the exact failure mode this endpoint exists to prevent.
+   */
+  truncated: boolean;
+}
+
+async function listBackupObjects(): Promise<BackupListing> {
   const client = getS3Client();
   const bucket = getS3Bucket();
   const objects: BackupObject[] = [];
   let continuationToken: string | undefined;
+  let truncated = false;
 
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
     const response = await client.send(
@@ -72,9 +86,12 @@ async function listBackupObjects(): Promise<BackupObject[]> {
     if (!response.IsTruncated) break;
     continuationToken = response.NextContinuationToken;
     if (!continuationToken) break;
+
+    // Ran out of page budget with more keys still outstanding.
+    if (page === MAX_LIST_PAGES - 1) truncated = true;
   }
 
-  return objects;
+  return { objects, truncated };
 }
 
 export async function GET(request: Request) {
@@ -86,8 +103,32 @@ export async function GET(request: Request) {
   const maxAgeHours = resolveBackupMaxAgeHours(process.env.BACKUP_MAX_AGE_HOURS);
 
   try {
-    const objects = await listBackupObjects();
+    const { objects, truncated } = await listBackupObjects();
     const result = assessBackupFreshness({ objects, now: new Date(), maxAgeHours });
+
+    // A truncated listing cannot support a "fresh" verdict: the newest object
+    // sorts last, so what got dropped is exactly what the check needs. Report it
+    // loudly rather than letting a bounded scan masquerade as full coverage.
+    if (truncated) {
+      loggers.security.error(
+        `[BACKUP ALERT] Backup listing hit the ${MAX_LIST_PAGES}-page cap with more keys outstanding — ` +
+          'the newest object sorts last under date-stamped naming, so this verdict may be wrong. ' +
+          'Raise MAX_LIST_PAGES or prune the prefix.',
+        { objectsSeen: objects.length, maxListPages: MAX_LIST_PAGES, reason: result.reason }
+      );
+      Sentry.captureException(
+        new Error(
+          `[BACKUP ALERT] db-backups/ listing truncated at ${MAX_LIST_PAGES} pages ` +
+            `(${objects.length} keys seen); freshness verdict is unreliable`
+        ),
+        {
+          level: 'error',
+          fingerprint: ['db-backup-freshness', 'listing_truncated'],
+          tags: { check: 'db_backup_freshness', reason: 'listing_truncated' },
+          extra: { objectsSeen: objects.length, maxListPages: MAX_LIST_PAGES },
+        }
+      );
+    }
 
     audit({
       eventType: 'data.read',
@@ -100,6 +141,7 @@ export async function GET(request: Request) {
         maxAgeHours: result.maxAgeHours,
         encrypted: result.encrypted,
         objectsSeen: objects.length,
+        listingTruncated: truncated,
       },
     });
 
@@ -153,6 +195,7 @@ export async function GET(request: Request) {
           // wiped".
           newestKey: result.newest?.key ?? null,
           objectsSeen: objects.length,
+          listingTruncated: truncated,
           message: result.message,
           timestamp: new Date().toISOString(),
         },
@@ -171,6 +214,7 @@ export async function GET(request: Request) {
       encrypted: result.encrypted,
       newestKey: result.newest?.key ?? null,
       objectsSeen: objects.length,
+      listingTruncated: truncated,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

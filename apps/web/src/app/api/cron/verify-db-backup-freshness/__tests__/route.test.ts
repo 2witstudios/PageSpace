@@ -262,6 +262,61 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
     expect(body.newestKey).toBe(FRESH_ENC.Key);
   });
 
+  it('alerts when the listing hits the page cap — a bounded scan must not pass as full coverage', async () => {
+    // Every page reports more keys outstanding, so the 20-page budget runs out.
+    // Keys sort lexicographically and the date-stamped naming puts the NEWEST
+    // last, so what a truncated scan drops is exactly what the check needs.
+    mockSend.mockResolvedValue({
+      Contents: [FRESH_ENC],
+      IsTruncated: true,
+      NextContinuationToken: 'more',
+    });
+
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(mockSend).toHaveBeenCalledTimes(20);
+    expect(body.listingTruncated).toBe(true);
+
+    const truncationAlert = mockCaptureException.mock.calls.find(
+      ([, ctx]) => ctx?.tags?.reason === 'listing_truncated'
+    );
+    expect(truncationAlert).toBeDefined();
+    expect((truncationAlert![0] as Error).message).toContain('listing truncated');
+    expect(truncationAlert![1].fingerprint).toEqual([
+      'db-backup-freshness',
+      'listing_truncated',
+    ]);
+    expect(mockLoggers.security.error).toHaveBeenCalled();
+  });
+
+  it('reports listingTruncated=false on a complete listing', async () => {
+    mockSend.mockResolvedValue(page([FRESH_ENC]));
+
+    const body = await (await GET(request)).json();
+
+    expect(body.listingTruncated).toBe(false);
+    expect(
+      mockCaptureException.mock.calls.some(([, c]) => c?.tags?.reason === 'listing_truncated')
+    ).toBe(false);
+  });
+
+  it('records listing truncation in the audit trail', async () => {
+    mockSend.mockResolvedValue({
+      Contents: [FRESH_ENC],
+      IsTruncated: true,
+      NextContinuationToken: 'more',
+    });
+
+    await GET(request);
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({ listingTruncated: true }),
+      })
+    );
+  });
+
   it('skips keys with no LastModified rather than aging them as "now"', async () => {
     mockSend.mockResolvedValue(
       page([
