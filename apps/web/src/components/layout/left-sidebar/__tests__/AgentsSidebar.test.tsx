@@ -25,6 +25,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
+import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -158,10 +159,24 @@ const SESSION: SessionFixture = {
   shells: [],
 };
 
+/**
+ * Serve a listing the way the ROUTE serves one (issue #2373): each thread
+ * annotated with its pane placement, using the server's own
+ * `annotateConversationsWithPanes`. Fixtures cannot drift from the shape the
+ * sidebar actually receives — a `workspace` grid and a `conversations` list
+ * that disagreed about placement is precisely the bug this suite now guards.
+ */
 const respondWithSessions = (sessions: SessionFixture[]) => {
+  const annotated = sessions.map((session) => ({
+    ...session,
+    conversations: annotateConversationsWithPanes(
+      session.conversations,
+      (session.workspace as { columns?: unknown } | undefined)?.columns as never,
+    ),
+  }));
   mockFetchWithAuth.mockResolvedValue({
     ok: true,
-    json: async () => ({ sessions }),
+    json: async () => ({ sessions: annotated }),
   });
 };
 
@@ -300,6 +315,65 @@ describe('AgentsSidebar', () => {
       // Two panes, each showing its own conversation — two sibling rows.
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
       expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    /**
+     * THE BUG (issue #2373). The expansion used to be
+     * `chatPanes ? … : session.conversations`, and an open workspace always
+     * has a grid — so the pane branch always won and a thread with no pane row
+     * simply did not render. Placement is best-effort, so that is the ordinary
+     * state of a freshly spawned worker: production showed one workspace with
+     * 3 threads and 2 panes, another with 10 threads and 4 panes. Six threads
+     * were unreachable from the sidebar entirely.
+     *
+     * Fails on the pre-fix component: only the two placed rows appear.
+     */
+    test('renders a thread that has NO pane, alongside the placed ones', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [
+            ...SESSION.conversations,
+            // Spawned, claimed, never placed — the "hi" conversation from the
+            // production repro.
+            { conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' },
+          ],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+      expect(screen.getByText('Researcher — hi')).toBeDefined();
+      expect(screen.getAllByTestId('sidebar-conversation-row')).toHaveLength(3);
+    });
+
+    test('an unplaced thread closes the THREAD — there is no pane to unbind', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [{ conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' }],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — hi'));
+      await user.click(await screen.findByText('Close'));
+
+      // The conversation DELETE, not a layout verb: an unplaced thread has no
+      // pane binding to reset.
+      await waitFor(() => {
+        expect(mockDel).toHaveBeenCalledWith(
+          expect.stringContaining('/conversations/conv-unplaced'),
+        );
+      });
     });
 
     test('clicking a pane row selects its conversation', async () => {

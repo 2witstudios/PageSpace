@@ -171,6 +171,13 @@ interface SessionConversationEntry {
   conversationId: string;
   title: string | null;
   agentPageId: string | null;
+  /**
+   * Where this thread sits in the workspace's grid, or `null` when it is not
+   * placed. Server-derived (`annotateConversationsWithPanes`) so the sidebar
+   * has ONE list to render rather than choosing between the conversation list
+   * and the grid — see the expansion below.
+   */
+  pane?: { paneId: string; columnId: string; orderIndex: number } | null;
 }
 
 interface SessionListEntry {
@@ -832,22 +839,6 @@ function SessionRow({
     [],
   );
 
-  // Only chat panes address a conversation — a terminal/still-unbound pane
-  // has nothing to show here (shells get their own section below,
-  // unchanged; page panes get their own rows via `pagePanes`). `null` when
-  // this session has no saved grid yet, so the render falls back to the
-  // flat `session.conversations` list.
-  const chatPanes = useMemo(
-    () =>
-      session.workspace
-        ? panesOf(session.workspace).filter(
-            (pane): pane is PaneState & { scope: { kind: 'chat'; targetId: string } } =>
-              pane.scope?.kind === 'chat' && pane.scope.targetId !== null,
-          )
-        : null,
-    [session.workspace],
-  );
-
   // Page panes are server-persisted workspace artifacts exactly like chat
   // panes, so a session's expansion lists them too — a document or task
   // page opened into the grid (by the picker or by an agent's
@@ -969,45 +960,29 @@ function SessionRow({
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {chatPanes
-            ? chatPanes.map((pane) => (
-                <PaneRow
-                  key={pane.id}
-                  pane={pane}
-                  conversationEntryForTarget={conversationEntryForTarget}
-                  conversationLabel={conversationLabel}
-                  selectedConversationId={selectedConversationId}
-                  onOpenConversation={openConversation}
-                  onClose={closePaneConversation}
-                />
-              ))
-            : session.conversations.map((conversation) => (
-                <RowMenu
-                  key={conversation.conversationId}
-                  items={[
-                    {
-                      label: 'Close',
-                      icon: X,
-                      onSelect: () => void closeConversation(conversation.conversationId),
-                      destructive: true,
-                    },
-                  ]}
-                  menuLabel="Conversation actions"
-                  testId="sidebar-conversation-row"
-                  className={cn(
-                    'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                    selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center text-left"
-                    onClick={() => openConversation(conversation)}
-                  >
-                    <span className="truncate">{conversationLabel(conversation)}</span>
-                  </button>
-                </RowMenu>
-              ))}
+          {/* ONE LIST (issue #2373). This used to be
+              `chatPanes ? … : session.conversations`, and an open workspace
+              always has a grid — so the pane branch always won and a thread
+              with no pane row was invisible. Placement is best-effort
+              (`spawn_session` places only when it has a `toolCallId`), so
+              "created but not placed" is the ordinary state of a freshly
+              spawned worker: in production one workspace showed 2 of its 3
+              threads, another 4 of its 10.
+
+              The THREAD is the row. `pane` is an attribute of it, deciding
+              only which close verb applies — unbind the pane, or close the
+              thread outright. */}
+          {session.conversations.map((conversation) => (
+            <ConversationRow
+              key={conversation.conversationId}
+              conversation={conversation}
+              conversationLabel={conversationLabel}
+              selectedConversationId={selectedConversationId}
+              onOpenConversation={openConversation}
+              onClosePane={closePaneConversation}
+              onCloseConversation={closeConversation}
+            />
+          ))}
           {pagePanes.map((pane) => (
             <RowMenu
               key={pane.id}
@@ -1043,7 +1018,7 @@ function SessionRow({
               <span className="truncate">{shell.name}</span>
             </button>
           ))}
-          {(chatPanes ?? session.conversations).length === 0 && pagePanes.length === 0 && (
+          {session.conversations.length === 0 && pagePanes.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
         </div>
@@ -1053,26 +1028,37 @@ function SessionRow({
 }
 
 /**
- * One PANE's row: labeled by its own conversation, updating in place on an
- * agent switch instead of a sibling row appearing — the fix for "changing
- * the agent in a pane spawns a new sidebar item."
+ * ONE THREAD'S ROW — the single shape the workspace expansion renders
+ * (issue #2373).
+ *
+ * There used to be two: a pane-keyed row when the workspace had a grid, and a
+ * conversation-keyed row when it did not. That fork is what made an unplaced
+ * thread invisible, because an open workspace always has a grid. The row is
+ * now keyed by the THREAD, and its pane — when it has one — decides only which
+ * close verb applies.
+ *
+ * Keying by the thread also keeps the property the pane-keyed row was written
+ * for ("changing the agent in a pane spawns a new sidebar item"): the mint
+ * that repoints a pane removes the stale conversation, so it leaves this
+ * listing (`isActive AND closedInWorkspaceAt IS NULL`) rather than lingering
+ * beside its replacement.
  */
-function PaneRow({
-  pane,
-  conversationEntryForTarget,
+function ConversationRow({
+  conversation,
   conversationLabel,
   selectedConversationId,
   onOpenConversation,
-  onClose,
+  onClosePane,
+  onCloseConversation,
 }: {
-  pane: PaneState & { scope: { kind: 'chat'; targetId: string; agentPageId: string | null } };
-  conversationEntryForTarget: (targetId: string, agentPageId: string | null) => SessionConversationEntry;
+  conversation: SessionConversationEntry;
   conversationLabel: (conversation: SessionConversationEntry) => string;
   selectedConversationId: string | null;
   onOpenConversation: (conversation: SessionConversationEntry) => void;
-  onClose: (paneId: string, conversationId: string) => void | Promise<void>;
+  onClosePane: (paneId: string, conversationId: string) => void | Promise<void>;
+  onCloseConversation: (conversationId: string) => void | Promise<void>;
 }) {
-  const activeEntry = conversationEntryForTarget(pane.scope.targetId, pane.scope.agentPageId);
+  const pane = conversation.pane ?? null;
 
   return (
     <RowMenu
@@ -1080,22 +1066,29 @@ function PaneRow({
         {
           label: 'Close',
           icon: X,
-          onSelect: () => void onClose(pane.id, pane.scope.targetId),
+          // A placed thread closes its PANE (which may leave the thread open
+          // elsewhere); an unplaced one has no pane to unbind, so Close means
+          // the thread.
+          onSelect: () =>
+            void (pane
+              ? onClosePane(pane.paneId, conversation.conversationId)
+              : onCloseConversation(conversation.conversationId)),
           destructive: true,
         },
       ]}
       menuLabel="Conversation actions"
+      testId="sidebar-conversation-row"
       className={cn(
         'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-        selectedConversationId === pane.scope.targetId && 'bg-accent text-foreground',
+        selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
       )}
     >
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center text-left"
-        onClick={() => onOpenConversation(activeEntry)}
+        onClick={() => onOpenConversation(conversation)}
       >
-        <span className="truncate">{conversationLabel(activeEntry)}</span>
+        <span className="truncate">{conversationLabel(conversation)}</span>
       </button>
     </RowMenu>
   );
