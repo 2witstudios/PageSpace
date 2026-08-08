@@ -1,3 +1,4 @@
+import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useVirtualizationMode } from '../useVirtualizationMode';
@@ -43,6 +44,49 @@ describe('useVirtualizationMode', () => {
     );
 
     rerender({ desired: true, streaming: true });
+    expect(result.current).toBe(true);
+  });
+
+  it('given StrictMode double-rendering, should produce the same answer as a single render', () => {
+    // The hook writes its ref during render. That is only safe because the result
+    // is a pure function of (desired, isStreaming, previous) and re-running
+    // converges — so a second (or discarded) render pass cannot advance it past
+    // where one pass would land.
+    const { result, rerender } = renderHook(
+      ({ desired, streaming }) => useVirtualizationMode(desired, streaming),
+      {
+        initialProps: { desired: false, streaming: false },
+        wrapper: ({ children }) => React.createElement(React.StrictMode, null, children),
+      }
+    );
+    expect(result.current).toBe(false);
+
+    rerender({ desired: true, streaming: true });
+    expect(result.current).toBe(false);
+
+    rerender({ desired: true, streaming: true });
+    expect(result.current).toBe(false);
+
+    rerender({ desired: true, streaming: false });
+    expect(result.current).toBe(true);
+
+    // And it stays put once the stream restarts.
+    rerender({ desired: true, streaming: true });
+    expect(result.current).toBe(true);
+  });
+
+  it('given the stream ends, should always be able to leave a deferred state', () => {
+    // Guards against a deferral that could latch: whatever `desired` wants is
+    // adopted the moment isStreaming goes false, with no further conditions.
+    const { result, rerender } = renderHook(
+      ({ desired, streaming }) => useVirtualizationMode(desired, streaming),
+      { initialProps: { desired: false, streaming: true } }
+    );
+
+    for (let i = 0; i < 5; i++) rerender({ desired: true, streaming: true });
+    expect(result.current).toBe(false);
+
+    rerender({ desired: true, streaming: false });
     expect(result.current).toBe(true);
   });
 
