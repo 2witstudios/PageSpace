@@ -39,6 +39,9 @@
 # host migration that dropped the machine's schedule. A scheduled machine that
 # never fires is indistinguishable from a finished one by STATE alone, so the
 # bucket is the only trustworthy signal.
+# This image also runs in the tenant compose stack, which has no such backup job —
+# the route skips (200) unless DEPLOYMENT_MODE is cloud, so tenants are not paged
+# nightly for infrastructure they do not have.
 45 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-db-backup-freshness >> /var/log/cron/verify-db-backup-freshness.log 2>&1
 
 # Activity log archival (hot→cold tier) - Daily at 2:30am UTC
