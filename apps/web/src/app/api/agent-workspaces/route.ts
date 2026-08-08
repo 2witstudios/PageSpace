@@ -135,9 +135,9 @@ export async function GET(request: Request) {
         // between, and the choice was wrong in the common case: an open
         // workspace always has a grid, so `AgentsSidebar` always rendered the
         // pane branch, and a thread with no pane row was invisible. Placement
-        // is best-effort — `spawn_session` places only when it has a
-        // `toolCallId` — so "created but not placed" is the ordinary state of a
-        // freshly spawned worker, not an edge case.
+        // is best-effort by design, and a thread created without `placeInGrid`
+        // is never placed at all, so "created but not placed" is a resting
+        // state this list must serve, not a transient to wait out.
         conversations: annotateConversationsWithPanes(
           conversationsBySession.get(session.workspaceId) ?? [],
           grid,
