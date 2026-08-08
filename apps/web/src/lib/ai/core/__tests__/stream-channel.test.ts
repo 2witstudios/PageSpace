@@ -6,6 +6,7 @@ import {
   type ChannelFrame,
 } from '@/lib/ai/core/stream-channel';
 import { pumpSdkStreamToChannel } from '@/lib/ai/core/pump-sdk-stream';
+import { StreamChannelRegistry } from '@/lib/ai/core/stream-channel-registry';
 
 const chunk = (value: unknown): UIMessageChunk => value as UIMessageChunk;
 const textDelta = (delta: string): UIMessageChunk =>
@@ -371,5 +372,79 @@ describe('pumpSdkStreamToChannel', () => {
 
     expect(channel.nextSeq).toBe(100);
     expect(channel.getFrames()).toHaveLength(100);
+  });
+});
+
+describe('stream-channel-registry', () => {
+  const meta = {
+    pageId: 'p1',
+    userId: 'u1',
+    displayName: 'Jono',
+    conversationId: 'c1',
+    browserSessionId: 'b1',
+  };
+
+  it('given an opened channel, should be findable by messageId with its meta', () => {
+    const registry = new StreamChannelRegistry();
+    const channel = registry.open('m1', meta);
+
+    expect(registry.get('m1')).toBe(channel);
+    expect(registry.getMeta('m1')).toEqual(meta);
+    registry.reset();
+  });
+
+  it('given an unknown messageId, should return undefined rather than throw', () => {
+    const registry = new StreamChannelRegistry();
+    expect(registry.get('nope')).toBeUndefined();
+    expect(registry.getMeta('nope')).toBeUndefined();
+  });
+
+  it('given a re-opened messageId, should finish the previous channel rather than strand its subscribers', () => {
+    // The retry / takeover path. Silently replacing the entry would leave the old
+    // channel's subscribers waiting forever on a stream nothing will ever finish.
+    const registry = new StreamChannelRegistry();
+    const first = registry.open('m1', meta);
+    let firstEnd: string | null = null;
+    first.subscribe({
+      fromSeq: 0,
+      onFrame: () => {},
+      onEnd: (end) => {
+        firstEnd = end.reason;
+      },
+    });
+
+    const second = registry.open('m1', meta);
+
+    expect(firstEnd).toBe('finished');
+    expect(first.finished).toBe(true);
+    expect(registry.get('m1')).toBe(second);
+    expect(second.finished).toBe(false);
+    registry.reset();
+  });
+
+  it('given close, should finish the channel and drop the entry, and be idempotent', () => {
+    const registry = new StreamChannelRegistry();
+    const channel = registry.open('m1', meta);
+
+    registry.close('m1', true);
+    expect(channel.finished).toBe(true);
+    expect(channel.aborted).toBe(true);
+    expect(registry.get('m1')).toBeUndefined();
+
+    expect(() => registry.close('m1', true)).not.toThrow();
+  });
+
+  it('given two messageIds, should keep their channels independent', () => {
+    const registry = new StreamChannelRegistry();
+    const a = registry.open('m1', meta);
+    const b = registry.open('m2', meta);
+
+    a.append(textDelta('only a'));
+
+    expect(a.nextSeq).toBe(1);
+    expect(b.nextSeq).toBe(0);
+    registry.close('m1');
+    expect(registry.get('m2')).toBe(b);
+    registry.reset();
   });
 });
