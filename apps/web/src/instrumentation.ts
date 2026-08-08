@@ -34,6 +34,16 @@ export async function register() {
     setActivityBroadcastHook(broadcastActivityEvent);
     console.log('[Instrumentation] Activity broadcast hook initialized');
 
+    // Route security-audit trust-plane alerts to Sentry. Until this existed,
+    // setChainAlertHandler had no caller anywhere, so every notify* helper in
+    // security-audit-alerting.ts early-returned and the audit-chain cron's only
+    // "alert" was a logfile line nothing forwards. Alerting interfaces with no
+    // delivery are why the daily DB backup died unnoticed for 44 days.
+    const { setChainAlertHandler } = await import('@pagespace/lib/audit/security-audit-alerting');
+    const { buildSentryChainAlertHandler } = await import('@/lib/observability/chain-alert-sentry');
+    setChainAlertHandler(buildSentryChainAlertHandler());
+    console.log('[Instrumentation] Security-audit chain alert handler initialized (Sentry)');
+
     if (
       process.env.AUDIT_SIEM_ENABLED === 'true' &&
       process.env.AUDIT_WEBHOOK_URL &&

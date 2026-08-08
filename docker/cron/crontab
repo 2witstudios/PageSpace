@@ -27,6 +27,20 @@
 # Verifies hash chain integrity of security audit log
 0 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
 
+# Database backup freshness check - Daily at 2:45am UTC
+# Asserts a recent, non-empty, AES-256-encrypted pg_dump exists in Tigris under
+# db-backups/. The dump itself is produced by a Fly SCHEDULED MACHINE outside this
+# app (pagespace-db-backup, see PageSpace-Deploy fly/backup/), which fires around
+# 00:30 UTC — so 02:45 leaves ~2h of slack for a slow run before we check.
+# Alerts to Sentry (level fatal) and returns 503 when the newest object is older
+# than BACKUP_MAX_AGE_HOURS (default 36h, i.e. one missed run is tolerated).
+# Exists because that job died silently for 44 days (2026-06-26 → 2026-08-08):
+# a fail-closed BACKUP_ENCRYPTION_KEY gate with the secret never set, then a Fly
+# host migration that dropped the machine's schedule. A scheduled machine that
+# never fires is indistinguishable from a finished one by STATE alone, so the
+# bucket is the only trustworthy signal.
+45 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-db-backup-freshness >> /var/log/cron/verify-db-backup-freshness.log 2>&1
+
 # Activity log archival (hot→cold tier) - Daily at 2:30am UTC
 # Flips isArchived=true on activity_logs older than ACTIVITY_LOGS_ARCHIVE_DAYS (default 365)
 # so the active-view stays bounded. Flag-flip only: never deletes rows or touches the hash chain.
