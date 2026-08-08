@@ -23,11 +23,14 @@
  * location is its parent, and the two are never allowed to become confusable.
  *
  * Violations are reported in a FIXED order, so one bad tree always yields one
- * code: node cap, root count, dangling parent, cycle, reachability, depth,
- * split arity, fractions, ordering. The order is not arbitrary — each check
- * assumes what the ones before it established. Everything that walks a parent
- * pointer needs the dangling check to have passed; the depth walk needs the
- * cycle check to have passed, which is what lets it run without a visited set.
+ * code: node cap, duplicate ids, root count, dangling parent, cycle,
+ * reachability, depth, split arity, pane leafness, fractions, ordering. The
+ * order is not arbitrary — each check assumes what the ones before it
+ * established. Everything that resolves a node needs ids to be unique;
+ * everything that walks a parent pointer needs the dangling check to have
+ * passed; the depth walk needs the cycle check to have passed, which is what
+ * lets it run without a visited set; and the fraction SUM needs its terms
+ * proven finite, because a NaN loses every comparison it is given.
  */
 import { FRACTION_EPSILON } from './workspace-layout-verbs';
 import { childrenOf, descendantsOf, detachedOf, rootOf, type WorkspaceNode } from './workspace-node';
@@ -61,6 +64,7 @@ export const MAX_DEPTH = 8;
 export type TreeValidation = { ok: true } | { ok: false; code: TreeViolationCode; detail: string };
 
 export type TreeViolationCode =
+  | 'duplicate_id'
   | 'no_root'
   | 'multiple_roots'
   | 'dangling_parent'
@@ -69,7 +73,9 @@ export type TreeViolationCode =
   | 'max_depth_exceeded'
   | 'max_nodes_exceeded'
   | 'degenerate_split'
+  | 'pane_has_children'
   | 'fraction_mixed'
+  | 'fraction_not_finite'
   | 'fraction_sum'
   | 'position_contiguity';
 
@@ -121,6 +127,20 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // First, because it bounds the work every check below does.
   if (nodes.length > MAX_NODES) {
     return violation('max_nodes_exceeded', `${nodes.length} nodes; the cap is ${MAX_NODES}`);
+  }
+
+  // Second, because every check below this line resolves nodes BY ID and none
+  // of them can mean anything while an id names two nodes. Ids are minted on
+  // the client, so a collision is reachable rather than theoretical, and every
+  // resolver in the model is a `find` or a `Map` — each silently keeps one of
+  // the pair. A colliding tree would therefore be judged on whichever half the
+  // lookups happened to land on, and then both halves would be written.
+  const seenIds = new Set<string>();
+  for (const node of nodes) {
+    if (seenIds.has(node.id)) {
+      return violation('duplicate_id', `id "${node.id}" names more than one node; ids are unique`);
+    }
+    seenIds.add(node.id);
   }
 
   // The root is found by TYPE, never by "the node with no parent" — a parked
@@ -228,6 +248,27 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     }
   }
 
+  // A pane is a LEAF by definition: only a root and a split hold children. The
+  // types get most of the way there — a split cannot be detached, a pane cannot
+  // carry an axis — but they stop short here, because `PaneNode.parentId` is an
+  // ordinary string and nothing in it knows what kind of node the id names. So
+  // a `move` that names a pane as its destination writes a subtree hanging off
+  // a viewport: reachable, acyclic, correctly numbered, and unrenderable.
+  //
+  // After reachability on purpose. A parked pane holding a stowaway fails both
+  // this and the reachability check, and `unreachable` is the truer thing to
+  // say about a subtree nothing renders — the test for it pins that.
+  for (const node of nodes) {
+    if (node.nodeType !== 'pane') continue;
+    const children = childrenOf(nodes, node.id);
+    if (children.length > 0) {
+      return violation(
+        'pane_has_children',
+        `pane "${node.id}" holds ${children.length} children (${children.map((child) => child.id).join(', ')}); a pane is a leaf`,
+      );
+    }
+  }
+
   const groups = siblingGroups(nodes);
 
   // Fractions, per container. The parked panes are skipped: they share no
@@ -243,6 +284,28 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
       );
     }
     if (sized.length === 0) continue;
+
+    // BEFORE the sum, and the ordering is the whole point. `Math.abs(NaN - 1)
+    // >= FRACTION_EPSILON` is FALSE — every comparison against NaN is — so a
+    // group holding one waves itself through the very check written to stop
+    // it. The sum can only be trusted once its terms are known to be numbers.
+    //
+    // Not a hypothetical value. The client's optimistic resize divides a drag
+    // offset by its container's extent, and a container that has not laid out
+    // yet has an extent of 0. Worse, it is self-propagating: a persisted NaN
+    // poisons every future total that includes it, so the sum check would
+    // never fire on that container again. An infinity is the same division one
+    // signed step away, and just as much not a share of anything.
+    for (const member of group.members) {
+      const fraction = fractionOf(member);
+      if (fraction !== undefined && !Number.isFinite(fraction)) {
+        return violation(
+          'fraction_not_finite',
+          `node "${member.id}" carries a fraction of ${fraction}; a share is a finite number`,
+        );
+      }
+    }
+
     // Every producer settles its own residual, so real drift stays far below
     // the epsilon; this catches shares that were never rebalanced, not float
     // noise.

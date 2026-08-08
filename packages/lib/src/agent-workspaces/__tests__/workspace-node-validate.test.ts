@@ -100,6 +100,16 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'multiple_roots' });
   });
 
+  it('should reject two nodes sharing an id', () => {
+    // Ids are minted on the CLIENT, so a collision is reachable rather than
+    // theoretical. Every helper that resolves by id — `findNode`, `childrenOf`,
+    // the reachability walk's visited set — silently picks one of the pair, so
+    // a colliding tree validates as whichever half the lookups happened to
+    // land on and then persists both.
+    const nodes: WorkspaceNode[] = [root(), pane('twin', 'root-1', 0), pane('twin', 'root-1', 1)];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_id' });
+  });
+
   it('should reject a parentId naming a node that is not in the set', () => {
     const nodes: WorkspaceNode[] = [root(), pane('orphan', 'column-that-was-closed', 0)];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'dangling_parent' });
@@ -187,6 +197,15 @@ describe('validateTree', () => {
     expect(validateTree([root(), pane('only', 'root-1', 0)])).toEqual({ ok: true });
   });
 
+  it('should reject a pane holding children, because a pane is a leaf by definition', () => {
+    // Only a root and a split hold children — a pane is a viewport onto ONE
+    // target, so a node parented into one is a subtree no renderer has a place
+    // for. The types cannot say this: `PaneNode.parentId` is an ordinary
+    // string, so nothing stops a bad `move` from naming a pane as a container.
+    const nodes: WorkspaceNode[] = [root(), pane('leaf', 'root-1', 0), pane('stowaway', 'leaf', 0)];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'pane_has_children' });
+  });
+
   it('should reject a sibling group where only some members carry a fraction', () => {
     // Absence IS the state — an unsized container splits evenly. A group half
     // sized has no defensible rendering, so it is never half-trusted.
@@ -205,6 +224,51 @@ describe('validateTree', () => {
       sized('b', 'root-1', 1, 0.3),
     ];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'fraction_sum' });
+  });
+
+  it('should reject a NaN fraction, which the sum check alone cannot catch', () => {
+    // `Math.abs(NaN - 1) >= FRACTION_EPSILON` is FALSE — every comparison
+    // against NaN is — so a group summing to NaN sails through the check that
+    // exists to stop exactly this. And NaN is a value this path produces: the
+    // client's optimistic resize divides an offset by its container's extent,
+    // and a container that has not laid out yet has an extent of 0.
+    //
+    // It is also self-propagating. Once one NaN persists, every future group
+    // holding that node sums to NaN and passes too, so the tree can never
+    // again fail the sum check — which is why the guard is on the VALUE and
+    // not on the total.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      sized('a', 'root-1', 0, Number.NaN),
+      sized('b', 'root-1', 1, 0.5),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
+  });
+
+  it('should reject infinite fractions, the same defect wearing a different value', () => {
+    // The pair is chosen to sum to NaN, so this tree passes today for the same
+    // reason the one above does: an infinity divided out of a zero extent is
+    // one signed step away from a NaN, and neither is a share of anything.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      sized('a', 'root-1', 0, Number.POSITIVE_INFINITY),
+      sized('b', 'root-1', 1, Number.NEGATIVE_INFINITY),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
+  });
+
+  it('should report a non-finite fraction ahead of the sum it would otherwise poison', () => {
+    // POSITION, not merely presence. Unlike a NaN, a lone infinity does fail
+    // the sum comparison — so a finiteness guard sitting after that comparison
+    // would report `fraction_sum` here and send the client off to rebalance
+    // shares, which is a repair that cannot converge on an infinity. The terms
+    // are judged before the total they feed.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      sized('a', 'root-1', 0, Number.POSITIVE_INFINITY),
+      sized('b', 'root-1', 1, 0.5),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
   });
 
   it('should accept a sibling group whose fractions sum to 1 only within FRACTION_EPSILON', () => {

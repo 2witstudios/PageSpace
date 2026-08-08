@@ -107,6 +107,16 @@
       "import": "./dist/agent-workspaces/redact-conversation-listing.js",
       "require": "./dist/agent-workspaces/redact-conversation-listing.js"
     },
+    "./agent-workspaces/workspace-node": {
+      "types": "./dist/agent-workspaces/workspace-node.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node.js",
+      "require": "./dist/agent-workspaces/workspace-node.js"
+    },
+    "./agent-workspaces/workspace-node-validate": {
+      "types": "./dist/agent-workspaces/workspace-node-validate.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-validate.js",
+      "require": "./dist/agent-workspaces/workspace-node-validate.js"
+    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",
