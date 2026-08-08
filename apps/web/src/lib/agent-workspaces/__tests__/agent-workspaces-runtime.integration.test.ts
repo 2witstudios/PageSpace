@@ -554,6 +554,51 @@ describe('createConversationInSession — the placeInGrid gate', () => {
     expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
   });
 
+  it('never evicts the conversation that asked for the spawn', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seed();
+
+    // The spawner: an agent's own thread, already occupying the only pane.
+    const spawnerId = createId();
+    await createConversationInSession({
+      conversationId: spawnerId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Caller',
+      placeInGrid: true,
+    });
+    expect(await panesTargeting(workspace.id, spawnerId)).toHaveLength(1);
+
+    // Its worker, naming the spawner as off-limits.
+    //
+    // What this pins is the OUTCOME a user cares about — spawning a worker
+    // adds a pane beside your conversation, it never navigates the one you are
+    // reading. Which guard delivers that is deliberately not asserted, and I
+    // checked rather than assumed: removing the `excludeTargetId` pass-through
+    // does NOT flip this test, because `placeWorkerPane` also sets
+    // `preferSplit: true` (`workspace-placement.ts:122`) and that alone is
+    // enough here. `excludeTargetId` is the narrower second guard; its
+    // independent effect belongs to the verb's own tests
+    // (`workspace-placement-worker.test.ts`), which cover the pass-through
+    // directly. Pinning the outcome rather than the mechanism is the point —
+    // it stays true if the guards are ever reshuffled, and it fails if a
+    // future change lets a spawn eat the caller's pane by any route.
+    const workerId = createId();
+    await createConversationInSession({
+      conversationId: workerId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+      placeInGrid: true,
+      excludeTargetId: spawnerId,
+    });
+
+    expect(await panesTargeting(workspace.id, spawnerId)).toHaveLength(1);
+    expect(await panesTargeting(workspace.id, workerId)).toHaveLength(1);
+  });
+
   it('places at most ONE pane per thread however often creation is retried', async () => {
     if (!dbAvailable) return;
     const { owner, agentPage, workspace } = await seed();
