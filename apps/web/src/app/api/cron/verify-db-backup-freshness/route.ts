@@ -172,57 +172,57 @@ export async function GET(request: Request) {
     return authError;
   }
 
-  // The daily pg_dump job this asserts on is cloud-only infrastructure (a Fly
-  // scheduled machine against the SaaS database — PageSpace-Deploy fly/backup/).
-  // The tenant compose stack ships this same cron image but has no equivalent
-  // job, so running the check there would emit a `fatal` Sentry event every night
-  // with no remedy available — and an alert that always fires teaches people to
-  // ignore backup alerts, destroying the value of this endpoint everywhere else.
-  //
-  // `isCloud()` rather than a config-presence check on purpose: absence-based
-  // gating would let a misconfigured CLOUD deployment silently disable its own
-  // backup monitoring, which is precisely the failure this endpoint exists to
-  // catch. `isCloud()` is true unless DEPLOYMENT_MODE explicitly says tenant or
-  // onprem, so an unset or malformed value still runs the check. (This is not the
-  // `!isCloud()` integration-gating antipattern CLAUDE.md warns about — nothing is
-  // being feature-restricted; the asserted infrastructure simply does not exist in
-  // those topologies. That tenants have no DB backup at all is a real gap, tracked
-  // separately, not something this check should paper over by alerting nightly.)
-  //
-  // IF TENANT OR ONPREM EVER GAIN A BACKUP JOB, REVISIT THIS GATE — otherwise their
-  // backups would go unmonitored silently, which is this endpoint's own failure mode
-  // turned inward. The gate encodes "no such job exists here", not "we don't care".
-  if (!isCloud()) {
-    // `ok` means "a good backup is affirmed", so it is FALSE here — nothing was
-    // affirmed, and on these topologies no backup exists to affirm. Reporting
-    // ok:true because the run was uneventful would be a false affirmation of the
-    // one thing this endpoint exists to establish, and `skipped` is what marks it
-    // as not-an-incident. A consumer that naively reads `ok` therefore errs toward
-    // "not verified" rather than toward false confidence, which is the correct
-    // bias for a backup monitor. The 200 is what tells an uptime probe this is
-    // not a failure.
-    const skipped = {
-      ok: false,
-      skipped: true,
-      reason: 'not_cloud_deployment' as const,
-      deploymentMode: process.env.DEPLOYMENT_MODE ?? null,
-    };
-    loggers.api.info(
-      '[Cron] DB backup freshness skipped: no cloud backup job in this deployment mode',
-      skipped
-    );
-    audit({
-      eventType: 'data.read',
-      resourceType: 'cron_job',
-      resourceId: 'verify_db_backup_freshness',
-      details: skipped,
-    });
-    return NextResponse.json({ success: true, ...skipped, timestamp: new Date().toISOString() });
-  }
-
   const maxAgeHours = resolveBackupMaxAgeHours(process.env.BACKUP_MAX_AGE_HOURS);
 
   try {
+    // The daily pg_dump job this asserts on is cloud-only infrastructure (a Fly
+    // scheduled machine against the SaaS database — PageSpace-Deploy fly/backup/).
+    // The tenant compose stack ships this same cron image but has no equivalent
+    // job, so running the check there would emit a `fatal` Sentry event every night
+    // with no remedy available — and an alert that always fires teaches people to
+    // ignore backup alerts, destroying the value of this endpoint everywhere else.
+    //
+    // `isCloud()` rather than a config-presence check on purpose: absence-based
+    // gating would let a misconfigured CLOUD deployment silently disable its own
+    // backup monitoring, which is precisely the failure this endpoint exists to
+    // catch. `isCloud()` is true unless DEPLOYMENT_MODE explicitly says tenant or
+    // onprem, so an unset or malformed value still runs the check. (This is not the
+    // `!isCloud()` integration-gating antipattern CLAUDE.md warns about — nothing is
+    // being feature-restricted; the asserted infrastructure simply does not exist in
+    // those topologies. That tenants have no DB backup at all is a real gap, tracked
+    // separately, not something this check should paper over by alerting nightly.)
+    //
+    // IF TENANT OR ONPREM EVER GAIN A BACKUP JOB, REVISIT THIS GATE — otherwise their
+    // backups would go unmonitored silently, which is this endpoint's own failure mode
+    // turned inward. The gate encodes "no such job exists here", not "we don't care".
+    if (!isCloud()) {
+      // `ok` means "a good backup is affirmed", so it is FALSE here — nothing was
+      // affirmed, and on these topologies no backup exists to affirm. Reporting
+      // ok:true because the run was uneventful would be a false affirmation of the
+      // one thing this endpoint exists to establish, and `skipped` is what marks it
+      // as not-an-incident. A consumer that naively reads `ok` therefore errs toward
+      // "not verified" rather than toward false confidence, which is the correct
+      // bias for a backup monitor. The 200 is what tells an uptime probe this is
+      // not a failure.
+      const skipped = {
+        ok: false,
+        skipped: true,
+        reason: 'not_cloud_deployment' as const,
+        deploymentMode: process.env.DEPLOYMENT_MODE ?? null,
+      };
+      loggers.api.info(
+        '[Cron] DB backup freshness skipped: no cloud backup job in this deployment mode',
+        skipped
+      );
+      audit({
+        eventType: 'data.read',
+        resourceType: 'cron_job',
+        resourceId: 'verify_db_backup_freshness',
+        details: skipped,
+      });
+      return NextResponse.json({ success: true, ...skipped, timestamp: new Date().toISOString() });
+    }
+
     const { objects, truncated } = await listBackupObjects();
     const result = assessBackupFreshness({ objects, now: new Date(), maxAgeHours });
 

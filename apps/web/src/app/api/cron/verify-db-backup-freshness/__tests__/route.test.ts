@@ -486,6 +486,24 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
       );
     });
 
+    it('routes a throw on the skip path to Sentry rather than an unhandled 500', async () => {
+      // The gate lives inside the try/catch so every path fails loudly. Outside
+      // it, a throw here would surface as an unhandled 500 with no alert — silent
+      // in exactly the way this endpoint exists to prevent.
+      process.env.DEPLOYMENT_MODE = 'tenant';
+      mockAudit.mockImplementation(() => {
+        throw new Error('audit sink exploded');
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(500);
+      expect(mockCaptureException).toHaveBeenCalledTimes(1);
+      expect(mockCaptureException.mock.calls[0][1].tags.reason).toBe('check_failed');
+      expect(mockFlush).toHaveBeenCalled();
+      mockAudit.mockReset();
+    });
+
     it('RUNS the check when DEPLOYMENT_MODE is unset — absence must never disable it', async () => {
       // A misconfigured cloud deployment silently skipping its own backup
       // monitoring is the exact failure class this endpoint exists to catch.
