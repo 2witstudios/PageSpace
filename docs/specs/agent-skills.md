@@ -175,14 +175,15 @@ same trade Agent Memory makes.
 
 `set_plan`/`clear_plan` are deliberately **not** in `WRITE_TOOLS` — they mutate
 conversation metadata, not user content, and binding an existing plan doc is a
-legitimate read-only-mode action. Writability follows the chat route's own gate
-(owner **or** `isShared`), so a collaborator the route lets post to a shared
-conversation can bind a plan there.
+legitimate read-only-mode action. Writability mirrors the turn's own gate —
+owner **or** `isShared`, then an explicit history-delete refusal, as in
+`authorizePageConversation` — so a collaborator the pipeline lets post to a
+shared conversation can bind a plan there.
 
 Known limits, recorded so they aren't rediscovered as bugs:
 
-- **Surface coverage.** The `ACTIVE PLAN:` section renders on the page-chat and
-  Global Assistant routes only. `set_plan` ships in the shared `pageSpaceTools`
+- **Surface coverage.** The `ACTIVE PLAN:` section renders in the page-chat and
+  Global Assistant turn pipelines only. `set_plan` ships in the shared `pageSpaceTools`
   set, so on `/api/v1/chat/completions`, the page-agents messages route and
   workflow runs the binding persists (and reaches the UI and later chat turns)
   but is not echoed into that surface's own prompt — the same

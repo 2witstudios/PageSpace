@@ -4,8 +4,8 @@
  * agent standing nowhere otherwise has no way to name Home, which the /plan
  * skill needs as the destination for a personal plan artifact.
  *
- * Shared by both chat routes so the two surfaces can't drift on when the hint
- * appears.
+ * Shared by both chat turn pipelines so the two surfaces can't drift on when the
+ * hint appears.
  *
  * Fail-closed to `undefined`, never throw: this is a convenience hint, and no
  * chat request should fail because a drive lookup did. The try/catch (rather
@@ -29,9 +29,10 @@ export async function resolveHomeDriveHint(
 
     // Ceiling the hint to the caller's drive scope. Empty = session auth =
     // unscoped; non-empty = a scoped MCP/OAuth token that may only reach those
-    // drives. This mirrors what the route already does for the member-drive
+    // drives. This mirrors what page-chat-turn already does for the member-drive
     // context block, which filters the same way for the same reason: it is a
-    // value the ROUTE reads directly, so the tool layer's ceiling never sees it.
+    // value the PROMPT layer reads directly, so the tool layer's ceiling — which
+    // only gates tool calls — never sees it.
     //
     // Two things go wrong without it. The id itself is disclosed to a token
     // that may not reach that drive. And it is actively misleading: the /plan

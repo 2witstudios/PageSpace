@@ -24,7 +24,8 @@
  * gives the model nothing to reason about when deciding whether to re-read.
  *
  * SURFACE COVERAGE: this section is rendered by the page-chat and Global
- * Assistant routes only. `set_plan` ships in the shared `pageSpaceTools` set, so
+ * Assistant turn pipelines only (`lib/ai/chat-pipeline/{page,global}-chat-turn`).
+ * `set_plan` ships in the shared `pageSpaceTools` set, so
  * it is callable on `/api/v1/chat/completions`, the page-agents messages route
  * and workflow runs, where the binding persists and shows up in the UI and on
  * later chat turns but is NOT echoed back into that surface's own prompt. That
@@ -57,20 +58,6 @@ export interface ActivePlan {
   /** The plan page's drive — unused by the prompt, needed by the chip's link. */
   driveId: string;
 }
-
-/**
- * NOTE FOR EDITORS: the suppression rules below (unbound → trashed → not
- * visible) are mirrored by `loadPlan` in
- * `app/api/ai/conversations/[conversationId]/plan/route.ts`, which the PlanChip
- * reads. Change one and change the other, or the chip and the prompt will
- * disagree about whether a plan is still live.
- *
- * They are deliberately NOT one function: the route additionally enforces
- * conversation ownership with 404-not-403 semantics and returns `driveId` for
- * the chip's link, while this one takes an injected principal check. Folding
- * both into a single helper would add more branching than the ~15 duplicated
- * lines cost.
- */
 
 /**
  * Resolve the plan bound to `conversationId`, or null when unbound, trashed,
