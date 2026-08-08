@@ -285,7 +285,9 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              <div key={`${message.id}-tool-${group.toolCallId || index}`} className="mt-1">
+              // The index fallback is namespaced so a (degenerate) empty toolCallId
+              // can never collide with a real one that happens to look like a number.
+              <div key={`${message.id}-tool-${group.toolCallId || `idx-${index}`}`} className="mt-1">
                 <CompactToolCallRenderer
                   part={{
                     type: group.type,

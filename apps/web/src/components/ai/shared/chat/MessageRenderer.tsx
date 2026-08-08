@@ -289,7 +289,9 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              <div key={`${message.id}-tool-${group.toolCallId || index}`} className="mr-2 sm:mr-8">
+              // The index fallback is namespaced so a (degenerate) empty toolCallId
+              // can never collide with a real one that happens to look like a number.
+              <div key={`${message.id}-tool-${group.toolCallId || `idx-${index}`}`} className="mr-2 sm:mr-8">
                 <ToolCallRenderer
                   part={{
                     type: group.type,
