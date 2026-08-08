@@ -7,7 +7,7 @@ describe('storageBillingTarget', () => {
     assert({
       given: 'a drive-scoped agent-session subject',
       should: 'target that drive (its owner pays)',
-      actual: storageBillingTarget({ sessionId: 'session-1', driveId: 'drive-1', ownerId: 'owner-1' }),
+      actual: storageBillingTarget({ workspaceId: 'session-1', driveId: 'drive-1', ownerId: 'owner-1' }),
       expected: { driveId: 'drive-1' },
     });
   });
@@ -16,13 +16,13 @@ describe('storageBillingTarget', () => {
     assert({
       given: 'a global-assistant agent-session subject (no drive)',
       should: 'target the ownerId directly — no drive to attribute to',
-      actual: storageBillingTarget({ sessionId: 'session-1', driveId: null, ownerId: 'owner-1' }),
+      actual: storageBillingTarget({ workspaceId: 'session-1', driveId: null, ownerId: 'owner-1' }),
       expected: { ownerId: 'owner-1' },
     });
   });
 
   it('given the same subject twice, produces the same target', () => {
-    const subject: StorageSubject = { sessionId: 'session-1', driveId: 'drive-1', ownerId: 'owner-1' };
+    const subject: StorageSubject = { workspaceId: 'session-1', driveId: 'drive-1', ownerId: 'owner-1' };
     expect(storageBillingTarget(subject)).toEqual(storageBillingTarget({ ...subject }));
   });
 });

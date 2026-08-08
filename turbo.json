@@ -61,6 +61,7 @@
   ],
   "globalEnv": [
     "DATABASE_URL",
+    "ADMIN_DATABASE_URL",
     "CSRF_SECRET",
     "ENCRYPTION_KEY",
     "WEB_APP_URL",

@@ -46,10 +46,10 @@ describe('useTabMeta - Agents tab', () => {
 
   it('shows the selected session\'s own name once it resolves', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url === '/api/agent-sessions/sess-1') return sessionResponse('Refactor auth flow');
+      if (url === '/api/agent-workspaces/sess-1') return sessionResponse('Refactor auth flow');
       throw new Error(`unexpected url ${url}`);
     });
-    const tab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const tab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 
@@ -61,7 +61,7 @@ describe('useTabMeta - Agents tab', () => {
     mockFetchWithAuth.mockImplementation(
       () => new Promise(() => {}), // never resolves within this test
     );
-    const tab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const tab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 
@@ -74,10 +74,10 @@ describe('useTabMeta - Agents tab', () => {
     // back to 'Session' for the same case) - it must not collapse into the
     // same "Agents" title as "no session selected".
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url === '/api/agent-sessions/sess-1') return jsonResponse({ session: { sessionId: 'sess-1', driveId: 'drive-1', name: '' } });
+      if (url === '/api/agent-workspaces/sess-1') return jsonResponse({ session: { sessionId: 'sess-1', driveId: 'drive-1', name: '' } });
       throw new Error(`unexpected url ${url}`);
     });
-    const tab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const tab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 
@@ -86,7 +86,7 @@ describe('useTabMeta - Agents tab', () => {
 
   it('falls back to the static "Agents" title when the session doesn\'t resolve (e.g. access denied)', async () => {
     mockFetchWithAuth.mockImplementation(async () => jsonResponse({ session: null }));
-    const tab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const tab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 
@@ -96,11 +96,11 @@ describe('useTabMeta - Agents tab', () => {
 
   it('updates the title when the same tab switches to a different session', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url === '/api/agent-sessions/sess-1') return sessionResponse('First Session');
-      if (url === '/api/agent-sessions/sess-2') return jsonResponse({ session: { sessionId: 'sess-2', driveId: 'drive-1', name: 'Second Session' } });
+      if (url === '/api/agent-workspaces/sess-1') return sessionResponse('First Session');
+      if (url === '/api/agent-workspaces/sess-2') return jsonResponse({ session: { sessionId: 'sess-2', driveId: 'drive-1', name: 'Second Session' } });
       throw new Error(`unexpected url ${url}`);
     });
-    const firstTab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const firstTab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result, rerender } = renderHook((tab) => useTabMeta(tab), { wrapper, initialProps: firstTab });
 
@@ -109,7 +109,7 @@ describe('useTabMeta - Agents tab', () => {
     // Simulate useAgentSurfaceStore.commit() mirroring a new selection onto
     // this tab's `search` via updateActiveTabSearch — same tab id/path, only
     // the query string changes.
-    const secondTab = { ...firstTab, search: 'session=sess-2' };
+    const secondTab = { ...firstTab, search: 'workspace=sess-2' };
     rerender(secondTab);
 
     await waitFor(() => expect(result.current.title).toBe('Second Session'));
@@ -117,10 +117,10 @@ describe('useTabMeta - Agents tab', () => {
 
   it('reverts to the static "Agents" title when the session selection is cleared', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url === '/api/agent-sessions/sess-1') return sessionResponse('First Session');
+      if (url === '/api/agent-workspaces/sess-1') return sessionResponse('First Session');
       throw new Error(`unexpected url ${url}`);
     });
-    const selectedTab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+    const selectedTab = createTab({ path: '/dashboard/agents', search: 'workspace=sess-1' });
 
     const { result, rerender } = renderHook((tab) => useTabMeta(tab), { wrapper, initialProps: selectedTab });
 
@@ -133,10 +133,10 @@ describe('useTabMeta - Agents tab', () => {
 
   it('applies the same session-name behavior to drive-scoped Agents tabs', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url === '/api/agent-sessions/sess-1') return sessionResponse('Drive Session', 'drive-1');
+      if (url === '/api/agent-workspaces/sess-1') return sessionResponse('Drive Session', 'drive-1');
       throw new Error(`unexpected url ${url}`);
     });
-    const tab = createTab({ path: '/dashboard/drive-1/agents', search: 'session=sess-1' });
+    const tab = createTab({ path: '/dashboard/drive-1/agents', search: 'workspace=sess-1' });
 
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 

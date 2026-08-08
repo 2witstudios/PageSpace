@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "rev" bigint DEFAULT 0 NOT NULL;

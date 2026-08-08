@@ -8,6 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -49,10 +50,18 @@ export async function DELETE(
     // Get recipients BEFORE deleting (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(drive.id);
 
-    // Permanently delete the drive (cascade will delete all pages)
-    await db
-      .delete(drives)
-      .where(eq(drives.id, drive.id));
+    // Permanently delete the drive (cascade will delete all pages).
+    //
+    // Chat history is NOT covered by that cascade and has to be deleted
+    // explicitly, BEFORE the drive goes: `conversations.contextId` is not a
+    // foreign key, and once `pages.driveId` cascades the drive's pages away
+    // there is nothing left to trace the page-scoped threads through. The
+    // `chat_messages.pageId` cascade that used to make this automatic was
+    // dropped with the table in migration 0253.
+    await db.transaction(async (tx) => {
+      await deleteConversationsForDrive(tx, drive.id);
+      await tx.delete(drives).where(eq(drives.id, drive.id));
+    });
 
     // Broadcast drive deletion event (permanent delete)
     await broadcastDriveEvent(

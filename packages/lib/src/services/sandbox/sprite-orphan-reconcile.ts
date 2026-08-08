@@ -12,7 +12,7 @@
  * TWO SOURCES OF WORK, because a Sprite can be orphaned in two different ways.
  *
  * (A) THE RECLAIM OUTBOX (`machine_sprite_reclaims`, kept under its physical
- *     name) — the pointer already lost its row. `agent_sessions` FK-cascades off
+ *     name) — the pointer already lost its row. `agent_workspaces` FK-cascades off
  *     `conversations`, `pages` and `users`, so every hard delete along any of
  *     those paths destroys the only record of a VM that may still be running:
  *     the 30-day purge, "delete permanently", a drive delete, the account-erasure
@@ -81,12 +81,12 @@ export type SpriteOrphanRow =
    */
   | { kind: 'reclaim'; sandboxId: string; spriteInstanceId: string | null }
   /**
-   * An `agent_sessions` row whose teardown was REQUESTED but never confirmed.
+   * An `agent_workspaces` row whose teardown was REQUESTED but never confirmed.
    * The row OUTLIVES its Sprite on purpose — it is re-provisionable identity, and
    * deleting it would break the conversation's link to the sandbox it owned — so
    * the release is a STAMP, never a delete.
    */
-  | { kind: 'agent-session'; sessionId: string; sandboxId: string; spriteInstanceId: string | null };
+  | { kind: 'agent-session'; workspaceId: string; sandboxId: string; spriteInstanceId: string | null };
 
 export interface ReconcileOrphanSpritesDeps {
   /**
@@ -111,7 +111,7 @@ export interface ReconcileOrphanSpritesDeps {
    * A session REVIVED since listing (a concurrent `ensure` clears the request as
    * part of recording the new identity) must not have its live Sprite destroyed.
    */
-  isTeardownStillRequested: (sessionId: string) => Promise<boolean>;
+  isTeardownStillRequested: (workspaceId: string) => Promise<boolean>;
   /**
    * Idempotent kill — an already-gone Sprite reports `ok`. Never throws; failures
    * come back as `{ ok: false }`.
@@ -140,7 +140,7 @@ export interface ReconcileOrphanSpritesDeps {
   >;
   /** CAS-stamp `spriteTornDownAt` on the session row (never delete it — it is re-provisionable identity): only if the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
   markSessionTornDown: (input: {
-    sessionId: string;
+    workspaceId: string;
     sandboxId: string;
     spriteInstanceId: string | null;
   }) => Promise<boolean>;
@@ -198,7 +198,7 @@ export async function reconcileOrphanSprites(
       // list was read. Killing a revived session's Sprite would destroy a live
       // VM's filesystem — the one genuinely irreversible mistake this cron could
       // make. An outbox row has no session left to revive, so it skips this.
-      if (row.kind === 'agent-session' && !(await deps.isTeardownStillRequested(row.sessionId))) {
+      if (row.kind === 'agent-session' && !(await deps.isTeardownStillRequested(row.workspaceId))) {
         skipped += 1;
         continue;
       }
@@ -268,7 +268,7 @@ export async function reconcileOrphanSprites(
       }
 
       const released = await deps.markSessionTornDown({
-        sessionId: row.sessionId,
+        workspaceId: row.workspaceId,
         sandboxId: row.sandboxId,
         spriteInstanceId: row.spriteInstanceId,
       });

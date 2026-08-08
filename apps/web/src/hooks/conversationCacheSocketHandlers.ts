@@ -23,22 +23,28 @@ export interface ConversationCacheHandlerDeps {
 
 /**
  * The ONE socket-events → conversation-cache protocol (F10, PR #2098 review),
- * shared by GlobalChatContext (global channel) and useAgentChannelMultiplayer
- * (agent channels) so the two paths cannot drift. AiChatView keeps its own
- * handlers: it additionally dual-writes into its useChat transport, which
- * neither of these subscribers can reach.
+ * shared by GlobalChatContext (global channel) and useConversationSubscription
+ * (per-conversation) so the paths cannot drift.
  *
  * DISPATCH IS BY THE EVENT'S CONVERSATION, not a subscriber-supplied "active"
  * one. A single active-conversation gate assumed each subscriber watches one
  * conversation — panes broke that: several conversations on one channel are
  * on screen at once, none of them the subscriber's "active" one, and every
  * event for them was silently dropped (replies vanishing on completion,
- * collaborator messages/edits/deletes never appearing). An event now applies
- * to whichever conversation it names, gated only on that conversation having
- * a real cache entry (`hasEntry`): every rendering surface loads or seeds its
- * conversation on mount, so cached ⇔ some surface can render it — and a
- * conversation nobody has cached needs no cache write (the DB row is the
- * truth its eventual loader will fetch).
+ * collaborator messages/edits/deletes never appearing). An event applies to
+ * whichever conversation it names.
+ *
+ * NO `hasEntry` GATE (Agent-Session SSoT epic, Phase 2 / plan PR 3). Every
+ * handler below used to early-return unless the conversation already had a real
+ * cache entry, on the reasoning "cached ⇔ some surface can render it". That
+ * reasoning had a hole exactly the size of the epic's canonical bug: the entry
+ * is created by a LOAD, and the load is asynchronous, so a dispatch landing in
+ * the window between a pane mounting and its first fetch committing was dropped
+ * on the floor with nothing to re-deliver it. The gate is now unnecessary rather
+ * than merely removed — `useConversationSubscription` ensures a cache entry
+ * BEFORE it joins the conversation's room, so "subscribed" implies "cached" by
+ * construction instead of by timing. The residual cost of a write for a
+ * conversation nothing renders is one map key.
  *
  * The user/edit/delete handlers fire only for a REMOTE tab's action
  * (useChannelStreamSocket drops own-tab events via isOwnStream before
@@ -52,12 +58,10 @@ export const buildConversationCacheHandlers = ({
   refreshSnapshot,
 }: ConversationCacheHandlerDeps) => ({
   onUserMessage: (message: UIMessage, payload: { conversationId: string }) => {
-    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
     conversationMessagesActions.applyRemoteUserMessage(payload.conversationId, message);
   },
 
   onMessageEdited: (payload: { messageId: string; conversationId: string; parts: UIMessage['parts']; editedAt: string }) => {
-    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
     const editPayload: MessageEditPayload = {
       messageId: payload.messageId,
       parts: payload.parts,
@@ -67,13 +71,12 @@ export const buildConversationCacheHandlers = ({
   },
 
   onMessageDeleted: (payload: { messageId: string; conversationId: string }) => {
-    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
     conversationMessagesActions.applyDelete(payload.conversationId, payload.messageId);
   },
 
   onStreamComplete: (messageId: string, completedConvId?: string, _info?: { joinFailed: boolean }, aborted?: boolean) => {
     const stream = getActiveStreamById(messageId);
-    if (stream && stream.parts.length > 0 && conversationMessagesActions.hasEntry(stream.conversationId)) {
+    if (stream && stream.parts.length > 0) {
       // The shared F1/F6 commit protocol — see commitConfirmedReply. Without this
       // commit the reply flashes to missing: for OWN streams the mirror removes the
       // pending entry the instant status changes. epic leaf 6.8 (D
@@ -89,14 +92,12 @@ export const buildConversationCacheHandlers = ({
     }
     // No usable store entry (SSE join failed / zero parts): the message IS durably
     // persisted — reload the conversation's cache entry rather than losing it.
-    // Only for a CACHED conversation (uncached ⇒ nothing renders it; its
-    // eventual loader fetches the DB truth), and unless the sender's own
-    // onFinish already committed a final row whose status is CONSISTENT with
+    // Unless the sender's own onFinish already committed a final row whose status is CONSISTENT with
     // this event (buildOwnStreamCommitOnFinish) — then a reload only adds a
     // loading flip. A locally-Stopped 'interrupted' row does NOT suppress a
     // non-aborted completion: the server may have outrun the abort and
     // persisted the full reply — see cacheHasConsistentFinalMessage.
-    if (!completedConvId || !conversationMessagesActions.hasEntry(completedConvId)) return;
+    if (!completedConvId) return;
     const cacheHasFinalMessage = cacheHasConsistentFinalMessage(
       conversationMessagesActions.getEntry(completedConvId).messages,
       messageId,

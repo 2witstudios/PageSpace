@@ -128,8 +128,10 @@ vi.mock('@/components/ai/page-agents', () => ({
 }));
 
 import AgentPanes from '../AgentPanes';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { __resetHydratedSessionsForTests } from '@/stores/agent-workspace/useWorkspaceServerSync';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
@@ -144,7 +146,7 @@ const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
  */
 function defaultFetchRoute(url: string): unknown {
   if (url.includes('/shells')) return { shells: [] };
-  if (url.includes('/api/agent-sessions')) return { sessions: [] };
+  if (url.includes('/api/agent-workspaces')) return { sessions: [] };
   if (url === '/api/pages/agent-1') return { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' };
   if (url === '/api/pages/agent-1/agent-config') return {};
   if (url === '/api/pages/agent-2') return { id: 'agent-2', title: 'Writer', driveId: 'drive-1' };
@@ -161,9 +163,9 @@ function mockSessionConversations(
   conversations: Array<{ conversationId: string; agentPageId: string | null; lastMessageAt?: string | null }>,
 ) {
   mockFetchWithAuth.mockImplementation(async (url: string) => {
-    if (url.includes('/api/agent-sessions')) {
+    if (url.includes('/api/agent-workspaces')) {
       return jsonOk({
-        sessions: [{ sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
       });
     }
     return jsonOk(defaultFetchRoute(url));
@@ -186,12 +188,12 @@ function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {
 beforeEach(() => {
   vi.clearAllMocks();
   cuidCounter = 0;
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
   usePendingStreamsStore.setState({ streams: new Map() });
-  // `useWorkspaceServerSync`'s "hydrated this session already" tracking is
-  // module-level (deliberately survives real remounts — see its own
-  // comment); reset it so one test's mount doesn't suppress another's.
-  __resetHydratedSessionsForTests();
+  // The verb queue's generation counters and retry timers are module-level
+  // (they deliberately survive real remounts); reset them so one test's
+  // in-flight verb cannot leak into the next.
+  __resetWorkspaceQueuesForTests();
   mockUsePageAgents.mockReturnValue({
     allAgents: [
       { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' },
@@ -246,7 +248,7 @@ describe('AgentPanes', () => {
       await user.click(closeButtons[closeButtons.length - 1]);
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9'),
       );
     });
   });
@@ -268,7 +270,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
       expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
       // Nothing was mutated — the grid is still exactly what it was.
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
@@ -285,7 +287,7 @@ describe('AgentPanes', () => {
 
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
@@ -293,7 +295,7 @@ describe('AgentPanes', () => {
     it('confirming drops the grid instantly, DELETEs the session, and reports it ended', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
         return undefined;
       });
       const onSessionEnded = vi.fn();
@@ -305,7 +307,7 @@ describe('AgentPanes', () => {
 
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
     });
@@ -314,7 +316,7 @@ describe('AgentPanes', () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       let resolveSessionDel!: (value: unknown) => void;
       mockDel.mockImplementation((url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') {
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') {
           return Promise.reject(new ApiRequestError('conflict', 409));
         }
         return new Promise((resolve) => {
@@ -329,7 +331,7 @@ describe('AgentPanes', () => {
 
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       // Still pending — the sandbox-kill DELETE has not resolved yet, but the
       // grid is already gone.
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
@@ -357,7 +359,7 @@ describe('AgentPanes', () => {
 
       let resolveSessionDel!: (value: unknown) => void;
       mockDel.mockImplementation((url: string) =>
-        url === '/api/agent-sessions/ses-1'
+        url === '/api/agent-workspaces/ses-1'
           ? new Promise((resolve) => {
               resolveSessionDel = resolve;
             })
@@ -368,16 +370,16 @@ describe('AgentPanes', () => {
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       // Still pending — the shell must not be touched before the session-end
       // DELETE is known to have actually succeeded (review finding —
       // chatgpt-codex-connector on PR #2318).
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
 
       resolveSessionDel({ hadOtherOpenConversations: false });
       await new Promise((resolve) => setTimeout(resolve, 0));
       // Only now, confirmed, is the shell actually torn down.
-      expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
     });
 
     it('never kills the shell at all if the session-end DELETE fails', async () => {
@@ -393,7 +395,7 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
 
       mockDel.mockImplementation((url: string) =>
-        url === '/api/agent-sessions/ses-1'
+        url === '/api/agent-workspaces/ses-1'
           ? Promise.reject(new Error('sandbox teardown failed'))
           : Promise.resolve(undefined),
       );
@@ -406,7 +408,7 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(errorSpy).toHaveBeenCalled());
       // Never touched — a failed session-end must never have killed the
       // shell a restored terminal pane still claims to hold.
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
       expect(screen.getByTestId('pane-shell')).toBeInTheDocument();
       errorSpy.mockRestore();
@@ -422,7 +424,7 @@ describe('AgentPanes', () => {
       // (caught in review).
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
         return { ok: true, spriteTornDown: true, hadOtherOpenConversations: true };
       });
       const warnSpy = vi.spyOn(toast, 'warning').mockImplementation(() => '');
@@ -441,7 +443,7 @@ describe('AgentPanes', () => {
     it('a failed DELETE rolls the grid back to exactly what it was', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
         throw new Error('sandbox teardown failed');
       });
       const onSessionEnded = vi.fn();
@@ -453,7 +455,7 @@ describe('AgentPanes', () => {
 
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       expect(onSessionEnded).not.toHaveBeenCalled();
       // The grid dropped optimistically the instant "End session" was
       // confirmed, then the DELETE failed — `hydrateWorkspace` restores it
@@ -464,15 +466,15 @@ describe('AgentPanes', () => {
     });
 
     it("is a no-op on a brand-new session whose OWN entry hasn't appeared in an already-warm cache — never guesses confirmed-empty", async () => {
-      // The `/api/agent-sessions` cache can be warm from ANOTHER session in
+      // The `/api/agent-workspaces` cache can be warm from ANOTHER session in
       // the same drive (so `sessionsData` is truthy) while THIS brand-new
       // session's own row hasn't appeared in it yet — a real fact distinct
       // from "loaded and confirmed to have no other conversations." Treating
       // the former as the latter would offer to end a session whose actual
       // membership is still unknown (caught in review).
       mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-sessions')) {
-          return jsonOk({ sessions: [{ sessionId: 'ses-other', conversations: [] }] });
+        if (url.includes('/api/agent-workspaces')) {
+          return jsonOk({ sessions: [{ workspaceId: 'ses-other', sessionId: 'ses-other', conversations: [] }] });
         }
         return jsonOk(defaultFetchRoute(url));
       });
@@ -514,7 +516,7 @@ describe('AgentPanes', () => {
       const closeButtons = screen.getAllByLabelText('Close pane');
       await user.click(closeButtons[0]);
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       await waitFor(() =>
         expect(
@@ -540,7 +542,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       // The grid never emptied — still exactly one pane, now repointed at
       // the other session's other open listing instead of the picker.
@@ -570,7 +572,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       await waitFor(() => {
         const pane = useAgentWorkspaceStore
@@ -597,7 +599,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
       expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
       // The grid is untouched — this is the SAME peek-then-confirm flow as
       // any other end-session, nothing was mutated by the failed close.
@@ -651,7 +653,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       const closeButtons = screen.getAllByLabelText('Close pane');
       await user.click(closeButtons[0]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
 
       // WHILE that DELETE is still pending, this exact pane gets reassigned —
       // e.g. the pane bar's agent selector switched it, or a fresh mint
@@ -698,7 +700,7 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       const closeButtons = screen.getAllByLabelText('Close pane');
       await user.click(closeButtons[0]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
 
       act(() =>
         useAgentWorkspaceStore.getState().assignPane('ses-1', paneId, {
@@ -718,7 +720,7 @@ describe('AgentPanes', () => {
     it("ends the session (via forgetWorkspace) when closing the session's LAST open listing, even with a terminal pane remaining", async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
         return undefined;
       });
       const onSessionEnded = vi.fn();
@@ -744,7 +746,7 @@ describe('AgentPanes', () => {
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
       // The WHOLE workspace is gone, including the terminal pane that was
       // never itself targeted by the close.
@@ -782,8 +784,8 @@ describe('AgentPanes', () => {
       // conversation of its own to close).
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-2'));
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1');
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1');
       expect(
         useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
       ).toHaveLength(1);
@@ -841,7 +843,7 @@ describe('AgentPanes', () => {
     // of its loading state — stuck spinning forever for nothing.
     it('does not invalidate a pending mint when closing turns out to be a no-op (listing not yet resolved)', async () => {
       mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-sessions')) {
+        if (url.includes('/api/agent-workspaces')) {
           // Never resolves — closeDecisionListing stays null the whole test.
           return new Promise(() => {});
         }
@@ -876,7 +878,7 @@ describe('AgentPanes', () => {
           .find((p) => p.id === paneId);
         expect(pane?.scope?.targetId).toBe('new-id-1');
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 13): unlike
@@ -949,7 +951,7 @@ describe('AgentPanes', () => {
         expect(pane?.scope?.targetId).toBe('new-id-2');
       });
       // Not cleaned up as if it had been superseded.
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-2');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-2');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
@@ -1079,7 +1081,7 @@ describe('AgentPanes', () => {
       resolvePost({});
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
       );
       // Still just the one pane — the resolved mint did not resurrect it.
       expect(
@@ -1122,7 +1124,7 @@ describe('AgentPanes', () => {
       resolvePost({});
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
       );
       // The rebind survives — still pointed at the OTHER conversation, not
       // silently overwritten by the abandoned mint's own conversationId.
@@ -1251,7 +1253,7 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByTestId('pick-shell'));
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells', {}),
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', {}),
       );
       await waitFor(() => expect(screen.getByTestId('pane-shell')).toHaveTextContent('shell-9'));
     });
@@ -1261,7 +1263,7 @@ describe('AgentPanes', () => {
       // not the viewing user's own tier — a free-tier member of a Pro-owned
       // drive would otherwise see this wrongly disabled.
       mockFetchWithAuth.mockImplementation(async (url: string) =>
-        url === '/api/agent-sessions/ses-1'
+        url === '/api/agent-workspaces/ses-1'
           ? jsonOk({ session: { driveId: 'drive-1', name: 'worker' }, sandboxEligible: false })
           : jsonOk(defaultFetchRoute(url)),
       );
@@ -1275,7 +1277,7 @@ describe('AgentPanes', () => {
 
       const user = userEvent.setup({ pointerEventsCheck: 0 });
       await user.click(shellButton);
-      expect(mockPost).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells', {});
+      expect(mockPost).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', {});
     });
   });
 
@@ -1514,7 +1516,7 @@ describe('AgentPanes', () => {
     });
 
     // issue #2295: a pane the user closed out of this session
-    // (`closedInSessionAt`) must never be silently overwritten by an
+    // (`closedInWorkspaceAt`) must never be silently overwritten by an
     // unrelated LATER conversation selection — e.g. clicking a different
     // row in the past-conversations list, or the sidebar's session
     // re-entry, both of which funnel into the seeding effect that fires
@@ -1560,13 +1562,13 @@ describe('AgentPanes', () => {
         // The sessions-LISTING endpoint specifically (`?driveId=`) — not the
         // per-session `/workspace` sub-route `useWorkspaceServerSync` also
         // fetches (same prefix, see the readiness test above this block).
-        if (url.includes('/api/agent-sessions?')) {
+        if (url.includes('/api/agent-workspaces?')) {
           return new Promise((resolve) => {
             resolveSessions = () =>
               resolve(
                 jsonOk({
                   sessions: [
-                    { sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
+                    { workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
                   ],
                 }),
               );
@@ -1619,7 +1621,7 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('button', { name: 'select-conv-closed' }));
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed/reopen', {}),
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-closed/reopen', {}),
       );
       expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
       expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
@@ -1643,7 +1645,7 @@ describe('AgentPanes', () => {
       // the deliberately-slow reopen this test is exercising — only the
       // reopen URL stays pending; the claim resolves normally.
       mockPost.mockImplementation((url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-slow/reopen') {
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-slow/reopen') {
           return new Promise((resolve) => (resolveSlowReopen = resolve));
         }
         return Promise.resolve({ ok: true, alreadyInSession: false });
@@ -1666,7 +1668,7 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-fast'));
 
       // NOW the stale reopen resolves — must be ignored, AND rolled back:
-      // it succeeded server-side (closedInSessionAt cleared, a cap slot
+      // it succeeded server-side (closedInWorkspaceAt cleared, a cap slot
       // consumed) for a pick nothing shows anymore, which could otherwise
       // make a later reopen fail as "session full" for no visible reason.
       resolveSlowReopen({});
@@ -1678,7 +1680,7 @@ describe('AgentPanes', () => {
         expect(pane?.scope?.targetId).toBe('conv-fast');
       });
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-slow'),
       );
     });
 
@@ -1762,7 +1764,7 @@ describe('AgentPanes', () => {
           .find((p) => p.id === paneId);
         expect(pane?.scope?.targetId).toBe('conv-slow');
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-slow');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
@@ -1786,7 +1788,7 @@ describe('AgentPanes', () => {
       // resolve that one normally; only the reopen this test exercises stays
       // pending.
       mockPost.mockImplementation((url: string) => {
-        if (url === '/api/agent-sessions/ses-1/conversations/conv-already-open/reopen') {
+        if (url === '/api/agent-workspaces/ses-1/conversations/conv-already-open/reopen') {
           return new Promise((resolve) => (resolveReopen = resolve));
         }
         return Promise.resolve({ ok: true, alreadyInSession: false });
@@ -1808,7 +1810,7 @@ describe('AgentPanes', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-already-open');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-already-open');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 16): the
@@ -1853,13 +1855,13 @@ describe('AgentPanes', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-shared-16');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-shared-16');
 
       // The newer (LAST to settle) reports alreadyOpen — its OWN outcome is
       // a no-op, but it must still drain the older's deferred cleanup.
       resolveNewer({ ok: true, alreadyOpen: true });
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-shared-16'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-shared-16'),
       );
     });
 
@@ -1898,7 +1900,7 @@ describe('AgentPanes', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-race');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-race');
 
       // The newer reopen resolves too — legitimately lands it.
       resolveNewer({});
@@ -1909,7 +1911,7 @@ describe('AgentPanes', () => {
           .find((p) => p.id === paneId);
         expect(pane?.scope?.targetId).toBe('conv-race');
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-race');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-race');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 17): the
@@ -1951,7 +1953,7 @@ describe('AgentPanes', () => {
       // else pending for this id) — triggers a DIRECT cleanup, DELETE
       // pending.
       resolveFirstReopen({ ok: true, alreadyOpen: false });
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-compensate'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-compensate'));
 
       // WHILE that DELETE is still in flight, a fresh pick of the SAME
       // conversation lands it back in the pane (back to History first —
@@ -1969,7 +1971,7 @@ describe('AgentPanes', () => {
       await waitFor(() =>
         expect(
           mockPost.mock.calls.filter(
-            (c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-compensate/reopen',
+            (c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-compensate/reopen',
           ),
         ).toHaveLength(3),
       );
@@ -2017,7 +2019,7 @@ describe('AgentPanes', () => {
       // Reopen #1 resolves, genuinely orphaned — DIRECT cleanup, DELETE
       // pending.
       resolveFirstReopen({ ok: true, alreadyOpen: false });
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-recurse'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-recurse'));
 
       // A fresh pick lands it back while that first DELETE is pending.
       await user.click(await screen.findByRole('tab', { name: /history/i }));
@@ -2028,7 +2030,7 @@ describe('AgentPanes', () => {
       resolveFirstDelete(undefined);
       await waitFor(() =>
         expect(
-          mockPost.mock.calls.filter((c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-recurse/reopen'),
+          mockPost.mock.calls.filter((c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-recurse/reopen'),
         ).toHaveLength(3),
       );
 
@@ -2043,7 +2045,7 @@ describe('AgentPanes', () => {
       resolveCompensatingReopen({ ok: true, alreadyOpen: false });
       await waitFor(() =>
         expect(
-          mockDel.mock.calls.filter((c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-recurse'),
+          mockDel.mock.calls.filter((c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-recurse'),
         ).toHaveLength(2),
       );
     });
@@ -2239,14 +2241,14 @@ describe('AgentPanes', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-orphan');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-orphan');
 
       // The NEWER (current) reopen then fails outright — nothing else will
       // ever revisit the older one's dangling server-side success; the
       // failing settle must finish that deferred cleanup itself.
       rejectNewer(new Error('network down'));
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-orphan'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-orphan'),
       );
     });
 
@@ -2316,7 +2318,7 @@ describe('AgentPanes', () => {
       // left behind server-side.
       resolveReopen({});
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed-mid-close'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-closed-mid-close'),
       );
       // The surviving (first) pane was never touched by any of this.
       const survivingPane = useAgentWorkspaceStore
@@ -2575,9 +2577,9 @@ describe('AgentPanes', () => {
         // per-session `/workspace` sub-route `useWorkspaceServerSync` also
         // fetches, which would otherwise reassign this shared resolver to
         // the WRONG pending promise (both URLs start with the same prefix).
-        if (url.includes('/api/agent-sessions?')) {
+        if (url.includes('/api/agent-workspaces?')) {
           return new Promise((resolve) => {
-            resolveSessions = () => resolve(jsonOk({ sessions: [{ sessionId: 'ses-1', conversations: [] }] }));
+            resolveSessions = () => resolve(jsonOk({ sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }] }));
           });
         }
         return jsonOk(defaultFetchRoute(url));
@@ -2594,7 +2596,7 @@ describe('AgentPanes', () => {
 
     it('stays disabled when the initial sessions fetch fails outright (SWR isLoading goes false with no data)', async () => {
       mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-sessions')) return { ok: false, status: 500, json: async () => ({}) };
+        if (url.includes('/api/agent-workspaces')) return { ok: false, status: 500, json: async () => ({}) };
         return jsonOk(defaultFetchRoute(url));
       });
       renderPanes();
@@ -2610,18 +2612,18 @@ describe('AgentPanes', () => {
 
     it('stays disabled when the shared drive-level cache is already warm but does not yet list THIS session (a session spawned after the last successful fetch)', async () => {
       mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-sessions')) {
+        if (url.includes('/api/agent-workspaces')) {
           // Warm cache, real data, but for a DIFFERENT session — exactly
           // what a shared per-drive SWR key can already hold when a brand
           // new session opens.
-          return jsonOk({ sessions: [{ sessionId: 'some-other-session', conversations: [] }] });
+          return jsonOk({ sessions: [{ workspaceId: 'some-other-session', sessionId: 'some-other-session', conversations: [] }] });
         }
         return jsonOk(defaultFetchRoute(url));
       });
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
       );
 
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
@@ -2699,7 +2701,7 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
       // The outgoing conversation (agent-1's original) closed.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
 
       // Switch back to the ORIGINAL agent — conv-1 is gone now, so this
       // mints a SECOND, brand-new conversation rather than reusing it.
@@ -2714,7 +2716,7 @@ describe('AgentPanes', () => {
         }),
       );
       // And the just-left Writer conversation (new-id-1) closed in turn.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'));
     });
 
     it('clicking "+" starts a new conversation with the pane\'s CURRENT agent, replacing what it shows — no agent picker', async () => {
@@ -2745,7 +2747,7 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
       // The replaced conversation (conv-1) closed — the same
       // closeReplacedConversation cleanup an AISelector switch triggers.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
     });
 
     it('clicking "+" does not close the replaced conversation when another pane still shows it', async () => {
@@ -2842,7 +2844,7 @@ describe('AgentPanes', () => {
       const closeButtons = screen.getAllByLabelText('Close pane');
       const user = userEvent.setup();
       await user.click(closeButtons[1]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
 
       // From the REMAINING pane, switch to agent-1 — the one whose
       // conversation JUST closed. This must MINT a fresh one, not silently
@@ -2867,12 +2869,12 @@ describe('AgentPanes', () => {
       await user.click(await findEnabledSelector(/Researcher/));
       await user.click(await screen.findByRole('menuitem', { name: 'Global Assistant' }));
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations', {
           conversationId: 'new-id-1',
         }),
       );
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
 
       // Switching back to Researcher mints fresh too (conv-1 is gone), same
       // "closes on switch" discipline as the null-agentPageId case's outgoing side.
@@ -2901,7 +2903,7 @@ describe('AgentPanes', () => {
       // Let the (now-loaded) conversation list rule itself out as the cause,
       // isolating the assertion to the streaming guard.
       await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
       );
 
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
@@ -2924,7 +2926,7 @@ describe('AgentPanes', () => {
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
       );
 
       expect(await screen.findByRole('button', { name: 'Start a new conversation' })).toBeDisabled();

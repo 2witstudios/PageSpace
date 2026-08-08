@@ -10,7 +10,6 @@
  */
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import { computePageStateHash } from '@pagespace/lib/services/page-version-service';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -183,7 +182,8 @@ export function restoreFields(
 
 /** Message table plus the derived flags for a conversation. */
 export interface ConversationTableSelection {
-  table: typeof channelMessages | typeof messages | typeof chatMessages;
+  /** The table this message lives in — the one every reader consults. */
+  table: typeof channelMessages | typeof messages;
   isChannel: boolean;
   isGlobal: boolean;
   label: 'channel' | 'global' | 'page';
@@ -191,9 +191,15 @@ export interface ConversationTableSelection {
 
 /**
  * Route a message activity to its backing table. Channel conversations use
- * channelMessages; a global conversation (or one with no page) uses messages;
- * everything else is a page conversation on chatMessages. Single replacement
- * for the three duplicated conversationType ternaries.
+ * channelMessages; everything else — global AND page — is on the unified
+ * `messages` table since the message-table merge (epic "Agent-Session Single
+ * Source of Truth", Phase 4 / D6). Single replacement for the three duplicated
+ * conversationType ternaries.
+ *
+ * `isGlobal` keeps its old meaning (a global-assistant thread, or one with no
+ * page) because `planMessageRollback`/`planMessageRedo` still branch on it for
+ * channel-vs-chat field shapes and callers log it; it no longer selects a
+ * table.
  */
 export function pickConversationTable(params: {
   conversationType?: string;
@@ -201,7 +207,7 @@ export function pickConversationTable(params: {
 }): ConversationTableSelection {
   const isChannel = params.conversationType === 'channel';
   const isGlobal = !isChannel && (!params.hasPageId || params.conversationType === 'global');
-  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
+  const table = isChannel ? channelMessages : messages;
   const label = isChannel ? 'channel' : isGlobal ? 'global' : 'page';
   return { table, isChannel, isGlobal, label };
 }

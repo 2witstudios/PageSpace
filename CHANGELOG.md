@@ -7,6 +7,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Panes and sidebars no longer sit blank while the messages are right there in the database** —
+  every surface used to keep its own private copy of a conversation and its own theory of when to
+  refresh, so a message written from one surface could stay invisible in another until you
+  reloaded. Every surface is now a subscriber to one authoritative feed and can tell when it has
+  missed something, so it refetches instead of quietly showing you stale history.
+- **Workers you spawn appear immediately instead of up to 20 seconds later** — the sidebar polled
+  on a timer; it is now told.
+- **One chat history** — page chats and Global Assistant chats were stored in two different tables
+  with two different code paths, which is why a handful of features worked in one and not the
+  other. They are one now.
+- **A plan on a shared conversation is visible to the people it is shared with** — the plan chip
+  silently failed to load for anyone but the conversation's owner, so collaborators saw no plan on
+  a conversation whose agent was visibly working from one.
+- **Closing one pane no longer stops another from receiving live updates** — two views of the same
+  conversation (say the Global Assistant on your dashboard and a pane in the Agents console) shared
+  one subscription, so closing either one silently cut the other off until you reloaded.
+- **Layout changes no longer go missing on self-hosted deployments reached over plain HTTP** — in
+  that setup a reload could reuse ids from the previous page load, and a split or resize would be
+  mistaken for one already applied and quietly dropped.
 - **The Agents console's tab now shows "Agents" and remembers what was open when you switch away and back** —
   the browser-style tab bar didn't recognize `/dashboard/agents` as a page at all, so its tab showed
   "Drive" or "Untitled" instead of "Agents". Worse, the console keeps its selected session/conversation/panes
@@ -74,6 +93,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   free.
 
 ### Added
+
+- **Your agent workspaces now follow you between devices, and agents can arrange their own** —
+  the pane grid in the Agents console used to live partly in your browser's local storage, so the
+  same workspace looked different on your laptop and your phone, and a collaborator watching a
+  shared workspace saw nothing you did. The layout is now server-held: open, close, move, resize
+  and rearrange panes converge live for everyone looking at that workspace, on every device.
+  Agents can arrange their own workspaces too, through the same verbs you use — an agent can open
+  the page it is about to edit next to the conversation you are having about it.
+- **`list_sessions` can now see workspaces shared with you** — an agent could always be *told* to
+  work in a colleague's workspace in a drive you both belong to, but had no way to discover one.
+  It now lists them, with other members' private thread titles shown as "(private thread)" so the
+  workspace is discoverable without its contents being readable.
+- **`/plan` ships as an editable starter skill** — an agent can bind a conversation to a plan
+  document and keep working against it across reloads and context summaries, with the plan shown
+  as a chip on the conversation.
 
 - **Agent sessions and the sandbox are open to everyone — the sandbox itself is a Pro+ feature** —
   sessions, chat, and the Agents screen's panes (splitting between agent conversations, a terminal,

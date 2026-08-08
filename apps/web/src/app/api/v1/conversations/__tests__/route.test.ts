@@ -51,12 +51,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chatMessages.id',
-    conversationId: 'chatMessages.conversationId',
-    isActive: 'chatMessages.isActive',
-    createdAt: 'chatMessages.createdAt',
-  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -74,11 +68,18 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: vi.fn().mockResolvedValue(null),
+    softDeleteConversationById: vi.fn().mockResolvedValue(undefined),
+    // The POST writes through the repository rather than `db.insert` directly,
+    // so that this creator emits `conversation:created` like the other two.
+    createApiConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+// The `[id]` GET reads the UNIFIED `messages` table since the message-table
+// merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6 — reader
+// cutover). Mocked at the repository seam so this suite stays a route test.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesByConversationId: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -90,7 +91,7 @@ import { GET as getById, DELETE } from '../[id]/route';
 import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -131,8 +132,9 @@ const existingConversation = {
   createdAt: new Date('2024-01-15T10:00:00.000Z'),
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
-  sessionId: null,
-  closedInSessionAt: null,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
   lastMessageAt: null,
 };
 
@@ -215,15 +217,23 @@ describe('POST /api/v1/conversations', () => {
     });
   });
 
-  test('inserts a conversations row', async () => {
-    const insertValues = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.insert).mockReturnValue({ values: insertValues } as unknown as ReturnType<typeof db.insert>);
+  test('creates the conversation through the repository, not with a bare insert', async () => {
+    // Asserted at the repository rather than at `db.insert`, because that is
+    // where the write moved — and the reason it moved is that the repository
+    // emits `conversation:created`. A route writing the row itself is a
+    // creation nobody hears about, which is what this path used to be.
     await POST(makePostRequest({}));
     assert({
       given: 'a valid create request',
-      should: 'call db.insert once',
-      actual: vi.mocked(db.insert).mock.calls.length,
+      should: 'call the repository creator once',
+      actual: vi.mocked(conversationRepository.createApiConversation).mock.calls.length,
       expected: 1,
+    });
+    assert({
+      given: 'a valid create request',
+      should: 'never write the row directly',
+      actual: vi.mocked(db.insert).mock.calls.length,
+      expected: 0,
     });
   });
 });
@@ -321,7 +331,7 @@ describe('GET /api/v1/conversations/[id]', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
     vi.mocked(getAllowedDriveIds).mockReturnValue([]);
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(null);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([]);
   });
 
   test('returns 401 when auth fails', async () => {
@@ -364,10 +374,11 @@ describe('GET /api/v1/conversations/[id]', () => {
 
   test('returns 200 with conversation and messages array', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([
       {
         id: 'msg-1',
-        pageId: 'page-1',
+        // No `pageId`: the unified read seam deliberately drops the
+        // transitional column (Phase 4 / D6 — it is deleted at PR 15).
         conversationId: 'conv-1',
         userId: 'user-1',
         role: 'user',
@@ -397,7 +408,7 @@ describe('GET /api/v1/conversations/[id]', () => {
 
   test('returns 200 with empty messages array when no messages exist', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValue([]);
     const response = await getById(makeGetRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
     const body = await response.json() as Record<string, unknown>;
     assert({
@@ -485,14 +496,14 @@ describe('DELETE /api/v1/conversations/[id]', () => {
     });
   });
 
-  test('soft delete calls db.update for the conversations table', async () => {
+  test('soft delete goes through the repository choke point (rev bump + conversation:deleted emission)', async () => {
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(existingConversation);
     await DELETE(makeDeleteRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
     assert({
       given: 'a successful delete',
-      should: 'call db.update at least once (to soft-delete the conversations row)',
-      actual: vi.mocked(db.update).mock.calls.length >= 1,
-      expected: true,
+      should: 'delegate the tombstone + message sweep to conversationRepository.softDeleteConversationById',
+      actual: vi.mocked(conversationRepository.softDeleteConversationById).mock.calls,
+      expected: [['conv-1']],
     });
   });
 

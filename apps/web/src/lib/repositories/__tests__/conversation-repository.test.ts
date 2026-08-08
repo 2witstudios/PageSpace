@@ -43,9 +43,12 @@ vi.mock('@pagespace/db/db', () => {
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
+  ne: vi.fn((field, value) => ({ kind: 'ne', field, value })),
   and: vi.fn((...conds) => ({ kind: 'and', conds })),
   inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
+  isDistinctFrom: vi.fn((field, value) => ({ kind: 'isDistinctFrom', field, value })),
   sql: Object.assign(
     vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
       kind: 'sql',
@@ -64,20 +67,37 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     title: 'conversations.title',
     updatedAt: 'conversations.updatedAt',
   },
+  // The unified leg of the dual-write (Phase 4 PR 10): the History soft-delete
+  // now tombstones a conversation's rows in BOTH message tables, in the same
+  // transaction, so a post-cutover reader cannot resurrect deleted messages.
+  messages: {
+    id: 'messages.id',
+    conversationId: 'messages.conversationId',
+    isActive: 'messages.isActive',
+    // The owner-conflict probe tests this in SQL now, so it has to be nameable.
+    userId: 'messages.userId',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: {
-    id: 'chatMessages.id',
-    pageId: 'chatMessages.pageId',
-    conversationId: 'chatMessages.conversationId',
-    isActive: 'chatMessages.isActive',
-  },
   pages: { id: 'pages.id', type: 'pages.type', isTrashed: 'pages.isTrashed' },
 }));
 
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   userActivities: { userId: 'userActivities.userId' },
+}));
+
+// The un-share eviction. Mocked rather than left to the real client so the
+// assertions are about what this repository ASKS FOR — the room pattern and
+// the excepted user — rather than about whether a POST happened to reach a
+// non-existent realtime host.
+// The implementation is passed to `vi.fn` rather than set with
+// `mockResolvedValue`, so it survives both `mockClear` and `mockReset` — the
+// call site does `kickUserFromRooms(…).catch(…)`, which a mock returning
+// `undefined` would turn into a TypeError instead of a test failure.
+const mockKickUserFromRooms = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock('@pagespace/lib/realtime/kick-client', () => ({
+  kickUserFromRooms: mockKickUserFromRooms,
 }));
 
 const mockInvalidateCompaction = vi.hoisted(() => vi.fn());
@@ -87,6 +107,7 @@ vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
 
 import { conversationRepository } from '../conversation-repository';
 import { db } from '@pagespace/db/db';
+import { pageRoom, userSessionsRoom } from '@pagespace/lib/realtime/rooms';
 
 const mockDb = vi.mocked(db);
 
@@ -176,8 +197,14 @@ describe('conversationRepository.createConversation', () => {
     const limitMock = vi.fn().mockResolvedValue(existing);
     return { where: vi.fn().mockReturnValue({ limit: limitMock }) };
   }
-  function mockChatMessagesLookup(rows: Array<{ userId: string | null }>) {
-    return { where: vi.fn().mockResolvedValue(rows) };
+  /**
+   * The owner-conflict probe. It is an existence check now — the predicate
+   * (`userId IS NOT NULL AND userId <> caller`) moved into SQL and the query
+   * takes `LIMIT 1` — so the fixture is "did anything match", not a row set to
+   * filter in JS.
+   */
+  function mockChatMessagesLookup(rows: Array<{ id: string }>) {
+    return { where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(rows) }) };
   }
   // The INSERT chain is values → onConflictDoNothing → returning. `rows` is
   // what RETURNING yields: [{id}] = this call won the insert, [] = a
@@ -219,7 +246,7 @@ describe('conversationRepository.createConversation', () => {
     expect(onConflictDoNothing).toHaveBeenCalled();
   });
 
-  it('carries title inside the INSERT (sessionId is never a param here — binding is claimed separately, never at creation)', async () => {
+  it('carries title inside the INSERT (workspaceId is never a param here — binding is claimed separately, never at creation)', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -231,11 +258,11 @@ describe('conversationRepository.createConversation', () => {
 
     expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-bound', sessionId: null, title: 'Worker: research' })
+      expect.objectContaining({ id: 'conv-bound', workspaceId: null, title: 'Worker: research' })
     );
   });
 
-  it('defaults title to null when opts omit it, always inserting sessionId: null', async () => {
+  it('defaults title to null when opts omit it, always inserting workspaceId: null', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -244,7 +271,7 @@ describe('conversationRepository.createConversation', () => {
     await conversationRepository.createConversation('conv-unbound', 'user-1', 'agent-1');
 
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-unbound', sessionId: null, title: null })
+      expect.objectContaining({ id: 'conv-unbound', workspaceId: null, title: null })
     );
   });
 
@@ -262,10 +289,9 @@ describe('conversationRepository.createConversation', () => {
   it("reports 'message_owner_conflict' (no insert) when an existing message belongs to a different user (Codex P2)", async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([
-        { userId: 'victim-user' },
-        { userId: null },
-      ]));
+      // The victim's row matches `userId IS NOT NULL AND userId <> caller`;
+      // the agent-authored null row does not. The query returns the match.
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ id: 'msg-victim' }]));
 
     const outcome = await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'agent-1');
 
@@ -287,29 +313,36 @@ describe('conversationRepository.createConversation', () => {
   // page at all — asserted here on the WHERE clause itself, because mocking the row lookup (as
   // the tests above do) cannot see the scoping bug that let the wrong rows through.
   it('asks who owns the conversation ACROSS ALL PAGES — a page-scoped guard let an attacker squat it from outside', async () => {
-    const chatMessagesWhere = vi.fn().mockResolvedValue([]);
+    const messagesWhere = vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) });
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => ({ where: chatMessagesWhere }));
+      .mockImplementationOnce(() => ({ where: messagesWhere }));
     mockInsert([{ id: 'conv-victim' }]);
 
     await conversationRepository.createConversation('conv-victim', 'attacker-user', 'attacker-page');
 
-    const predicate = chatMessagesWhere.mock.calls[0][0] as { kind: string; conds: Array<{ field?: string }> };
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12). The
+    // property under test is unchanged and is the whole point of this case:
+    // the predicate must name the conversation and nothing about the page.
+    const predicate = messagesWhere.mock.calls[0][0] as { kind: string; conds: Array<{ field?: string }> };
     const fields = predicate.conds.map((c) => c.field);
-    expect(fields).toContain('chatMessages.conversationId');
-    expect(fields).toContain('chatMessages.isActive');
+    expect(fields).toContain('messages.conversationId');
+    expect(fields).toContain('messages.isActive');
+    // The owner test itself is in SQL now rather than a JS `.some()`, so it is
+    // part of this predicate and belongs under the same guard.
+    expect(fields).toContain('messages.userId');
     // The page must NOT narrow it — that narrowing IS the vulnerability.
+    expect(fields).not.toContain('messages.pageId');
     expect(fields).not.toContain('chatMessages.pageId');
   });
 
   it('creates the row when prior messages exist but all belong to the caller', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([
-        { userId: 'user-1' },
-        { userId: null },
-      ]));
+      // Caller's own rows and agent-authored nulls both fail the predicate,
+      // so the query finds nothing.
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
     const { valuesMock } = mockInsert([{ id: 'conv-mine' }]);
 
     const outcome = await conversationRepository.createConversation('conv-mine', 'user-1', 'agent-1');
@@ -350,7 +383,7 @@ describe('conversationRepository.createConversation', () => {
   it('given { isShared: true }, still refuses a conversationId owned by a different user (squat-guard applies regardless of isShared)', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
-      .mockImplementationOnce(() => mockChatMessagesLookup([{ userId: 'victim-user' }]));
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ id: 'msg-victim' }]));
 
     await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'machine-1', { isShared: true });
 
@@ -363,7 +396,8 @@ describe('conversationRepository.autoTitleConversation', () => {
   // that's what makes this safe to call on every message without a separate
   // "is this the first message" lookup, and race-safe under concurrent calls.
   it('updates title guarded by "title IS NULL" in the WHERE clause', async () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 
@@ -383,7 +417,8 @@ describe('conversationRepository.autoTitleConversation', () => {
     // "title IS NULL" predicate. There is no in-memory "if title" branch
     // for a race to slip through — the second of two concurrent calls
     // still issues the same guarded UPDATE and updates zero rows.
-    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 
@@ -397,7 +432,8 @@ describe('conversationRepository.autoTitleConversation', () => {
 
 describe('conversationRepository.setConversationShared', () => {
   it('should update isShared to true for a conversation', async () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockUpdateChain.set.mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
@@ -411,7 +447,8 @@ describe('conversationRepository.setConversationShared', () => {
   });
 
   it('should update isShared to false for a conversation', async () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 
@@ -421,11 +458,267 @@ describe('conversationRepository.setConversationShared', () => {
       expect.objectContaining({ isShared: false })
     );
   });
+
+  /**
+   * UN-SHARE MUST REACH THE PAGE ROOM (review finding MINOR 4).
+   *
+   * `directoryRoomsFor` adds the page room only when the emit context says the
+   * conversation is shared, and the row this method emits from is the
+   * POST-update one — so an un-share advertised `isShared: false`, the page
+   * room was dropped from the audience, and the only people told were the
+   * owner's own tabs. The collaborators who needed to drop the row from their
+   * sidebar were precisely the ones excluded; their list stayed stale until the
+   * 120s backstop poll or a reconnect.
+   *
+   * The two tests above assert only the SQL, which is why they never saw it.
+   * This one stubs nothing above the transport: the shipped
+   * `emitConversationLifecycle` → `conversationEvents.updated` →
+   * `directoryRoomsFor` → `postBroadcast` path runs for real and the outbound
+   * broadcast is captured, so the assertion is about the room that actually
+   * goes on the wire.
+   */
+  it('emits the UN-share to the page room, not just the owner — otherwise the collaborators who lose access are the only ones not told', async () => {
+    const OWNER = 'owner-1';
+    const PAGE = 'agent_1';
+    const returningMock = vi.fn().mockResolvedValue([
+      // The post-update row: isShared is already false here, which is exactly
+      // what used to shrink the audience.
+      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: PAGE, title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 7 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    const REALTIME_URL = 'http://realtime.unshare.invalid';
+    process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
+    process.env.REALTIME_BROADCAST_SECRET =
+      process.env.REALTIME_BROADCAST_SECRET ?? 'unshare-audience-test-secret-0123456789';
+
+    const sent: { channelId: string; event: string; payload: { changes?: { isShared?: boolean } } }[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      let isRealtime = false;
+      try {
+        isRealtime = new URL(url).origin === new URL(REALTIME_URL).origin;
+      } catch {
+        isRealtime = false;
+      }
+      if (isRealtime) {
+        sent.push(JSON.parse(typeof init?.body === 'string' ? init.body : '{}'));
+        return { ok: true, status: 200 } as unknown as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+
+    try {
+      await conversationRepository.setConversationShared('conv_abc', false, {
+        userId: OWNER,
+        browserSessionId: 'tab-1',
+      });
+
+      // Emission is fire-and-forget, so poll rather than assume it has landed.
+      const deadline = Date.now() + 5000;
+      while (sent.filter((b) => b.event === 'conversation:updated').length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const rooms = sent.filter((b) => b.event === 'conversation:updated').map((b) => b.channelId).sort();
+      expect(rooms).toEqual([pageRoom(PAGE), userSessionsRoom(OWNER)].sort());
+
+      // The audience widened; the FACT on the wire must still be the un-share.
+      for (const b of sent.filter((x) => x.event === 'conversation:updated')) {
+        expect(b.payload.changes?.isShared).toBe(false);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  /**
+   * The other half of the audience widening above. Because the un-share now
+   * addresses the page room, a REDUNDANT un-share (the row is already private)
+   * would announce that conversation's id to every member of the page room —
+   * people who may never have been able to see it. The `ne` in the WHERE makes
+   * a no-op toggle match no row, so nothing is written and nothing is emitted.
+   */
+  it('stays silent when the toggle changes nothing — otherwise a redundant un-share leaks a private conversation id to the page room', async () => {
+    // No row matched: `ne(isShared, false)` finds nothing on an already-private
+    // conversation.
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+    // The owner lookup the eviction falls back to when no row came back.
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue([{ userId: 'owner-1' }]),
+      }),
+    });
+
+    const REALTIME_URL = 'http://realtime.noop.invalid';
+    process.env.INTERNAL_REALTIME_URL = REALTIME_URL;
+    process.env.REALTIME_BROADCAST_SECRET =
+      process.env.REALTIME_BROADCAST_SECRET ?? 'unshare-audience-test-secret-0123456789';
+
+    const sent: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      let isRealtime = false;
+      try {
+        isRealtime = new URL(url).origin === new URL(REALTIME_URL).origin;
+      } catch {
+        isRealtime = false;
+      }
+      if (isRealtime) {
+        sent.push(JSON.parse(typeof init?.body === 'string' ? init.body : '{}'));
+        return { ok: true, status: 200 } as unknown as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+
+    try {
+      await conversationRepository.setConversationShared('conv_already_private', false);
+
+      // THE GUARD ITSELF: the UPDATE must be conditional on the value actually
+      // flipping. Asserting only "no row came back, so nothing was emitted"
+      // would pass with or without the `ne` — the mock returns `[]` either way
+      // — so it would prove nothing about the WHERE that produces the `[]`.
+      expect(whereMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'and',
+          conds: expect.arrayContaining([
+            expect.objectContaining({ kind: 'ne', field: 'conversations.isShared', value: false }),
+          ]),
+        }),
+      );
+
+      // And the consequence: no row changed, so nothing goes on the wire.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(sent).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  /**
+   * THE EVICTION IS NOT PART OF WHAT THE `ne` GUARD SKIPS (review finding
+   * MINOR 2).
+   *
+   * The guard above is right about the emit and was wrong about the kick: it
+   * short-circuited before `kickUserFromRooms`, so a repeat un-share stopped
+   * evicting. That matters because the kick is best-effort — `kick-client`
+   * never throws and the call site swallows — which makes re-issuing the
+   * un-share the only recovery path when a kick is lost to a downed realtime,
+   * an HMAC reject or a timeout. With the early return in front of it, the
+   * retry did nothing and non-owner sockets kept receiving `conv:<id>` content
+   * events until they reconnected.
+   *
+   * Fails on the pre-fix code: the return happened before any kick.
+   */
+  it('still evicts non-owners on a REPEAT un-share — the kick is best-effort, so re-issuing it is the only retry there is', async () => {
+    // Already private: the guarded UPDATE matches no row.
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    const OWNER = 'owner-1';
+    const limitMock = vi.fn().mockResolvedValue([{ userId: OWNER }]);
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({ limit: limitMock }),
+    });
+
+    await conversationRepository.setConversationShared('conv_already_private', false);
+
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '*',
+        roomPattern: 'conv:conv_already_private',
+        reason: 'conversation_unshared',
+      }),
+    );
+    // THE OWNER MUST BE EXCEPTED. `updated` is undefined on this path, so
+    // hoisting the kick verbatim would have left `exceptUserId` undefined —
+    // and `userId: '*'` with no exception evicts the owner from their own
+    // conversation as a side effect of a toggle that changed nothing. Hence
+    // the fallback read this asserts on.
+    expect(limitMock).toHaveBeenCalled();
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({ exceptUserId: OWNER }),
+    );
+  });
+
+  /**
+   * The fallback read can come back empty — a conversation deleted between the
+   * un-share request and this lookup, or an id that never existed. There is
+   * then no owner to except, and `userId: '*'` without an exception is an
+   * indiscriminate eviction, so the kick is skipped rather than issued blind.
+   */
+  it('skips the eviction entirely when no owner can be resolved — a `*` kick with no exception would evict indiscriminately', async () => {
+    const returningMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    mockSelectChain.from.mockReturnValue({
+      where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+    });
+
+    await conversationRepository.setConversationShared('conv_gone', false);
+
+    expect(mockKickUserFromRooms).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The common path still takes the owner off the row it just wrote — the
+   * fallback read is for the no-op path only, not an extra query on every
+   * un-share.
+   */
+  it('uses the updated row for the owner on a real un-share, without a second read', async () => {
+    const OWNER = 'owner-1';
+    const returningMock = vi.fn().mockResolvedValue([
+      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+    mockDb.select = vi.fn(() => mockSelectChain) as unknown as typeof mockDb.select;
+
+    await conversationRepository.setConversationShared('conv_abc', false);
+
+    expect(mockKickUserFromRooms).toHaveBeenCalledWith(
+      expect.objectContaining({ exceptUserId: OWNER, roomPattern: 'conv:conv_abc' }),
+    );
+    expect(mockDb.select).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Sharing is not an eviction event — the kick belongs to `isShared === false`
+   * only. Pinned because the hoist moved it above the early return, where a
+   * miswritten condition would fire it on every toggle.
+   */
+  it('never evicts on a SHARE', async () => {
+    const returningMock = vi.fn().mockResolvedValue([
+      { id: 'conv_abc', userId: 'owner-1', isShared: true, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+    ]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await conversationRepository.setConversationShared('conv_abc', true);
+
+    expect(mockKickUserFromRooms).not.toHaveBeenCalled();
+  });
 });
 
 describe('conversationRepository.softDeleteConversation', () => {
-  it("deactivates the canonical conversations row, not just its chat_messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
+  it("deactivates the canonical conversations row, not just its messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const whereMock = vi.fn(() =>
+      Object.assign(Promise.resolve(undefined), { returning: returningMock }),
+    );
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 
@@ -436,36 +729,51 @@ describe('conversationRepository.softDeleteConversation', () => {
     // vice versa (a second review finding on the same fix: chatgpt-codex-
     // connector on PR #2296).
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    // Two separate UPDATEs: conversations FIRST, then chat_messages — the
-    // canonical row is locked before the message sweep, or a concurrent
-    // send's own FOR UPDATE re-check (apps/web/src/app/api/ai/chat/route.ts)
-    // could acquire that lock in the window between them, observe
-    // isActive: true, and commit a new active message a moment before this
-    // transaction tombstones the conversation (review finding — chatgpt-
-    // codex-connector on PR #2299, filed after the original chatMessages-
-    // then-conversations order shipped on PR #2296). Verified via the table
-    // argument each db.update() call received.
+    // Two UPDATEs: conversations FIRST, then the message sweep — the
+    // canonical row is locked before the sweep, or a concurrent send's own
+    // FOR UPDATE re-check (apps/web/src/app/api/ai/chat/route.ts) could
+    // acquire that lock in the window between them, observe isActive: true,
+    // and commit a new active message a moment before this transaction
+    // tombstones the conversation (review finding — chatgpt-codex-connector on
+    // PR #2299, filed after the original messages-then-conversations order
+    // shipped on PR #2296). Verified via the table argument each db.update()
+    // call received.
+    //
+    // The count has tracked the merge: two before PR 10, THREE during the
+    // dual-write, and two again now that Phase 4 PR 14 has frozen
+    // `chat_messages`. A `chatMessages` table argument reappearing in this
+    // list is a resurrected legacy writer.
     expect(mockDb.update).toHaveBeenCalledTimes(2);
     expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'conversations.id' }));
-    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'chatMessages.id' }));
-    expect(setMock).toHaveBeenNthCalledWith(1, { isActive: false });
+    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'messages.id' }));
+    expect(mockDb.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'chatMessages.id' }));
+    expect(setMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ isActive: false }));
     expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
     expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
   });
 
-  it('does not touch conversations.isActive at all if the chat_messages update throws — the transaction rolls back atomically', async () => {
-    const failingWhere = vi.fn().mockRejectedValue(new Error('db exploded'));
-    const setMock = vi.fn().mockReturnValue({ where: failingWhere });
+  it('does not touch conversations.isActive at all if the message sweep throws — the transaction rolls back atomically', async () => {
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const whereMock = vi
+      .fn()
+      // First statement: the conversations tombstone (ends `.returning()`).
+      .mockImplementationOnce(() => ({ returning: returningMock }))
+      // Second statement: the message sweep, through the shared page writer —
+      // it ends in `.returning()`, which is what throws here.
+      .mockImplementationOnce(() => ({
+        returning: () => Promise.reject(new Error('db exploded')),
+      }));
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
 
     await expect(conversationRepository.softDeleteConversation('agent_1', 'conv_deleted')).rejects.toThrow(
       'db exploded',
     );
 
-    // Only the FIRST update (chat_messages) was even attempted — the second
-    // (conversations) never ran, matching real transaction semantics where
-    // a throw inside the callback aborts before any later statement.
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    // Both statements were issued in-transaction; the throw aborts the
+    // transaction, so nothing after the sweep (emission, compaction
+    // invalidation) runs — matching real transaction semantics.
+    expect(mockDb.update).toHaveBeenCalledTimes(2);
     expect(mockInvalidateCompaction).not.toHaveBeenCalled();
   });
 });

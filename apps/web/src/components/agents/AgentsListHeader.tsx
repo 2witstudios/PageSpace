@@ -53,7 +53,7 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
     // depending on ITS OWN route, and this header doesn't know which is
     // mounted alongside it — without this, a session spawned from here only
     // shows up in the sidebar after its 20s poll.
-    void mutate((key) => typeof key === 'string' && key.startsWith('/api/agent-sessions'));
+    void mutate((key) => typeof key === 'string' && key.startsWith('/api/agent-workspaces'));
   });
   const openQuickCreate = useUIStore((state) => state.openQuickCreate);
 

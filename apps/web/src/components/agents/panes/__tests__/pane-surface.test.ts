@@ -4,7 +4,7 @@
  * PTY stream and registers a viewer server-side.
  */
 import { describe, it, expect } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import { resolvePaneSurface } from '../pane-surface';
 
 const chat = (targetId: string | null, agentPageId: string | null = 'agent-1'): PaneScope => ({

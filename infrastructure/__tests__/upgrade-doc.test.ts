@@ -93,4 +93,39 @@ describe('infrastructure/UPGRADE.md (operator upgrade note)', () => {
       expect(doc).toContain('db:provision:admin-users');
     });
   });
+
+  /**
+   * Every migration this doc names by filename must actually exist.
+   *
+   * This guard exists because migrations DO get renumbered: when the
+   * "Agent-Session Single Source of Truth" epic was integrated with master,
+   * master had already shipped its own 0246, so the epic's eight migrations
+   * moved 0246–0253 → 0247–0254. The SQL files themselves keep their
+   * pre-renumber numbers in comments deliberately — the runner hashes the file,
+   * so the bodies had to stay byte-identical — but THIS file is a runbook, not
+   * an applied migration, and nothing forced its numbers to stay stale.
+   *
+   * The failure mode is worse than a dangling reference. A renumber SHIFTS the
+   * numbers, so a stale citation does not 404 — it silently lands on a
+   * different, real migration. After that shift `0253` stopped meaning the
+   * harmless `ALTER ... RENAME` this doc described and started meaning
+   * `0253_drop_chat_messages`, the one irreversible step in the epic. An
+   * operator reading "nothing is dropped" next to that number would have taken
+   * exactly the wrong snapshot decision.
+   */
+  describe('migration references', () => {
+    const MIGRATIONS_DIR = resolve(__dirname, '../../packages/db/drizzle');
+
+    it('given every migration named in the doc, should resolve to a real file in packages/db/drizzle', () => {
+      const referenced = [...doc.matchAll(/\b(\d{4}_[a-z0-9_]+)\b/g)].map((m) => m[1]);
+      // The doc is expected to cite migrations by name; a zero match would mean
+      // this guard silently stopped guarding anything.
+      expect(referenced.length).toBeGreaterThan(0);
+
+      const missing = [...new Set(referenced)].filter(
+        (name) => !existsSync(resolve(MIGRATIONS_DIR, `${name}.sql`)),
+      );
+      expect(missing).toEqual([]);
+    });
+  });
 });

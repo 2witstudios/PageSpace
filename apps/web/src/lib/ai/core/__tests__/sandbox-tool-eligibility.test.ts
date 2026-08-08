@@ -13,10 +13,10 @@ const { mockCanRunCodeForSession, mockFindSessionForConversation } = vi.hoisted(
   mockFindSessionForConversation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   canRunCodeForSession: mockCanRunCodeForSession,
 }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
 }));
 

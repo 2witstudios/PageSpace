@@ -9,6 +9,7 @@ import {
   getAllowedDriveIds,
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   buildCreateConversationPayload,
   buildConversationListQuery,
@@ -34,7 +35,9 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
 
-  await db.insert(conversations).values({
+  // Through the repository, so this creator emits its lifecycle event like the
+  // other two. It was the one path that wrote a conversation and told nobody.
+  await conversationRepository.createApiConversation({
     id: result.data.id,
     userId: result.data.userId,
     title: result.data.title,

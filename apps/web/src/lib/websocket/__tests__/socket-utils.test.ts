@@ -72,7 +72,7 @@ import {
   type AiStreamStartPayload,
   type AiStreamCompletePayload,
 } from '../socket-utils';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {

@@ -35,7 +35,19 @@ vi.mock('@pagespace/db/db', () => ({
     }),
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
+  sql: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
 
 // Destination resolution: the tool authorizes the target itself (create-file-page
 // deliberately does not), so both seams it uses are mocked here.

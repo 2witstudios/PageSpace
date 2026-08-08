@@ -23,7 +23,7 @@ scripts/          Backfill scripts, changelog generator, coverage tools
 - **Message content**: Use `parts` array structure. See `packages/lib/src/types.ts`.
 - **Permissions**: Use centralized functions from `packages/lib/src/permissions/`. Never roll your own.
 - **UI refresh protection**: Components editing/streaming content must register with `useEditingStore` (`apps/web/src/stores/useEditingStore.ts`) to prevent SWR clobbering and auth refresh interruption.
-- **Changelog**: Run `bun run changelog:generate` when changes land. Update any user-visible notes.
+- **Changelog**: Update any user-visible notes when changes land.
 
 ## Deployment Modes
 
@@ -64,5 +64,4 @@ bun run test:unit          # Unit tests only
 bun run test:security      # Security tests
 bun run db:generate        # Generate Drizzle migrations
 bun run db:migrate         # Run migrations
-bun run changelog:generate # Generate changelog from merged PRs
 ```

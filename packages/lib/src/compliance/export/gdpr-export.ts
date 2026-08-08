@@ -1,7 +1,9 @@
-import { eq, inArray, or, and, ne } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -13,6 +15,10 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
@@ -191,6 +197,24 @@ export interface UserDisplayPreferenceExport {
   updatedAt: Date;
 }
 
+/**
+ * The subject's own SETTINGS — hotkey bindings, automation opt-ins, toast level
+ * and per-type email opt-ins.
+ *
+ * These were excluded, on the reasoning that the subject "can read them in
+ * Settings at any time" (review finding). In-app visibility is not an Art 15
+ * basis: Art 15(3) gives a right to a COPY of the personal data undergoing
+ * processing, and being able to look at a screen does not discharge it. They
+ * are small, they are unambiguously the subject's, and exporting them removes
+ * the question entirely — which is cheaper than defending it.
+ */
+export interface UserSettingsExport {
+  hotkeys: { hotkeyId: string; binding: string; updatedAt: Date }[];
+  automation: { pulseEnabled: boolean; updatedAt: Date } | null;
+  toastNotifications: { level: string; updatedAt: Date } | null;
+  emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+}
+
 export interface UserPersonalizationExport {
   bio: string | null;
   writingStyle: string | null;
@@ -198,6 +222,87 @@ export interface UserPersonalizationExport {
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One PTY the subject opened inside a workspace.
+ *
+ * `spriteExecId` is deliberately absent: it names an exec session on a VM in
+ * OUR fleet, which is infrastructure identity rather than data about the
+ * subject — the same posture the log collectors take toward
+ * `sessionId`/`requestId`. `coldTail` IS carried: it is the subject's own
+ * terminal scrollback, i.e. their work.
+ */
+export interface UserAgentWorkspaceShellExport {
+  id: string;
+  name: string;
+  agentType: string;
+  command: string | null;
+  /** Tail of the last dead incarnation's scrollback — the subject's own terminal output. */
+  coldTail: string | null;
+  coldTailAt: Date | null;
+  /** Distinguishes "was silent" from "output overflowed the ring and left an empty tail". */
+  coldTailHasOutput: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * A working context (`agent_workspaces`) — the drive-level workspace that owns
+ * one sandbox and hosts the subject's conversations and shells.
+ *
+ * Excludes the whole Sprite identity block (`spriteKey`, `sandboxId`,
+ * `spriteInstanceId`, `egressPolicyToken`, `teardownRequestedAt`,
+ * `spriteTornDownAt`) and the storage-billing block (`storageLastBilledAt`,
+ * `storageMeasuredBytes`, `storageMeasuredAt`): every one of them describes a
+ * VM in OUR fleet and our accounting against it, not the subject's own
+ * activity. Same exclusion set, for the same reason, as the tenant migration's
+ * `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`.
+ */
+export interface UserAgentWorkspaceExport {
+  id: string;
+  /**
+   * `owner` — the subject's own workspace, carried whole.
+   *
+   * `participant` — a workspace someone ELSE owns, in which the subject ran
+   * shells of their own. The shells are the subject's data and travel; the
+   * workspace's own descriptive fields (`name`, `driveId`, its lifecycle
+   * timestamps) describe the OWNER's working context and are withheld under
+   * Art 15(4).
+   */
+  role: 'owner' | 'participant';
+  driveId: string | null;
+  name: string | null;
+  lastActiveAt: Date | null;
+  endedAt: Date | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  shells: UserAgentWorkspaceShellExport[];
+}
+
+/**
+ * A generation's checkpointed stream state (`ai_stream_sessions`).
+ *
+ * `parts` is the reason this category exists: it is a periodic snapshot of the
+ * generated `UIMessagePart[]` buffer — message CONTENT — and it is the only
+ * record of a generation that was interrupted before its assistant row was
+ * materialized.
+ *
+ * Excludes `channelId`, `browserSessionId`, `streamId`, `rawPartsCount`,
+ * `lastHeartbeatAt` and `abortRequestedAt`: multicast routing keys, client
+ * session telemetry, replay bookkeeping and liveness plumbing — the same
+ * category of internal transport detail the log collectors already strip.
+ * `displayName` is excluded too: it is the subject's own name, already carried
+ * verbatim by `profile`.
+ */
+export interface UserStreamStateExport {
+  messageId: string;
+  conversationId: string;
+  status: 'streaming' | 'complete' | 'aborted';
+  /** Checkpointed generation content. */
+  parts: unknown[];
+  startedAt: Date;
+  completedAt: Date | null;
 }
 
 export interface AllUserData {
@@ -215,7 +320,10 @@ export interface AllUserData {
   sessions: UserSessionExport[];
   notifications: UserNotificationExport[];
   displayPreferences: UserDisplayPreferenceExport[];
+  settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
+  agentWorkspaces: UserAgentWorkspaceExport[];
+  streamState: UserStreamStateExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -313,33 +421,6 @@ export async function collectUserPages(
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
   const result: UserMessageExport[] = [];
 
-  // AI chat messages (chatMessages table)
-  const aiChats = await database
-    .select({
-      id: chatMessages.id,
-      content: chatMessages.content,
-      role: chatMessages.role,
-      pageId: chatMessages.pageId,
-      conversationId: chatMessages.conversationId,
-      createdAt: chatMessages.createdAt,
-      status: chatMessages.status,
-    })
-    .from(chatMessages)
-    .where(eq(chatMessages.userId, userId));
-
-  for (const msg of aiChats) {
-    result.push({
-      id: msg.id,
-      source: 'ai_chat',
-      content: msg.content,
-      role: msg.role,
-      pageId: msg.pageId,
-      conversationId: msg.conversationId,
-      createdAt: msg.createdAt,
-      status: msg.status,
-    });
-  }
-
   // Channel messages
   const channelMsgs = await database
     .select({
@@ -361,10 +442,39 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     });
   }
 
-  // Conversation messages (unified conversations table). Global assistant rows store the
-  // conversation OWNER's userId (not null, unlike chatMessages), so this query — unlike
-  // aiChats above — does surface assistant placeholders for the requesting user's own
-  // conversations; `status` is what makes an empty row explainable rather than data loss.
+  /**
+   * Chat messages — one table, every kind of thread (epic "Agent-Session
+   * Single Source of Truth", Phase 4 / D6).
+   *
+   * ── Why the predicate is not just `messages.userId = :subject` ──────────
+   * `userId` is the HUMAN author and is NULL for every agent/system-authored
+   * row (page-chat assistant replies, `/help` answers, consult and worker
+   * dispatches; `sourceAgentId` names the agent when known). Filtering on
+   * `userId` alone exported the subject's questions and dropped every answer
+   * inside their own page chats — while the same answer in a GLOBAL
+   * conversation WAS exported, because the global writer stamps the owner's
+   * id on assistant rows. That asymmetry is an Art 15 completeness gap, and
+   * unification made it uniform rather than creating it.
+   *
+   * So the export is the union of:
+   *   1. rows the subject AUTHORED (`messages.userId = :subject`) — wherever
+   *      they live, including a conversation someone else owns (a shared
+   *      page conversation accepts messages from any member who can access
+   *      it), and
+   *   2. rows with NO human author that sit in a conversation the subject
+   *      OWNS — the agent/system side of the subject's own threads.
+   *
+   * It deliberately stops there. Rows authored by ANOTHER human inside the
+   * subject's shared conversation stay out: they are that person's data, and
+   * Art 15(4) says a subject's access right must not adversely affect the
+   * rights of others. `conversations.userId` alone would have swept them in
+   * (multi-author legacy conversations exist — 0249's orphan synthesis logs
+   * how many it found, "earliest human author wins").
+   *
+   * The join is INNER by design: `messages.conversationId` carries a real,
+   * VALIDATED FK to `conversations`, so a message with no conversation row
+   * cannot exist and the join cannot silently drop one.
+   */
   const convMsgs = await database
     .select({
       id: messages.id,
@@ -373,16 +483,41 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       conversationId: messages.conversationId,
       createdAt: messages.createdAt,
       status: messages.status,
+      conversationType: conversations.type,
+      conversationContextId: conversations.contextId,
+      conversationAgentPageId: conversations.agentPageId,
     })
     .from(messages)
-    .where(eq(messages.userId, userId));
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(
+      or(
+        eq(messages.userId, userId),
+        and(isNull(messages.userId), eq(conversations.userId, userId)),
+      )
+    );
 
   for (const msg of convMsgs) {
+    const isGlobal = msg.conversationType === 'global';
     result.push({
       id: msg.id,
-      source: 'conversation',
+      // The export vocabulary predates the merge and is kept: a page/client
+      // thread is still reported as 'ai_chat', a global thread as
+      // 'conversation'. One physical table, two documented sources.
+      source: isGlobal ? 'conversation' : 'ai_chat',
       content: msg.content,
       role: msg.role,
+      // The page comes from the CONVERSATION — there is no per-row page
+      // column. Each kind names it in its own place: `type='page'` in
+      // `contextId`, `type='client'` in `agentPageId` (its `contextId` is a
+      // DRIVE). Anything else — a global thread, or an API thread that never
+      // ran a completion — reports no pageId rather than a wrong one.
+      ...(() => {
+        const derived =
+          msg.conversationType === 'page' ? msg.conversationContextId
+          : msg.conversationType === 'client' ? msg.conversationAgentPageId
+          : null;
+        return derived ? { pageId: derived } : {};
+      })(),
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
       status: msg.status,
@@ -695,6 +830,36 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
     .where(eq(displayPreferences.userId, userId));
 }
 
+/** Every settings row the subject owns, in one Art 15 category. */
+export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
+  const [hotkeys, automation, toast, email] = await Promise.all([
+    database
+      .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
+      .from(userHotkeyPreferences)
+      .where(eq(userHotkeyPreferences.userId, userId)),
+    database
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled, updatedAt: userAutomationPreferences.updatedAt })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId)),
+    database
+      .select({ level: userToastNotificationPreferences.level, updatedAt: userToastNotificationPreferences.updatedAt })
+      .from(userToastNotificationPreferences)
+      .where(eq(userToastNotificationPreferences.userId, userId)),
+    database
+      .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
+      .from(emailNotificationPreferences)
+      .where(eq(emailNotificationPreferences.userId, userId)),
+  ]);
+  return {
+    hotkeys,
+    // Both are unique-per-user, so at most one row each; null means "never set",
+    // which is a different fact from the default and worth preserving.
+    automation: automation[0] ?? null,
+    toastNotifications: toast[0] ?? null,
+    emailNotifications: email,
+  };
+}
+
 export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
   const result = await database
     .select({
@@ -712,6 +877,151 @@ export async function collectUserPersonalization(database: DB, userId: string): 
   return result[0] ?? null;
 }
 
+/**
+ * The subject's WORKING CONTEXTS and the shells inside them.
+ *
+ * ── Why this collector exists ────────────────────────────────────────────────
+ * The epic "Agent-Session Single Source of Truth" moved a large amount of the
+ * subject's actual work into `agent_workspaces` / `agent_workspace_shells`.
+ * Nothing collected either one, so a subject access request answered LESS after
+ * the epic than before it, in a product where the workspace and its shells ARE
+ * the work. The asymmetry was sharpest against erasure: `purge-stream-state`
+ * and the `users` cascade already REACH this content on an Art 17 request. We
+ * were deleting on demand what we would not disclose on demand.
+ *
+ * ── The Art 15(4) boundary ──────────────────────────────────────────────────
+ * Exactly the rule `collectUserMessages` settled on: rows the subject
+ * AUTHORED, wherever they live — never another person's rows just because they
+ * sit in a container the subject owns.
+ *
+ *   - Workspaces: `ownerId = :subject`.
+ *   - Shells: `ownerId = :subject`. A shell's `ownerId` is the ACTING user
+ *     (`spawnSessionShell` takes it from the caller), which in a SHARED
+ *     workspace is not necessarily the workspace's owner. So the subject's own
+ *     shell inside someone else's workspace travels — as a `participant` entry
+ *     carrying the shells and nothing descriptive about the other person's
+ *     workspace — and another member's shell inside the SUBJECT's workspace
+ *     does NOT. `conversations.workspaceId` binds the threads, which
+ *     `collectUserMessages` already exports under its own boundary.
+ */
+export async function collectUserAgentWorkspaces(
+  database: DB,
+  userId: string,
+): Promise<UserAgentWorkspaceExport[]> {
+  const ownedWorkspaces = await database
+    .select({
+      id: agentWorkspaces.id,
+      driveId: agentWorkspaces.driveId,
+      name: agentWorkspaces.name,
+      lastActiveAt: agentWorkspaces.lastActiveAt,
+      endedAt: agentWorkspaces.endedAt,
+      createdAt: agentWorkspaces.createdAt,
+      updatedAt: agentWorkspaces.updatedAt,
+    })
+    .from(agentWorkspaces)
+    .where(eq(agentWorkspaces.ownerId, userId));
+
+  const ownedShells = await database
+    .select({
+      id: agentWorkspaceShells.id,
+      workspaceId: agentWorkspaceShells.workspaceId,
+      name: agentWorkspaceShells.name,
+      agentType: agentWorkspaceShells.agentType,
+      command: agentWorkspaceShells.command,
+      coldTail: agentWorkspaceShells.coldTail,
+      coldTailAt: agentWorkspaceShells.coldTailAt,
+      coldTailHasOutput: agentWorkspaceShells.coldTailHasOutput,
+      createdAt: agentWorkspaceShells.createdAt,
+      updatedAt: agentWorkspaceShells.updatedAt,
+    })
+    .from(agentWorkspaceShells)
+    .where(eq(agentWorkspaceShells.ownerId, userId));
+
+  const shellsByWorkspace = new Map<string, UserAgentWorkspaceShellExport[]>();
+  for (const shell of ownedShells) {
+    const { workspaceId, ...rest } = shell;
+    const bucket = shellsByWorkspace.get(workspaceId) ?? [];
+    bucket.push(rest);
+    shellsByWorkspace.set(workspaceId, bucket);
+  }
+
+  const result: UserAgentWorkspaceExport[] = ownedWorkspaces.map((workspace) => ({
+    ...workspace,
+    role: 'owner' as const,
+    shells: shellsByWorkspace.get(workspace.id) ?? [],
+  }));
+
+  // Subject-owned shells that live in somebody else's workspace. The shells are
+  // the subject's data and must not be dropped; the host workspace's own
+  // fields are the OWNER's and are withheld (Art 15(4)).
+  const ownedIds = new Set(ownedWorkspaces.map((w) => w.id));
+  for (const [workspaceId, shells] of shellsByWorkspace) {
+    if (ownedIds.has(workspaceId)) continue;
+    result.push({
+      id: workspaceId,
+      role: 'participant',
+      driveId: null,
+      name: null,
+      lastActiveAt: null,
+      endedAt: null,
+      createdAt: null,
+      updatedAt: null,
+      shells,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Checkpointed generation state (`ai_stream_sessions`).
+ *
+ * ── Why the predicate is not just `ai_stream_sessions.user_id = :subject` ────
+ * Same shape as `collectUserMessages`, for the same reason. `user_id` is the
+ * human who triggered the generation, and the union is:
+ *
+ *   1. rows the subject TRIGGERED (`user_id = :subject`) — wherever they live,
+ *      including a shared conversation someone else owns; and
+ *   2. rows with NO human trigger — a `user_id` that matches no `users` row,
+ *      i.e. a service/agent actor such as a dispatched worker — that sit in a
+ *      conversation the subject OWNS.
+ *
+ * Leg 2 is the same Art 15 hole the epic already closed for `messages`: the
+ * agent side of the subject's own thread must not vanish from their export
+ * merely because no person authored it. It is expressed as "no matching `users`
+ * row" rather than "NULL" because this column is NOT NULL — an agent actor
+ * carries an id that simply is not a person's.
+ *
+ * It stops there. A row triggered by ANOTHER HUMAN inside the subject's shared
+ * conversation stays out: `parts` is that person's generated content, and
+ * Art 15(4) forbids letting one subject's access right override another's.
+ */
+export async function collectUserStreamState(
+  database: DB,
+  userId: string,
+): Promise<UserStreamStateExport[]> {
+  const rows = await database
+    .select({
+      messageId: aiStreamSessions.messageId,
+      conversationId: aiStreamSessions.conversationId,
+      status: aiStreamSessions.status,
+      parts: aiStreamSessions.parts,
+      startedAt: aiStreamSessions.startedAt,
+      completedAt: aiStreamSessions.completedAt,
+    })
+    .from(aiStreamSessions)
+    .innerJoin(conversations, eq(aiStreamSessions.conversationId, conversations.id))
+    .leftJoin(users, eq(users.id, aiStreamSessions.userId))
+    .where(
+      or(
+        eq(aiStreamSessions.userId, userId),
+        and(isNull(users.id), eq(conversations.userId, userId)),
+      ),
+    );
+
+  return rows.map((row) => ({ ...row, parts: row.parts ?? [] }));
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -722,7 +1032,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userAgentWorkspaces, userStreamState] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
@@ -735,7 +1045,10 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserSessions(database, userId),
     collectUserNotifications(database, userId),
     collectUserDisplayPreferences(database, userId),
+    collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
+    collectUserAgentWorkspaces(database, userId),
+    collectUserStreamState(database, userId),
   ]);
 
   return {
@@ -753,6 +1066,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     sessions: userSessions,
     notifications: userNotifications,
     displayPreferences: userDisplayPreferences,
+    settings: userSettings,
     personalization: userPersonalizationData,
+    agentWorkspaces: userAgentWorkspaces,
+    streamState: userStreamState,
   };
 }

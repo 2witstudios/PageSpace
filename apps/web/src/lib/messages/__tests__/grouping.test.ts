@@ -1,5 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { isFirstInGroup, formatMessageDate } from '../grouping';
+
+// Every fixture below is written in UTC ("crosses midnight", "Today",
+// "Yesterday"), but grouping compares LOCAL calendar days — so in any
+// west-of-UTC timezone 2026-05-04T23:59Z and 2026-05-05T00:00Z land on the
+// same local day and the midnight test flips. Pin the process to UTC so the
+// suite means the same thing on every machine (CI already runs UTC), and
+// restore afterwards so the pin can't leak into other files sharing this
+// vitest worker.
+const ORIGINAL_TZ = process.env.TZ;
+process.env.TZ = 'UTC';
+afterAll(() => {
+  if (ORIGINAL_TZ === undefined) {
+    delete process.env.TZ;
+  } else {
+    process.env.TZ = ORIGINAL_TZ;
+  }
+});
 
 describe('isFirstInGroup', () => {
   const t0 = new Date('2026-05-04T12:00:00Z');

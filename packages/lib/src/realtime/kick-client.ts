@@ -27,12 +27,21 @@ export const KICK_REASONS = [
   'permission_revoked',
   'session_revoked',
   'page_private',
+  'conversation_unshared',
 ] as const;
 
 export type KickReason = (typeof KICK_REASONS)[number];
 
 export interface KickPayload {
+  /**
+   * The user to evict — or the literal `'*'` for a ROOM-WIDE kick (every
+   * socket currently in `roomPattern`, minus `exceptUserId`). The wildcard
+   * exists for un-share: the sharer cannot enumerate which collaborators
+   * joined the conversation room, but the room itself can.
+   */
   userId: string;
+  /** Room-wide kicks only: the one user whose sockets stay (the owner). */
+  exceptUserId?: string;
   /** An exact room name from ./rooms.ts builders. */
   roomPattern: string;
   reason: KickReason;

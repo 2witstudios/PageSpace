@@ -1,8 +1,9 @@
 /**
  * Activity-log pageId FK retry — integration tests (Postgres)
  *
- * Tests against a real Postgres database. Skips gracefully when DB is
- * unavailable — same convention as `machine-panes-store.integration.test.ts`.
+ * Tests against a real Postgres database. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  *
  * The unit tests for `isPageIdForeignKeyError` construct the Drizzle wrapper
  * error by hand, so they can only prove the predicate matches the shape we
@@ -21,6 +22,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { logActivity, logMessageActivity } from '../activity-logger';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -28,7 +30,8 @@ beforeAll(async () => {
   try {
     await db.execute(sql`SELECT 1`);
     dbAvailable = true;
-  } catch {
+  } catch (error) {
+    requireDb('activity-logger-fk-retry.integration.test.ts', error);
     dbAvailable = false;
   }
 });

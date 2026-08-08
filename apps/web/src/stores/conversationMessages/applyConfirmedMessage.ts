@@ -5,6 +5,14 @@ import type { ConversationMessagesById } from './seedEmpty';
 export interface ApplyConfirmedMessageEvent {
   conversationId: string;
   message: UIMessage;
+  /**
+   * The post-write `conversations.rev` the originating `conversation:*` event
+   * carried, when there was one. Recorded on the pending mutation so a snapshot
+   * that already contains this write can skip replaying it — see
+   * `replayPendingMutations`. Omit for unversioned paths (an SSE stream commit,
+   * the legacy `chat:*` fan-out), which always replay.
+   */
+  rev?: number;
 }
 
 /**
@@ -48,7 +56,7 @@ export const applyConfirmedMessage = (
       optimisticSends: existing.optimisticSends.filter((m) => m.id !== event.message.id),
       pendingMutationsSinceLoad: [
         ...existing.pendingMutationsSinceLoad,
-        { type: 'confirmedMessage', message: event.message },
+        { type: 'confirmedMessage', message: event.message, rev: event.rev },
       ],
     },
   };

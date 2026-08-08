@@ -129,11 +129,11 @@ describe('pickBillableGB', () => {
 
 function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
   deps: ReconcileSandboxStorageDeps;
-  chargeCalls: Array<{ payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }>;
-  agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }>;
+  chargeCalls: Array<{ payerId: string; driveId?: string; workspaceId: string; costDollars: number; gbMonths: number }>;
+  agentSessionAdvanceCalls: Array<{ workspaceId: string; billedThrough: Date }>;
 } {
-  const chargeCalls: Array<{ payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }> = [];
-  const agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }> = [];
+  const chargeCalls: Array<{ payerId: string; driveId?: string; workspaceId: string; costDollars: number; gbMonths: number }> = [];
+  const agentSessionAdvanceCalls: Array<{ workspaceId: string; billedThrough: Date }> = [];
   const deps: ReconcileSandboxStorageDeps = {
     listAgentSessionSprites: async () => [],
     lookupDriveOwnerId: async () => 'owner-1',
@@ -152,7 +152,7 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
 /** A measured agent-session Sprite: 1GB written, measured just before `now`, in `drive-1`. */
 function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionStorageRow {
   return {
-    sessionId: 'session-1',
+    workspaceId: 'session-1',
     driveId: 'drive-1',
     ownerId: 'session-owner-1',
     storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
@@ -166,7 +166,7 @@ function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionS
 describe('reconcileSandboxStorage', () => {
   it('bills an agent-session Sprite to its drive for its MEASURED storage window and advances its watermark', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-1', driveId: 'drive-1' })],
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-1', driveId: 'drive-1' })],
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -179,7 +179,7 @@ describe('reconcileSandboxStorage', () => {
     });
     expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
     expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
-    expect(agentSessionAdvanceCalls).toEqual([{ sessionId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
 
   it('resolves the payer via lookupDriveOwnerId when driveId is set', async () => {
@@ -243,9 +243,9 @@ describe('reconcileSandboxStorage', () => {
 
   it('given chargeStorage succeeds but the FOLLOWING watermark advance throws, counts the money as charged (never under-reported) and flags the row distinguishably', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ sessionId: 'boom' }), agentSession({ sessionId: 'fine' })],
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'boom' }), agentSession({ workspaceId: 'fine' })],
       advanceAgentSessionWatermark: async (input) => {
-        if (input.sessionId === 'boom') throw new Error('watermark write failed');
+        if (input.workspaceId === 'boom') throw new Error('watermark write failed');
         agentSessionAdvanceCalls.push(input);
       },
     });
@@ -261,14 +261,14 @@ describe('reconcileSandboxStorage', () => {
     expect(result.totalCostDollars).toBeGreaterThan(0);
     expect(chargeCalls).toHaveLength(2);
     // Only 'fine' successfully advanced — 'boom' will be billed again next run.
-    expect(agentSessionAdvanceCalls.map((c) => c.sessionId)).toEqual(['fine']);
+    expect(agentSessionAdvanceCalls.map((c) => c.workspaceId)).toEqual(['fine']);
   });
 
   it('given chargeStorage ITSELF throws, bills nothing for that row (no double-count) and never attempts its watermark advance', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ sessionId: 'boom' }), agentSession({ sessionId: 'fine' })],
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'boom' }), agentSession({ workspaceId: 'fine' })],
       chargeStorage: async (input) => {
-        if (input.sessionId === 'boom') throw new Error('credit ledger unreachable');
+        if (input.workspaceId === 'boom') throw new Error('credit ledger unreachable');
         chargeCalls.push(input);
       },
     });
@@ -277,8 +277,8 @@ describe('reconcileSandboxStorage', () => {
 
     expect(result).toMatchObject({ processed: 2, charged: 1, failed: 1, chargedButUnadvanced: 0 });
     expect(chargeCalls).toHaveLength(1);
-    expect(chargeCalls[0].sessionId).toBe('fine');
-    expect(agentSessionAdvanceCalls.map((c) => c.sessionId)).toEqual(['fine']);
+    expect(chargeCalls[0].workspaceId).toBe('fine');
+    expect(agentSessionAdvanceCalls.map((c) => c.workspaceId)).toEqual(['fine']);
   });
 
   it('given a stale measurement on an idle session, still bills the last measured value and flags it stale', async () => {

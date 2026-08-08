@@ -1,8 +1,10 @@
 import { db } from '@pagespace/db/db'
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
-import { eq, and, desc, isNull } from '@pagespace/db/operators'
+import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { conversations, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
@@ -329,6 +331,58 @@ async function recursivelyTrash(
  * Page service - encapsulates all DB operations for page CRUD
  * This is the boundary seam that route tests should mock
  */
+/**
+ * A page's chat messages for the page payload, author included.
+ *
+ * Reads the one `messages` table (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6). Page scope is `unifiedPageScope` - the join through
+ * `conversations`, which is what `chat_messages.pageId` became.
+ *
+ * Deliberately keeps the legacy shape verbatim, including the ABSENCE of a
+ * `status` filter (this payload has always included mid-flight 'streaming'
+ * placeholders) and the nested `user` object the drizzle relational query
+ * produced. Unbounded like its predecessor.
+ */
+async function fetchPageChatMessages(pageId: string) {
+  const rows = await db
+    .select({
+      id: unifiedMessages.id,
+      pageId: derivedPageId(),
+      conversationId: unifiedMessages.conversationId,
+      userId: unifiedMessages.userId,
+      role: unifiedMessages.role,
+      content: unifiedMessages.content,
+      messageType: unifiedMessages.messageType,
+      isActive: unifiedMessages.isActive,
+      createdAt: unifiedMessages.createdAt,
+      editedAt: unifiedMessages.editedAt,
+      toolCalls: unifiedMessages.toolCalls,
+      toolResults: unifiedMessages.toolResults,
+      sourceAgentId: unifiedMessages.sourceAgentId,
+      status: unifiedMessages.status,
+      authorId: users.id,
+      authorName: users.name,
+      authorEmail: users.email,
+      authorImage: users.image,
+    })
+    .from(unifiedMessages)
+    .innerJoin(conversations, eq(conversations.id, unifiedMessages.conversationId))
+    .leftJoin(users, eq(users.id, unifiedMessages.userId))
+    .where(and(unifiedPageScope(pageId), eq(unifiedMessages.isActive, true)))
+    .orderBy(asc(unifiedMessages.createdAt));
+
+  return rows.map(({ authorId, authorName, authorEmail, authorImage, ...message }) => ({
+    ...message,
+    // The LEFT JOIN types every `users` column as nullable, but `authorId`
+    // being present means the row joined — `users.email` is NOT NULL in the
+    // schema, so the assertion restates a database guarantee rather than
+    // papering over an unknown.
+    user: authorId === null
+      ? null
+      : { id: authorId, name: authorName, email: authorEmail!, image: authorImage },
+  }));
+}
+
 export const pageService = {
   /**
    * Check if user can view a page
@@ -396,12 +450,7 @@ export const pageService = {
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-      db.query.chatMessages.findMany({
-        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
-        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
-      })
+      fetchPageChatMessages(pageId)
     ]);
 
     const pageData = toPageData(page);
@@ -506,12 +555,7 @@ export const pageService = {
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-      db.query.chatMessages.findMany({
-        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
-        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
-      })
+      fetchPageChatMessages(pageId)
     ]);
 
     if (!updatedPage) {

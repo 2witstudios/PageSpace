@@ -76,6 +76,10 @@ vi.mock('@pagespace/lib/compliance/erasure/resend-suppression-client', () => ({
   createResendSuppressionClient: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock('@pagespace/lib/compliance/erasure/purge-stream-state', () => ({
+  deleteStreamStateForUser: vi.fn().mockResolvedValue({ streamSessions: 0, abortIntents: 0 }),
+}));
+
 vi.mock('@pagespace/lib/compliance/erasure/ai-provider-erasure', () => ({
   eraseAiProviderData: vi.fn().mockResolvedValue({ evidence: [], forwarded: 0 }),
 }));

@@ -816,7 +816,7 @@ export interface AIUsageData {
   pageId?: string;
   driveId?: string;
   /**
-   * The `agent_sessions.id` this usage attributes to (Terminal Epic 3 first-class
+   * The `agent_workspaces.id` this usage attributes to (Terminal Epic 3 first-class
    * attribution) — set by the sandbox runtime/storage charge streams so the
    * usage breakdown can group terminal spend by session without JSON forensics.
    * Absent for every non-terminal source.

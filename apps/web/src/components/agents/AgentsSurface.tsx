@@ -6,7 +6,7 @@ import { Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';

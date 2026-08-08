@@ -53,7 +53,7 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
 // The bound-session lookup for payer-derived sandbox eligibility (review
 // #2326) hits the real DB through the agent-sessions runtime; this suite's
 // conversations are unbound, so the eligibility path takes the userId branch.
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: vi.fn().mockResolvedValue(null),
 }));
 
@@ -78,6 +78,9 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -208,9 +211,75 @@ vi.mock('@pagespace/db/operators', () => ({
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 
+// The global route's auto-title now routes through the repository (rev bump
+// + emit); stubbed so these route tests don't wire its update chain.
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2), shimmed to preserve this file's
+// assertion surface: beforeSave runs against the mocked db's transaction
+// (exactly like the real repository), the raw write forwards to
+// mockSaveGlobalAssistantMessageToDatabase — the same spy the route used to
+// call directly — and the in-transaction lastMessageAt/rev bump surfaces as
+// a `db.update(conversations)` call for the bump assertions.
+vi.mock('@/lib/repositories/message-repository', async () => {
+  const { db } = await import('@pagespace/db/db');
+  const { conversations } = await import('@pagespace/db/schema/conversations');
+  type Tx = {
+    select: (...a: unknown[]) => {
+      from: (...a: unknown[]) => {
+        where: (...a: unknown[]) => { for: (...a: unknown[]) => { limit: (n: number) => Promise<Array<{ isActive: boolean }>> } };
+      };
+    };
+    insert: (...a: unknown[]) => { values: (...a: unknown[]) => unknown };
+  };
+  type SaveArgs = Record<string, unknown> & { beforeSave?: (tx: Tx) => Promise<unknown> };
+  const dbAny = db as unknown as {
+    transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean>;
+    update: (t: unknown) => { set: (v: unknown) => { where: (w: unknown) => Promise<unknown> } };
+  };
+  return {
+    messageRepository: {
+      saveGlobalMessage: vi.fn(async (args: SaveArgs) => {
+        const saved = await dbAny.transaction(async (tx) => {
+          if (args.beforeSave) {
+            const r = await args.beforeSave(tx);
+            if (r === false) return false;
+            if (r && typeof r === 'object' && (r as { proceed?: boolean }).proceed === false) return false;
+          }
+          const { beforeSave: _b, triggeredBy: _t, ...rest } = args;
+          await mockSaveGlobalAssistantMessageToDatabase({ ...rest, dbClient: tx });
+          return true;
+        });
+        // The real repository bumps rev + lastMessageAt in the same
+        // transaction; surfaced here on the outer db.update spy.
+        if (saved) await dbAny.update(conversations).set({}).where({});
+        return { saved, rev: 1 };
+      }),
+      insertGlobalStreamingPlaceholder: vi.fn(async (args: { messageId: string; conversationId: string; userId: string }) => {
+        const inserted = await dbAny.transaction(async (tx) => {
+          const [row] = await tx.select({}).from(conversations).where({}).for('update').limit(1);
+          if (!row?.isActive) return false;
+          await tx.insert({}).values({ id: args.messageId, status: 'streaming' });
+          return true;
+        });
+        return { inserted };
+      }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    },
+  };
+});
+
 // resolveOrCreateConversation is tested in its own file; here we stub it so
 // the route tests don't have to wire up the conversations db mock for it.
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
@@ -699,13 +768,13 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  sessionId: null, closedInSessionAt: null,
+  workspaceId: null, closedInWorkspaceAt: null, agentPageId: null, rev: 0, planPageId: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 
   describe('global conversation-added broadcast', () => {
     it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
@@ -721,7 +790,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
 
     it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest(), makeContext());
@@ -788,7 +857,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
 
     it('broadcasts the new-conversation sidebar event when isNew=true (previously an acknowledged gap)', async () => {
-      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
       vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
       vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
 

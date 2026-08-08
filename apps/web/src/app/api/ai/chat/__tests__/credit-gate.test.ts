@@ -91,7 +91,6 @@ vi.mock('@pagespace/db/db', () => {
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn(), exists: vi.fn(), sql: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));

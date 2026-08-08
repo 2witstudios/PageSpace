@@ -45,7 +45,7 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
-vi.mock('@pagespace/db/schema/core', () => ({ pages: {}, drives: {}, chatMessages: {} }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: {}, drives: {} }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveAgentMembers: {} }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),

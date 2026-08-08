@@ -1,9 +1,31 @@
 import { pgTable, text, timestamp, jsonb, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
+import { conversations } from './conversations';
 
 export const aiStreamSessions = pgTable('ai_stream_sessions', {
   messageId:      text('message_id').primaryKey(),
   channelId:      text('channel_id').notNull(),
-  conversationId: text('conversation_id').notNull(),
+  /**
+   * The conversation this generation belongs to — and, since migration 0250
+   * (epic "Agent-Session Single Source of Truth", Phase 4 — integrity
+   * constraints), a REAL foreign key rather than a naming convention.
+   *
+   * It could only become one after 0249 synthesized `conversations` rows for
+   * the orphan page-chat corpus: page-chat streams carry the same
+   * self-minted `conversationId` as `chat_messages`, so before that sweep a
+   * large share of these rows referenced nothing.
+   *
+   * ON DELETE CASCADE: a stream row is per-generation state (checkpointed
+   * parts, heartbeat, abort mailbox) that is meaningless once its
+   * conversation is gone. It also closes a real GDPR leak — deleting a user
+   * cascades to their conversations, and their `parts` checkpoints (message
+   * content) used to survive that.
+   *
+   * The constraint is added `NOT VALID` in the migration, so pre-existing
+   * dangling rows (streams whose conversation was hard-deleted) are left
+   * alone; only new INSERTs are checked. That makes the chat routes' eager
+   * `createConversation` call load-bearing — see the PR body.
+   */
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
   // The stream's OWNER. The authz anchor for every abort: a Stop may only ever stop the
   // caller's own streams, and this column — not any client-supplied claim — is what says so.
   userId:         text('user_id').notNull(),

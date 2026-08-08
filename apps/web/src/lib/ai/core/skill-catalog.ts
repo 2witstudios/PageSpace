@@ -110,8 +110,14 @@ function renderCommandList(
  * The volatile AVAILABLE COMMANDS section: non-builtin winners only
  * (built-ins live in the stable catalog). Degrades deterministically to fit
  * `charBudget`: 200-char descriptions → 80-char → names only → capped name
- * list with an omission note. Returns '' when the user has no commands —
- * the zero-command majority pays zero standing tokens.
+ * list with an omission note. Returns '' when the user has no commands.
+ *
+ * NOTE: "the zero-command majority pays zero standing tokens" stopped being
+ * true once starter skills began installing as personal commands at
+ * provisioning (packages/lib/src/commands/starter-skills.ts) — essentially
+ * every user now carries a catalog. That is why starter descriptions are kept
+ * short: they consume the same budget as the user's OWN commands and would
+ * otherwise push those down this ladder.
  *
  * `availableTools` (same sentinel semantics as listEligibleSkills) controls
  * whether the omission note may reference list_commands.

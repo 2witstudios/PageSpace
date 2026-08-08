@@ -10,13 +10,13 @@
  *
  * THE HANDLE SOURCE: `acquireSandbox` lazily ensures the conversation's agent
  * session row and its Sprite from `conversationId` alone — resolving
- * `conversations.sessionId` to the session row it's bound to, NOT treating the
+ * `conversations.workspaceId` to the session row it's bound to, NOT treating the
  * conversation id as a session id (contract.ts invariant 1: a session hosts
  * MANY conversations, and post-unconflation the two are different id
  * namespaces). This is one of the two sanctioned first-touch provisioning
  * sites (the other is a shell open). It runs through the SAME
  * `ensureSession`/`provisionSessionSandbox` path the API routes and the
- * realtime bridge use, so the CAS in `agent-session-sprite.ts` actually
+ * realtime bridge use, so the CAS in `agent-workspace-sprite.ts` actually
  * serializes every concurrent provisioner.
  */
 
@@ -57,7 +57,7 @@ import {
   ensureGlobalSandboxSession,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
-} from '@/lib/agent-sessions/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
@@ -183,7 +183,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         return { ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' };
       }
 
-      // The conversation's WORKING CONTEXT, through conversations.sessionId.
+      // The conversation's WORKING CONTEXT, through conversations.workspaceId.
       // A page conversation with no session gets a denial, never a
       // lazily-minted environment — per-conversation minting is exactly the
       // conflation the session model removed, and it is what made panes
@@ -205,7 +205,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —
       // one budget per workspace, however many threads work in it.
       const nowMs = Date.now();
-      const guardrail = checkSessionRuntimeGuardrail({ sessionId: row.id, now: nowMs });
+      const guardrail = checkSessionRuntimeGuardrail({ workspaceId: row.id, now: nowMs });
       if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
       const provisioned = await provisionSessionSandbox(row, input.userId);
@@ -220,7 +220,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
       }
 
-      recordSessionActivity({ sessionId: row.id, now: nowMs });
+      recordSessionActivity({ workspaceId: row.id, now: nowMs });
 
       return {
         ok: true,
@@ -228,7 +228,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         resumed: provisioned.resumed,
         // The session the sandbox belongs to — what every post-run hook
         // (storage measurement, activity feed) is keyed by.
-        sessionId: row.id,
+        workspaceId: row.id,
         // The CALLER's surface agent page (the conversation this run came
         // through) — purely descriptive per-agent attribution for the usage
         // breakdown, never a billing/payer key. A session hosts MANY
@@ -259,9 +259,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // suppress the post-write one, so an agent that writes 5 GB stays invisible
     // until the throttle lapses. The seam's own comment says so; an earlier pass
     // of this PR wired a pre-op call anyway and reintroduced exactly that.
-    measureStorage: ({ sandbox, sessionId }) =>
+    measureStorage: ({ sandbox, workspaceId }) =>
       measureWarmSessionStorage({
-        sessionId,
+        workspaceId,
         // The exec client exposes `runCommand`; the measurement seam speaks the
         // host's `exec`. One adapter here beats widening either contract.
         //
@@ -274,7 +274,11 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
           spriteInstanceId: sandbox.spriteInstanceId,
         }),
       }),
-    notifyShellActivity: (input) => notifyShellAgentActivity(input),
+    // `ShellActivityEventPayload.sessionId` is the web→realtime SHELL-BRIDGE
+    // wire field. Realtime deploys before web on Fly, so renaming it would need
+    // its own accept-both window; it is not part of this rename's inventory, so
+    // the workspace id is mapped onto the existing wire name at the boundary.
+    notifyShellActivity: ({ workspaceId, ...rest }) => notifyShellAgentActivity({ sessionId: workspaceId, ...rest }),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
     // through the built-in heuristic classifier before it becomes a model message.
     // Annotates flagged content (never blocks); a classifier error fails open. A
@@ -326,7 +330,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
       if (resolved.ok) {
         const row = resolved.session;
-        return { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId };
+        return { workspaceId: row.id, driveId: row.driveId, ownerId: row.ownerId };
       }
       if (!resolved.attempted) return null;
       return { deny: resolved.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
@@ -424,7 +428,7 @@ export function createResolveSandboxActorContext(
     //    `driveId: null`), so this user is the payer-to-be — never the
     //    drive they happen to be visiting.
     //  - A PAGE conversation can be hosted in a driveless Global session
-    //    too (`create-conversation-in-session.ts`: a global session may
+    //    too (`create-conversation-in-workspace.ts`: a global session may
     //    host any accessible agent), where the payer is the SESSION's
     //    owner, not the agent's drive owner. Only an UNBOUND page
     //    conversation falls back to the agent/location drive — and that

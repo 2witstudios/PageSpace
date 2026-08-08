@@ -4,11 +4,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -51,7 +52,7 @@ export async function PATCH(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -72,8 +73,17 @@ export async function PATCH(
     // Process content update (preserving structure if needed)
     const updatedContent = processMessageContentUpdate(message.content, content);
 
-    // Update the message content
-    await globalConversationRepository.updateMessageContent(messageId, updatedContent);
+    // Update the message content via the repository choke point: one
+    // transaction with the rev bump, then the legacy chat:message_edited
+    // broadcast + authoritative conversation:message_updated event — both
+    // emitted from the repository, not this route (Agent-Session SSoT §3).
+    await messageRepository.editGlobalMessage({
+      messageId,
+      conversationId,
+      ownerUserId: userId,
+      updatedContent,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
     // Invalidate compaction when a message in this conversation is edited (stale summary guard).
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
@@ -89,26 +99,6 @@ export async function PATCH(
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after global message edit', err as Error);
     }
-
-    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageEdited({
-          messageId,
-          pageId: globalChannelId(userId),
-          conversationId,
-          parts: [{ type: 'text', text: updatedContent }],
-          editedAt: new Date().toISOString(),
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast global message edit', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(conversationId),
-        });
-      }
-    })();
 
     // Log activity for audit trail (non-blocking)
     try {
@@ -186,7 +176,7 @@ export async function DELETE(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -204,8 +194,15 @@ export async function DELETE(
     // Store content for audit trail before deletion
     const deletedContent = message.content;
 
-    // Soft delete the message
-    await globalConversationRepository.softDeleteMessage(messageId);
+    // Soft delete via the repository choke point (rev bump + legacy
+    // chat:message_deleted + authoritative conversation:message_deleted,
+    // with the newest-surviving-message lastMessageAt recompute preserved).
+    await messageRepository.softDeleteGlobalMessage({
+      messageId,
+      conversationId,
+      ownerUserId: userId,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
     // Invalidate compaction when a message in this conversation is deleted (stale summary guard).
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
@@ -221,24 +218,6 @@ export async function DELETE(
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after global message delete', err as Error);
     }
-
-    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageDeleted({
-          messageId,
-          pageId: globalChannelId(userId),
-          conversationId,
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast global message delete', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(conversationId),
-        });
-      }
-    })();
 
     // Log activity for audit trail (non-blocking)
     try {

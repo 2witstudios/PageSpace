@@ -2,7 +2,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
 import { resolveDriveScope } from './drive-context-defaults';
@@ -170,22 +171,32 @@ export const searchTools = {
           if (aiChatPages.length > 0) {
             const aiChatPageIds = aiChatPages.map(p => p.id);
 
-            // Search conversation messages
+            // Search conversation messages.
+            //
+            // Reads the unified `messages` table since the message-table merge
+            // (epic "Agent-Session Single Source of Truth", Phase 4 / D6).
+            // Page scope comes from the JOIN — `conversations.type = 'page'`
+            // AND `conversations.contextId = <pageId>` — not from
+            // `messages.pageId`: `contextId` is the end-state authority and is
+            // indexed (`conversations_context_id_idx`), while `messages.pageId`
+            // is transitional and dropped at the contract PR.
             const conversationMatches = await db
               .select({
-                id: chatMessages.id,
-                pageId: chatMessages.pageId,
-                conversationId: chatMessages.conversationId,
-                content: chatMessages.content,
-                createdAt: chatMessages.createdAt,
+                id: messages.id,
+                pageId: sql<string>`${conversations.contextId}`,
+                conversationId: messages.conversationId,
+                content: messages.content,
+                createdAt: messages.createdAt,
               })
-              .from(chatMessages)
+              .from(messages)
+              .innerJoin(conversations, eq(conversations.id, messages.conversationId))
               .where(and(
-                inArray(chatMessages.pageId, aiChatPageIds),
-                eq(chatMessages.isActive, true),
-                sql`${chatMessages.content} ~ ${pgPattern}`
+                eq(conversations.type, 'page'),
+                inArray(conversations.contextId, aiChatPageIds),
+                eq(messages.isActive, true),
+                sql`${messages.content} ~ ${pgPattern}`
               ))
-              .orderBy(asc(chatMessages.createdAt))
+              .orderBy(asc(messages.createdAt), asc(messages.id))
               .limit(maxResults);
 
             // Group by conversation and build results
@@ -206,20 +217,22 @@ export const searchTools = {
             const allConvMessages = matchingConversationIds.length > 0
               ? await db
                   .select({
-                    id: chatMessages.id,
-                    pageId: chatMessages.pageId,
-                    conversationId: chatMessages.conversationId,
-                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${chatMessages.pageId}, ${chatMessages.conversationId} ORDER BY ${chatMessages.createdAt})`.as('line_number'),
+                    id: messages.id,
+                    pageId: sql<string>`${conversations.contextId}`,
+                    conversationId: messages.conversationId,
+                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.contextId}, ${messages.conversationId} ORDER BY ${messages.createdAt}, ${messages.id})`.as('line_number'),
                   })
-                  .from(chatMessages)
+                  .from(messages)
+                  .innerJoin(conversations, eq(conversations.id, messages.conversationId))
                   .where(and(
-                    inArray(chatMessages.pageId, matchingPageIds),
-                    inArray(chatMessages.conversationId, matchingConversationIds),
-                    eq(chatMessages.isActive, true),
+                    eq(conversations.type, 'page'),
+                    inArray(conversations.contextId, matchingPageIds),
+                    inArray(messages.conversationId, matchingConversationIds),
+                    eq(messages.isActive, true),
                     // A 'streaming' placeholder is hidden from every other reader — if it
                     // participates in this ROW_NUMBER() partition, computed line numbers shift
                     // by one relative to what the client actually displays.
-                    ne(chatMessages.status, 'streaming')
+                    ne(messages.status, 'streaming')
                   ))
               : [];
 

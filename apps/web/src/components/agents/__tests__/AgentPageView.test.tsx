@@ -212,7 +212,10 @@ vi.mock('@/components/shared/PageWebhooksDialog', () => ({
 }));
 
 import AgentPageView from '../AgentPageView';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 function pageFixture(): TreePage {
   return {
@@ -251,7 +254,7 @@ beforeEach(() => {
   conversationsState.lastOnConversationDelete = null;
   agentPanesState.lastOnConversationClosed = null;
   agentPanesState.firstOnConversationClosed = null;
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  __resetWorkspaceQueuesForTests();
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
     if (url.endsWith('/agent-config'))
@@ -296,10 +299,10 @@ describe('AgentPageView', () => {
 
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
     // Reachable now that a global session can host any accessible agent's
-    // conversation (create-conversation-in-session.ts): this agent page's
+    // conversation (create-conversation-in-workspace.ts): this agent page's
     // most-recent conversation can be bound to a global session. AgentPanes
     // must scope to the session's OWN drive (null), never `page.driveId` —
-    // otherwise `agentSessionsKey`/the picker look in the wrong workspace.
+    // otherwise `agentWorkspacesKey`/the picker look in the wrong workspace.
     // The raw session-record shape `useSessionRecord` resolves to (not a
     // pre-coalesced driveId) — a RESOLVED global session, session.driveId null.
     mockUseSWR.mockReturnValue({ data: { session: { driveId: null } } });
@@ -486,7 +489,7 @@ describe('AgentPageView', () => {
 
     expect(screen.getByText('Open in Agents')).toHaveAttribute(
       'href',
-      '/dashboard/drive-1/agents?session=ses-1&c=conv-1&agent=agent-1',
+      '/dashboard/drive-1/agents?workspace=ses-1&c=conv-1&agent=agent-1',
     );
   });
 
@@ -541,13 +544,13 @@ describe('AgentPageView', () => {
 
       conversationsState.lastOnConversationDelete?.('conv-1');
 
-      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1', expect.any(Function), { revalidate: false }));
-      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-sessions?driveId=drive-1')!;
+      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1', expect.any(Function), { revalidate: false }));
+      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-workspaces?driveId=drive-1')!;
       const updated = (updater as (current: unknown) => unknown)({
-        sessions: [{ sessionId: 'ses-1', conversations: [] }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }],
       });
       expect(updated).toEqual({
-        sessions: [{ sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
       });
     });
 
@@ -563,7 +566,7 @@ describe('AgentPageView', () => {
       const predicate = mockMutate.mock.calls.find(([key]) => typeof key === 'function')![0] as (
         key: unknown,
       ) => boolean;
-      expect(predicate('/api/agent-sessions?driveId=drive-1')).toBe(true);
+      expect(predicate('/api/agent-workspaces?driveId=drive-1')).toBe(true);
       expect(predicate('/api/pages/agent-1')).toBe(false);
     });
 

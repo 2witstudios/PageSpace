@@ -21,14 +21,17 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
-import { chatMessages, pages } from '@pagespace/db/schema/core';
+import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
+import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/workspace-status';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
   checkAccessForSubject,
@@ -43,29 +46,34 @@ import {
   provisionSessionSandbox,
   spawnSession,
   getAgentSessionStore,
-} from '@/lib/agent-sessions/agent-sessions-runtime';
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
+import { applyLayoutVerbForWorkspace } from '@/lib/agent-workspaces/workspace-placement';
+import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
-} from '@/lib/agent-sessions/create-conversation-in-session';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+} from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,
   killShellById,
   listShells,
   spawnShell,
-} from '@/lib/agent-sessions/session-shells-runtime';
+} from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-streams';
 import {
   createSessionTools,
   type DispatchOutcome,
   type OwnWorkspaceSummary,
+  type SharedWorkspaceSummary,
   type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
 } from './session-tools';
 import { createShellIo, realtimeShellIoTransport } from './shell-io';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
 // ---------------------------------------------------------------------------
 // Worker dispatch through the standard chat pipeline
@@ -158,38 +166,34 @@ export function resolveSelfBaseUrl(): string | null {
 
 /**
  * The latest completed assistant turn — what a `wait: true` dispatch hands
- * back after the drained stream finishes. Page-anchored transcripts live in
- * `chat_messages`; global-assistant ones in `messages`.
+ * back after the drained stream finishes.
+ *
+ * ONE conversation-scoped query since the message-table merge (epic
+ * "Agent-Session Single Source of Truth", Phase 4 / D6 — reader cutover).
+ * Page-anchored transcripts used to live in `chat_messages` and
+ * global-assistant ones in `messages`; both now live in `messages`, and a
+ * conversation id is globally unique (cuid2), so the `pageId` half of the old
+ * page-branch predicate was never load-bearing — the page is
+ * `conversations.contextId` and is already implied by the conversation.
+ *
+ * The global branch GAINS `status <> 'streaming'`, which only the page branch
+ * had: a streaming placeholder is an empty row, and returning it as "the
+ * reply" reported a completed dispatch as an empty answer. Same correctness
+ * class as `readSessionTranscript`'s `pending` mapping below.
  */
-async function readLatestAssistantReply(sessionId: string, agentPageId: string | null): Promise<string> {
-  if (agentPageId === null) {
-    const [row] = await db
-      .select({ content: globalMessages.content })
-      .from(globalMessages)
-      .where(
-        and(
-          eq(globalMessages.conversationId, sessionId),
-          eq(globalMessages.role, 'assistant'),
-          eq(globalMessages.isActive, true),
-        ),
-      )
-      .orderBy(desc(globalMessages.createdAt))
-      .limit(1);
-    return row?.content ?? '';
-  }
+async function readLatestAssistantReply(conversationId: string): Promise<string> {
   const [row] = await db
-    .select({ content: chatMessages.content })
-    .from(chatMessages)
+    .select({ content: globalMessages.content })
+    .from(globalMessages)
     .where(
       and(
-        eq(chatMessages.pageId, agentPageId),
-        eq(chatMessages.conversationId, sessionId),
-        eq(chatMessages.role, 'assistant'),
-        eq(chatMessages.isActive, true),
-        ne(chatMessages.status, 'streaming'),
+        eq(globalMessages.conversationId, conversationId),
+        eq(globalMessages.role, 'assistant'),
+        eq(globalMessages.isActive, true),
+        ne(globalMessages.status, 'streaming'),
       ),
     )
-    .orderBy(desc(chatMessages.createdAt))
+    .orderBy(desc(globalMessages.createdAt))
     .limit(1);
   return row?.content ?? '';
 }
@@ -205,7 +209,7 @@ async function readLatestAssistantReply(sessionId: string, agentPageId: string |
  * transcript.
  */
 export async function dispatchThroughChatPipeline(input: {
-  sessionId: string;
+  conversationId: string;
   agentPageId: string | null;
   input: string;
   userId: string;
@@ -236,14 +240,20 @@ export async function dispatchThroughChatPipeline(input: {
     return { ok: false, reason: 'failed', detail: 'the calling request carries no session credentials to dispatch with' };
   }
 
-  const url =
-    input.agentPageId === null
-      ? `${base}/api/ai/global/${encodeURIComponent(input.sessionId)}/messages`
-      : `${base}/api/ai/chat`;
+  // ONE internal path, whatever the worker is (epic "Agent-Session Single
+  // Source of Truth", Phase 5 — chat route consolidation). This used to branch
+  // on `agentPageId === null` to pick between two URLs, because two message
+  // tables forced two routes. Both URLs still exist and still work for the
+  // clients that address them by name, but they are one implementation now
+  // (`handle-chat-turn.ts`), and that implementation picks the page-agent or
+  // global-assistant strategy from the CONVERSATION — so dispatch names the
+  // pipeline once and lets it decide. A page worker still sends `chatId`; a
+  // global worker sends none, and the entry resolves its conversation.
+  const url = `${base}/api/ai/chat`;
 
   const requestHeaders: Record<string, string> = {
     'content-type': 'application/json',
-    // Required by both routes; a synthetic id marks a server-side dispatch —
+    // Required by the pipeline; a synthetic id marks a server-side dispatch —
     // it identifies this dispatch, not a browser tab.
     'x-browser-session-id': `agent-dispatch-${createId()}`,
     'x-agent-dispatch-depth': String(input.depth),
@@ -257,7 +267,7 @@ export async function dispatchThroughChatPipeline(input: {
 
   const body = JSON.stringify({
     ...(input.agentPageId !== null ? { chatId: input.agentPageId } : {}),
-    conversationId: input.sessionId,
+    conversationId: input.conversationId,
     messages: [
       { id: createId(), role: 'user', parts: [{ type: 'text', text: input.input }] },
     ],
@@ -271,7 +281,7 @@ export async function dispatchThroughChatPipeline(input: {
     // 3) — the real cause (DNS, connection refused, TLS) is an internal detail
     // logged server-side, not something to hand a model dispatching a turn.
     loggers.ai.error('session dispatch: could not reach the chat pipeline', error instanceof Error ? error : undefined, {
-      sessionId: input.sessionId,
+      conversationId: input.conversationId,
     });
     return { ok: false, reason: 'failed', detail: 'could not reach the chat pipeline to dispatch this turn' };
   }
@@ -298,11 +308,11 @@ export async function dispatchThroughChatPipeline(input: {
     await response.text();
   } catch (error) {
     loggers.ai.warn('session dispatch: waiting stream ended abnormally', {
-      sessionId: input.sessionId,
+      conversationId: input.conversationId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  const reply = await readLatestAssistantReply(input.sessionId, input.agentPageId);
+  const reply = await readLatestAssistantReply(input.conversationId);
   return { ok: true, waited: true, reply };
 }
 
@@ -322,26 +332,32 @@ export async function dispatchThroughChatPipeline(input: {
  * to exist (issue #2262 finding 4 — no unbounded `db.select()` feeding model
  * context).
  *
- * DELIBERATE metadata exposure (issue #2262 finding 6): this lists EVERY
- * active conversation in the session — including siblings the CALLER did not
- * spawn and does not own — by title and agent, to whichever member's agent
- * asks. That is shared-workspace semantics, not a leak: a session is one
- * shared sandbox and filesystem by design, so knowing what else is running
- * there is the same visibility a human teammate has glancing at the sidebar.
- * What stays owner-gated is TRANSCRIPT content — `read_session` still requires
- * `openOwnSession`'s ownership check, so seeing a sibling listed here grants
- * no access to what it said.
+ * Metadata exposure (issue #2262 finding 6): every active conversation in the
+ * session lists — including siblings the CALLER did not spawn — by agent and
+ * row, to whichever member's agent asks. Shared-workspace semantics: a
+ * session is one shared sandbox and filesystem by design, so knowing what
+ * else is running there is the same visibility a human teammate has glancing
+ * at the sidebar. TITLES, though, follow the one listing redaction rule
+ * (`redactConversationTitleForViewer` — full rule documented on
+ * `listSessionConversationsBulk`): the workspace's owner sees them all; a
+ * caller listing a workspace they do NOT own (their conversation was spawned
+ * into a shared one) sees `(private thread)` for siblings that are neither
+ * theirs nor deliberately shared. TRANSCRIPT content stays owner-gated
+ * either way — `read_session` still requires `openOwnSession`'s ownership
+ * check, so seeing a sibling listed here grants no access to what it said.
  */
-async function listSessionWorkers({
-  workspaceSessionId,
+async function listWorkspaceWorkers({
+  workspaceId,
   callerConversationId,
+  callerUserId,
 }: {
-  workspaceSessionId: string;
+  workspaceId: string;
   callerConversationId: string;
+  callerUserId: string;
 }): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
   const [row, workerRows, shells] = await Promise.all([
-    store.findById(workspaceSessionId),
+    store.findById(workspaceId),
     db
       .select({
         conversationId: conversations.id,
@@ -349,29 +365,38 @@ async function listSessionWorkers({
         agentPageId: conversations.contextId,
         type: conversations.type,
         agentTitle: pages.title,
+        ownerId: conversations.userId,
+        isShared: conversations.isShared,
       })
       .from(conversations)
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(conversations.sessionId, workspaceSessionId),
+          eq(conversations.workspaceId, workspaceId),
           eq(conversations.isActive, true),
           // A closed listing is gone from the human's sidebar — `list_sessions`
           // must agree, or an agent keeps seeing (and dispatching to) a
           // sibling the user believes they already closed.
-          isNull(conversations.closedInSessionAt),
+          isNull(conversations.closedInWorkspaceAt),
         ),
       )
       .orderBy(desc(conversations.createdAt))
       .limit(MAX_SESSION_CONVERSATIONS),
-    listShells(workspaceSessionId),
+    listShells(workspaceId),
   ]);
 
   return {
     sandbox: row ? deriveSandboxStatus(row) : 'none',
     workers: workerRows.map((worker) => ({
       sessionId: worker.conversationId,
-      name: worker.title ?? '',
+      name:
+        redactConversationTitleForViewer({
+          viewerId: callerUserId,
+          // A vanished workspace row (FK-nulled edge) has no owner to grant
+          // through — the empty id matches nobody, so the rule fails CLOSED.
+          workspaceOwnerId: row?.ownerId ?? '',
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
       agent:
         worker.type === 'page' && worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
@@ -387,40 +412,102 @@ async function listSessionWorkers({
 }
 
 /**
- * ALL the caller's active workspaces (their newest `SESSION_LIST_LIMIT`
- * slice, same as the sidebar) with each one's workers — the discovery half of
+ * ALL the caller's active workspaces (their newest
+ * `MAX_ACTIVE_WORKSPACES_PER_OWNER` slice, same as the sidebar — which is all
+ * of them, see below) with each one's workers — the discovery half of
  * resource-addressed orchestration: every worker id here is addressable by
  * the verbs from anywhere, and every workspaceId is a valid `spawn_session`
  * `workspace` target. Composed from the SAME primitives the sidebar uses
  * (`listSessions` + `listSessionConversationsBulk`), never a second query
  * shape; agent labels resolved in one batched lookup.
+ *
+ * Owned, and separately ACCESSIBLE: every row is decided by
+ * `decideAgentSessionAccess`, the same one gate `listSharedWorkspaces` and the
+ * routes run, because owning a workspace in a drive you have been removed from
+ * does not entitle you to it. See the comment on the filter.
  */
 async function listOwnWorkspaces({
   userId,
-  excludeWorkspaceSessionId,
+  excludeWorkspaceId,
 }: {
   userId: string;
-  excludeWorkspaceSessionId?: string;
+  excludeWorkspaceId?: string;
 }): Promise<OwnWorkspaceSummary[]> {
-  // The exclusion runs AFTER `listSessions`' own SESSION_LIST_LIMIT cap, not
-  // as a query-level filter before it — deliberately, not an oversight: a
+  // The exclusion runs AFTER `listSessions`' own listing cap, not as a
+  // query-level filter before it — deliberately, not an oversight: a
   // pre-cap exclusion would need a new filter shape on the shared store
-  // (`AgentSessionListFilter`) for a scenario that cannot occur today.
-  // `SESSION_LIST_LIMIT` and `MAX_ACTIVE_SESSIONS_PER_OWNER` are both 100,
-  // and the latter is a STRUCTURAL cap (`createIfUnderLimit`'s atomic
-  // count-and-insert) — no owner can ever HAVE more than 100 active
-  // sessions, so `listSessions` never actually truncates here and this
-  // filter can never drop a workspace that a pre-cap exclusion would have
-  // backfilled (review finding — CodeRabbit). That soundness is CONTINGENT
-  // on the two constants staying equal and the cap staying structural; if
-  // either ever changes independently, revisit this filter's ordering.
-  const sessions = (await listSessions({ ownerId: userId })).filter(
-    (session) => session.sessionId !== excludeWorkspaceSessionId,
+  // (`AgentSessionListFilter`) for a scenario that cannot occur. The store's
+  // `.limit()` and the spawn ceiling are the SAME
+  // `MAX_ACTIVE_WORKSPACES_PER_OWNER` constant (contract.ts), and the
+  // ceiling is STRUCTURAL (`createIfUnderLimit`'s atomic count-and-insert) —
+  // no owner can ever HAVE more active workspaces than one listing shows, so
+  // `listSessions` never actually truncates here and this filter can never
+  // drop a workspace that a pre-cap exclusion would have backfilled (review
+  // finding — CodeRabbit; the two-constants coupling this used to lean on is
+  // now one constant, pinned by session-list-limit-invariant.test.ts). If
+  // the cap ever stops being structural, revisit this filter's ordering.
+  const owned = (await listSessions({ ownerId: userId })).filter(
+    (session) => session.workspaceId !== excludeWorkspaceId,
+  );
+
+  // OWNERSHIP IS NOT ACCESS (review finding — MAJOR, `list_sessions`).
+  //
+  // This listing filtered on `ownerId` alone, which made it the one
+  // session-surface read with no access predicate — `listSharedWorkspaces`
+  // below runs `decideAgentSessionAccess` per row, and so does every route.
+  // The decision is explicit that the gate binds the OWNER too ("losing the
+  // drive loses its working contexts"), so an owner removed from a drive was
+  // refused the detail view by `list_sessions`' own revocation re-check and
+  // then handed the same workspace one field over, under `otherWorkspaces`.
+  // One documented rule, enforced in one branch and waived in its sibling.
+  //
+  // The SAME one decision, never a second predicate. Membership resolves once
+  // per distinct drive rather than per workspace, since an owner's workspaces
+  // cluster into few drives; a global-assistant workspace (`driveId` null) is
+  // owner-only by construction and needs no lookup at all.
+  const driveIds = [...new Set(owned.flatMap((s) => (s.driveId ? [s.driveId] : [])))];
+  const membershipByDrive = new Map(
+    await Promise.all(
+      driveIds.map(
+        async (driveId) => [driveId, await resolveDriveMembership({ userId, driveId })] as const,
+      ),
+    ),
+  );
+  const sessions = owned.filter(
+    (session) =>
+      decideAgentSessionAccess({
+        requesterId: userId,
+        session: { ownerId: session.ownerId, driveId: session.driveId },
+        // Absent from the map only if `driveId` is null, which the decision
+        // handles on its own branch; `null` there would deny.
+        driveMembership: session.driveId ? membershipByDrive.get(session.driveId) ?? null : null,
+      }).allowed,
   );
   if (sessions.length === 0) return [];
 
-  const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.sessionId));
+  const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.workspaceId));
+  const agentTitles = await resolveAgentTitles(workersBySession);
 
+  return sessions.map((session) => ({
+    workspaceId: session.workspaceId,
+    name: session.name,
+    driveId: session.driveId,
+    sandbox: session.sandboxStatus,
+    workers: (workersBySession.get(session.workspaceId) ?? []).map((worker) => ({
+      sessionId: worker.conversationId,
+      name: worker.title ?? '',
+      agent:
+        worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
+          : null,
+    })),
+  }));
+}
+
+/** The one batched agent-label lookup both cross-workspace listings share. */
+async function resolveAgentTitles(
+  workersBySession: Awaited<ReturnType<typeof listSessionConversationsBulk>>,
+): Promise<Map<string, string>> {
   const agentPageIds = [
     ...new Set(
       [...workersBySession.values()].flat().flatMap((w) => (w.agentPageId ? [w.agentPageId] : [])),
@@ -434,59 +521,158 @@ async function listOwnWorkspaces({
       .where(inArray(pages.id, agentPageIds));
     for (const row of agentRows) agentTitles.set(row.id, row.title);
   }
+  return agentTitles;
+}
 
-  return sessions.map((session) => ({
-    workspaceId: session.sessionId,
+/**
+ * The most SHARED workspaces (other members' sessions in drives the caller
+ * belongs to) one `list_sessions` call reports. The caller's OWN set needs
+ * no such bound — `MAX_ACTIVE_WORKSPACES_PER_OWNER` is a structural spawn
+ * ceiling, so a listing can never truncate it — but the member-visible set
+ * has no structural ceiling behind it (N members × their own caps), so this
+ * cap is a REAL truncation bound: newest activity first, the rest silently
+ * beyond the horizon. Sized to the same figure as the own-set cap
+ * (`MAX_ACTIVE_WORKSPACES_PER_OWNER`) so one listing's total stays
+ * model-context-shaped.
+ */
+const MAX_MEMBER_VISIBLE_WORKSPACES = 100;
+
+/**
+ * Workspaces the caller can ACCESS as a drive member without owning them —
+ * the discovery HALF of the spawn gate, restoring symmetry PR #2336 flagged:
+ * `spawn_session`'s explicit-`workspaceId` path admits any caller
+ * `checkSessionAccess` allows (owner OR drive member), while discovery only
+ * enumerated owned workspaces — so a member could target a shared workspace
+ * by id but never learn the id from `list_sessions`.
+ *
+ * Per-row access is decided by the SAME one pure decision the spawn gate
+ * uses — `decideAgentSessionAccess`, fed by the same `resolveDriveMembership`
+ * gather (`checkAccessForSubject`'s exact composition) — never a second
+ * predicate. Candidate drives come from the caller's drive relationships
+ * (`getDriveIdsForUser`, deliberately over-broad: it includes
+ * page-permission-only drives whose membership resolves to `'none'`, which
+ * the decision then denies — an over-broad candidate set filtered by the one
+ * real gate beats a hand-rolled narrower query that could drift from it).
+ *
+ * Worker rows come from the same `listSessionConversationsBulk` primitive as
+ * every other listing, with titles routed through the ONE redaction rule
+ * (`redactConversationTitleForViewer`): the caller sees their own and
+ * deliberately-shared titles; another member's private thread keeps its row
+ * (agent + activity — the orchestration signal) as `(private thread)`.
+ * Bounded by {@link MAX_MEMBER_VISIBLE_WORKSPACES} (see its doc).
+ */
+async function listSharedWorkspaces({
+  userId,
+  excludeWorkspaceId,
+}: {
+  userId: string;
+  excludeWorkspaceId?: string;
+}): Promise<SharedWorkspaceSummary[]> {
+  const candidateDriveIds = await getDriveIdsForUser(userId);
+  if (candidateDriveIds.length === 0) return [];
+
+  const memberships = await Promise.all(
+    candidateDriveIds.map(async (driveId) => ({
+      driveId,
+      membership: await resolveDriveMembership({ userId, driveId }),
+    })),
+  );
+
+  const sessionsPerDrive = await Promise.all(
+    memberships
+      .filter(({ membership }) => membership !== 'none')
+      .map(async ({ driveId, membership }) => {
+        // The ownerless `{ driveId }` filter: every ACTIVE session in the
+        // drive, any owner — the sidebar's own store primitive, its per-query
+        // cap included.
+        const sessions = await listSessions({ driveId });
+        return sessions.filter(
+          (session) =>
+            // The caller's own sessions belong to the OWN listing; the
+            // current workspace is the top-level detail view.
+            session.ownerId !== userId &&
+            session.workspaceId !== excludeWorkspaceId &&
+            // THE gate — the same pure decision `checkSessionAccess` applies
+            // on spawn_session's explicit-workspaceId path.
+            decideAgentSessionAccess({
+              requesterId: userId,
+              session: { ownerId: session.ownerId, driveId: session.driveId },
+              driveMembership: membership,
+            }).allowed,
+        );
+      }),
+  );
+
+  const shared = sessionsPerDrive
+    .flat()
+    .sort((a, b) => {
+      // Newest activity first, nulls last, then newest created — the store's
+      // own listing order, re-established across the merged drives.
+      const activity = (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
+      return activity !== 0 ? activity : b.createdAt.localeCompare(a.createdAt);
+    })
+    .slice(0, MAX_MEMBER_VISIBLE_WORKSPACES);
+  if (shared.length === 0) return [];
+
+  const workersBySession = await listSessionConversationsBulk(shared.map((s) => s.workspaceId));
+  const agentTitles = await resolveAgentTitles(workersBySession);
+
+  return shared.map((session) => ({
+    workspaceId: session.workspaceId,
     name: session.name,
-    driveId: session.driveId,
+    // Non-null by construction: only drive-scoped sessions pass the filter
+    // (a global-assistant session is owner-only, and own rows are excluded).
+    driveId: session.driveId ?? '',
     sandbox: session.sandboxStatus,
-    workers: (workersBySession.get(session.sessionId) ?? []).map((worker) => ({
+    workers: (workersBySession.get(session.workspaceId) ?? []).map((worker) => ({
       sessionId: worker.conversationId,
-      name: worker.title ?? '',
+      name:
+        redactConversationTitleForViewer({
+          viewerId: userId,
+          workspaceOwnerId: session.ownerId,
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
       agent:
         worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
           : null,
+      lastActiveAt: worker.lastMessageAt?.toISOString() ?? null,
     })),
   }));
 }
 
+/**
+ * A worker's recent turns, oldest-last-N first.
+ *
+ * ONE conversation-scoped query since the message-table merge (Phase 4 / D6 —
+ * reader cutover). The old `agentPageId === null` branch picked the TABLE, not
+ * the rows: `messages` for global-assistant threads, `chat_messages` for
+ * page-anchored ones. With one table the branch has nothing left to decide —
+ * `conversationId` alone selects the thread (cuid2, globally unique), and a
+ * page conversation's page is `conversations.contextId`, already implied.
+ *
+ * GLOBAL THREADS GAIN THE `pending` MAPPING. Only the page branch carried
+ * `status === 'streaming' ⇒ pending`; the global branch did not even select
+ * `status`, so a turn still being generated was handed to the model as a
+ * completed, empty message. Both now report it honestly. This is a deliberate
+ * behaviour change on global threads and the one intended non-parity in this
+ * reader.
+ */
 async function readSessionTranscript(input: {
-  sessionId: string;
+  conversationId: string;
   agentPageId: string | null;
   limit: number;
 }): Promise<TranscriptEntry[]> {
-  if (input.agentPageId === null) {
-    const rows = await db
-      .select({ role: globalMessages.role, content: globalMessages.content, createdAt: globalMessages.createdAt })
-      .from(globalMessages)
-      .where(and(eq(globalMessages.conversationId, input.sessionId), eq(globalMessages.isActive, true)))
-      .orderBy(desc(globalMessages.createdAt))
-      .limit(input.limit);
-    return rows
-      .reverse()
-      .map((row) => ({
-        role: row.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-        content: row.content,
-        at: row.createdAt,
-      }));
-  }
   const rows = await db
     .select({
-      role: chatMessages.role,
-      content: chatMessages.content,
-      createdAt: chatMessages.createdAt,
-      status: chatMessages.status,
+      role: globalMessages.role,
+      content: globalMessages.content,
+      createdAt: globalMessages.createdAt,
+      status: globalMessages.status,
     })
-    .from(chatMessages)
-    .where(
-      and(
-        eq(chatMessages.pageId, input.agentPageId),
-        eq(chatMessages.conversationId, input.sessionId),
-        eq(chatMessages.isActive, true),
-      ),
-    )
-    .orderBy(desc(chatMessages.createdAt))
+    .from(globalMessages)
+    .where(and(eq(globalMessages.conversationId, input.conversationId), eq(globalMessages.isActive, true)))
+    .orderBy(desc(globalMessages.createdAt))
     .limit(input.limit);
   return rows.reverse().map((row) => ({
     role: row.role === 'assistant' ? ('assistant' as const) : ('user' as const),
@@ -531,7 +717,21 @@ export async function resolveCallerSessionForWorker(
   ownerId: string,
 ): Promise<CallerSessionResolution> {
   const existing = await findSessionForConversation(callerConversationId);
-  if (existing) return { ok: true, session: existing };
+  if (existing) {
+    // A bound session is used AS IS — but "bound" is not "still allowed". The
+    // binding is PERMANENT and drive membership is not, so without this the
+    // early return hands a revoked member a worker (and therefore code
+    // execution) inside another tenant's live sandbox and filesystem — the
+    // richest thing this file can grant, on the one path that used to check
+    // nothing. This is the SAME permission decision the explicit-workspaceId
+    // branch of `resolveWorkerPlacement` runs, and it is permission-only:
+    // `decideAgentSessionAccess` reads owner + drive membership and never
+    // lifecycle state, so an ENDED session still resolves here exactly as
+    // #2335 requires. Only revocation refuses.
+    const access = await checkSessionAccess(ownerId, existing.id);
+    if (!access.allowed) return { ok: false, reason: 'not_permitted' };
+    return { ok: true, session: existing };
+  }
 
   const conversation = await conversationRepository.getConversation(callerConversationId);
   if (!conversation || conversation.userId !== ownerId || !conversation.isActive) {
@@ -547,7 +747,6 @@ export async function resolveCallerSessionForWorker(
     if (!agent) return { ok: false, reason: 'no_session' };
     if (!(await canUserViewPage(ownerId, agent.id))) return { ok: false, reason: 'not_permitted' };
     const access = await checkAccessForSubject(ownerId, {
-      sessionId: 'about-to-be-minted',
       ownerId,
       driveId: agent.driveId,
     });
@@ -587,7 +786,7 @@ async function resolveWorkerPlacement(input: {
   ownerId: string;
   agentPageId: string | null;
 }): Promise<
-  | { ok: true; workspaceSessionId: string; unwind: (() => Promise<void>) | null }
+  | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
   const { workspace, callerConversationId, ownerId, agentPageId } = input;
@@ -604,7 +803,7 @@ async function resolveWorkerPlacement(input: {
       }
       return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
     }
-    return { ok: true, workspaceSessionId: resolved.session.id, unwind: null };
+    return { ok: true, workspaceId: resolved.session.id, unwind: null };
   }
 
   if (workspace === 'new') {
@@ -621,7 +820,7 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
     }
-    const access = await checkAccessForSubject(ownerId, { sessionId: 'about-to-be-minted', ownerId, driveId });
+    const access = await checkAccessForSubject(ownerId, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
     }
@@ -637,12 +836,12 @@ async function resolveWorkerPlacement(input: {
     const unwind = async () => {
       await endSession(spawned.session.id).catch((cleanupError) => {
         loggers.ai.warn('createWorkerSession: failed to unwind an empty minted workspace', {
-          workspaceSessionId: spawned.session.id,
+          workspaceId: spawned.session.id,
           error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
         });
       });
     };
-    return { ok: true, workspaceSessionId: spawned.session.id, unwind };
+    return { ok: true, workspaceId: spawned.session.id, unwind };
   }
 
   // An existing workspaceId, gated by the ONE session access decision
@@ -653,7 +852,7 @@ async function resolveWorkerPlacement(input: {
     // id-guessing caller learns nothing.
     return { ok: false, reason: 'workspace_not_found', detail: `There is no workspace "${workspace}" you can use. Call list_sessions to see yours.` };
   }
-  return { ok: true, workspaceSessionId: workspace, unwind: null };
+  return { ok: true, workspaceId: workspace, unwind: null };
 }
 
 /**
@@ -678,7 +877,7 @@ async function resolveWorkerPlacement(input: {
  */
 async function recoverMintedWorkspaceAfterThrow(
   workerConversationId: string,
-  workspaceSessionId: string,
+  workspaceId: string,
   unwind: () => Promise<void>,
 ): Promise<'bound' | 'not_bound'> {
   let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
@@ -693,11 +892,11 @@ async function recoverMintedWorkspaceAfterThrow(
     verificationFailed = true;
     loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
       workerConversationId,
-      workspaceSessionId,
+      workspaceId,
       error: lookupError instanceof Error ? lookupError.message : String(lookupError),
     });
   }
-  if (boundAfterThrow?.id === workspaceSessionId) return 'bound';
+  if (boundAfterThrow?.id === workspaceId) return 'bound';
   if (!verificationFailed) {
     // Confirmed unbound — safe to unwind the empty workspace.
     await unwind();
@@ -712,15 +911,22 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
       const row = await findSessionForConversation(conversationId);
-      return row ? { sessionId: row.id } : null;
+      return row ? { workspaceId: row.id } : null;
     },
-    listSessionWorkers,
-    listOwnWorkspaces,
 
-    findSession: async (sessionId) => {
-      // The tool family's "sessionId" is the WORKER's conversation id (what
-      // spawn returned) — resolve the conversation, not a workspace row.
-      const conversation = await conversationRepository.getConversation(sessionId);
+    // THE session-access decision, wired for the tool surface exactly as the
+    // verbs route wires it (security review HIGH 2). Resolving a conversation's
+    // binding says the workspace is addressable, never that it is still usable
+    // — drive membership can be revoked out from under a permanent binding.
+    checkWorkspaceAccess: (userId, workspaceId) => checkSessionAccess(userId, workspaceId),
+    listWorkspaceWorkers,
+    listOwnWorkspaces,
+    listSharedWorkspaces,
+
+    findWorker: async (conversationId) => {
+      // The wire's "sessionId" is the WORKER's conversation id (what spawn
+      // returned) — resolve the conversation, not a workspace row.
+      const conversation = await conversationRepository.getConversation(conversationId);
       if (!conversation) return null;
       // A history-deleted worker is not addressable. Load-bearing now that
       // `openOwnSession` authorizes by the RESOURCE alone (ownership +
@@ -728,44 +934,28 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // workspace comparison incidentally masked deleted rows.
       if (!conversation.isActive) return null;
       return {
-        sessionId,
+        conversationId,
         ownerId: conversation.userId,
-        agentPageId: conversation.type === 'page' ? conversation.contextId : null,
+        agentPageId: conversationPageId(conversation),
         name: conversation.title ?? '',
-        // A worker conversation never "ends" — its session might, which the
-        // dispatch surfaces as a failed run rather than a dead address.
-        endedAt: null,
-        // The WORKSPACE this conversation is bound to (conversations.sessionId
-        // — the agent_sessions.id FK), or null for a session-less thread.
+        // The WORKSPACE this conversation is bound to (conversations.workspaceId
+        // — the agent_workspaces.id FK), or null for a workspace-less thread.
         // `openOwnSession` requires it non-null (a plain thread is not a
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
-        workspaceSessionId: conversation.sessionId,
+        workspaceId: conversation.workspaceId,
         // The human closed this conversation's LISTING (it no longer shows in
         // their sidebar) — `openOwnSession` refuses on this, so a worker verb
         // can never dispatch new work into, read, or kill a worker the user
         // has already closed.
-        isClosed: conversation.closedInSessionAt !== null,
+        isClosed: conversation.closedInWorkspaceAt !== null,
       };
     },
 
-    countSessionConversations: async (workspaceSessionId) => {
-      const [row] = await db
-        .select({ n: count() })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.sessionId, workspaceSessionId),
-            eq(conversations.isActive, true),
-            // Mirrors the HTTP creation path's cap count (create-conversation-
-            // in-session.ts): a closed listing frees its cap slot here too, or
-            // the tool-side spawn planner keeps refusing a replacement worker
-            // for a slot the human already closed.
-            isNull(conversations.closedInSessionAt),
-          ),
-        );
-      return row?.n ?? 0;
-    },
+    // The ONE shared open-conversation count (`conversation-cap.ts`) — the
+    // same predicate the HTTP creation path's cap enforces, so a closed
+    // listing frees its cap slot here too by construction, not by mirroring.
+    countOpenConversations: (workspaceId) => countOpenConversations(workspaceId),
 
     canUseAgent: async (userId, agentPageId) => {
       const page = await db.query.pages.findFirst({
@@ -776,17 +966,24 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
       const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
       if (!placement.ok) return placement;
-      const { workspaceSessionId, unwind } = placement;
+      const { workspaceId, unwind } = placement;
 
       try {
         await createConversationInSession({
-          conversationId: sessionId,
+          conversationId,
           userId: ownerId,
           agentPageId,
-          sessionId: workspaceSessionId,
+          workspaceId,
+          // The spawning conversation shares this grid when the worker lands in
+          // the caller's own workspace — never evicted by its own spawn.
+          excludeTargetId: callerConversationId,
+          // An agent minting a worker has no browser pane waiting to be filled,
+          // so the server places it. The pane-picker routes deliberately do not
+          // ask for this — see `placeInGrid`'s doc.
+          placeInGrid: true,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -795,8 +992,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         });
       } catch (error) {
         if (unwind) {
-          const recovered = await recoverMintedWorkspaceAfterThrow(sessionId, workspaceSessionId, unwind);
-          if (recovered === 'bound') return { ok: true, workspaceSessionId };
+          const recovered = await recoverMintedWorkspaceAfterThrow(conversationId, workspaceId, unwind);
+          if (recovered === 'bound') return { ok: true, workspaceId };
         }
         // A FIXED message per known cause, never the raw driver/error string
         // (issue #2262 finding 3): a database error's text is an internal
@@ -816,26 +1013,52 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // metadata explicitly.
         const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
         loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, {
-          sessionId,
+          conversationId,
           callerConversationId,
           ownerId,
           ...(cause ? { cause: `${cause.name}: ${cause.message}` } : {}),
         });
         return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
       }
-      return { ok: true, workspaceSessionId };
+      return { ok: true, workspaceId };
     },
+
+    // The layout family's two seams (issue #2208). The read is the SAME
+    // label-joining snapshot the layout GET serves, so a model and a browser
+    // never see different names for the same pane; the write is the same
+    // single writer (`applyWorkspaceLayoutVerb`) behind the verbs route.
+    readPaneGrid: async (workspaceId, viewerId) => {
+      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId, viewerId);
+      if (!snapshot.grid || snapshot.grid.length === 0) return null;
+      return {
+        columns: snapshot.grid.map((column) => ({
+          columnId: column.id,
+          widthFraction: column.widthFraction ?? null,
+          panes: column.panes.map((pane) => ({
+            paneId: pane.id,
+            kind: pane.scope?.kind ?? null,
+            targetId: pane.scope?.targetId ?? null,
+            // Labels are display-only and the snapshot already re-derived them
+            // from the live rows — an unbound pane has none at all.
+            name: pane.scope?.name ?? '',
+            heightFraction: pane.heightFraction ?? null,
+          })),
+        })),
+      };
+    },
+
+    applyLayoutVerb: applyLayoutVerbForWorkspace,
 
     dispatch: dispatchThroughChatPipeline,
 
     readTranscript: readSessionTranscript,
 
-    endSession: async ({ sessionId, userId }) => {
+    killWorker: async ({ conversationId, userId }) => {
       // Stop the worker's in-flight run (the caller's own streams only —
       // abortConversationStreams' authorization). Deliberately NO sandbox
-      // teardown: a worker works in its SPAWNER's session, so tearing "its"
+      // teardown: a worker works in its SPAWNER's workspace, so tearing "its"
       // sandbox down would destroy the caller's own working context.
-      await abortConversationStreams({ conversationId: sessionId, userId }).catch(() => {});
+      await abortConversationStreams({ conversationId, userId }).catch(() => {});
       return { ok: true, spriteTornDown: false };
     },
 
@@ -858,12 +1081,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true };
     },
 
-    spawnShell: async ({ sessionId, ownerId, name }) => {
+    spawnShell: async ({ conversationId, ownerId, name }) => {
       // The pure layer hands the CALLER's conversation id; shells hang off the
-      // SESSION, so resolve the working context first.
-      const session = await findSessionForConversation(sessionId);
+      // WORKSPACE, so resolve the working context first.
+      const session = await findSessionForConversation(conversationId);
       if (!session) return { ok: false, reason: 'no_session' };
-      const spawned = await spawnShell({ sessionId: session.id, ownerId, name });
+      const spawned = await spawnShell({ workspaceId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
       return { ok: true, shell: spawned.shell };
     },
@@ -874,7 +1097,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       if (!row) return null;
       return {
         shellId: row.id,
-        sessionId: row.sessionId,
+        workspaceId: row.workspaceId,
         name: row.name,
         ...(row.coldTail !== null || row.coldTailHasOutput
           ? {

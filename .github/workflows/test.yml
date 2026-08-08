@@ -1,5 +1,21 @@
 name: Test Suite
 
+# A LONG-LIVED BRANCH DOES NOT BELONG IN EITHER LIST WHILE ITS PR IS OPEN, and
+# this branch put itself in both. The cost was measured, not theorised: every
+# push produced TWO full Test Suite runs (`event=push` and
+# `event=pull_request`) for the same commit, so a burst of commits queued eight
+# runs where four were wanted and the checks took twice as long to settle.
+#
+#  - `push.branches` matches the branch being pushed TO, so listing this branch
+#    added a second, redundant run of the run `pull_request` already gives.
+#  - `pull_request.branches` filters on the BASE branch, not the head. This PR's
+#    base is `master`, already listed — so that entry bought nothing at all. It
+#    would only matter for a PR *targeting* this branch, and there are none.
+#
+# Removed, and the branch keeps full CI on every push through `pull_request`'s
+# `synchronize`. `pu/flash-sandbox` and `pu/panes-agent` carry the same
+# redundancy and are left alone: they predate this branch and are not its to
+# change.
 on:
   push:
     branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]

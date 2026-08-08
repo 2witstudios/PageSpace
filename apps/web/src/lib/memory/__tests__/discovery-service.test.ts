@@ -32,7 +32,6 @@ vi.mock('@pagespace/db/operators', () => ({
   ne: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id', driveId: 'driveId' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
@@ -338,31 +337,37 @@ describe('discovery-service', () => {
         },
       ];
 
+      // Since the message-table merge (epic "Agent-Session Single Source of
+      // Truth", Phase 4 / D6) BOTH conversation reads select `FROM messages`,
+      // so the table no longer discriminates them — the join arity does. The
+      // global read joins `conversations` only; the page read joins
+      // `conversations` and then `pages`.
       mockDbSelect.mockImplementation(() => {
         return {
           from: vi.fn((table: Record<string, unknown>) => {
-            // messages table
+            // unified messages table
             if ('conversationId' in table) {
-              return {
-                innerJoin: vi.fn(() => ({
-                  where: vi.fn(() => ({
-                    orderBy: vi.fn(() => ({
-                      limit: vi.fn(() => Promise.resolve(globalMessages)),
-                    })),
+              const globalTail = {
+                where: vi.fn(() => ({
+                  orderBy: vi.fn(() => ({
+                    limit: vi.fn(() => Promise.resolve(globalMessages)),
                   })),
                 })),
               };
-            }
-
-            // chatMessages table
-            if ('pageId' in table) {
-              return {
-                innerJoin: vi.fn(() => ({
-                  where: vi.fn(() => ({
-                    orderBy: vi.fn(() => ({
-                      limit: vi.fn(() => Promise.resolve(pageMessages)),
-                    })),
+              const pageTail = {
+                where: vi.fn(() => ({
+                  orderBy: vi.fn(() => ({
+                    limit: vi.fn(() => Promise.resolve(pageMessages)),
                   })),
+                })),
+              };
+              return {
+                // First `.innerJoin(conversations)`: still ambiguous, so it
+                // returns a node that is BOTH the global tail and the entry to
+                // a second join (which only the page read makes).
+                innerJoin: vi.fn(() => ({
+                  ...globalTail,
+                  innerJoin: vi.fn(() => pageTail),
                 })),
               };
             }

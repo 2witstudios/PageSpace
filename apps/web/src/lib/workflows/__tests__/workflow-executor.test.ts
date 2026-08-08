@@ -50,7 +50,7 @@ const { mockSpawnSession, mockCreateConversationInSession, mockEndSession } = vi
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
 }));
-vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   spawnSession: mockSpawnSession,
   createConversationInSession: mockCreateConversationInSession,
   endSession: mockEndSession,
@@ -140,8 +140,10 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
-vi.mock('@/lib/ai/core/message-utils', () => ({
-  saveMessageToDatabase: vi.fn(),
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
 }));
 
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
@@ -166,7 +168,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { executeWorkflow, type WorkflowExecutionInput } from '../workflow-executor';
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
-import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -472,7 +474,7 @@ describe('executeWorkflow', () => {
       // and release the session's compute when the run ends (review #2326).
       expect(mockSpawnSession).toHaveBeenCalledTimes(1);
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'wf-ses-1', agentPageId: mockAgent.id }),
+        expect.objectContaining({ workspaceId: 'wf-ses-1', agentPageId: mockAgent.id }),
       );
       expect(mockEndSession).toHaveBeenCalledWith('wf-ses-1');
     });
@@ -630,7 +632,7 @@ describe('executeWorkflow', () => {
     const result = await executeWorkflow(input);
 
     expect(result.success).toBe(true);
-    const saveCall = vi.mocked(saveMessageToDatabase).mock.calls[0][0];
+    const saveCall = vi.mocked(messageRepository.savePageMessage).mock.calls[0][0];
     expect(saveCall.content).toContain('Meeting Notes');
     expect(saveCall.content).toContain('Discussed Q4 goals');
   });
@@ -661,7 +663,7 @@ describe('executeWorkflow', () => {
     const result = await executeWorkflow(input);
 
     expect(result.success).toBe(true);
-    const saveCall = vi.mocked(saveMessageToDatabase).mock.calls[0][0];
+    const saveCall = vi.mocked(messageRepository.savePageMessage).mock.calls[0][0];
     expect(saveCall.content).toContain('event prompt');
     expect(saveCall.content).not.toContain('Stored workflow prompt');
   });
@@ -671,8 +673,8 @@ describe('executeWorkflow', () => {
 
     await executeWorkflow(createInputFixture());
 
-    expect(saveMessageToDatabase).toHaveBeenCalledTimes(2);
-    const [userSave, assistantSave] = vi.mocked(saveMessageToDatabase).mock.calls;
+    expect(messageRepository.savePageMessage).toHaveBeenCalledTimes(2);
+    const [userSave, assistantSave] = vi.mocked(messageRepository.savePageMessage).mock.calls;
     expect(userSave[0].role).toBe('user');
     expect(assistantSave[0].role).toBe('assistant');
     expect(assistantSave[0].content).toBe('Report complete');
@@ -828,7 +830,7 @@ describe('executeWorkflow — explicit step chains', () => {
     expect(result.conversationId).toBeUndefined();
     expect(generateText).not.toHaveBeenCalled();
     expect(createAIProvider).not.toHaveBeenCalled();
-    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+    expect(messageRepository.savePageMessage).not.toHaveBeenCalled();
 
     expect(mockToolExecute).toHaveBeenCalledTimes(1);
     const [args, options] = mockToolExecute.mock.calls[0];

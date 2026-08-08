@@ -33,7 +33,7 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join('?'), values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: {}, favorites: {}, pageTags: {}, chatMessages: {},
+  pages: {}, favorites: {}, pageTags: {},
 }));
 vi.mock('@pagespace/db/schema/members', () => ({ pagePermissions: {} }));
 vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: {} }));

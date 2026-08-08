@@ -20,7 +20,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
   drives: { id: 'id', ownerId: 'ownerId' },
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -156,8 +155,12 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 // Mock core AI modules
 vi.mock('../../core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs) => msgs),
-  saveMessageToDatabase: vi.fn(),
   convertDbMessageToUIMessage: vi.fn((msg) => msg),
+}));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
@@ -184,7 +187,7 @@ import { canActorViewPage, isMcpScoped, resolveActingAgentId, filterDriveIdsByAp
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { createAIProvider } from '../../core/provider-factory';
-import { saveMessageToDatabase } from '../../core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import type { ToolExecutionContext } from '../../core/types';
 import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
@@ -368,7 +371,7 @@ describe('agent-communication-tools', () => {
         steps: [],
         totalUsage: { inputTokens: 100, outputTokens: 200, totalTokens: 300 },
       } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
-      vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      vi.mocked(messageRepository.savePageMessage).mockResolvedValue({ saved: true, rev: 1 });
       vi.mocked(AIMonitoring.trackUsage).mockClear();
     });
 
@@ -768,7 +771,7 @@ describe('agent-communication-tools', () => {
         );
 
         // Verify saveMessageToDatabase was called with sourceAgentId for the user message
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           call => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();
@@ -801,7 +804,7 @@ describe('agent-communication-tools', () => {
         );
 
         // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           call => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();
@@ -831,7 +834,7 @@ describe('agent-communication-tools', () => {
         );
 
         // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           call => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();
@@ -1292,7 +1295,7 @@ describe('agent-communication-tools', () => {
 
         // ...but the persisted message must not: the presigned URLs expire,
         // and replaying them from history would send dead links to the model.
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           (call) => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();
@@ -1331,7 +1334,7 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           (call) => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();
@@ -1373,7 +1376,7 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+        const userMessageCall = vi.mocked(messageRepository.savePageMessage).mock.calls.find(
           (call) => call[0].role === 'user'
         );
         expect(userMessageCall).toBeDefined();

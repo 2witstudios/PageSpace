@@ -16,13 +16,14 @@ import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-mid
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, desc } from '@pagespace/db/operators'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { eq } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -154,6 +155,43 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 }
 
 /**
+ * Resolve a caller-supplied conversationId to the ONE decision that governs
+ * reading it here — `authorizePageConversation`: owned-or-shared AND
+ * belongs-to-this-page, plus the history-deleted refusal. Fetch and decision in
+ * one step, so no call site can take the row without also taking the decision.
+ *
+ * `null` for an id that names no row, which the caller answers exactly as it
+ * answers a refusal (see the 404 at the call site): an id-guessing caller must
+ * not learn which of the two it hit.
+ *
+ * WHY THIS IS A FUNCTION rather than three lines inline at the call site:
+ * CodeQL's `js/user-controlled-bypass` reports any request-derived branch
+ * selector whose basic block dominates a call whose CALLEE NAME matches
+ * /login|auth|verify/ — here `if (conversationId)` dominating
+ * `authorizePageConversation` (alert #277). It is a name-and-dominance
+ * heuristic, not a proof of a bypass, and there is no bypass to prove: the
+ * decision is computed from the FETCHED row plus the session `userId`, the
+ * caller controls only WHICH conversation is named, and `pageId` is the agent
+ * page `canPrincipalViewPage` has already cleared. Dominance is per
+ * control-flow graph, so giving the call its own function is what settles the
+ * finding without weakening the check by a single condition.
+ *
+ * Two consequences worth keeping: this name must stay free of `auth`, `login`
+ * and `verify` (the heuristic reads the callee name, so renaming this to
+ * `authorize…` re-raises the alert while changing no behaviour), and the
+ * decision itself must stay in `authorize-page-conversation.ts` — inlining it
+ * back into the route would re-raise it too.
+ */
+async function resolveRequestedConversation(
+  conversationId: string,
+  { userId, pageId }: { userId: string; pageId: string },
+): Promise<PageConversationAccess | null> {
+  const requested = await conversationRepository.getConversation(conversationId);
+  if (!requested) return null;
+  return authorizePageConversation(requested, { userId, pageId });
+}
+
+/**
  * POST /api/ai/page-agents/consult
  * Consult another AI agent in the workspace for specialized knowledge or assistance
  */
@@ -274,7 +312,7 @@ export async function POST(request: Request) {
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
-    // Without this, chatMessages are persisted but the conversation itself is
+    // Without this, messages are persisted but the conversation itself is
     // invisible to list_conversations. createConversation itself refuses to
     // claim ownership of a supplied conversationId that already has messages
     // from a different user (see its doc comment) — safe to call unconditionally.
@@ -284,35 +322,48 @@ export async function POST(request: Request) {
     // placeholders (empty, mid-flight rows) — see Server Stream Durability epic PR 2. The
     // fallback branch was also missing the isActive filter the conversationId branch already
     // had (pre-existing gap, called out in the PR 2 board's reader inventory).
+    //
+    // Both branches read the UNIFIED `messages` table since the message-table
+    // merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6). Page
+    // scope moved from `chat_messages.pageId` to the repository's join through
+    // `conversations`. `chat_messages` was DROPPED by migration 0253 — there is
+    // no dual write and no revert path; this route is the only reader left that
+    // needs to state that, because it used to claim the opposite.
+    //
+    // BOTH branches are owner-scoped. `canPrincipalViewPage` above answers "may
+    // you use this AGENT", never "is this CONVERSATION yours", and the
+    // page-scoped repository predicate (`unifiedPageScope`) carries no user
+    // predicate at all — so on a SHARED agent page this route previously
+    // returned another member's private transcript verbatim to anyone who
+    // could name the conversation, and the no-conversationId branch handed over
+    // the page's 10 most recent messages across every user for free.
     let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {
+      // The same decision `page-chat-turn` runs before it will append a turn to
+      // a caller-supplied conversation: owned-or-shared AND belongs-to-this-page.
+      // `null` here means the id named no row — refused identically, see below.
+      const access = await resolveRequestedConversation(conversationId, { userId, pageId: agentId });
+      if (!access?.allowed) {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'conversation',
+          resourceId: conversationId,
+          details: { reason: 'consult_conversation_not_readable', action: 'consult', method: 'POST' },
+          riskScore: 0.6,
+        });
+        // Same shape whether the id names nothing or names someone else's
+        // thread — an id-guessing caller learns nothing either way.
+        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      }
       // Scoped to this conversation only, in chronological order.
-      historyMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, agentId),
-          eq(chatMessages.conversationId, conversationId),
-          eq(chatMessages.isActive, true),
-          ne(chatMessages.status, 'streaming')
-        ))
-        .orderBy(chatMessages.createdAt);
+      historyMessages = await messageRepository.getPageConversationMessages(agentId, conversationId);
     } else {
-      // No conversationId: fall back to the agent's most recent messages across
-      // all conversations for lightweight context. Must order DESC then reverse
-      // — ordering ASCENDING with limit(10) returns the agent's FIRST 10
-      // messages ever, not the most recent.
-      const recentMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, agentId),
-          eq(chatMessages.isActive, true),
-          ne(chatMessages.status, 'streaming')
-        ))
-        .orderBy(desc(chatMessages.createdAt))
-        .limit(10);
-      historyMessages = recentMessages.slice().reverse();
+      // No conversationId: fall back to THIS CALLER'S most recent messages on
+      // this agent, for lightweight context. The repository orders DESC under
+      // the limit and reverses — ordering ASCENDING with limit(10) would return
+      // the FIRST 10 messages ever, not the most recent.
+      historyMessages = await messageRepository.getRecentPageMessagesForUser(agentId, userId, 10);
     }
 
     // Build conversation messages (exclude system - handled separately)
@@ -340,7 +391,7 @@ export async function POST(request: Request) {
 
     // Persist the question immediately so it survives even if generation fails below.
     const userMessageId = createId();
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: userMessageId,
       pageId: agentId,
       conversationId: activeConversationId,
@@ -617,7 +668,7 @@ export async function POST(request: Request) {
 
     // Persist the answer so the conversation can be continued via conversationId.
     const assistantMessageId = createId();
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: assistantMessageId,
       pageId: agentId,
       conversationId: activeConversationId,

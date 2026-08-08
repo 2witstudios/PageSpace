@@ -6,11 +6,11 @@ import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/a
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
-import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
@@ -398,7 +398,7 @@ async function runToolStep(
  * to make the common case immediate and the residual case loudly observable
  * (error-level, not a swallowed warn), never to be a second reaper.
  */
-async function releaseWorkflowSession(sessionId: string, workflowId: string): Promise<void> {
+async function releaseWorkflowSession(workspaceId: string, workflowId: string): Promise<void> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       // `endSession` reports most failures as a RESOLVED `{ ok: false }`
@@ -406,13 +406,13 @@ async function releaseWorkflowSession(sessionId: string, workflowId: string): Pr
       // both shapes get the same bounded retry + error-level residual log
       // (codex round 10: the old unconditional return treated a resolved
       // failure as success and skipped both).
-      const result = await endSession(sessionId);
+      const result = await endSession(workspaceId);
       if (result && result.ok === false) {
         if (attempt === 2) {
           loggers.api.error(
             'Workflow executor: run-scoped session teardown failed after retry — the orphan-Sprite reconcile cron will reclaim it',
             undefined,
-            { sessionId, workflowId, reason: result.reason, detail: result.detail },
+            { workspaceId, workflowId, reason: result.reason, detail: result.detail },
           );
         }
         continue;
@@ -423,7 +423,7 @@ async function releaseWorkflowSession(sessionId: string, workflowId: string): Pr
         loggers.api.error(
           'Workflow executor: run-scoped session teardown failed after retry — the orphan-Sprite reconcile cron will reclaim it',
           error instanceof Error ? error : undefined,
-          { sessionId, workflowId },
+          { workspaceId, workflowId },
         );
       }
     }
@@ -645,7 +645,7 @@ async function runExecution(
             conversationId: boundConversationId,
             userId: input.createdBy,
             agentPageId: agent.id,
-            sessionId: spawned.session.id,
+            workspaceId: spawned.session.id,
             title: `Workflow: ${input.workflowName}`.slice(0, 100),
           });
           conversationId = boundConversationId;
@@ -659,7 +659,7 @@ async function runExecution(
           availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
           loggers.api.warn('Workflow executor: session conversation bind failed — running without session-backed tools', {
             workflowId: input.workflowId,
-            sessionId: spawned.session.id,
+            workspaceId: spawned.session.id,
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -747,7 +747,7 @@ async function runExecution(
     const userMessageId = createId();
     const assistantMessageId = createId();
 
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: userMessageId,
       pageId: agent.id,
       conversationId,
@@ -756,7 +756,7 @@ async function runExecution(
       content: userMessage,
     });
 
-    await saveMessageToDatabase({
+    await messageRepository.savePageMessage({
       messageId: assistantMessageId,
       pageId: agent.id,
       conversationId,

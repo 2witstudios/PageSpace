@@ -3,7 +3,7 @@
  *
  * The behaviour worth pinning hardest is the one that has no visible symptom
  * when it breaks: **clicking a row does not navigate**. Selection goes to the
- * store, which writes `?session=&c=&agent=` with `pushState`, and the route
+ * store, which writes `?workspace=&c=&agent=` with `pushState`, and the route
  * never changes — so nothing remounts and a live shell or streaming chat
  * survives the click. A regression to `router.push` would look identical on
  * screen and would silently tear down every PTY on the surface.
@@ -25,6 +25,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
+import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -109,8 +110,12 @@ import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
-import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import type { WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
@@ -128,17 +133,27 @@ const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}):
 });
 
 interface SessionFixture {
+  workspaceId: string;
+  /** The rolling-deploy compat twin the DTO still carries; nothing reads it. */
   sessionId: string;
   driveId: string | null;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
-  /** Omitted (undefined) in most fixtures — the sidebar reads that as "fall back to the flat conversation list above." */
+  /**
+   * The saved pane grid, omitted in most fixtures. Since issue #2373 the
+   * sidebar no longer picks a row shape from this — it annotates the list
+   * above with it, exactly as the route does. Left `unknown` because the
+   * fixtures are deliberately loose literals; `gridOf` narrows it once.
+   */
   workspace?: unknown;
 }
 
 const SESSION: SessionFixture = {
+  // The listing spreads AgentSessionDTO, which carries the canonical id AND
+  // the rolling-deploy compat twin. The sidebar reads the canonical one.
+  workspaceId: 'ses-1',
   sessionId: 'ses-1',
   driveId: 'drive-1',
   name: 'api refactor',
@@ -150,10 +165,27 @@ const SESSION: SessionFixture = {
   shells: [],
 };
 
+/**
+ * Serve a listing the way the ROUTE serves one (issue #2373): each thread
+ * annotated with its pane placement, using the server's own
+ * `annotateConversationsWithPanes`. Fixtures cannot drift from the shape the
+ * sidebar actually receives — a `workspace` grid and a `conversations` list
+ * that disagreed about placement is precisely the bug this suite now guards.
+ */
+const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
+  (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
+
 const respondWithSessions = (sessions: SessionFixture[]) => {
+  const annotated = sessions.map((session) => ({
+    ...session,
+    conversations: annotateConversationsWithPanes(
+      session.conversations,
+      gridOf(session.workspace),
+    ),
+  }));
   mockFetchWithAuth.mockResolvedValue({
     ok: true,
-    json: async () => ({ sessions }),
+    json: async () => ({ sessions: annotated }),
   });
 };
 
@@ -185,7 +217,7 @@ beforeEach(() => {
   // Same leak risk for panes: two tests opening the same session id (every
   // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
   // panes[0], since nothing else clears this store between tests.
-  useAgentWorkspaceStore.setState({ workspaces: {} });
+  __resetWorkspaceQueuesForTests();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
   // this default doubles as proof a non-admin gets full access too.
@@ -201,7 +233,7 @@ describe('AgentsSidebar', () => {
   test("lists the drive's sessions for a non-admin authenticated user", async () => {
     renderSidebar();
     expect(await screen.findByText('api refactor')).toBeDefined();
-    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1');
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
   });
 
   test('refuses when signed out, and makes no request on their behalf', () => {
@@ -248,9 +280,13 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  test('falls back to a flat conversation list when the session has no saved pane grid', async () => {
-    // SESSION carries no `workspace` — a session never opened under
-    // `useWorkspaceServerSync` (or opened only by an older client).
+  // Named for the deleted fork ("falls back to a flat conversation list") until
+  // issue #2373. There is no fallback now — there is one list, and a session
+  // with no grid is just the case where every thread in it is unplaced. Keeping
+  // the old name would have implied the branch still exists.
+  test('lists a session\'s threads when it has no saved pane grid at all', async () => {
+    // SESSION carries no `workspace` — a session never opened in the grid (or
+    // opened only by a client old enough to predate the layout sync).
     const user = userEvent.setup();
     renderSidebar();
 
@@ -292,6 +328,65 @@ describe('AgentsSidebar', () => {
       // Two panes, each showing its own conversation — two sibling rows.
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
       expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    /**
+     * THE BUG (issue #2373). The expansion used to be
+     * `chatPanes ? … : session.conversations`, and an open workspace always
+     * has a grid — so the pane branch always won and a thread with no pane row
+     * simply did not render. Placement is best-effort, so that is the ordinary
+     * state of a freshly spawned worker: production showed one workspace with
+     * 3 threads and 2 panes, another with 10 threads and 4 panes. Six threads
+     * were unreachable from the sidebar entirely.
+     *
+     * Fails on the pre-fix component: only the two placed rows appear.
+     */
+    test('renders a thread that has NO pane, alongside the placed ones', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [
+            ...SESSION.conversations,
+            // Spawned, claimed, never placed — the "hi" conversation from the
+            // production repro.
+            { conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' },
+          ],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+      expect(screen.getByText('Researcher — hi')).toBeDefined();
+      expect(screen.getAllByTestId('sidebar-conversation-row')).toHaveLength(3);
+    });
+
+    test('an unplaced thread closes the THREAD — there is no pane to unbind', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [{ conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' }],
+          workspace: workspaceFixture,
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — hi'));
+      await user.click(await screen.findByText('Close'));
+
+      // The conversation DELETE, not a layout verb: an unplaced thread has no
+      // pane binding to reset.
+      await waitFor(() => {
+        expect(mockDel).toHaveBeenCalledWith(
+          expect.stringContaining('/conversations/conv-unplaced'),
+        );
+      });
     });
 
     test('clicking a pane row selects its conversation', async () => {
@@ -346,7 +441,7 @@ describe('AgentsSidebar', () => {
 
     test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
       // Deliberately NO local grid: the session isn't the displayed one, so
-      // `AgentPanes`/`useWorkspaceServerSync` never hydrated it. The click
+      // `AgentPanes` and its layout sync never hydrated it. The click
       // must seat the row's own server-listing snapshot before focusing —
       // `selectPane` no-ops on a session the store has never seen (review
       // P1, chatgpt-codex-connector).
@@ -401,22 +496,32 @@ describe('AgentsSidebar', () => {
           .workspaces['ses-1'].columns.flatMap((c) => c.panes);
         expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
       });
-      // …and the close was PUT to the server, not left to a sync hook that
-      // isn't mounted for a non-displayed session.
+      // …and the close crossed the wire as its own `close_pane` VERB. The
+      // hand-rolled PUT this test used to pin is gone: the store posts every
+      // mutation for every session, displayed or not, so the sidebar has no
+      // persistence of its own left to get wrong.
       await waitFor(() => {
-        const putCall = mockFetchWithAuth.mock.calls.find(
+        const verbCall = mockFetchWithAuth.mock.calls.find(
           ([url, init]) =>
-            url === '/api/agent-sessions/ses-1/workspace' &&
-            (init as RequestInit | undefined)?.method === 'PUT',
+            url === '/api/agent-workspaces/ses-1/workspace/verbs' &&
+            (init as RequestInit | undefined)?.method === 'POST',
         );
-        expect(putCall).toBeDefined();
-        const body = JSON.parse((putCall![1] as RequestInit).body as string) as {
-          workspace: WorkspaceState;
+        expect(verbCall).toBeDefined();
+        const body = JSON.parse((verbCall![1] as RequestInit).body as string) as {
+          opId: string;
+          baseRev: number;
+          verb: { type: string; paneId: string };
         };
-        const putPanes = body.workspace.columns.flatMap((c) => c.panes);
-        expect(putPanes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
-        expect(putPanes).toHaveLength(2);
+        expect(body.verb).toEqual({ type: 'close_pane', paneId: 'pane-3' });
+        expect(body.opId).toBeTruthy();
       });
+      // Nothing was PUT — the legacy blob route survives one release for
+      // rolling deploys, but this client no longer calls it.
+      expect(
+        mockFetchWithAuth.mock.calls.find(
+          ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+        ),
+      ).toBeUndefined();
     });
 
     test('closing a row the local store no longer knows refreshes the listing instead of clobbering the server', async () => {
@@ -470,7 +575,11 @@ describe('AgentsSidebar', () => {
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-9');
     });
 
-    test('a failed close-PUT restores the row snapshot locally and surfaces an error', async () => {
+    test('a close whose verb the server rejects converges on the server truth, not a guessed rollback', async () => {
+      // The old hand-rolled PUT rolled back to `session.workspace` and
+      // toasted. The queue's answer is better and needs no local guess: a
+      // 4xx abandons the op and re-reads the server's own snapshot, so what
+      // the user ends up looking at is what is actually durable.
       const withPagePane = {
         ...workspaceFixture,
         columns: [
@@ -484,9 +593,13 @@ describe('AgentsSidebar', () => {
         ],
       };
       mockFetchWithAuth.mockImplementation(async (...args: unknown[]) => {
+        const url = args[0] as string;
         const init = args[1] as RequestInit | undefined;
-        if (init?.method === 'PUT') return { ok: false, status: 500, json: async () => ({}) };
-        return { ok: true, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
+        if (url.endsWith('/workspace/verbs')) return { ok: false, status: 404, json: async () => ({}) };
+        if (url.endsWith('/workspace') && init?.method === undefined) {
+          return { ok: true, status: 200, json: async () => ({ rev: 4, grid: withPagePane.columns }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
       });
       const user = userEvent.setup();
       renderSidebar();
@@ -495,14 +608,13 @@ describe('AgentsSidebar', () => {
       fireEvent.contextMenu(await screen.findByText('Spec doc'));
       await user.click(await screen.findByText('Close'));
 
-      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-      // The close landed locally, the PUT failed — the local grid must be
-      // restored to the durable (server) state rather than silently
-      // diverging until hydration resurrects the pane (review P3).
-      const panes = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-      expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
+        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+      });
+      expect(useAgentWorkspaceStore.getState().sync['ses-1'].rev).toBe(4);
     });
 
     test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
@@ -529,7 +641,7 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByText(/end session/i)).toBeDefined();
       const putCall = mockFetchWithAuth.mock.calls.find(
         ([url, init]) =>
-          url === '/api/agent-sessions/ses-1/workspace' &&
+          url === '/api/agent-workspaces/ses-1/workspace' &&
           (init as RequestInit | undefined)?.method === 'PUT',
       );
       expect(putCall).toBeUndefined();
@@ -559,7 +671,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       await waitFor(() => {
         const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
@@ -599,12 +711,69 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       await waitFor(() => {
         const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
         expect(pane.scope?.targetId).toBe('conv-2');
       });
+    });
+
+    /**
+     * THE SAME CASE, FROM A SESSION THE STORE HAS NEVER SEEN (review finding —
+     * CodeRabbit).
+     *
+     * A sidebar row can act on a session that is not the displayed one, and for
+     * that session `AgentPanes` — and the layout sync that seats its grid — was
+     * never mounted. `closePaneConversation` read the store raw, got undefined,
+     * defaulted `shownElsewhere` to FALSE, and turned "close this pane" into
+     * "DELETE this conversation" for a thread still open in another pane.
+     *
+     * The test above pre-hydrates the store, which is exactly why it could not
+     * see this. Here the store is deliberately left empty: the fix seats the
+     * row's own `session.workspace` snapshot through `ensureLocalWorkspace`
+     * first, so the second pane is visible and only the clicked pane resets.
+     *
+     * Fails on the pre-fix component with a DELETE.
+     */
+    test('closing a shared pane in an UNHYDRATED session still resets locally — never DELETEs', async () => {
+      const sharedWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      // NO hydrateWorkspace — this session was never opened in the grid.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      // Assert the RESET, not merely the absence of a DELETE (review finding —
+      // CodeRabbit): a bare early return on `shownElsewhere` would leave the
+      // clicked pane still bound and pass a no-DELETE-only assertion. The
+      // clicked pane must be emptied and its sibling left alone, which is also
+      // what proves the fix seated the grid — an unseated one cannot see
+      // pane-2, so it would have taken the DELETE branch instead.
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0].panes;
+        expect(panes?.find((p) => p.id === 'pane-1')?.scope).toBeNull();
+      });
+      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
+      expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      expect(mockDel).not.toHaveBeenCalled();
     });
 
     test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
@@ -630,10 +799,11 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      // Both panes show the identical label (same shared conversation) —
-      // pane-1 renders first, matching `columns[0].panes` order.
-      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
-      fireEvent.contextMenu(pane1Row);
+      // ONE row, though the thread occupies two panes — `findByText` throws on
+      // a second match, so this also pins the property the pane-keyed rows
+      // could not give: the sidebar lists THREADS. The row acts on the thread's
+      // first placement (pane-1), which is what the annotator records.
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() => {
@@ -709,7 +879,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-      expect(window.location.search).toBe('?session=ses-1&c=conv-1&agent=agent-1');
+      expect(window.location.search).toBe('?workspace=ses-1&c=conv-1&agent=agent-1');
       // The whole point: no route change, so nothing remounts.
       expect(mockPush).not.toHaveBeenCalled();
     });
@@ -741,7 +911,7 @@ describe('AgentsSidebar', () => {
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
-      expect(window.location.search).toBe('?session=ses-1&c=conv-2&agent=agent-1');
+      expect(window.location.search).toBe('?workspace=ses-1&c=conv-2&agent=agent-1');
       expect(mockPush).not.toHaveBeenCalled();
     });
 
@@ -932,7 +1102,7 @@ describe('AgentsSidebar', () => {
 
   describe('new session', () => {
     test('the inline "+" opens a searchable agent palette; picking an agent advances to a naming step, and submitting blank still spawns the session AND its first conversation, landing inside it', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -946,7 +1116,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, '{Enter}');
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
         agentPageId: 'agent-1',
         name: '',
@@ -960,7 +1130,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('the drive palette also offers Global Assistant, first — picking it spawns a session in THIS drive with no agent', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -974,7 +1144,7 @@ describe('AgentsSidebar', () => {
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       // Drive-scoped, not the global assistant group: driveId stays 'drive-1'.
-      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
         agentPageId: null,
         name: '',
@@ -986,7 +1156,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1049,7 +1219,7 @@ describe('AgentsSidebar', () => {
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
@@ -1090,7 +1260,7 @@ describe('AgentsSidebar', () => {
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
       // Still pending — nothing has resolved yet.
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
@@ -1121,7 +1291,7 @@ describe('AgentsSidebar', () => {
       await user.click(screen.getByLabelText('End session'));
       const dialog = await screen.findByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
 
       // While that DELETE is still pending, the user navigates to a
       // different session entirely.
@@ -1199,7 +1369,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
       // Instant sidebar freshness, same as the session row's other mutating actions.
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
@@ -1220,7 +1390,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
     });
 
@@ -1333,7 +1503,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning from the Assistant group posts driveId: null, distinct from the drive palette\'s own "Global Assistant" agent pick', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-a', sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([
         SESSION,
         {
@@ -1354,7 +1524,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'my assistant session{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
           agentPageId: null,
           name: 'my assistant session',
@@ -1388,7 +1558,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       expect(await screen.findByText('api refactor')).toBeDefined();
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions');
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces');
       // The drive name resolves through the roster, not the agents-by-drive fetch.
       expect(screen.getByText('Alpha')).toBeDefined();
     });
@@ -1458,7 +1628,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' });
       respondWithSessions([]);
       const user = userEvent.setup();
       renderSidebar();
@@ -1471,7 +1641,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'my session{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: 'drive-1',
           agentPageId: 'agent-1',
           name: 'my session',
@@ -1485,7 +1655,7 @@ describe('AgentsSidebar', () => {
       // Sessions are always deliberately named now — the Assistant group's "+"
       // goes through the naming step too, even though there's no agent to
       // choose (the assistant is the counterpart).
-      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      mockPost.mockResolvedValue({ session: { workspaceId: 'ses-a', sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([]);
       const user = userEvent.setup();
       renderSidebar();
@@ -1500,7 +1670,7 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, '{Enter}');
 
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
           agentPageId: null,
           name: '',
@@ -1550,7 +1720,15 @@ describe('AgentsSidebar', () => {
     });
 
     test('typing filters the drive\'s sessions by name, and clearing the query restores the rest', async () => {
-      respondWithSessions([SESSION, { ...SESSION, sessionId: 'ses-2', name: 'design review' }]);
+      // Override BOTH ids. `sessionId` is only the rolling-deploy compat twin;
+      // the sidebar keys rows on the canonical `workspaceId`, so overriding
+      // the twin alone gave two rows keyed `ses-1` — React warned about the
+      // duplicate key and this "two sessions" test was really rendering one
+      // session twice.
+      respondWithSessions([
+        SESSION,
+        { ...SESSION, workspaceId: 'ses-2', sessionId: 'ses-2', name: 'design review' },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 

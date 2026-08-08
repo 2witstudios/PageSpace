@@ -4,7 +4,7 @@ import { createMetadata } from "@/lib/metadata";
 export const metadata = createMetadata({
   title: "Agent Sessions & Sandbox",
   description: "Agent sessions give an agent a real cloud machine — a terminal, a filesystem, real code execution. How sessions and panes work, what's free vs. Pro, and how Workflows can run code too.",
-  path: "/docs/features/agent-sessions",
+  path: "/docs/features/agent-workspaces",
   keywords: ["agent sessions", "sandbox", "terminal", "code execution", "panes", "workflows", "cloud"],
 });
 

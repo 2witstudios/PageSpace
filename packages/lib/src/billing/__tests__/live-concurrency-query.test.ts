@@ -2,8 +2,10 @@
  * getLiveInFlightHolds integration tests (real Postgres).
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable,
- * mirroring credit-gate-concurrency.integration.test.ts.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
+ * Mirrors credit-gate-concurrency.integration.test.ts.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -12,6 +14,7 @@ import { eq } from '@pagespace/db/operators';
 import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { factories } from '@pagespace/db/test/factories';
 import { getLiveInFlightHolds } from '../live-concurrency-query';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
@@ -25,7 +28,8 @@ describe('getLiveInFlightHolds', () => {
     try {
       await db.select().from(creditBalances).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('live-concurrency-query.test.ts', error);
       dbAvailable = false;
     }
   });

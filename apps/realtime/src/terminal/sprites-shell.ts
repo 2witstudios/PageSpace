@@ -55,13 +55,13 @@ export type ReconnectPlan =
 /**
  * Decide how a dropped shell should reconnect. Exec sessions do NOT survive a
  * Sprite pause (docs.sprites.dev/concepts/lifecycle — "open network connections"
- * are "lost on any pause"), so a persisted `streamSessionId` can be dangling: it
+ * are "lost on any pause"), so a persisted `spriteExecId` can be dangling: it
  * MUST be verified against the sessions the Sprite currently reports live before
  * any retry. Pure by construction so every branch is unit-testable:
  *
  * - Known id still live → `attach` it (reattach + replay scrollback).
  * - Known id absent from the live list → `create` a fresh session (the stale id
- *   is dead; the shell overwrites the persisted streamSessionId).
+ *   is dead; the shell overwrites the persisted spriteExecId).
  * - NO known id → `create`, even when live shells exist. A Sprite hosts every
  *   agent terminal on its machine, so a live tty session may well be a SIBLING
  *   terminal's — attaching to it would drop this user into another terminal's
@@ -182,7 +182,7 @@ export type OpenPtyShellArgs = {
    * terminal's first session, and any fresh session that later replaces a
    * dangling one after a pause. The id is the one the session announced on its
    * own socket, so it is authoritative rather than inferred. The handler writes
-   * it to `machine_agent_terminals.streamSessionId` so the next reconnect (even
+   * it to `machine_agent_terminals.spriteExecId` so the next reconnect (even
    * after a realtime-process restart) targets THIS session and not a dead id or
    * a sibling terminal's shell. Never fired when attaching to a session whose id
    * the caller already supplied — there is nothing new to persist.
@@ -1240,7 +1240,7 @@ export function openPtyShell({
       if (plan.action === 'create') {
         // Either the known id is dead (Sprite paused then cold-woke) or we never
         // learned one. Start a fresh shell transparently; its own session_info
-        // frame names it, overwriting any dangling streamSessionId, so the user
+        // frame names it, overwriting any dangling spriteExecId, so the user
         // sees a new prompt rather than exit -1. `launchFreshSession` already clears
         // `seenTail`, so there is nothing a give-up here could be redundant WITH —
         // 'fresh' keeps it shown, matching a brand-new shell's own scrollback.

@@ -8,6 +8,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, and, desc, isNull, inArray, isNotNull, lt } from '@pagespace/db/operators';
 import { pages, type PageTypeEnum } from '@pagespace/db/schema/core';
+import { deleteConversationsForPages } from './conversation-cleanup';
 
 export type PageTypeValue = PageTypeEnum;
 
@@ -271,20 +272,51 @@ export const pageRepository = {
   /**
    * Hard-delete pages that have been in the trash for longer than the cutoff date.
    * Returns the count of deleted pages.
+   *
+   * This is an AUTOMATIC Article 17 path (`api/cron/purge-trashed-pages` runs
+   * it on a schedule against rows a user asked to be rid of 30 days earlier),
+   * and until now it was a bare `DELETE FROM pages` with no chat cleanup at
+   * all — so every page it purged left its conversations, messages and stream
+   * checkpoints behind. The manual trash route did clean up; the automated
+   * sweep over the SAME rows did not, which is the worse half of the pair,
+   * because nobody is watching it.
+   *
+   * SCOPE is exactly the rows this DELETE removes, and no more. `pages.parentId`
+   * carries NO foreign key (it is a bare text column), so deleting a trashed
+   * parent does not touch its children — they are orphaned, not cascaded, and
+   * trashing a page marks only that page. Expanding to the subtree here would
+   * therefore delete the chat history of pages that SURVIVE the purge, turning
+   * an under-deletion bug into a worse over-deletion one.
+   *
+   * Runs in a transaction so history and pages go together or not at all.
    */
   purgeExpiredTrashedPages: async (olderThan: Date): Promise<number> => {
-    const result = await db
-      .delete(pages)
-      .where(
-        and(
-          eq(pages.isTrashed, true),
-          isNotNull(pages.trashedAt),
-          lt(pages.trashedAt, olderThan)
-        )
-      )
-      .returning({ id: pages.id });
+    return db.transaction(async (tx) => {
+      const expired = await tx
+        .select({ id: pages.id })
+        .from(pages)
+        .where(
+          and(
+            eq(pages.isTrashed, true),
+            isNotNull(pages.trashedAt),
+            lt(pages.trashedAt, olderThan)
+          )
+        );
+      if (expired.length === 0) return 0;
 
-    return result.length;
+      const expiredIds = expired.map((p) => p.id);
+
+      // BEFORE the delete: `agentPageId` is ON DELETE SET NULL, so a page
+      // deleted first can no longer be traced to the API threads that named it.
+      await deleteConversationsForPages(tx, expiredIds);
+
+      const result = await tx
+        .delete(pages)
+        .where(inArray(pages.id, expiredIds))
+        .returning({ id: pages.id });
+
+      return result.length;
+    });
   },
 
   /**

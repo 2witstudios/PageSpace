@@ -1,7 +1,6 @@
 import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
@@ -78,6 +77,16 @@ export const users = pgTable('users', {
   suspendedReason: text('suspendedReason'),
   // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
   timezone: text('timezone'),
+  /**
+   * Stamped once the starter skills (see packages/lib/src/commands/starter-skills.ts)
+   * have been installed into this user's Home drive. NULL = never installed.
+   *
+   * This is a high-water mark, not a mirror of the commands table: the installer
+   * must never resurrect a starter the user deliberately deleted, and the
+   * backfill script must be safely re-runnable after a partial failure. Checking
+   * "does a command with this trigger exist?" alone would fail both.
+   */
+  starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -202,7 +211,6 @@ import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   deviceTokens: many(deviceTokens),
-  chatMessages: many(chatMessages),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   socketTokens: many(socketTokens),

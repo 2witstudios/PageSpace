@@ -63,13 +63,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { __table: 'pages', id: 'id' },
   drives: { __table: 'drives', id: 'id' },
-  chatMessages: {
-    __table: 'chatMessages',
-    pageId: 'pageId',
-    createdAt: 'createdAt',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-  },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },
@@ -91,7 +84,6 @@ vi.mock('@pagespace/db/db', () => {
           if (table?.__table === 'pages') return resolve([AGENT_ROW]);
           if (table?.__table === 'users') return resolve([GATE_USER_ROW]);
           if (table?.__table === 'drives') return resolve([DRIVE_ROW]);
-          if (table?.__table === 'chatMessages') return resolve([]);
           return resolve([]);
         } catch (e) {
           return reject?.(e);
@@ -138,14 +130,38 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@/lib/ai/core/message-utils', () => ({
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
+// reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+// PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// which read the unified `messages` table.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    // These suites assert other things, so an empty history is the honest
+    // stand-in for the two readers the cutover introduced.
+    getPageConversationMessages: vi.fn().mockResolvedValue([]),
+    getRecentPageMessagesForUser: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 const createConversation = vi.fn().mockResolvedValue(undefined);
+// A caller-supplied conversationId is authorized before its history is read
+// (`authorizePageConversation`), so the row has to exist and be the caller's
+// own on THIS agent page for the continued-conversation case to get that far.
+const getConversation = vi.fn(async (id: string) => ({
+  id,
+  userId: 'user-1',
+  type: 'page',
+  contextId: 'agent-1',
+  agentPageId: null,
+  isShared: false,
+  isActive: true,
+}));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     createConversation: (...args: unknown[]) => createConversation(...args),
+    getConversation: (...args: [string]) => getConversation(...args),
   },
 }));
 

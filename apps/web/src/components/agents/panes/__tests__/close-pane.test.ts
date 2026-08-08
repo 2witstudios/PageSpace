@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { decideClosePane, type SessionConversationSummary } from '../close-pane';
-import type { PaneState } from '@/stores/agent-workspace/pane-reducer';
+import type { PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
 const chatPane = (id: string, conversationId: string | null, agentPageId: string | null = null): PaneState => ({
   id,

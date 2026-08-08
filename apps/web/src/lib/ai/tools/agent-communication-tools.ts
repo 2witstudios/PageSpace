@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql } from '@pagespace/db/operators'
-import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+// Aliased: `messages` is used as a local variable name inside the tools below.
+import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
@@ -13,7 +15,8 @@ import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
-import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -175,12 +178,19 @@ export const agentCommunicationTools = {
         for (const agent of agents) {
           const canView = await canActorViewPage(executionContext, agent.id);
           if (canView) {
-            // Check if agent has conversation history
+            // Check if agent has conversation history. Unified `messages`
+            // table since the merge (Phase 4 / D6); the agent page comes from
+            // `conversations.contextId` (the end-state authority, indexed)
+            // rather than the transitional `messages.pageId`.
             const messageCount = await db
               .select({ count: sql<number>`count(*)` })
-              .from(chatMessages)
-              .where(eq(chatMessages.pageId, agent.id));
-            
+              .from(unifiedMessages)
+              .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
+              .where(and(
+                eq(conversationsTable.type, 'page'),
+                eq(conversationsTable.contextId, agent.id)
+              ));
+
             const hasConversationHistory = messageCount[0]?.count > 0;
             
             // Get parent title if exists
@@ -308,12 +318,17 @@ export const agentCommunicationTools = {
           for (const agent of agents) {
             const canView = await canActorViewPage(executionContext, agent.id);
             if (canView) {
-              // Check for conversation history
+              // Check for conversation history (unified `messages` table; see
+              // the same query in `list_agents` above).
               const messageCount = await db
                 .select({ count: sql<number>`count(*)` })
-                .from(chatMessages)
-                .where(eq(chatMessages.pageId, agent.id));
-              
+                .from(unifiedMessages)
+                .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
+                .where(and(
+                  eq(conversationsTable.type, 'page'),
+                  eq(conversationsTable.contextId, agent.id)
+                ));
+
               const hasConversationHistory = messageCount[0]?.count > 0;
               
               // Get parent title if exists
@@ -500,16 +515,39 @@ export async function executeAskAgent(
         if (conversationId) {
           // Load existing conversation history. Excludes 'streaming' placeholders — this
           // feeds the target agent's own model context. See Server Stream Durability epic PR 2.
+          //
+          // Unified `messages` table since the merge (Phase 4 / D6). The agent
+          // predicate is preserved — it stops a caller pairing a conversation
+          // id with an agent it does not belong to — but reads
+          // `conversations.contextId` instead of the transitional
+          // `messages.pageId`.
           const dbMessages = await db
-            .select()
-            .from(chatMessages)
+            .select({
+              id: unifiedMessages.id,
+              // The agent page, taken from the conversation rather than the
+              // transitional column, so this reader survives its removal.
+              pageId: sql<string>`${conversationsTable.contextId}`,
+              userId: unifiedMessages.userId,
+              role: unifiedMessages.role,
+              content: unifiedMessages.content,
+              createdAt: unifiedMessages.createdAt,
+              isActive: unifiedMessages.isActive,
+              editedAt: unifiedMessages.editedAt,
+              messageType: unifiedMessages.messageType,
+              toolCalls: unifiedMessages.toolCalls,
+              toolResults: unifiedMessages.toolResults,
+              status: unifiedMessages.status,
+            })
+            .from(unifiedMessages)
+            .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
             .where(and(
-              eq(chatMessages.pageId, agentId),
-              eq(chatMessages.conversationId, conversationId),
-              eq(chatMessages.isActive, true),
-              ne(chatMessages.status, 'streaming')
+              eq(conversationsTable.type, 'page'),
+              eq(conversationsTable.contextId, agentId),
+              eq(unifiedMessages.conversationId, conversationId),
+              eq(unifiedMessages.isActive, true),
+              ne(unifiedMessages.status, 'streaming')
             ))
-            .orderBy(chatMessages.createdAt);
+            .orderBy(unifiedMessages.createdAt);
 
           messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
@@ -566,7 +604,7 @@ export async function executeAskAgent(
         const sourceAgentId = callingPage?.type === 'AI_CHAT' ? callingPage.id : null;
 
         // Save user message to database
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: userMessageId,
           pageId: agentId,
           conversationId: activeConversationId,
@@ -812,7 +850,7 @@ export async function executeAskAgent(
 
         // 13. Save assistant's response to database
         const assistantMessageId = createId();
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: assistantMessageId,
           pageId: agentId,
           conversationId: activeConversationId,

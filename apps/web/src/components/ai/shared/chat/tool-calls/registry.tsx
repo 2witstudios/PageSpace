@@ -23,6 +23,7 @@ import { CalendarAvailabilityRenderer, type FreeSlot } from './calendar/Calendar
 import { WorkflowListRenderer } from './workflow/WorkflowListRenderer';
 import { WorkflowCard, type WorkflowData } from './workflow/WorkflowCard';
 import { OpenPagePaneRenderer } from './OpenPagePaneRenderer';
+import { PlanBindingRenderer } from './PlanBindingRenderer';
 
 /**
  * Tool-call renderer registry.
@@ -438,6 +439,23 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     <OpenPagePaneRenderer
       pageId={parsedOutput.pageId as string | undefined}
       title={parsedOutput.title as string | undefined}
+    />
+  ),
+
+  set_plan: ({ parsedOutput }) => (
+    <PlanBindingRenderer
+      bound
+      success={parsedOutput.success !== false}
+      title={parsedOutput.title as string | undefined}
+      error={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  clear_plan: ({ parsedOutput }) => (
+    <PlanBindingRenderer
+      bound={false}
+      success={parsedOutput.success !== false}
+      error={parsedOutput.error as string | undefined}
     />
   ),
 

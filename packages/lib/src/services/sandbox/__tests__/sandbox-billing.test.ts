@@ -188,14 +188,14 @@ describe('defaultSandboxBillingDeps.trackUsage', () => {
     expect(call.pageId).toBe('terminal-page-1');
   });
 
-  it('forwards driveId/sessionId to AIMonitoring.trackUsage as first-class attribution (Terminal Epic 3 usage-breakdown fix)', async () => {
+  it('forwards driveId/workspaceId to AIMonitoring.trackUsage as first-class attribution (Terminal Epic 3 usage-breakdown fix)', async () => {
     mockTrackUsage.mockResolvedValue(undefined);
     await defaultSandboxBillingDeps.trackUsage({
       payerId: 'owner-1',
       holdId: 'hold-1',
       activeSeconds: 60,
       driveId: 'drive-1',
-      sessionId: 'session-1',
+      workspaceId: 'session-1',
     });
     const call = mockTrackUsage.mock.calls[0][0];
     expect(call.driveId).toBe('drive-1');

@@ -171,7 +171,10 @@ export function createMockOpenRouter() {
 
     const total = Math.max(1, streamChunks);
     let sent = 0;
-    let timer: NodeJS.Timeout | undefined;
+    // Explicitly initialised: `cleanup()` below closes over `timer` before the
+    // interval is created at the bottom of this block, so the declaration cannot
+    // move down to its assignment (which is what prefer-const would otherwise ask for).
+    let timer: NodeJS.Timeout | undefined = undefined;
 
     const sendNext = (): void => {
       writeSse(res, contentChunkOf(id, model, `chunk-${sent} `));
