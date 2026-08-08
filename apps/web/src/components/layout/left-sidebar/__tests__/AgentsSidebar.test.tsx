@@ -271,9 +271,13 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  test('falls back to a flat conversation list when the session has no saved pane grid', async () => {
-    // SESSION carries no `workspace` — a session never opened under
-    // `useWorkspaceServerSync` (or opened only by an older client).
+  // Named for the deleted fork ("falls back to a flat conversation list") until
+  // issue #2373. There is no fallback now — there is one list, and a session
+  // with no grid is just the case where every thread in it is unplaced. Keeping
+  // the old name would have implied the branch still exists.
+  test('lists a session\'s threads when it has no saved pane grid at all', async () => {
+    // SESSION carries no `workspace` — a session never opened in the grid (or
+    // opened only by a client old enough to predate the layout sync).
     const user = userEvent.setup();
     renderSidebar();
 
@@ -428,7 +432,7 @@ describe('AgentsSidebar', () => {
 
     test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
       // Deliberately NO local grid: the session isn't the displayed one, so
-      // `AgentPanes`/`useWorkspaceServerSync` never hydrated it. The click
+      // `AgentPanes` and its layout sync never hydrated it. The click
       // must seat the row's own server-listing snapshot before focusing —
       // `selectPane` no-ops on a session the store has never seen (review
       // P1, chatgpt-codex-connector).

@@ -1553,7 +1553,7 @@ export default function AgentPanes({
     // With a conversation to seed, the openConversation effect creates the
     // grid on the next tick — the spinner is a single-frame state. A
     // session-only selection has nothing to seed locally; until
-    // `useWorkspaceServerSync`'s hydration seats a saved grid (if one
+    // `useWorkspaceLayoutSync`'s hydration seats a saved grid (if one
     // exists), point at the sidebar rather than spin forever.
     return (
       <div className="flex h-full items-center justify-center">
