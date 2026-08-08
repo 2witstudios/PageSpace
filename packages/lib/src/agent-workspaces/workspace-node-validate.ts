@@ -71,7 +71,7 @@ export type TreeViolationCode =
   | 'degenerate_split'
   | 'fraction_mixed'
   | 'fraction_sum'
-  | 'order_index';
+  | 'position_contiguity';
 
 function violation(code: TreeViolationCode, detail: string): TreeValidation {
   return { ok: false, code, detail };
@@ -97,11 +97,11 @@ interface SiblingGroup {
  * their parent's first child appears in the list, then the parked panes.
  *
  * The parked panes are a group — they are ordered in the sidebar, so their
- * `orderIndex` still has to be contiguous — but they are NOT a container, and
+ * `position` still has to be contiguous — but they are NOT a container, and
  * the fraction check below skips them for exactly that reason.
  *
  * The root is in no group at all: it and a parked pane both carry a null
- * parent, and lumping them together would collide the root's `orderIndex: 0`
+ * parent, and lumping them together would collide the root's `position: 0`
  * with the first parked pane's.
  */
 function siblingGroups(nodes: readonly WorkspaceNode[]): SiblingGroup[] {
@@ -255,19 +255,21 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     }
   }
 
-  // `orderIndex` is contiguous and 0-based within each sibling group — the
-  // convention `agent-workspace-layout.ts` already documents for the rows. A
-  // gap or a duplicate means a verb renumbered part of a group and stopped,
-  // which shows up as two panes fighting over one slot. Checked in its own
-  // pass so a tree with both a fraction and an ordering fault always reports
-  // the fraction, whichever group each is in.
+  // `position` is contiguous and 0-based within each sibling group. This is
+  // the assertion a contiguous integer buys and pages' fractional `real`
+  // positioning could not make at all: a gap or a duplicate means a verb
+  // renumbered part of a group and stopped, which shows up as two panes
+  // fighting over one slot. Checked in its own pass so a tree with both a
+  // fraction and an ordering fault always reports the fraction, whichever
+  // group each is in.
   for (const group of groups) {
-    const indexes = group.members.map((node) => node.orderIndex).sort((a, b) => a - b);
-    if (!indexes.every((value, position) => value === position)) {
-      const where = group.parentId === null ? 'the parked panes' : `the children of "${group.parentId}"`;
+    const positions = group.members.map((node) => node.position).sort((a, b) => a - b);
+    if (!positions.every((value, slot) => value === slot)) {
+      const where =
+        group.parentId === null ? 'the parked panes' : `the children of "${group.parentId}"`;
       return violation(
-        'order_index',
-        `${where} are ordered [${indexes.join(', ')}]; expected a contiguous 0-based run`,
+        'position_contiguity',
+        `${where} hold positions [${positions.join(', ')}]; expected a contiguous 0-based run`,
       );
     }
   }

@@ -17,15 +17,15 @@ import { validateTree, MAX_DEPTH, MAX_NODES } from '../workspace-node-validate';
 import type { PaneNode, RootNode, SplitNode, WorkspaceNode } from '../workspace-node';
 
 function root(): RootNode {
-  return { nodeType: 'root', id: 'root-1', parentId: null, orderIndex: 0, axis: 'row' };
+  return { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row' };
 }
 
-function split(id: string, parentId: string, orderIndex: number): SplitNode {
-  return { nodeType: 'split', id, parentId, orderIndex, axis: 'column' };
+function split(id: string, parentId: string, position: number): SplitNode {
+  return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, orderIndex: number): PaneNode {
-  return { nodeType: 'pane', id, parentId, orderIndex, target: { kind: 'chat', id: `conv-${id}` } };
+function pane(id: string, parentId: string | null, position: number): PaneNode {
+  return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 
 /**
@@ -49,10 +49,10 @@ function deepTree(splitCount: number): WorkspaceNode[] {
 function sized(
   id: string,
   parentId: string | null,
-  orderIndex: number,
+  position: number,
   fraction: number,
 ): PaneNode {
-  return { ...pane(id, parentId, orderIndex), fraction };
+  return { ...pane(id, parentId, position), fraction };
 }
 
 /** A root holding `paneCount` panes, so `paneCount + 1` nodes in all. */
@@ -267,21 +267,21 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
-  it('should reject a sibling group whose orderIndexes leave a gap', () => {
+  it('should reject a sibling group whose positions leave a gap', () => {
     // Contiguous and 0-based is the convention the rows already document; a
     // gap means some verb renumbered part of a group and stopped.
     const nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 2)];
-    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'order_index' });
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
-  it('should reject a sibling group where two members claim the same orderIndex', () => {
+  it('should reject a sibling group where two members claim the same position', () => {
     const nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 0)];
-    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'order_index' });
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
   it('should reject a sibling group numbered from 1 instead of 0', () => {
     const nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 1), pane('b', 'root-1', 2)];
-    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'order_index' });
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
   it('should hold the parked panes to the same ordering as any other group', () => {
@@ -293,7 +293,7 @@ describe('validateTree', () => {
       pane('parked-a', null, 0),
       pane('parked-b', null, 3),
     ];
-    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'order_index' });
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
   it('should not let the root and the parked panes collide over index 0', () => {
@@ -329,7 +329,7 @@ describe('validateTree', () => {
     const broken: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 2)];
     expect(validateTree(broken)).toEqual({
       ok: false,
-      code: 'order_index',
+      code: 'position_contiguity',
       detail: expect.any(String),
     });
   });
@@ -402,7 +402,7 @@ describe('validateTree', () => {
       pane('parked', null, 3),
     ];
     const rejectedBefore = structuredClone(rejected);
-    expect(validateTree(rejected)).toMatchObject({ ok: false, code: 'order_index' });
+    expect(validateTree(rejected)).toMatchObject({ ok: false, code: 'position_contiguity' });
     expect(rejected).toEqual(rejectedBefore);
   });
 });
