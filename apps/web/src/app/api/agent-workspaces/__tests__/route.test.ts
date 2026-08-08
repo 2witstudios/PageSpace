@@ -205,22 +205,16 @@ describe('GET /api/agent-workspaces', () => {
     expect(conversations[1].conversationId).toBe('conv-unplaced');
     expect(conversations[1].pane).toBeNull();
 
-    // `workspace` STILL carries the grid's geometry. This PR narrowed what it
-    // means — it is no longer anyone's answer to "which threads exist" — but
-    // narrowing is not removing, and nothing else asserted it was still served
-    // once a grid existed. It is load-bearing: `AgentsSidebar`'s
-    // `ensureLocalWorkspace` hydrates the store FROM this field for a session
-    // whose grid the pane surface never mounted, and `closePaneConversation`
-    // fails closed without it — so silently dropping it would turn every
-    // sidebar pane-close into a no-op refetch rather than a visible break.
-    expect(body.sessions[0].workspace).toEqual({
-      id: 'ses-1',
-      columns: [
-        { id: 'col-1', panes: [{ id: 'pane-1', scope: { kind: 'chat', targetId: 'conv-1' } }] },
-      ],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    });
+    // The annotation and the geometry AGREE, because both derive from one
+    // grid read (`route.ts` reads `grid` once and passes it to both). Their
+    // disagreeing is the shape of the original bug — two views of placement
+    // that could drift — so it is worth an assertion even though the geometry
+    // itself is already covered by 'should attach the grid as `workspace`'
+    // above, which predates this PR. (An earlier revision of this test claimed
+    // that coverage did not exist. It did; I had searched for it badly.)
+    const placedPaneId = conversations[0].pane.paneId;
+    expect(body.sessions[0].workspace.columns[0].panes[0].id).toBe(placedPaneId);
+    expect(body.sessions[0].workspace.columns[0].id).toBe(conversations[0].pane.columnId);
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
