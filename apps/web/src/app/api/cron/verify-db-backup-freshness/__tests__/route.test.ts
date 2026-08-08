@@ -165,19 +165,30 @@ describe('GET /api/cron/verify-db-backup-freshness', () => {
   });
 
   it('fingerprints by reason, not by message, so a daily alert stays one issue', async () => {
-    mockSend.mockResolvedValue(page([]));
+    // Two `stale` runs a day apart: same fault, but the age embedded in the
+    // message differs, which is exactly what message-based grouping would
+    // split into two Sentry issues.
+    mockSend.mockResolvedValue(
+      page([{ ...FRESH_ENC, LastModified: hoursAgo(40) }])
+    );
     await GET(request);
-    const first = mockCaptureException.mock.calls[0][1].fingerprint;
+    const [firstError, firstContext] = mockCaptureException.mock.calls[0];
 
     vi.clearAllMocks();
     mockValidate.mockReturnValue(null);
-    // Same fault a day later — the age in the message has changed.
-    mockSend.mockResolvedValue(page([]));
+    mockSend.mockResolvedValue(
+      page([{ ...FRESH_ENC, LastModified: hoursAgo(64) }])
+    );
     await GET(request);
-    const second = mockCaptureException.mock.calls[0][1].fingerprint;
+    const [secondError, secondContext] = mockCaptureException.mock.calls[0];
 
-    expect(first).toEqual(['db-backup-freshness', 'no_objects']);
-    expect(second).toEqual(first);
+    // The messages genuinely differ...
+    expect((firstError as Error).message).toContain('40h old');
+    expect((secondError as Error).message).toContain('64h old');
+    expect((firstError as Error).message).not.toEqual((secondError as Error).message);
+    // ...but the grouping key does not.
+    expect(firstContext.fingerprint).toEqual(['db-backup-freshness', 'stale']);
+    expect(secondContext.fingerprint).toEqual(firstContext.fingerprint);
   });
 
   it('returns 503 when the prefix is empty', async () => {

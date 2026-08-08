@@ -39,6 +39,10 @@ export async function register() {
     // security-audit-alerting.ts early-returned and the audit-chain cron's only
     // "alert" was a logfile line nothing forwards. Alerting interfaces with no
     // delivery are why the daily DB backup died unnoticed for 44 days.
+    //
+    // `alertHandler` is process-local, so this covers THIS process only. The
+    // processor registers the same handler in its own composition root
+    // (apps/processor/src/server.ts) for the worker-side alerts it raises.
     const { setChainAlertHandler } = await import('@pagespace/lib/audit/security-audit-alerting');
     const { buildSentryChainAlertHandler } = await import('@/lib/observability/chain-alert-sentry');
     setChainAlertHandler(buildSentryChainAlertHandler());

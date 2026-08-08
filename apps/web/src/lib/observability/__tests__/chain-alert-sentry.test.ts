@@ -1,10 +1,12 @@
 /**
- * Tests for the Sentry delivery of security-audit trust-plane alerts.
+ * Tests for the web process's Sentry delivery of security-audit alerts.
  *
- * The regression guarded here is not a wrong Sentry payload — it is the alert
- * being dropped entirely. `setChainAlertHandler` had no production caller, so
- * every notify* helper in security-audit-alerting.ts early-returned and no
- * trust-plane failure could ever reach a human.
+ * The regression guarded here is not the payload shape — that lives in the
+ * shared builder (@pagespace/lib/audit/chain-alert-payload) and is tested
+ * there. It is that the alert leaves the process at all: `setChainAlertHandler`
+ * had no production caller, so every notify* helper in
+ * security-audit-alerting.ts early-returned and no trust-plane failure could
+ * ever reach a human.
  */
 
 // @vitest-environment node
@@ -50,12 +52,12 @@ function alert(overrides: Partial<ChainVerificationAlert> = {}): ChainVerificati
   } as ChainVerificationAlert;
 }
 
-describe('buildSentryChainAlertHandler', () => {
+describe('buildSentryChainAlertHandler (web)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('captures the alert to Sentry at fatal level', () => {
+  it('captures the alert to Sentry as an Error at fatal level', () => {
     buildSentryChainAlertHandler()(alert());
 
     expect(mockCaptureException).toHaveBeenCalledTimes(1);
@@ -64,47 +66,38 @@ describe('buildSentryChainAlertHandler', () => {
     expect((error as Error).message).toContain('[SECURITY ALERT]');
     expect((error as Error).message).toContain('Hash mismatch at entry-42');
     expect(context.level).toBe('fatal');
-    expect(context.tags.check).toBe('security_audit_chain');
-    expect(context.tags.source).toBe('periodic');
   });
 
-  it('carries forensic counts in extra without inventing detection logic', () => {
+  it('tags the alert as coming from the web process', () => {
     buildSentryChainAlertHandler()(alert());
 
-    const { extra } = mockCaptureException.mock.calls[0][1];
-    expect(extra).toMatchObject({
-      totalEntries: 100,
-      entriesVerified: 42,
-      validEntries: 41,
-      invalidEntries: 1,
-      breakPointEntryId: 'entry-42',
-      breakPointPosition: 41,
-      durationMs: 1234,
-    });
+    const { tags } = mockCaptureException.mock.calls[0][1];
+    expect(tags.process).toBe('web');
+    expect(tags.check).toBe('security_audit_chain');
+    expect(tags.source).toBe('periodic');
   });
 
-  it('fingerprints by source so a recurring alert escalates one issue', () => {
-    const handler = buildSentryChainAlertHandler();
+  it('does not pass `message` through as a context key', () => {
+    buildSentryChainAlertHandler()(alert());
 
-    handler(alert({ source: 'preflight' }));
-    handler(alert({ source: 'preflight' }));
-    handler(alert({ source: 'break_glass' }));
-
-    const fingerprints = mockCaptureException.mock.calls.map((c) => c[1].fingerprint);
-    expect(fingerprints[0]).toEqual(['security-audit-chain', 'preflight']);
-    expect(fingerprints[1]).toEqual(fingerprints[0]);
-    expect(fingerprints[2]).toEqual(['security-audit-chain', 'break_glass']);
+    // The message becomes the Error; leaving it in the capture context too
+    // would be dead weight Sentry ignores.
+    expect(mockCaptureException.mock.calls[0][1]).not.toHaveProperty('message');
   });
 
-  it('survives an alert with no breakPoint (anchor-publish style)', () => {
-    const withoutBreakPoint = alert();
-    // notifyAnchorPublishFailure builds a synthetic result; guard the null path.
-    (withoutBreakPoint.result as { breakPoint: unknown }).breakPoint = null;
+  it('forwards the shared builder’s fingerprint and extra', () => {
+    buildSentryChainAlertHandler()(alert({ source: 'break_glass' }));
 
-    expect(() => buildSentryChainAlertHandler()(withoutBreakPoint)).not.toThrow();
-    const [error, context] = mockCaptureException.mock.calls[0];
-    expect((error as Error).message).toContain('Chain verification reported invalid.');
-    expect(context.extra.breakPointEntryId).toBeNull();
-    expect(context.extra.breakPointPosition).toBeNull();
+    const context = mockCaptureException.mock.calls[0][1];
+    expect(context.fingerprint).toEqual(['security-audit-chain', 'break_glass']);
+    expect(context.extra).toMatchObject({ totalEntries: 100, durationMs: 1234 });
+  });
+
+  it('survives an alert with no breakPoint', () => {
+    const noBreak = alert();
+    (noBreak.result as { breakPoint: unknown }).breakPoint = null;
+
+    expect(() => buildSentryChainAlertHandler()(noBreak)).not.toThrow();
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
   });
 });
