@@ -121,4 +121,24 @@ describe('createRefreshAccessToken', () => {
     expect(isRateLimitError(thrown)).toBe(false);
     expect(isServerError(thrown)).toBe(false);
   });
+
+  it('aborts a never-settling POST after timeoutMs with a retryable TimeoutError (never hangs, never purges)', async () => {
+    // An unreachable token endpoint (dead tunnel) must become the SDK's own
+    // TimeoutError: `classifyRefreshFailure` treats it as retryable, so the
+    // stored refresh token survives a transient outage instead of being
+    // purged — and the caller (a `pagespace mcp` tool call) gets an error
+    // instead of an indefinite hang.
+    const fetchImpl = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as unknown as typeof fetch;
+
+    const refresh = createRefreshAccessToken(TOKEN_ENDPOINT, CLIENT_ID, fetchImpl, Date.now, { timeoutMs: 10 });
+
+    // isTimeoutError is exactly what the SDK's classifyRefreshFailure keys on
+    // for its 'retryable' verdict (packages/sdk/src/auth/decide.ts) — a
+    // bespoke error type here would classify terminal and purge the stored
+    // refresh token on a transient outage.
+    await expect(refresh('ps_rt_old')).rejects.toSatisfy((error: unknown) => isTimeoutError(error));
+  });
 });

@@ -98,7 +98,7 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
-  { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
+  { path: ['mcp'], handler: mcpHandler, longRunning: true, lazyAuth: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
   { path: ['drives', 'rename'], handler: drivesRenameHandler, summary: 'Rename a drive' },

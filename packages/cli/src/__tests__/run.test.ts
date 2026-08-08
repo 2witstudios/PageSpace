@@ -1,7 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, isLongRunningCommand, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeActiveKeyStore, createFakeCredentialStore, createRecordingSink } from './fake-context.js';
+
+/**
+ * Drives `run(['mcp', ...])` through the `createMcpTransport` seam with an
+ * in-memory transport pair — `run` must never attach a real stdio transport
+ * to the test process — and returns the connected MCP client alongside the
+ * exit code so callers can assert on the served protocol surface.
+ */
+async function runMcp(deps: RunDependencies) {
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [code] = await Promise.all([
+    run({ ...deps, createMcpTransport: () => serverTransport }),
+    client.connect(clientTransport),
+  ]);
+  return { code, client };
+}
 
 function makeDeps(argv: string[], env: Record<string, string | undefined> = {}): RunDependencies & {
   stdout: ReturnType<typeof createRecordingSink>;
@@ -91,13 +109,23 @@ describe('run', () => {
     expect(deleteCalls).toBe(0);
   });
 
-  it('"mcp" is not auth-exempt: fails closed with an actionable message and zero credentials', async () => {
+  it('"mcp" with zero credentials serves degraded: transport connects, every tool call fails with the actionable message', async () => {
+    // A pre-transport exit is indistinguishable from a hung server to the MCP
+    // client that spawned this process (hours-long "timeouts" in ChatGPT
+    // desktop), so the no-credential case must serve and fail per-call.
     const deps = makeDeps(['mcp']);
-    const code = await run(deps);
-    expect(code).not.toBe(EXIT_SUCCESS);
+    const { code, client } = await runMcp(deps);
+
+    expect(code).toBe(EXIT_SUCCESS);
     expect(deps.stderr.lines.join('')).toMatch(/--key|--token/);
     // The mcp-specific refusal: the active key must be called out as deliberately inapplicable.
     expect(deps.stderr.lines.join('')).toContain('deliberately does not apply to "pagespace mcp"');
+
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(60);
+    const result = await client.callTool({ name: 'drives.list', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('keys create');
   });
 
   describe('"mcp" with a stored default profile but no explicit credential (Phase 8 task 4)', () => {
@@ -105,7 +133,7 @@ describe('run', () => {
       vi.unstubAllGlobals();
     });
 
-    it('never touches the personal credential at all: no discovery/refresh network call, no rotation', async () => {
+    it('never touches the personal credential at all: no store read, no discovery/refresh network call, no rotation', async () => {
       let networkCalls = 0;
       vi.stubGlobal(
         'fetch',
@@ -115,7 +143,7 @@ describe('run', () => {
         }) as unknown as typeof fetch,
       );
 
-      const store = createFakeCredentialStore();
+      const inner = createFakeCredentialStore();
       const personalCredential: HostCredential = {
         kind: 'oauth',
         refreshToken: 'ps_rt_personal_secret',
@@ -123,16 +151,34 @@ describe('run', () => {
         scopes: ['full'],
         createdAt: new Date(0).toISOString(),
       };
-      await store.set('https://pagespace.ai', personalCredential, 'default');
+      await inner.set('https://pagespace.ai', personalCredential, 'default');
+      // Degraded serve is STRONGER than the old fail-closed exit here: with
+      // nothing explicit named, `resolveCredentialSource` is never called, so
+      // the store isn't even read (a keychain call on macOS) — count reads to
+      // pin that.
+      let storeReads = 0;
+      const store = {
+        ...inner,
+        async get(host: string, name?: string) {
+          storeReads += 1;
+          return inner.get(host, name);
+        },
+      };
 
       const deps = { ...makeDeps(['mcp']), credentialStore: store };
-      const code = await run(deps);
+      const { code, client } = await runMcp(deps);
 
-      expect(code).not.toBe(EXIT_SUCCESS);
+      expect(code).toBe(EXIT_SUCCESS);
       expect(deps.stderr.lines.join('')).toContain('keys create');
-      expect(networkCalls).toBe(0);
 
-      const stillStored = await store.get('https://pagespace.ai', 'default');
+      const result = await client.callTool({ name: 'drives.list', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('keys create');
+
+      expect(networkCalls).toBe(0);
+      expect(storeReads).toBe(0);
+
+      const stillStored = await inner.get('https://pagespace.ai', 'default');
       expect(credentialSecret(stillStored!)).toBe('ps_rt_personal_secret');
     });
   });
@@ -502,7 +548,7 @@ describe('the active key (`pagespace keys use`) as the lowest-priority credentia
     expect(deps.stderr.lines.join('')).toContain('No explicit credential found');
   });
 
-  it('"mcp" still refuses with only an active key — zero network, active credential untouched', async () => {
+  it('"mcp" with only an active key serves degraded — zero network, active credential untouched, calls fail with the active-key refusal', async () => {
     let networkCalls = 0;
     vi.stubGlobal(
       'fetch',
@@ -516,10 +562,14 @@ describe('the active key (`pagespace keys use`) as the lowest-priority credentia
     await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
     const deps = { ...makeDeps(['mcp']), credentialStore: store, activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }) };
 
-    const code = await run(deps);
+    const { code, client } = await runMcp(deps);
 
-    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(code).toBe(EXIT_SUCCESS);
     expect(deps.stderr.lines.join('')).toContain('deliberately does not apply to "pagespace mcp"');
+
+    const result = await client.callTool({ name: 'drives.list', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('deliberately does not apply');
     expect(networkCalls).toBe(0);
   });
 
@@ -556,5 +606,95 @@ describe('isLongRunningCommand', () => {
 
   it('is false when argv does not even parse — the usage-error path is one-shot', () => {
     expect(isLongRunningCommand(['mcp', '--token'])).toBe(false);
+  });
+});
+
+describe('"mcp" no-hang guarantees — initialize/tools-list always answer, auth failures are bounded per-call errors', () => {
+  const HOST = 'https://pagespace.ai';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('a hung credential-store read (keychain prompt) never blocks the protocol: tools/list instant, tools/call errors after the bounded read timeout', async () => {
+    vi.useFakeTimers();
+    const store = {
+      ...createFakeCredentialStore(),
+      // A keychain read blocking on an unanswerable GUI access prompt.
+      get: () => new Promise<never>(() => {}),
+    };
+    const deps = { ...makeDeps(['mcp', '--key', 'agent']), credentialStore: store };
+
+    const { code, client } = await runMcp(deps);
+    expect(code).toBe(EXIT_SUCCESS);
+
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(60);
+
+    const pending = client.callTool({ name: 'drives.list', arguments: {} });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('timed out');
+    expect(JSON.stringify(result.content)).toContain('--token');
+  });
+
+  it('a stored oauth credential against a black-holed host errors after the bounded discovery timeout instead of hanging forever', async () => {
+    vi.useFakeTimers();
+    // fetch that never settles until aborted — a dead tunnel / unroutable host.
+    vi.stubGlobal(
+      'fetch',
+      ((_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        })) as unknown as typeof fetch,
+    );
+
+    const store = createFakeCredentialStore();
+    await store.set(
+      HOST,
+      { kind: 'oauth', refreshToken: 'ps_rt_x', clientId: 'cli', scopes: ['full'], createdAt: new Date(0).toISOString() },
+      'agent',
+    );
+    const deps = { ...makeDeps(['mcp', '--key', 'agent']), credentialStore: store };
+
+    const { code, client } = await runMcp(deps);
+    expect(code).toBe(EXIT_SUCCESS);
+
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(60);
+
+    const pending = client.callTool({ name: 'drives.list', arguments: {} });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+    expect(result.isError).toBe(true);
+
+    // The stored credential must survive the transient failure — no purge.
+    const stillStored = await store.get(HOST, 'agent');
+    expect(credentialSecret(stillStored!)).toBe('ps_rt_x');
+  });
+
+  it('--token happy path: lazy resolution is instant and the tool call reaches the API with the bearer token', async () => {
+    const authHeaders: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        authHeaders.push(new Headers(init?.headers).get('authorization') ?? '');
+        void input;
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', 'X-PageSpace-API-Version': '1.0.0' },
+        });
+      }) as unknown as typeof fetch,
+    );
+
+    const deps = makeDeps(['mcp', '--token', 'mcp_explicit_token']);
+    const { code, client } = await runMcp(deps);
+    expect(code).toBe(EXIT_SUCCESS);
+
+    const result = await client.callTool({ name: 'drives.list', arguments: {} });
+    expect(result.isError ?? false).toBe(false);
+    expect(authHeaders).toContain('Bearer mcp_explicit_token');
   });
 });

@@ -92,6 +92,67 @@ New (the `env` block naming a credential is required here too):
 }
 ```
 
+## ChatGPT desktop / Codex
+
+ChatGPT desktop and the Codex CLI share one MCP config — `~/.codex/config.toml` — and it's
+**TOML, not the JSON `mcpServers` shape** every other client above uses. A working entry,
+verified end to end against a live Codex session:
+
+```toml
+[mcp_servers.pagespace]
+command = "npx"
+args = ["-y", "-p", "@pagespace/cli", "pagespace-mcp"]
+startup_timeout_sec = 120
+
+[mcp_servers.pagespace.env]
+PAGESPACE_API_URL = "https://pagespace.ai"
+PAGESPACE_TOKEN = "<TOKEN_FROM_SETTINGS_MCP>"
+```
+
+Three details are load-bearing:
+
+- **The `-p` is not optional.** `npx -y @pagespace/cli pagespace-mcp` (no `-p`) dies instantly
+  with `could not determine executable to run` — this package publishes two bins and neither is
+  named after the package, so npx can't pick one. Codex renders that dead child as
+  **Tools: (none)**; ChatGPT shows a connector that times out. If your server shows no tools,
+  check this flag first.
+- **`startup_timeout_sec = 120`** gives a cold `npx` install (first run, cleared cache) room to
+  download the package before the client gives up on the handshake. The default is much lower.
+- **Name a credential in the `env` block** (`PAGESPACE_TOKEN`, or `PAGESPACE_KEY` for a key
+  minted on this machine). `pagespace mcp` never falls back to your personal `pagespace login`
+  credential; without an explicit credential the server still starts, but every tool call
+  returns an error telling you to configure one.
+
+Prefer `command = "pagespace"` with `args = ["mcp"]` only if the CLI is installed globally *and*
+on the PATH the app actually launches with — GUI apps on macOS don't inherit your shell PATH, so
+an nvm- or Homebrew-installed global can be invisible to ChatGPT even though `which pagespace`
+works in your terminal. The `npx` form above sidesteps that.
+
+("Auth: Unsupported" next to the server in Codex is normal for stdio servers — it means no OAuth
+flow on the transport, not a configuration problem.)
+
+### OpenAI Secure MCP Tunnel (`tunnel-client`)
+
+For ChatGPT reaching a *private* MCP server through [OpenAI's Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels),
+`tunnel-client` spawns the stdio server itself via `--mcp-command`:
+
+```bash
+tunnel-client init \
+  --profile pagespace \
+  --tunnel-id <your-tunnel-id> \
+  --mcp-command "npx -y -p @pagespace/cli pagespace-mcp"
+```
+
+The same two rules apply, and both failure modes surface as ChatGPT-side timeouts ("requests
+through the tunnel fail"):
+
+- **`-p` is required** in the `--mcp-command`, exactly as above.
+- **The credential env vars must exist in the environment where `tunnel-client run` executes** —
+  the spawned server inherits *that* process's env. Export `PAGESPACE_TOKEN` (or the legacy
+  `PAGESPACE_AUTH_TOKEN`) and any `PAGESPACE_API_URL` override in the shell, systemd unit, or
+  container that runs `tunnel-client`, then verify with
+  `tunnel-client doctor --profile pagespace --explain`.
+
 ## Explicit-token variant (agents, CI, headless boxes)
 
 `pagespace login` needs a browser and isn't appropriate for CI or a service account.

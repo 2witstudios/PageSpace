@@ -26,15 +26,47 @@ const metadataSchema = z.object({
 
 const WELL_KNOWN_PATH = '/.well-known/oauth-authorization-server';
 
-export function createDiscoverMetadata(fetchImpl: typeof fetch = fetch): DiscoverMetadata {
+/**
+ * Discovery can run before ANY transport is connected — `pagespace mcp`
+ * materializes auth on the first tool call of a server an MCP client already
+ * considers live — so an unreachable host must surface as an error, never an
+ * unbounded hang. Same abort shell as the SDK's transport/execute.ts.
+ */
+const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
+
+export interface DiscoverMetadataOptions {
+  readonly timeoutMs?: number;
+  /** Injected so tests can control abort deterministically without real timers/network. */
+  readonly abortFactory?: () => AbortController;
+}
+
+export function createDiscoverMetadata(
+  fetchImpl: typeof fetch = fetch,
+  options: DiscoverMetadataOptions = {},
+): DiscoverMetadata {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
+  const abortFactory = options.abortFactory ?? (() => new AbortController());
+
   return async (host: string): Promise<DiscoveredMetadata> => {
     const url = `${host.replace(/\/+$/, '')}${WELL_KNOWN_PATH}`;
 
+    const controller = abortFactory();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+
     let response: Response;
     try {
-      response = await fetchImpl(url);
+      response = await fetchImpl(url, { signal: controller.signal });
     } catch (error) {
+      if (timedOut) {
+        throw new DiscoveryError(`Timed out reaching ${url} after ${timeoutMs}ms`);
+      }
       throw new DiscoveryError(`Could not reach ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok) {

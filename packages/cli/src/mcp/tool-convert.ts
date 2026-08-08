@@ -131,7 +131,14 @@ export function formatSdkErrorResult(op: Operation, error: unknown): McpCallResu
     return textResult(`Permission denied for "${op.name}".${scope}`, true);
   }
   if (isAuthenticationError(error)) {
-    return textResult(`Authentication failed for "${op.name}". Run "pagespace login" or set PAGESPACE_TOKEN.`, true);
+    // The message passes through: every `AuthenticationError` reaching this
+    // server is authored by this CLI (FailingAuthProvider's remediation
+    // copy, the lazy keychain-timeout message, `classifyHttpError`'s typed
+    // 401 text) and is secret-free by construction. The old fixed hint here
+    // said `Run "pagespace login"` — the one remediation `pagespace mcp`
+    // deliberately refuses (see commands/mcp.ts) — actively misdirecting
+    // the person debugging a credential-less MCP config.
+    return textResult(`Authentication failed for "${op.name}": ${error.message}`, true);
   }
   if (isNotFoundError(error)) {
     return textResult(`Not found: the target of "${op.name}" does not exist or is not accessible.`, true);

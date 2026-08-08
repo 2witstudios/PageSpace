@@ -4,18 +4,21 @@
  * and returns an exit code; `bin.ts` is the only caller that touches the
  * real process.
  */
-import { PageSpaceClient } from '@pagespace/sdk';
+import { AuthenticationError, PageSpaceClient } from '@pagespace/sdk';
+import type { AuthProvider } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
-import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
+import { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
+import { createLazyAuthProvider } from './auth/lazy-provider.js';
 import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import { mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
+import { hasExplicitCredential, mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
 import { resolveCredentialSource } from './auth/resolve-credential-source.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
-import { mcpHandler } from './commands/mcp.js';
+import { createMcpHandler, mcpHandler } from './commands/mcp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { tokensCreateHandler } from './commands/keys/create.js';
 import { tokensListHandler } from './commands/keys/list.js';
 import { tokensRevokeHandler } from './commands/keys/revoke.js';
@@ -47,6 +50,14 @@ export interface RunDependencies {
   readonly isTTY?: boolean;
   /** Defaults to a function that never resolves truthily when omitted; only called when `isTTY` is true. */
   readonly prompt?: (message: string) => Promise<string>;
+  /**
+   * Test seam: when present and the mcp route is dispatched, the handler is
+   * built around this transport factory instead of the module-level
+   * `mcpHandler`'s real `StdioServerTransport` — `run(['mcp'])` in a test
+   * must never attach a live stdio transport to the test runner's process.
+   * `bin.ts` never sets it.
+   */
+  readonly createMcpTransport?: () => Transport;
 }
 
 /**
@@ -160,21 +171,69 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   // per-machine activation (its config must name a credential itself).
   const activeKeyEligible = routedHandler !== null && !isAuthExempt && routedHandler !== mcpHandler;
 
-  const { source, activeKeyName, explicit } = await resolveCredentialSource({
-    flags: { token: parsed.flags.token, key: parsed.flags.key },
-    env: deps.env,
-    host,
-    credentialStore: deps.credentialStore,
-    activeKeyStore,
-    allowActiveKey: activeKeyEligible,
-  });
+  const isLazyAuthRoute = resolution.kind === 'match' && resolution.route.lazyAuth === true;
 
-  const auth = buildAuthProvider(source, {
+  const authProviderDeps = {
     discoverMetadata: createDiscoverMetadata(),
     createRefreshAccessToken,
     credentialStore: deps.credentialStore,
     now: Date.now,
-  });
+  };
+
+  let auth: AuthProvider;
+  let source: Awaited<ReturnType<typeof resolveCredentialSource>>['source'] | null;
+  let activeKeyName: string | null;
+  let explicit: boolean;
+
+  if (isLazyAuthRoute) {
+    // A lazy-auth route (today only `mcp`) serves a protocol whose client
+    // can only see a startup failure as a silent hang, so NOTHING about the
+    // credential may run before the handler connects its transport: no
+    // credential-store read (a native keychain call that can block on an
+    // access prompt when spawned headless by an MCP client), no OAuth
+    // discovery/refresh (unbounded-feeling network I/O against a possibly
+    // dead host), no store purge. The Phase 8 task 4 invariant — never ride
+    // the human's ambient login credential — is preserved *structurally*
+    // here: with nothing explicit given, `resolveCredentialSource` is never
+    // called at all, so the ambient stored credential cannot even be read,
+    // and the wired provider fails every call with the actionable mcp
+    // message. With an explicit credential named, resolution (including the
+    // keychain read, bounded below) and any discovery/refresh move to the
+    // first `getAccessToken()` — i.e. the first tool call — where a failure
+    // surfaces as that call's error result through the live server.
+    explicit = hasExplicitCredential({ token: parsed.flags.token, key: parsed.flags.key }, deps.env);
+    source = null;
+    activeKeyName = null;
+    auth = explicit
+      ? createLazyAuthProvider(async () => {
+          const resolved = await resolveWithTimeout(
+            resolveCredentialSource({
+              flags: { token: parsed.flags.token, key: parsed.flags.key },
+              env: deps.env,
+              host,
+              credentialStore: deps.credentialStore,
+              activeKeyStore,
+              allowActiveKey: false,
+            }),
+            CREDENTIAL_STORE_READ_TIMEOUT_MS,
+          );
+          return buildAuthProvider(resolved.source, authProviderDeps);
+        })
+      : new FailingAuthProvider(mcpNoExplicitCredentialMessage());
+  } else {
+    const resolved = await resolveCredentialSource({
+      flags: { token: parsed.flags.token, key: parsed.flags.key },
+      env: deps.env,
+      host,
+      credentialStore: deps.credentialStore,
+      activeKeyStore,
+      allowActiveKey: activeKeyEligible,
+    });
+    source = resolved.source;
+    activeKeyName = resolved.activeKeyName;
+    explicit = resolved.explicit;
+    auth = buildAuthProvider(resolved.source, authProviderDeps);
+  }
 
   const ctx: HandlerContext = {
     sdk: new PageSpaceClient({ baseUrl: host, auth }),
@@ -202,7 +261,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     return EXIT_USAGE_ERROR;
   }
 
-  if (!isAuthExempt && !explicit && activeKeyName === null) {
+  if (!isAuthExempt && !isLazyAuthRoute && !explicit && activeKeyName === null) {
     // Must run before `enforceAuth` below: that call materializes `source` by
     // calling `auth.getAccessToken()`, which for a `kind: 'stored'` source
     // (the ambient "default"/personal credential falling through here with
@@ -214,18 +273,68 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     // that the command never runs afterward. An active key (checked above,
     // never for `mcp`) satisfies this gate for content commands: a human
     // approved exactly that key for this machine in a browser.
+    //
+    // Lazy-auth routes (`mcp`) are exempted from this early *exit* but not
+    // from the invariant it protects: their no-explicit-credential case was
+    // handled above by wiring a `FailingAuthProvider` WITHOUT ever calling
+    // `resolveCredentialSource` — strictly stronger than this gate, which
+    // runs after that resolver has already read the store. Exiting here
+    // would recreate the exact failure this route shape exists to avoid: a
+    // child that dies before its transport connects is indistinguishable
+    // from a hung server to the MCP client on the other end of the pipe.
     deps.stderr.write(
       `${resolution.route.handler === mcpHandler ? mcpNoExplicitCredentialMessage() : noExplicitCredentialMessage()}\n`,
     );
     return EXIT_RUNTIME_ERROR;
   }
 
-  if (!isAuthExempt) {
+  if (!isAuthExempt && !isLazyAuthRoute && source !== null) {
+    // Deliberately skipped for lazy-auth routes: `enforceAuth` materializes
+    // a token (discovery + refresh network I/O) before the handler runs —
+    // pre-transport death on failure — and its stored-credential purge fires
+    // on ANY AuthenticationError, which a long outage can produce
+    // transiently; wiping the stored key over that turns a temporary outage
+    // into a permanent re-login. Lazy routes surface auth failures per call
+    // instead, and never purge.
     const failure = await enforceAuth({ auth, source, credentialStore: deps.credentialStore, stderr: deps.stderr });
     if (failure !== null) {
       return failure;
     }
   }
 
-  return resolution.route.handler(ctx, { ...parsed, args: resolution.rest });
+  const handler =
+    deps.createMcpTransport !== undefined && resolution.route.handler === mcpHandler
+      ? createMcpHandler({ createTransport: deps.createMcpTransport })
+      : resolution.route.handler;
+  return handler(ctx, { ...parsed, args: resolution.rest });
+}
+
+/**
+ * Bounds the lazy credential-store read for lazy-auth routes: on macOS a
+ * keychain read can surface a GUI access prompt, which never gets answered
+ * when the process was spawned headless by an MCP client — without a bound
+ * the first tool call would hang exactly the way startup used to.
+ */
+const CREDENTIAL_STORE_READ_TIMEOUT_MS = 5_000;
+
+async function resolveWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new AuthenticationError(
+              `Reading the stored credential timed out after ${timeoutMs}ms — the OS keychain may be locked or ` +
+                'waiting on an access prompt this process cannot show. Pass --token (or set PAGESPACE_TOKEN) in ' +
+                'the MCP config to avoid the credential store entirely.',
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

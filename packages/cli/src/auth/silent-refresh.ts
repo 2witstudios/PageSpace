@@ -13,7 +13,7 @@
  * that would always classify as terminal regardless of cause.
  */
 import { z } from 'zod';
-import { classifyHttpError, NetworkError } from '@pagespace/sdk';
+import { classifyHttpError, NetworkError, TimeoutError } from '@pagespace/sdk';
 import type { OAuthTokens, RefreshAccessToken } from '@pagespace/sdk';
 
 const refreshResponseSchema = z.object({
@@ -32,12 +32,31 @@ const refreshResponseSchema = z.object({
  */
 const NOMINAL_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * This grant can run before ANY transport is connected (`pagespace mcp`
+ * resolves auth lazily on the first tool call), so an unreachable token
+ * endpoint must become a typed error, never an unbounded hang. The SDK's
+ * `TimeoutError` — not a bespoke type — so `classifyRefreshFailure` treats
+ * it as transient (retry next call), never as a purge-worthy rejection.
+ */
+const DEFAULT_REFRESH_TIMEOUT_MS = 10_000;
+
+export interface RefreshAccessTokenOptions {
+  readonly timeoutMs?: number;
+  /** Injected so tests can control abort deterministically without real timers/network. */
+  readonly abortFactory?: () => AbortController;
+}
+
 export function createRefreshAccessToken(
   tokenEndpoint: string,
   clientId: string,
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now,
+  options: RefreshAccessTokenOptions = {},
 ): RefreshAccessToken {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REFRESH_TIMEOUT_MS;
+  const abortFactory = options.abortFactory ?? (() => new AbortController());
+
   return async (refreshToken: string): Promise<OAuthTokens> => {
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -45,15 +64,31 @@ export function createRefreshAccessToken(
       client_id: clientId,
     });
 
+    const controller = abortFactory();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+
     let response: Response;
     try {
       response = await fetchImpl(tokenEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
+        signal: controller.signal,
       });
     } catch (error) {
+      if (timedOut) {
+        throw new TimeoutError(`Refresh token request timed out after ${timeoutMs}ms`, {
+          operation: 'auth.refresh',
+          timeoutMs,
+        });
+      }
       throw new NetworkError('Refresh token request failed', { cause: error, operation: 'auth.refresh' });
+    } finally {
+      clearTimeout(timer);
     }
 
     const bodyText = await response.text();
