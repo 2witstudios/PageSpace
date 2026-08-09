@@ -20,6 +20,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   another session already holds used to fail as a server error. The pane you had just opened stayed
   on screen, showing nothing, until something else happened to refresh the layout. The attempt is
   now refused properly and the layout corrects itself straight away.
+- **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
+  tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
+  showed no PageSpace tools at all. Copy it again and it works.
+- **The MCP config the CLI prints after minting a key no longer assumes a global install** — it
+  offered only the form that needs `pagespace` on your PATH, which isn't there if you minted the
+  key through `npx`, and which desktop AI apps often can't find even when it is. It now prints the
+  zero-install form that works either way, and mentions the shorter global-install form as an
+  option.
 - **Panes and sidebars no longer sit blank while the messages are right there in the database** —
   every surface used to keep its own private copy of a conversation and its own theory of when to
   refresh, so a message written from one surface could stay invisible in another until you
