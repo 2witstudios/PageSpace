@@ -73,6 +73,7 @@ import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
@@ -482,18 +483,38 @@ export async function createConversationInSession(input: {
  */
 function conversationOwnerRead() {
   return {
-    findConversation: async (conversationId: string) => {
+    findConversation: async (conversationId: string): Promise<BumpedConversationRow | null> => {
       const [row] = await db
         .select({
           // The workspace check their routes run is drive-membership-wide and
           // does NOT answer "is this conversation the caller's".
           userId: conversations.userId,
           isActive: conversations.isActive,
+          // THE REST IS THE EMIT CONTEXT, read here rather than in a second
+          // query after the write. Close and reopen change no `conversations`
+          // column — membership is a node — so there is no `RETURNING` to carry
+          // these facts the way every other lifecycle write's bump does. This
+          // read already runs on both paths for the ownership gate; widening
+          // its projection is free where a second SELECT would not be.
+          //
+          // The rev is passed through UNBUMPED, deliberately. It is the MESSAGE
+          // plane's watermark, and a membership change writes no message: a
+          // bump here would make every subscribed pane detect a gap and refetch
+          // a transcript that did not change. The directory listener never
+          // consults it.
+          id: conversations.id,
+          rev: conversations.rev,
+          isShared: conversations.isShared,
+          type: conversations.type,
+          contextId: conversations.contextId,
+          title: conversations.title,
+          lastMessageAt: conversations.lastMessageAt,
+          createdAt: conversations.createdAt,
         })
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .limit(1);
-      return row ?? null;
+      return row ? { ...row, rev: Number(row.rev) } : null;
     },
   };
 }
@@ -526,6 +547,10 @@ export async function closeConversationInSession(input: {
         if (result.status === 'stale') return 'refused';
         return 'dismissed';
       },
+      // The directory plane. See `announceClosed`'s own doc for why the node
+      // write's `workspace:nodes-updated` does not cover this: that event
+      // carries the TREE, and the sidebar's rows come from the LISTING.
+      announceClosed: (row) => emitConversationLifecycle('closed', row),
     },
     input,
   );
@@ -568,6 +593,7 @@ export async function reopenConversationInSession(input: {
             return 'refused';
         }
       },
+      announceReopened: (row) => emitConversationLifecycle('reopened', row),
     },
     input,
   );

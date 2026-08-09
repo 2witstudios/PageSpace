@@ -714,13 +714,20 @@ export const conversationRepository = {
    * facts about one thread, written by two paths, and the reason a thread could
    * be in a workspace and invisible in it.
    *
-   * Closing is now a `move` of the thread's node to no parent and reopening is
-   * a `move` back, both through `applyWorkspaceMembershipWrite`. The
-   * `conversation:closed` / `conversation:reopened` directory events they
-   * emitted are superseded by the structural `workspace:nodes-updated`
-   * broadcast that write already sends: the fact that moved is the node's
-   * location, so the broadcast that carries the tree is the one that carries
-   * it.
+   * Closing is now a `destroy` of the thread's node and reopening an
+   * admission, both through `applyWorkspaceMembershipWrite`.
+   *
+   * **Their `conversation:closed` / `conversation:reopened` emits moved WITH
+   * them — they were not superseded.** This comment used to claim the
+   * structural `workspace:nodes-updated` broadcast covered them, on the
+   * reasoning that the fact which changed is the node's location. It does not,
+   * and the claim cost a release's worth of staleness: that broadcast carries
+   * the TREE, and the sidebar's conversation rows are keyed by the LISTING and
+   * never by the tree (`AgentsSidebar.tsx`), into an SWR cache the tree event
+   * never touches. So a server-side close removed no row until the 120s
+   * backstop poll. The emits now live at the close/reopen chokepoints in
+   * `agent-workspaces-runtime.ts`; see `announceClosed` in
+   * `close-conversation-in-workspace.ts`.
    */
 
   /**

@@ -5,6 +5,7 @@ import { CONVERSATION_EVENTS } from '@pagespace/lib/realtime/conversation-event-
 import { useSWRConfig } from 'swr';
 import { useSocket } from '@/hooks/useSocket';
 import {
+  forgetConversationInCache,
   revalidateWorkspaceListings,
   touchConversationInCache,
 } from '@/components/agents/panes/workspace-conversations';
@@ -34,7 +35,7 @@ import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-
  * Both are event-driven; the difference is only whether a network round-trip is
  * needed to know what to draw.
  *
- * **`created` / `closed` / `deleted` RE-READ, and they used to do surgery.**
+ * **`created` / `deleted` RE-READ, and they used to do surgery.**
  * Each one carried `payload.workspaceId` — "which workspace's listing does this
  * row belong to" — and wrote (or dropped) the row in exactly that session's
  * cache entry. That column is gone: membership is a node in
@@ -50,6 +51,19 @@ import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-
  * spawned reached `handleCreated` with a null and took the `return` branch —
  * back to waiting for the 120s poll, which is the exact problem this listener
  * exists to solve. A re-read is slower than a patch and far faster than a poll.
+ *
+ * **`closed` IS THE EXCEPTION, AND IT IS NOT NEGOTIABLE.** It was swept into the
+ * re-read group with `created`/`deleted` on the same "the payload no longer says
+ * which workspace" reasoning, and that reasoning does not hold for a REMOVAL:
+ * dropping a row needs to know the conversation, not the workspace. The listing
+ * cache can find it — a thread is a member of at most one workspace (the node
+ * table's global chat-target uniqueness), so `forgetConversationInCache` sweeps
+ * every session's row and at most one matches. Making this a re-read cost the
+ * plane its one event that needs no request at all, and put a closed thread's
+ * sidebar row back on the 120s backstop poll whenever the refetch is slow,
+ * blocked or failing. `apps/e2e/tests/18-sidebar-directory-live.spec.ts` blocks
+ * the listing GET at the network for the whole assertion window precisely so
+ * that a re-read cannot pass for a fix.
  *
  * The TREE — which panes a workspace draws — is a different plane and this
  * module deliberately does not touch it: it arrives on
@@ -79,6 +93,12 @@ export function useSessionDirectoryListener(): void {
     // listing has to say which. See the module doc.
     const handleMembershipChanged = () => revalidateWorkspaceListings(mutate);
 
+    // THE ONE EVENT SERVED WITHOUT A REQUEST. A close names the row to remove
+    // and the cache already holds everything else about it, so this is a local,
+    // non-revalidating write — see the module doc for why it must stay one.
+    const handleClosed = (payload: ConversationDirectoryPayload) =>
+      forgetConversationInCache(mutate, null, payload.conversationId);
+
     const handleUpdated = (payload: ConversationDirectoryPayload) => {
       const changes = payload.changes;
       if (!changes) return;
@@ -107,7 +127,7 @@ export function useSessionDirectoryListener(): void {
 
     socket.on(CONVERSATION_EVENTS.created, handleMembershipChanged);
     socket.on(CONVERSATION_EVENTS.updated, handleUpdated);
-    socket.on(CONVERSATION_EVENTS.closed, handleMembershipChanged);
+    socket.on(CONVERSATION_EVENTS.closed, handleClosed);
     socket.on(CONVERSATION_EVENTS.deleted, handleMembershipChanged);
     socket.on(CONVERSATION_EVENTS.reopened, handleMembershipChanged);
     for (const event of SESSION_LIFECYCLE_EVENTS) socket.on(event, handleSessionLifecycle);
@@ -121,7 +141,7 @@ export function useSessionDirectoryListener(): void {
     return () => {
       socket.off(CONVERSATION_EVENTS.created, handleMembershipChanged);
       socket.off(CONVERSATION_EVENTS.updated, handleUpdated);
-      socket.off(CONVERSATION_EVENTS.closed, handleMembershipChanged);
+      socket.off(CONVERSATION_EVENTS.closed, handleClosed);
       socket.off(CONVERSATION_EVENTS.deleted, handleMembershipChanged);
       socket.off(CONVERSATION_EVENTS.reopened, handleMembershipChanged);
       for (const event of SESSION_LIFECYCLE_EVENTS) socket.off(event, handleSessionLifecycle);
