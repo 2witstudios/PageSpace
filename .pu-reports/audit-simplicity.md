@@ -49,3 +49,36 @@ Removing the cascade makes the bug unspellable, deletes the rescue, and makes or
 4. **Extract the sandbox table**, then revisit `node_revs` and the wire/rows overlap.
 
 Sequenced, not parallel. Two clusters run concurrently over `apps/web` earlier produced an eight-region semantic merge where one region required both sides interleaved; the cost exceeded the saving.
+
+---
+
+## Pass 5 — the old model is far less entangled than the import count suggests
+
+"26 files import the old model" overstates the deletion. What they import:
+
+**`contract.ts` — 19 importers, and it is a grab-bag of three unrelated concerns:**
+
+| Symbols | Concern | Dies with the old model? |
+|---|---|---|
+| `ShellDTO`, `SHELL_BRIDGE_ROUTES`, `ShellAgentType`, `shellDtoSchema`, `clampShellDimensions`, `ShellConnectPayload`, `SHELL_AGENT_TYPES` | shells | **no** |
+| `MAX_ACTIVE_WORKSPACES_PER_OWNER`, `AgentSessionDTO`, `agentSessionDtoSchema`, `SandboxStatus` | session identity + lifecycle | **no** |
+| `PaneScope`, `PaneKind`, `PersistedWorkspaceState` | layout | yes — 5 uses across 3 files |
+
+The old model looked entangled across 26 files because **one module holds three concerns**, not because the layout model reached everywhere. That is a module-boundary problem masquerading as coupling, and splitting `contract.ts` by concern is most of the deletion's cost.
+
+**`workspace-layout-verbs.ts` — 8 importers**, genuinely layout: `LayoutGridColumn`, `WorkspaceLayoutVerb`, `resolveOpenPlacement`, `isReplaceable`, `WorkspaceState`, `MAX_GRID_COLUMNS`, `workspaceLayoutVerbSchema`.
+
+## Finding 5 (ORDERING CONSTRAINT) — the successor depends on what it replaces
+
+`FRACTION_EPSILON` and `readFraction` are imported **by the new node model from the old layout model**. The old model cannot be deleted until they move. Anyone starting the deletion without knowing this hits it mid-change, with the tree half-converted.
+
+It is also a smell in its own right: a fraction primitive is not layout-model-specific, and living in `workspace-layout-verbs.ts` is why the successor had to reach backwards for it.
+
+## Revised order for step 2 (deleting the old model)
+
+1. Move `FRACTION_EPSILON` / `readFraction` to the node model — cuts the new→old dependency.
+2. Split `contract.ts` by concern: shells, session lifecycle, layout. The first two are keepers that were never layout; only the third dies.
+3. Delete `workspace-layout-verbs.ts` and its ~3 real consumers (`workspace-layout-runtime.ts`, the old verbs route, the layout half of `session-tools`).
+4. Drop `agent_workspace_panes`, `_pane_columns`, `_layout_revs`, `_layout_ops`, and `conversations.workspaceId` / `closedInWorkspaceAt`.
+
+Steps 1 and 2 are safe to do BEFORE the one-removal correction lands — they touch the old module's boundaries, not the node model's behaviour.
