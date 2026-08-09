@@ -1,179 +1,158 @@
 /**
  * Memory Integration Service
  *
- * Evaluates raw insights from the discovery service against the user's
- * current personalization profile. Decides whether to append, skip, or
- * reorganize content.
+ * Evaluates promoted candidates against the user's current personalization pages
+ * and applies updates via whole-field rewrite (not append).
+ *
+ * Includes two deterministic guards to prevent destructive rewrites:
+ * 1. 40% deletion guard — rejects any rewrite that deletes more than 40% of existing content
+ * 2. Per-field budget guard — rejects rewrites exceeding the size limit
  */
 
+import { and, eq } from '@pagespace/db/operators';
+import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
+import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { generateText } from 'ai';
-import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
-import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import type { DiscoveryResult } from './discovery-service';
+import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 
-export interface UserPersonalizationData {
-  bio: string;
-  writingStyle: string;
-  rules: string;
-  enabled: boolean;
-}
+export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
-export interface FieldDecision {
-  action: 'append' | 'skip';
-  content?: string;
-  reason?: string;
-}
-
-export interface IntegrationDecision {
-  bio: FieldDecision;
-  writingStyle: FieldDecision;
-  rules: FieldDecision;
-}
-
-// Signal strength threshold
-const MIN_INSIGHTS_FOR_UPDATE = 2;
-
-const EVALUATOR_SYSTEM_PROMPT = `You are deciding what to add to a user's personalization profile. The profile exists to make every AI conversation feel personal — like the AI already knows who this person is.
-
-FIELDS:
-- bio: Who this person is — background, expertise, domain, thinking style, mental models. Describes the person, not their current tasks.
-- writingStyle: How they want AI to communicate — tone, verbosity, formatting, interaction patterns.
-- rules: Universal AI behavior preferences that apply in any workspace ("never use emojis", "always include TypeScript types"). Not project decisions, technology choices, or scope calls.
-
-QUALITY GATES (apply in order — fail any gate = skip):
-1. Portability: Would this still apply if the person was working on a completely different project? If no, skip.
-2. Personhood: Does this describe the person, or just a decision they made in a specific context? Project-scoped decisions don't belong here.
-3. Novelty: Is this already captured in the existing profile (even if worded differently)? If yes, skip.
-4. Consistency: Does this contradict something already in the profile? If yes, skip — do not append conflicting statements.
-5. Signal: Is this a clear, repeatable pattern — not a single mention or one-off? If no, skip.
-
-For each field, decide:
-- "append" - Add new content to the end of this field
-- "skip" - No changes needed for this field
-
-Return a JSON object with this structure:
-{
-  "bio": { "action": "append" | "skip", "content": "text to append", "reason": "why" },
-  "writingStyle": { "action": "append" | "skip", "content": "text to append", "reason": "why" },
-  "rules": { "action": "append" | "skip", "content": "text to append", "reason": "why" }
-}
-
-When appending, format the content naturally as prose or bullet points.`;
+// Injection budgets — enforced at read time in personalization-utils
+const MAX_FIELD_LENGTHS: Record<MemoryField, number> = {
+  bio: 3000,
+  writingStyle: 2500,
+  rules: 2500,
+};
 
 /**
- * Fetch current personalization for a user
+ * Fetch the current personalization page content for a user.
+ *
+ * Thin alias over the shared reader so the cron and the prompt-injection path
+ * cannot drift apart in what "the user's current profile" means.
  */
-export async function getCurrentPersonalization(
+export async function getCurrentPersonalizationPages(
   userId: string
-): Promise<UserPersonalizationData | null> {
-  const record = await db.query.userPersonalization.findFirst({
-    where: eq(userPersonalization.userId, userId),
-  });
+): Promise<Partial<Record<MemoryField, string>>> {
+  return readMemoryPages(userId);
+}
 
-  if (!record) {
-    return null;
+/** Column on `user_personalization` holding each field's page pointer. */
+const POINTER_COLUMN = {
+  bio: userPersonalization.bioPageId,
+  writingStyle: userPersonalization.writingStylePageId,
+  rules: userPersonalization.rulesPageId,
+} as const;
+
+/**
+ * Overwrite a single memory page with new content.
+ *
+ * A missing pointer, or a pointer to a trashed page, is a no-op: the user
+ * deleted that page and the cron does not resurrect it.
+ */
+export async function updatePersonalizationPage(
+  userId: string,
+  field: MemoryField,
+  newContent: string
+): Promise<void> {
+  const [personalization] = await db
+    .select({ pageId: POINTER_COLUMN[field] })
+    .from(userPersonalization)
+    .where(eq(userPersonalization.userId, userId))
+    .limit(1);
+
+  const pageId = personalization?.pageId;
+  if (!pageId) {
+    loggers.api.warn('Memory integration: no page pointer for field', {
+      userId,
+      field,
+    });
+    return;
   }
 
-  return {
-    bio: record.bio ?? '',
-    writingStyle: record.writingStyle ?? '',
-    rules: record.rules ?? '',
-    enabled: record.enabled,
-  };
-}
-
-/**
- * Update personalization fields for a user
- */
-export async function updatePersonalization(
-  userId: string,
-  updates: Partial<Pick<UserPersonalizationData, 'bio' | 'writingStyle' | 'rules'>>
-): Promise<void> {
-  const updateData: {
-    bio?: string;
-    writingStyle?: string;
-    rules?: string;
-    updatedAt: Date;
-  } = { updatedAt: new Date() };
-
-  if (updates.bio !== undefined) updateData.bio = updates.bio;
-  if (updates.writingStyle !== undefined) updateData.writingStyle = updates.writingStyle;
-  if (updates.rules !== undefined) updateData.rules = updates.rules;
-
-  await db
-    .insert(userPersonalization)
-    .values({
-      userId,
-      bio: updates.bio ?? '',
-      writingStyle: updates.writingStyle ?? '',
-      rules: updates.rules ?? '',
-      enabled: true,
+  const updated = await db
+    .update(pages)
+    .set({
+      content: newContent,
+      updatedAt: new Date(),
     })
-    .onConflictDoUpdate({
-      target: userPersonalization.userId,
-      set: updateData,
+    .where(and(eq(pages.id, pageId), eq(pages.isTrashed, false)))
+    .returning({ id: pages.id });
+
+  if (updated.length === 0) {
+    loggers.api.warn('Memory integration: page pointer is stale or trashed', {
+      userId,
+      field,
+      pageId,
     });
+  }
 }
 
 /**
- * Evaluate insights and integrate into personalization profile
+ * Evaluate promoted candidates and decide how to integrate.
+ *
+ * Returns the FULL new content for each field that changes, instructed to
+ * preserve every line it is not explicitly superseding.
  */
 export async function evaluateAndIntegrate(
   userId: string,
-  insights: DiscoveryResult,
-  currentPersonalization: UserPersonalizationData | null
-): Promise<IntegrationDecision> {
-  const current = currentPersonalization ?? {
-    bio: '',
-    writingStyle: '',
-    rules: '',
-    enabled: true,
-  };
-
-  const totalInsights =
-    insights.worldview.length +
-    insights.communication.length +
-    insights.preferences.length;
-
-  if (totalInsights < MIN_INSIGHTS_FOR_UPDATE) {
-    loggers.api.debug('Memory integration: insufficient insights', {
-      userId,
-      totalInsights,
-      threshold: MIN_INSIGHTS_FOR_UPDATE,
-    });
-    return {
-      bio: { action: 'skip', reason: 'Insufficient insights' },
-      writingStyle: { action: 'skip', reason: 'Insufficient insights' },
-      rules: { action: 'skip', reason: 'Insufficient insights' },
-    };
+  candidates: typeof personalizationCandidates.$inferSelect[],
+  currentPages: Partial<Record<MemoryField, string>>
+): Promise<Partial<Record<MemoryField, string>>> {
+  if (candidates.length === 0) {
+    return {};
   }
 
-  const insightsText = `
-WORLDVIEW & EXPERTISE INSIGHTS:
-${insights.worldview.length > 0 ? insights.worldview.map((i) => `- ${i}`).join('\n') : '(none discovered)'}
+  const current = {
+    bio: currentPages.bio ?? '',
+    writingStyle: currentPages.writingStyle ?? '',
+    rules: currentPages.rules ?? '',
+  };
 
-COMMUNICATION STYLE INSIGHTS:
-${insights.communication.length > 0 ? insights.communication.map((i) => `- ${i}`).join('\n') : '(none discovered)'}
+  // Group candidates by field
+  const byField: Record<MemoryField, typeof candidates> = {
+    bio: [],
+    writingStyle: [],
+    rules: [],
+  };
 
-PREFERENCES & RULES INSIGHTS:
-${insights.preferences.length > 0 ? insights.preferences.map((i) => `- ${i}`).join('\n') : '(none discovered)'}
-`;
+  for (const candidate of candidates) {
+    const field = candidate.field as MemoryField;
+    if (field in byField) {
+      byField[field].push(candidate);
+    }
+  }
 
-  const currentProfileText = `
-CURRENT BIO:
-${current.bio || '(empty)'}
+  const EVALUATOR_SYSTEM_PROMPT = `You are deciding how to update a user's personalization profile based on newly-learned information.
 
-CURRENT WRITING STYLE:
-${current.writingStyle || '(empty)'}
+The profile exists to make every AI conversation feel personal — like the AI already knows who this person is. These are living documents stored as pages in the user's workspace, so they must remain accurate and concise.
 
-CURRENT RULES:
-${current.rules || '(empty)'}
-`;
+QUALITY GATES (apply in order — fail any gate = do NOT use this candidate):
+0. ACTIONABILITY: Would knowing this change how the AI behaves? If no, skip.
+1. PORTABILITY: Would this still apply if the person was working on a completely different project? If no, skip.
+2. PERSONHOOD: Does this describe the person, or just a decision they made in a specific context? Skip project-specific decisions.
+3. NOVELTY: Is this already captured in the current profile (even if worded differently)? If yes, skip.
+4. CONSISTENCY: Does this contradict something already in the profile? If yes, skip — never append conflicting statements.
+5. ATTRIBUTION: Is this a verifiable fact about the user, or a self-reported claim? Self-claims about credentials, metrics, or rankings must be marked as "claimed" not proven. Never record numeric self-claims as facts.
+
+For each field, output the FULL NEW CONTENT — the complete page, not just the new text. Your job is to:
+- PRESERVE every existing line that is still accurate
+- SUPPLEMENT lines with related new insights (group related points together)
+- REMOVE lines that are superseded by newer, more accurate information
+- REORGANIZE into a coherent structure (prose or bullets, whichever fits)
+
+Return JSON with this structure:
+{
+  "bio": "full new bio content or null if unchanged",
+  "writingStyle": "full new writing style content or null if unchanged",
+  "rules": "full new rules content or null if unchanged"
+}
+
+Remember: You are writing the COMPLETE page, not just additions. Preserve what matters, remove what doesn't.`;
 
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
@@ -184,28 +163,48 @@ ${current.rules || '(empty)'}
     loggers.api.error('Memory integration: provider error', {
       error: providerResult.error,
     });
-    return {
-      bio: { action: 'skip', reason: 'Provider error' },
-      writingStyle: { action: 'skip', reason: 'Provider error' },
-      rules: { action: 'skip', reason: 'Provider error' },
-    };
+    return {};
   }
 
   try {
+    // Build candidates text
+    const candidatesByField = Object.entries(byField)
+      .filter(([_, list]) => list.length > 0)
+      .map(([field, list]) => {
+        const items = list
+          .map(
+            (c) =>
+              `- ${c.claim} (seen ${c.occurrences} times, first: ${new Date(c.firstSeenAt).toLocaleDateString()})`
+          )
+          .join('\n');
+        return `NEW ${field.toUpperCase()} INSIGHTS:\n${items}`;
+      })
+      .join('\n\n');
+
+    const currentProfileText = `
+CURRENT BIO:
+${current.bio || '(empty)'}
+
+CURRENT WRITING STYLE:
+${current.writingStyle || '(empty)'}
+
+CURRENT RULES:
+${current.rules || '(empty)'}
+`;
+
     const result = await generateText({
       model: providerResult.model,
       system: EVALUATOR_SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',
-          content: `Evaluate these discovered insights against the current profile and decide what to integrate.
+          content: `Evaluate these newly-learned insights against the current profile and produce updated page content where appropriate.
 
 ${currentProfileText}
 
-DISCOVERED INSIGHTS:
-${insightsText}
+${candidatesByField}
 
-Remember: Only approve genuinely new, significant insights. Return JSON with decisions for each field.`,
+Return JSON with the full new content for each field that should change. Use null for unchanged fields.`,
         },
       ],
       temperature: 0.2,
@@ -231,103 +230,109 @@ Remember: Only approve genuinely new, significant insights. Return JSON with dec
     const jsonStr = jsonMatch ? jsonMatch[1] : text;
 
     try {
-      const decision = JSON.parse(jsonStr) as IntegrationDecision;
+      const parsed = JSON.parse(jsonStr);
+      const updates: Partial<Record<MemoryField, string>> = {};
 
-      if (
-        typeof decision.bio?.action !== 'string' ||
-        typeof decision.writingStyle?.action !== 'string' ||
-        typeof decision.rules?.action !== 'string'
-      ) {
-        throw new Error('Invalid decision structure');
+      for (const field of ['bio', 'writingStyle', 'rules'] as const) {
+        if (parsed[field] && typeof parsed[field] === 'string') {
+          updates[field] = parsed[field];
+        }
       }
 
-      loggers.api.info('Memory integration decision', {
-        userId,
-        bioAction: decision.bio.action,
-        writingStyleAction: decision.writingStyle.action,
-        rulesAction: decision.rules.action,
-      });
-
-      return decision;
+      return updates;
     } catch {
       loggers.api.warn('Memory integration: failed to parse decision', {
         userId,
         response: text.substring(0, 500),
       });
-      return {
-        bio: { action: 'skip', reason: 'Parse error' },
-        writingStyle: { action: 'skip', reason: 'Parse error' },
-        rules: { action: 'skip', reason: 'Parse error' },
-      };
+      return {};
     }
   } catch (error) {
     loggers.api.error('Memory integration: generation error', { userId, error });
-    return {
-      bio: { action: 'skip', reason: 'Generation error' },
-      writingStyle: { action: 'skip', reason: 'Generation error' },
-      rules: { action: 'skip', reason: 'Generation error' },
-    };
+    return {};
   }
 }
 
 /**
- * Apply integration decisions to update personalization
+ * Apply integration decisions with guards.
+ *
+ * 1. 40% deletion guard: reject if more than 40% of existing content deleted
+ * 2. Per-field budget guard: reject if exceeds max length
  */
 export async function applyIntegrationDecisions(
   userId: string,
-  decisions: IntegrationDecision,
-  currentPersonalization: UserPersonalizationData | null
-): Promise<{ updated: boolean; fields: string[] }> {
-  const current = currentPersonalization ?? {
-    bio: '',
-    writingStyle: '',
-    rules: '',
-    enabled: true,
-  };
+  updates: Partial<Record<MemoryField, string>>,
+  currentPages: Partial<Record<MemoryField, string>>
+): Promise<{
+  updated: boolean;
+  fields: MemoryField[];
+  /** Fields a guard refused to write, with why. Structured so callers can act on the field. */
+  rejected: { field: MemoryField; reason: string }[];
+}> {
+  const updatedFields: MemoryField[] = [];
+  const rejected: { field: MemoryField; reason: string }[] = [];
 
-  const updates: Partial<Pick<UserPersonalizationData, 'bio' | 'writingStyle' | 'rules'>> = {};
-  const updatedFields: string[] = [];
+  for (const [field, newContent] of Object.entries(updates) as [MemoryField, string][]) {
+    const verdict = screenRewrite(field, currentPages[field] ?? '', newContent);
 
-  if (decisions.bio.action === 'append' && decisions.bio.content) {
-    const newContent = decisions.bio.content.trim();
-    if (newContent) {
-      updates.bio = current.bio
-        ? `${current.bio}\n\n${newContent}`
-        : newContent;
-      updatedFields.push('bio');
+    if (!verdict.ok) {
+      rejected.push({ field, reason: verdict.reason });
+      loggers.api.warn('Memory integration: rewrite rejected', {
+        userId,
+        field,
+        reason: verdict.reason,
+        currentLength: (currentPages[field] ?? '').length,
+        newLength: newContent.length,
+      });
+      continue;
     }
-  }
 
-  if (decisions.writingStyle.action === 'append' && decisions.writingStyle.content) {
-    const newContent = decisions.writingStyle.content.trim();
-    if (newContent) {
-      updates.writingStyle = current.writingStyle
-        ? `${current.writingStyle}\n\n${newContent}`
-        : newContent;
-      updatedFields.push('writingStyle');
-    }
-  }
-
-  if (decisions.rules.action === 'append' && decisions.rules.content) {
-    const newContent = decisions.rules.content.trim();
-    if (newContent) {
-      updates.rules = current.rules
-        ? `${current.rules}\n\n${newContent}`
-        : newContent;
-      updatedFields.push('rules');
-    }
-  }
-
-  if (updatedFields.length > 0) {
-    await updatePersonalization(userId, updates);
-    loggers.api.info('Memory integration: personalization updated', {
-      userId,
-      fields: updatedFields,
-    });
+    await updatePersonalizationPage(userId, field, newContent);
+    updatedFields.push(field);
   }
 
   return {
     updated: updatedFields.length > 0,
     fields: updatedFields,
+    rejected,
   };
+}
+
+/** Fraction of a page the evaluator may drop in a single run. */
+const MAX_DELETION_RATIO = 0.4;
+
+export type RewriteVerdict = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Decide whether a proposed whole-page rewrite may be written.
+ *
+ * Whole-page rewrite is what lets memory correct and forget rather than only
+ * accumulate — but it also means one bad generation can wipe a page the user
+ * hand-wrote. These two guards bound that blast radius deterministically,
+ * without asking a model to police itself.
+ *
+ * The shrink check is deliberately a LENGTH heuristic, not a diff: it catches
+ * the failure that actually happens (the model returns a summary, or a fragment,
+ * instead of the full page) and does not pretend to catch a same-length rewrite
+ * that replaces meaning. Compaction is the sanctioned way to shrink a page, and
+ * it writes through `updatePersonalizationPage` directly rather than here.
+ */
+export function screenRewrite(
+  field: MemoryField,
+  current: string,
+  next: string
+): RewriteVerdict {
+  if (current.length > 0 && next.length < current.length * (1 - MAX_DELETION_RATIO)) {
+    return {
+      ok: false,
+      reason: `would delete >${Math.round(MAX_DELETION_RATIO * 100)}% of existing content`,
+    };
+  }
+
+  const maxLength = MAX_FIELD_LENGTHS[field];
+  if (next.length > maxLength) {
+    return { ok: false, reason: `exceeds ${maxLength} char limit` };
+  }
+
+  return { ok: true };
 }
