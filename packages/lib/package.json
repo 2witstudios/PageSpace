@@ -117,6 +117,31 @@
       "import": "./dist/agent-workspaces/workspace-node-validate.js",
       "require": "./dist/agent-workspaces/workspace-node-validate.js"
     },
+    "./agent-workspaces/workspace-node-rows": {
+      "types": "./dist/agent-workspaces/workspace-node-rows.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-rows.js",
+      "require": "./dist/agent-workspaces/workspace-node-rows.js"
+    },
+    "./agent-workspaces/workspace-node-algebra": {
+      "types": "./dist/agent-workspaces/workspace-node-algebra.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-algebra.js",
+      "require": "./dist/agent-workspaces/workspace-node-algebra.js"
+    },
+    "./agent-workspaces/workspace-node-commands": {
+      "types": "./dist/agent-workspaces/workspace-node-commands.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-commands.js",
+      "require": "./dist/agent-workspaces/workspace-node-commands.js"
+    },
+    "./agent-workspaces/workspace-node-wire": {
+      "types": "./dist/agent-workspaces/workspace-node-wire.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-wire.js",
+      "require": "./dist/agent-workspaces/workspace-node-wire.js"
+    },
+    "./agent-workspaces/workspace-node-write": {
+      "types": "./dist/agent-workspaces/workspace-node-write.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-write.js",
+      "require": "./dist/agent-workspaces/workspace-node-write.js"
+    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",
@@ -736,6 +761,11 @@
       "types": "./dist/services/agent-workspaces/workspace-layout-store.d.ts",
       "import": "./dist/services/agent-workspaces/workspace-layout-store.js",
       "require": "./dist/services/agent-workspaces/workspace-layout-store.js"
+    },
+    "./services/agent-workspaces/workspace-node-store": {
+      "types": "./dist/services/agent-workspaces/workspace-node-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-node-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-node-store.js"
     },
     "./services/agent-workspaces/shell-scrollback": {
       "types": "./dist/services/agent-workspaces/shell-scrollback.d.ts",

@@ -48,8 +48,8 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
-import { applyLayoutVerbForWorkspace } from '@/lib/agent-workspaces/workspace-placement';
-import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
+import { applyLayoutCommandForWorkspace, layoutCommand } from '@/lib/agent-workspaces/workspace-node-placement';
+import { readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
@@ -1023,31 +1023,42 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true, workspaceId };
     },
 
-    // The layout family's two seams (issue #2208). The read is the SAME
-    // label-joining snapshot the layout GET serves, so a model and a browser
-    // never see different names for the same pane; the write is the same
-    // single writer (`applyWorkspaceLayoutVerb`) behind the verbs route.
+    // The layout family's two seams (issue #2208). The read is the SAME atomic
+    // snapshot the `/nodes` GET serves, so a model and a browser never see
+    // different names — or different trees — for the same workspace; the write
+    // is the same single writer behind that route.
     readPaneGrid: async (workspaceId, viewerId) => {
-      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId, viewerId);
-      if (!snapshot.grid || snapshot.grid.length === 0) return null;
+      const snapshot = await readWorkspaceNodes(workspaceId, viewerId);
+      if (snapshot.nodes.length === 0) return null;
+      // Titles ride BESIDE the tree because they are authority and the tree is
+      // not; the model is one viewer, so they are folded back in here for it.
+      const titles = new Map(snapshot.targets.map((target) => [`${target.kind}:${target.id}`, target.title]));
       return {
-        columns: snapshot.grid.map((column) => ({
-          columnId: column.id,
-          widthFraction: column.widthFraction ?? null,
-          panes: column.panes.map((pane) => ({
-            paneId: pane.id,
-            kind: pane.scope?.kind ?? null,
-            targetId: pane.scope?.targetId ?? null,
-            // Labels are display-only and the snapshot already re-derived them
-            // from the live rows — an unbound pane has none at all.
-            name: pane.scope?.name ?? '',
-            heightFraction: pane.heightFraction ?? null,
-          })),
-        })),
+        nodes: snapshot.nodes.map((node) => {
+          const target = node.nodeType === 'pane' ? node.target : null;
+          return {
+            nodeId: node.id,
+            nodeType: node.nodeType,
+            parentId: node.parentId,
+            position: node.position,
+            axis: node.nodeType === 'pane' ? null : node.axis,
+            kind: target?.kind ?? null,
+            targetId: target?.id ?? null,
+            // A target the viewer may not name resolves to nothing, and the
+            // node still renders — refusing to resolve is deliberately
+            // indistinguishable from "gone".
+            name: target === null ? '' : titles.get(`${target.kind}:${target.id}`) ?? '',
+            fraction: node.nodeType === 'root' ? null : node.fraction ?? null,
+          };
+        }),
       };
     },
 
-    applyLayoutVerb: applyLayoutVerbForWorkspace,
+    // The model names a COMMAND; the server compiles it against the tree it
+    // holds under the lock. A command whose target id no longer exists is
+    // refused by the algebra, never clamped into something else.
+    applyLayoutCommand: async ({ workspaceId, actingUserId, command }) =>
+      applyLayoutCommandForWorkspace({ workspaceId, actingUserId, run: layoutCommand(command) }),
 
     dispatch: dispatchThroughChatPipeline,
 

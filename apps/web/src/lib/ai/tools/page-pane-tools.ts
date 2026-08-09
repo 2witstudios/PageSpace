@@ -36,7 +36,6 @@ export interface PagePaneToolDeps {
   placePagePane(input: {
     conversationId: string;
     pageId: string;
-    title?: string;
     /**
      * The ACTING USER. `pageId` is model-supplied, so the placement gates it
      * on this user's own page access — otherwise a prompt-injected agent
@@ -44,8 +43,6 @@ export interface PagePaneToolDeps {
      * review, MEDIUM on the HIGH 1 surface).
      */
     viewerId: string;
-    /** Idempotency key derived from the tool call — a retried call must not place twice. */
-    opId: string;
   }): Promise<void>;
 }
 
@@ -86,21 +83,17 @@ export function createPagePaneTools(deps: PagePaneToolDeps) {
         )?.experimental_context;
         const conversationId = context?.conversationId;
         const viewerId = context?.userId;
-        // `toolCallId` is stable across the SDK's own retries of one call, so
-        // deriving the opId from it is what makes a retried placement a
-        // replay (the verb engine's op memory short-circuits it) instead of
-        // a second pane.
-        const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
         // No acting user means no authority to place under — the ack below is
         // still honest (the client fast path is a no-op without a grid too).
-        if (conversationId && toolCallId && viewerId) {
-          await deps.placePagePane({
-            conversationId,
-            pageId,
-            title,
-            viewerId,
-            opId: `${OPEN_PAGE_PANE_TOOL_NAME}:${toolCallId}`,
-          });
+        //
+        // There is no idempotency key any more, and the SDK's own retry of one
+        // call is still safe: the placement command leaves a page that is
+        // already on screen exactly where it is and writes nothing. Idempotence
+        // by POLICY rather than by a `(workspaceId, opId)` memory row — the
+        // second call does nothing because there is nothing left to do, not
+        // because a table remembered the first.
+        if (conversationId && viewerId) {
+          await deps.placePagePane({ conversationId, pageId, viewerId });
         }
         return { opened: true, pageId, title };
       },

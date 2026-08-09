@@ -15,6 +15,7 @@ import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import { sessionRoom } from '@pagespace/lib/realtime/rooms';
 import type { WorkspaceLayoutGridDTO, WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const realtimeLogger = browserLoggers.realtime.child({ module: 'agent-workspace-events' });
@@ -62,17 +63,59 @@ export interface WorkspaceUpdatedPayload {
  * write must not fail because the realtime service hiccuped.
  */
 export function broadcastWorkspaceUpdated(payload: WorkspaceUpdatedPayload): void {
+  emit('workspace:updated', payload.workspaceId, payload);
+}
+
+/**
+ * The NODE model's broadcast: `workspace:nodes-updated`, the flat list after an
+ * applied write.
+ *
+ * **STRUCTURAL, and that is the whole design.** `session:<id>` is a room — one
+ * payload reaches every member of a shared workspace at once — so there is no
+ * viewer to redact for and per-viewer redaction is not expressible on this wire.
+ * The tree is identical for every member (ids, parents, positions, shares, and
+ * which target each pane points at), so it ships whole; the TITLES do not ship
+ * at all, because a title is authority and this wire cannot ask whose. That is
+ * the structural reason `targets[]` rides beside the nodes on the HTTP reads
+ * instead of inside them: a shape that put the title on the node would have
+ * nothing safe to broadcast.
+ *
+ * A subscriber that meets a target it cannot name resolves it through its OWN
+ * access-checked read.
+ *
+ * There is no `opId` here and no successor to one. The old event carried the
+ * client-minted key so a client could recognize its own echo and refuse to
+ * replay a still-queued verb; the node write is an UPSERT of a set, so applying
+ * one's own echo is idempotent and there is nothing left to recognize.
+ */
+export interface WorkspaceNodesUpdatedPayload {
+  workspaceId: string;
+  /** The post-write rev — subscribers apply on `watermark + 1`, refetch on a gap. */
+  rev: number;
+  /** The whole flat list after the write. Small enough to always ship whole. */
+  nodes: WorkspaceNode[];
+}
+
+export function broadcastWorkspaceNodesUpdated(payload: WorkspaceNodesUpdatedPayload): void {
+  emit('workspace:nodes-updated', payload.workspaceId, payload);
+}
+
+/**
+ * Fire-and-forget: broadcast failures are logged, never thrown — a layout
+ * write must not fail because the realtime service hiccuped.
+ */
+function emit(event: string, workspaceId: string, payload: unknown): void {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping workspace event broadcast', {
-      workspaceId: maskIdentifier(payload.workspaceId),
+      workspaceId: maskIdentifier(workspaceId),
     });
     return;
   }
 
   const requestBody = JSON.stringify({
-    channelId: sessionRoom(payload.workspaceId),
-    event: 'workspace:updated',
+    channelId: sessionRoom(workspaceId),
+    event,
     payload,
   });
 
@@ -85,7 +128,7 @@ export function broadcastWorkspaceUpdated(payload: WorkspaceUpdatedPayload): voi
     realtimeLogger.error(
       'Failed to broadcast workspace event',
       error instanceof Error ? error : undefined,
-      { workspaceId: maskIdentifier(payload.workspaceId) },
+      { workspaceId: maskIdentifier(workspaceId) },
     );
   });
 }

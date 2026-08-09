@@ -51,6 +51,10 @@
       "types": "./dist/schema/agent-workspaces.d.ts",
       "default": "./dist/schema/agent-workspaces.js"
     },
+    "./schema/agent-workspace-nodes": {
+      "types": "./dist/schema/agent-workspace-nodes.d.ts",
+      "default": "./dist/schema/agent-workspace-nodes.js"
+    },
     "./schema/agent-workspace-layout": {
       "types": "./dist/schema/agent-workspace-layout.d.ts",
       "default": "./dist/schema/agent-workspace-layout.js"
