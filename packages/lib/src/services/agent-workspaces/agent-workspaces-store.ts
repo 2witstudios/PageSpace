@@ -15,12 +15,13 @@
  *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
- *  - **No conversation writes.** `conversations.workspaceId` is the thread→session
- *    binding, set once at conversation creation by the squat-guarded repository
- *    path. This store READS that binding (`findByConversation` — how a chat
- *    turn resolves its working context) but never writes it: a store that could
- *    bind threads would be a second, unguarded way to move a thread's
- *    filesystem, which the model forbids (moving a thread is a fork).
+ *  - **No membership writes.** A thread belongs to a workspace by virtue of a
+ *    row in `agent_workspace_nodes` bound to it, written by exactly one funnel
+ *    (`applyWorkspaceMembershipWrite`). This store READS that binding
+ *    (`findByConversation` — how a chat turn resolves its working context) but
+ *    never writes it: a store that could bind threads would be a second,
+ *    unguarded way to move a thread's filesystem, which the model forbids
+ *    (moving a thread is a fork).
  */
 
 import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
@@ -86,9 +87,10 @@ export interface AgentSessionStore {
   findById(workspaceId: string): Promise<AgentSessionRecord | null>;
   /**
    * Resolve a conversation's session — how a chat turn finds its working
-   * context. Reads `conversations.workspaceId` and returns the session row, or
-   * null when the thread has no session (a plain chat) or the FK was nulled by
-   * a session delete. THE lookup the tool layer folds its Sprite key from:
+   * context. Reads the node bound to the conversation and returns its
+   * workspace row, or null when the thread is a member of none (a plain chat,
+   * or one whose workspace was deleted — the node's `rootId` FK cascades).
+   * THE lookup the tool layer folds its Sprite key from:
    * every conversation in one session resolves the same row, which is what
    * makes sandbox sharing structural rather than wired.
    */
@@ -342,14 +344,22 @@ export function revivedAgentSessionColumns(input: {
  * pin it rather than asserting "some recent timestamp".
  */
 export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentWorkspaces }, { machineSpriteReclaims }, { conversations }] =
-    await Promise.all([
-      import('@pagespace/db/db'),
-      import('@pagespace/db/operators'),
-      import('@pagespace/db/schema/agent-workspaces'),
-      import('@pagespace/db/schema/machine-sprite-reclaims'),
-      import('@pagespace/db/schema/conversations'),
-    ]);
+  const [
+    { db },
+    { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc },
+    { agentWorkspaces },
+    { machineSpriteReclaims },
+    // The membership table. `conversations` is no longer imported here at all:
+    // this store never read anything from it but the thread→workspace binding,
+    // and that binding is a node now.
+    { agentWorkspaceNodes },
+  ] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/agent-workspaces'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/agent-workspace-nodes'),
+  ]);
 
   return {
     async findById(workspaceId) {
@@ -362,15 +372,26 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     },
 
     async findByConversation(conversationId) {
-      // conversations.workspaceId is the binding; a null FK (plain chat, or a
-      // session deleted out from under its history) resolves to null, never to
-      // some fallback session — the tool layer's no-session denial depends on
-      // that honesty.
+      // THE NODE is the binding. `agent_workspace_nodes_chat_target_idx` is
+      // UNIQUE on `targetId` where `targetKind = 'chat'` — globally — so this
+      // is a single-row lookup on a unique index and "a thread has one
+      // workspace" is the database's rule rather than a column two writers
+      // could disagree about.
+      //
+      // A thread with no node (a plain chat, or one whose workspace was
+      // deleted — the `rootId` FK cascades) resolves to null, never to some
+      // fallback session: the tool layer's no-session denial depends on that
+      // honesty, exactly as it did when the binding was a column.
       const [row] = await db
         .select({ session: agentWorkspaces })
-        .from(conversations)
-        .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, conversations.workspaceId))
-        .where(eq(conversations.id, conversationId))
+        .from(agentWorkspaceNodes)
+        .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, agentWorkspaceNodes.rootId))
+        .where(
+          and(
+            eq(agentWorkspaceNodes.targetKind, 'chat'),
+            eq(agentWorkspaceNodes.targetId, conversationId),
+          ),
+        )
         .limit(1);
       return (row?.session as AgentSessionRecord) ?? null;
     },

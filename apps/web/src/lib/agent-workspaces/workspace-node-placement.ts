@@ -33,8 +33,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import {
@@ -102,14 +101,15 @@ export async function applyLayoutCommandForWorkspace(input: {
 // Placement — open_page_pane and spawn_session
 // ---------------------------------------------------------------------------
 
-/** The workspace a conversation is bound into, or `null` for an unbound thread. */
+/**
+ * The workspace whose tree holds this conversation, or `null` for a thread that
+ * belongs to none.
+ *
+ * One lookup on the node table's global chat-target index — the membership
+ * read, where this used to select `conversations.workspaceId`.
+ */
 async function findWorkspaceOfConversation(conversationId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ workspaceId: conversations.workspaceId })
-    .from(conversations)
-    .where(eq(conversations.id, conversationId))
-    .limit(1);
-  return row?.workspaceId ?? null;
+  return findWorkspaceOfChat(db, conversationId);
 }
 
 /**

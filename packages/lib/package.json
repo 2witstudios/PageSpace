@@ -112,6 +112,11 @@
       "import": "./dist/agent-workspaces/workspace-node.js",
       "require": "./dist/agent-workspaces/workspace-node.js"
     },
+    "./agent-workspaces/workspace-membership": {
+      "types": "./dist/agent-workspaces/workspace-membership.d.ts",
+      "import": "./dist/agent-workspaces/workspace-membership.js",
+      "require": "./dist/agent-workspaces/workspace-membership.js"
+    },
     "./agent-workspaces/workspace-node-validate": {
       "types": "./dist/agent-workspaces/workspace-node-validate.d.ts",
       "import": "./dist/agent-workspaces/workspace-node-validate.js",
@@ -1831,6 +1836,11 @@
       "types": "./dist/services/agent-workspaces/workspace-node-store.d.ts",
       "import": "./dist/services/agent-workspaces/workspace-node-store.js",
       "require": "./dist/services/agent-workspaces/workspace-node-store.js"
+    },
+    "./services/agent-workspaces/workspace-membership-store": {
+      "types": "./dist/services/agent-workspaces/workspace-membership-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-membership-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-membership-store.js"
     }
   },
   "typesVersions": {

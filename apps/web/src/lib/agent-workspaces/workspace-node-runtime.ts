@@ -47,8 +47,8 @@ import type {
   WorkspaceNodeTarget,
 } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { decideNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-write';
-import type { CommandCode, CommandResult } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
-import type { TreeViolationCode } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
+import type { CommandResult } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
+import type { MembershipCode, MembershipResult } from '@pagespace/lib/agent-workspaces/workspace-membership';
 import {
   chatHeldElsewhereDetail,
   chatIndexRefusalDetail,
@@ -60,10 +60,11 @@ import {
   readWorkspaceNodeSnapshot,
   withWorkspaceLayoutLock,
   writeWorkspaceNodes,
+  type DbExecutor,
   type WorkspaceNodeSnapshot,
 } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
 import { broadcastWorkspaceNodesUpdated } from '@/lib/websocket/agent-workspace-events';
-import { authorizePaneTargets, introducedPaneTargets } from './authorize-pane-scope';
+import { authorizePaneTargets, introducedPaneTargets, paneScopeDeps } from './authorize-pane-scope';
 
 /**
  * Who a resolved target list is being derived FOR.
@@ -106,8 +107,17 @@ export async function readWorkspaceNodes(
  * the wrapper is two lines when its caller arrives.
  */
 
-/** Why a write was refused. Every one of these writes NOTHING. */
-export type NodeWriteRefusal = TreeViolationCode | 'foreign_scope' | 'forbidden_target' | CommandCode;
+/**
+ * Why a write was refused. Every one of these writes NOTHING.
+ *
+ * {@link MembershipCode} is the widest of the layered codes — it already
+ * contains the commands', which contain the operations', which contain the
+ * validator's — so naming it here is what keeps a refusal from being re-worded
+ * on its way up. `bound_elsewhere` is the one code no layer can produce: it
+ * comes from the table's global chat-target index, and only the database is in
+ * a position to know.
+ */
+export type NodeWriteRefusal = MembershipCode | 'foreign_scope' | 'forbidden_target' | 'bound_elsewhere';
 
 /**
  * What the write answers.
@@ -156,6 +166,46 @@ type WriteProducer = (
   | { status: 'refused'; code: NodeWriteRefusal; detail: string };
 
 /**
+ * WORK THAT MUST LAND IN THE SAME TRANSACTION AS THE NODE WRITE.
+ *
+ * The membership chokepoint's whole reason for existing. A conversation row and
+ * the node that makes it a member of a workspace are one fact, so they are one
+ * transaction: if the row lands and the node does not, the thread is a member of
+ * nothing and appears nowhere — which is the ghost this epic deletes, measured
+ * in production as workspaces holding threads they could not show.
+ *
+ * It receives the transaction, so everything it does must go through THAT
+ * executor: a query on the pooled `db` from in here is a second connection and
+ * is therefore outside the atomicity this type exists to provide (and, on a
+ * small pool, a deadlock — see `withSessionListingLock`'s own doc).
+ *
+ * **A throw is the refusal.** The transaction rolls back, taking the node write
+ * with it, and the error reaches the caller unchanged — which is what lets the
+ * conversation layer keep its own error vocabulary instead of flattening every
+ * failure into a layout code.
+ */
+export type WithinNodeWrite = (tx: DbExecutor) => Promise<void>;
+
+/**
+ * A refusal that has to UNWIND rather than return, because `within` has already
+ * written into the transaction by the time it is raised.
+ *
+ * Private to this module and never seen by a caller: `commitUnderLock` catches
+ * it on the way out of the rollback and re-forms it as the ordinary
+ * `{status: 'refused'}` answer. It exists so that "refused" and "wrote nothing"
+ * stay the same sentence at every point in the funnel.
+ */
+class NodeWriteRefused extends Error {
+  constructor(
+    readonly code: NodeWriteRefusal,
+    readonly detail: string,
+  ) {
+    super(code);
+    this.name = 'NodeWriteRefused';
+  }
+}
+
+/**
  * THE ONE WRITE FUNNEL — lock, read, decide, gate, persist, broadcast.
  *
  * The whole read-decide-persist cycle is inside `withWorkspaceLayoutLock`,
@@ -176,8 +226,10 @@ async function commitUnderLock(input: {
   /** Who the answer's titles are for; `null` resolves none, for callers that discard the body. */
   viewerId: TargetViewerId;
   produce: WriteProducer;
+  /** See {@link WithinNodeWrite}. Runs once the write is DECIDED and GATED, and before it is persisted. */
+  within?: WithinNodeWrite;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, actingUserId, viewerId, produce } = input;
+  const { workspaceId, actingUserId, viewerId, produce, within } = input;
 
   /**
    * The chat targets this write tried to introduce, kept where the BACKSTOP can
@@ -214,6 +266,27 @@ async function commitUnderLock(input: {
       return { kind: 'refused' as const, code: decision.code, detail: decision.detail };
     }
 
+    // THE SHARED TRANSACTION, and it runs BEFORE the gate and before the change
+    // check. Both orderings are deliberate:
+    //
+    //  * **Before the gate**, because the gate asks whether the acting user may
+    //    bind this target, and for a membership write the target is a
+    //    conversation THIS TRANSACTION is creating. A gate reading the pooled
+    //    connection cannot see an uncommitted insert, so running it first would
+    //    refuse every legitimate spawn — the gate is therefore run against `tx`,
+    //    which means it has to run after the row it is asking about exists.
+    //  * **Before the change check**, because a membership write whose node is
+    //    already there is a no-op on the TREE and not necessarily a no-op on the
+    //    row: a retried create still has to re-run its own idempotency gates (is
+    //    this id really the conversation the caller described?), and skipping
+    //    them because the layout happened not to move would answer "yes" to a
+    //    request nobody checked.
+    //
+    // A throw from here rolls the whole transaction back — which is what makes
+    // it impossible for a conversation to land without the node that makes it a
+    // member of anything.
+    if (within !== undefined) await within(tx);
+
     // SESSION ACCESS IS NOT TARGET ACCESS. Reaching this workspace says nothing
     // about the ids a node points at — they are free-form in the body, and for
     // an agent tool they came out of a MODEL. So the bindings this write
@@ -223,13 +296,21 @@ async function commitUnderLock(input: {
     // whose payoff is the disclosure this gate exists to stop.
     const introduced = introducedPaneTargets(before.nodes, decision.persist.put);
     if (introduced.length > 0) {
-      const allowed = await authorizePaneTargets({ viewerId: actingUserId, workspaceId, targets: introduced });
+      const allowed = await authorizePaneTargets(
+        { viewerId: actingUserId, workspaceId, targets: introduced },
+        // Bound to the TRANSACTION: the conversation or shell being introduced
+        // may be one `within` just created, and containment against a row this
+        // transaction cannot see would refuse the write that created it.
+        paneScopeDeps(tx),
+      );
       if (!allowed) {
-        return {
-          kind: 'refused' as const,
-          code: 'forbidden_target' as const,
-          detail: 'You cannot show that in this workspace.',
-        };
+        // THROWN, not returned, and this is the only refusal in this function
+        // that is. Every refusal above happens before `within` has written
+        // anything, so returning commits an empty transaction. This one happens
+        // AFTER, so returning would commit `within`'s rows without the node
+        // that makes them a member — the exact ghost this funnel exists to make
+        // unrepresentable.
+        throw new NodeWriteRefused('forbidden_target', 'You cannot show that in this workspace.');
       }
     }
 
@@ -271,6 +352,11 @@ async function commitUnderLock(input: {
 
     const rev = await writeWorkspaceNodes(tx, { workspaceId, write: decision.persist });
     return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true };
+  }).catch((error: unknown) => {
+    // A refusal raised after `within` wrote, unwound through the rollback and
+    // re-formed here as the ordinary answer. Everything else keeps throwing.
+    if (!(error instanceof NodeWriteRefused)) throw error;
+    return { kind: 'refused' as const, code: error.code, detail: error.detail };
   });
 
   let outcome: Awaited<ReturnType<typeof commit>>;
@@ -383,6 +469,84 @@ export async function applyWorkspaceNodeCommand(input: {
   });
 }
 
+/**
+ * THE MEMBERSHIP WRITE — a node that says a thread belongs to this workspace,
+ * and (optionally) the row that thread IS, in one transaction.
+ *
+ * This is the chokepoint. `conversations.workspaceId` used to be membership and
+ * a pane row used to be layout, written by two paths with nothing holding them
+ * in correspondence; here membership has exactly one home and exactly one
+ * writer. Everything that used to reconcile the two — claim, close, reopen, the
+ * pane annotation — is a `create`, a `move` or a `destroy` through here.
+ *
+ * `within` is what closes the ghost case: a conversation whose row landed and
+ * whose node did not. It runs inside the same transaction as the node write, so
+ * either both are there or neither is. The transaction is also what makes the
+ * table's global chat-target uniqueness usable as a gate rather than as a
+ * post-hoc discovery — a second workspace admitting the same conversation is
+ * refused by the index, and the conversation row it was creating goes back with
+ * it.
+ *
+ * The cap is decided by `run` against the tree the lock read, so it can no
+ * longer be a count racing the insert it guards.
+ */
+export async function applyWorkspaceMembershipWrite(input: {
+  workspaceId: string;
+  /** The acting HUMAN. The binding gate is theirs — never a model's word. */
+  actingUserId: string;
+  run: (nodes: readonly WorkspaceNode[]) => MembershipResult;
+  within?: WithinNodeWrite;
+}): Promise<ApplyWorkspaceNodeWriteResult> {
+  const { workspaceId, actingUserId, run, within } = input;
+  try {
+    return await commitUnderLock({
+      workspaceId,
+      actingUserId,
+      // Nothing reads the body: membership callers report what happened and
+      // discard the rest, so resolving a title for them would be authority
+      // spent on nothing.
+      viewerId: null,
+      produce: (nodes, rev) => {
+        const result = run(nodes);
+        if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
+        return { status: 'write', baseRev: rev, put: result.write.put, drop: result.write.drop };
+      },
+      ...(within === undefined ? {} : { within }),
+    });
+  } catch (error) {
+    // The ONE database answer this layer translates. Every other throw is a
+    // fault or a `within` refusal and belongs to the caller unchanged.
+    if (!isChatTargetConflict(error)) throw error;
+    return {
+      status: 'refused',
+      code: 'bound_elsewhere',
+      detail: 'that conversation already belongs to a workspace',
+    };
+  }
+}
+
+/**
+ * Did this failure come from the table's global one-node-per-conversation
+ * index?
+ *
+ * `agent_workspace_nodes_chat_target_idx` is UNIQUE on `targetId` across every
+ * workspace, deliberately: a conversation belongs to exactly one workspace, so
+ * two workspaces racing to admit the same thread is a conflict the database is
+ * the only party in a position to settle. Matched on the constraint NAME rather
+ * than on the message, because the message is a Postgres locale string and the
+ * name is the schema's own identifier — the same index the schema doc calls
+ * constraint 6 of 6.
+ *
+ * Narrow on purpose: a `23505` from any OTHER index (the primary key, the
+ * single-root index) is a genuine fault and must keep throwing rather than be
+ * reported to a user as "already bound".
+ */
+function isChatTargetConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; constraint?: unknown };
+  return candidate.code === '23505' && candidate.constraint === 'agent_workspace_nodes_chat_target_idx';
+}
+
 async function withTargets(
   workspaceId: string,
   snapshot: WorkspaceNodeSnapshot,
@@ -484,7 +648,6 @@ async function resolveTargetsByWorkspace(
             contextId: conversations.contextId,
             userId: conversations.userId,
             isShared: conversations.isShared,
-            workspaceId: conversations.workspaceId,
             // The ordering fact the sidebar needs once it stops reading
             // `session.conversations` — carried here rather than fetched a
             // second time, because it is authorized by exactly the gate the
@@ -540,8 +703,23 @@ async function resolveTargetsByWorkspace(
     };
 
     for (const row of chatRows) {
-      const belongsHere = row.workspaceId === subject.workspaceId;
-      if (!belongsHere && !accessibleConversations.has(row.id)) continue;
+      // CONTAINMENT, and it has moved from a column compare to the tree itself.
+      // Every chat id in `wanted` is one THIS subject's nodes point at, and a
+      // node bound to a conversation IS that conversation's membership — so
+      // `conversations.workspaceId === subject.workspaceId` and "this
+      // workspace's tree holds it" are now the same sentence, and the second is
+      // the one the model still has.
+      //
+      // This is the same gate moved EARLIER rather than a weakened one. A node
+      // binding a conversation can only be written through
+      // `authorizePaneTargets`, and for an INTRODUCED chat target containment
+      // is false by definition (nothing holds it yet), so
+      // `canAccessConversation` is what let it in. A conversation is therefore
+      // in this tree because someone who could access it put it there — which
+      // is exactly what the column used to attest, checked once at the write
+      // instead of again at every read.
+      const containedHere = wanted.has(`chat:${row.id}`);
+      if (!containedHere && !accessibleConversations.has(row.id)) continue;
       const title = redactConversationTitleForViewer({
         viewerId,
         workspaceOwnerId,

@@ -68,12 +68,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
-  countOpenConversationsForSession: vi.fn(),
+  expelConversationFromSession: vi.fn(),
+  findWorkspaceOfConversation: vi.fn(),
   // Real semantics for the mock: just run `fn` — the route's own tests
   // aren't about lock contention (that's `agent-workspaces-runtime`'s own
   // test suite), only about the guard-then-delete sequence being atomic
   // AT THE CALL SITE, which a pass-through faithfully exercises.
-  withSessionListingLock: vi.fn((_sessionId: string, fn: () => Promise<unknown>) => fn()),
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -82,7 +82,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { expelConversationFromSession, findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -453,10 +453,10 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     // Default: audit log succeeds
     vi.mocked(conversationRepository.logConversationDeletion).mockResolvedValue(undefined);
 
-    // Default: irrelevant unless the conversation row overrides workspaceId —
-    // a plenty-large count so the never-empty guard never trips by accident
-    // in tests that don't care about it.
-    vi.mocked(countOpenConversationsForSession).mockResolvedValue(5);
+    // Default: the thread belongs to no workspace, so the membership half is
+    // never reached. Tests about the guard set a workspace explicitly.
+    vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+    vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
   });
 
   describe('authentication', () => {
@@ -473,12 +473,10 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     });
   });
 
-  describe("the session never-empty guard (review finding: chatgpt-codex-connector on PR #2296)", () => {
-    it("refuses to delete a session-bound conversation that is its session's LAST open listing", async () => {
-      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
-        mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null }),
-      );
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(1);
+  describe("the never-empty guard, now decided against the workspace's own tree", () => {
+    it("refuses to delete a thread that is its workspace's LAST conversation", async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('last_conversation');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
@@ -492,73 +490,343 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
         expect.anything(),
         expect.objectContaining({ eventType: 'security.rate.limited' }),
       );
-      // The count-then-refuse decision ran under the SAME per-session lock
-      // create/close/reopen serialize under — not a bare unlocked read.
-      expect(withSessionListingLock).toHaveBeenCalledWith('ses_1', expect.any(Function));
     });
 
-    it('allows deleting a session-bound conversation when another open listing remains in the same session', async () => {
-      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
-        mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null }),
-      );
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(2);
+    it('deletes when the workspace holds another conversation, removing the membership FIRST', async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
 
       expect(response.status).toBe(200);
+      // Under the SAME lock the workspace's every other write takes, and
+      // against the very tree the removal changes — so a concurrent reopen is
+      // serialized by construction rather than by a second lock both sides had
+      // to remember to take (review finding — chatgpt-codex-connector on PR
+      // #2296, whose race this shape closes structurally).
+      expect(expelConversationFromSession).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        workspaceId: 'ses_1',
+        actingUserId: mockUserId,
+        requireSurvivor: true,
+      });
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
     });
 
-    it('does not weigh the never-empty guard for a conversation ALREADY closed out of its session — it holds no open slot to protect — but STILL serializes under the session lock', async () => {
-      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
-        mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: new Date('2026-01-01') }),
-      );
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(0);
+    it('does not touch membership for a thread that belongs to no workspace', async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
 
       expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
-      // A CLOSED conversation's delete is not exempt from the lock — only
-      // from the never-empty guard's count check. Without the lock, this
-      // delete could interleave with a concurrent reopen's own lock-held
-      // critical section and leave `isActive: false` with
-      // `closedInWorkspaceAt: null` — "reopened" but invisible to every
-      // session listing (review finding — chatgpt-codex-connector on PR
-      // #2296, filed after the previous round's open-only guard).
-      expect(withSessionListingLock).toHaveBeenCalledWith('ses_1', expect.any(Function));
     });
 
-    it('does not weigh the guard for a plain (non-session-bound) conversation', async () => {
-      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
-        mockConversationRow({ workspaceId: null }),
-      );
+    it('500s WITHOUT deleting history when the membership write itself fails', async () => {
+      // The ordering that makes the survivable failure the one that can happen:
+      // expel-then-delete can leave a thread out of its workspace with intact
+      // history, which a re-claim fixes. Delete-then-expel would leave a pane
+      // bound to a dead thread and a cap slot nobody can reclaim.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('refused');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
 
-      expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
-      expect(withSessionListingLock).not.toHaveBeenCalled();
+      expect(response.status).toBe(500);
+      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resource not found', () => {
+    it('should return 404 when agent does not exist', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(null);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('AI agent not found');
     });
 
-    it('re-reads the row INSIDE the lock rather than trusting the pre-lock snapshot — a since-reopened conversation still trips the never-empty guard even though the outer read saw it closed', async () => {
-      // The pre-lock snapshot (read for ownership/audit purposes) sees the
-      // conversation closed; a concurrent reopen commits between that read
-      // and the lock being acquired, so the FRESH read taken inside the
-      // lock — the only one this route's decision actually uses — must see
-      // it open and weigh the guard, or a stale-snapshot bypass would let a
-      // since-reopened conversation slip past it.
-      vi.mocked(conversationRepository.getConversation)
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: new Date('2026-01-01') }))
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null }));
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(1);
+    it('should return 404 when conversation does not exist', async () => {
+      vi.mocked(conversationRepository.conversationExists).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Conversation not found');
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 403 when user lacks edit permission', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+  });
+
+  describe('title validation', () => {
+    it('should return 400 when body has no recognised fields', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {});
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/title|isShared/i);
+    });
+
+    it('should return 400 when title is empty string', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: '   ' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('Title is required');
+    });
+
+    it('should return 400 when title exceeds 255 characters', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'a'.repeat(256) });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('255 characters');
+    });
+  });
+
+  describe('successful update', () => {
+    it('should persist the title and return the saved result', async () => {
+      vi.mocked(conversationRepository.upsertConversationTitle).mockResolvedValue({
+        id: mockConversationId,
+        title: 'My Custom Title',
+      });
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {
+        title: 'My Custom Title',
+      });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.conversationId).toBe(mockConversationId);
+      expect(body.title).toBe('My Custom Title');
+      expect(body.message).toBeUndefined();
+    });
+
+    it('should call upsertConversationTitle with correct params', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {
+        title: 'Updated Title',
+      });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.upsertConversationTitle).toHaveBeenCalledWith(
+        mockConversationId,
+        mockUserId,
+        mockAgentId,
+        'Updated Title'
+      );
+    });
+
+    it('should verify conversation exists before persisting', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Test' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.conversationExists).toHaveBeenCalledWith(
+        mockAgentId,
+        mockConversationId
+      );
+    });
+  });
+
+  describe('isShared toggle', () => {
+    it('should call setConversationShared when isShared is provided by the owner', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(conversationRepository.setConversationShared).toHaveBeenCalledWith(
+        mockConversationId,
+        true
+      );
+    });
+
+    it('should call setConversationShared with false to make conversation private', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ isShared: true })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: false });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.setConversationShared).toHaveBeenCalledWith(
+        mockConversationId,
+        false
+      );
+    });
+
+    it('should return 403 when non-owner tries to toggle isShared', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: 'other_user' })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('owner');
+      expect(conversationRepository.setConversationShared).not.toHaveBeenCalled();
+    });
+
+    it('should broadcast conversation_added when isShared is set to true', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      // Give the fire-and-forget async broadcast a tick to run
+      await new Promise(r => setTimeout(r, 0));
+      expect(broadcastAiConversationAdded).toHaveBeenCalled();
+    });
+
+    it('should broadcast conversation_deleted when isShared is set to false', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ isShared: true })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: false });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      await new Promise(r => setTimeout(r, 0));
+      expect(broadcastAiConversationDeleted).toHaveBeenCalled();
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when repository throws', async () => {
+      vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Updated' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to update conversation');
+      const errorArgs = vi.mocked(loggers.ai.error).mock.calls[0];
+      expect(errorArgs[0]).toBe('Error updating conversation:');
+      expect(errorArgs[1]).toBeInstanceOf(Error);
+      expect((errorArgs[1] as Error).message).toBe('Database error');
+    });
+  });
+});
+
+describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: authenticated user
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: MCP scope check passes (null = no error)
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+
+    // Default: user has edit permission
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    // Default: agent exists
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+
+    // Default: conversation exists
+    vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
+
+    // Default: conversation owned by current user
+    vi.mocked(conversationRepository.getConversation).mockResolvedValue(mockConversationRow());
+
+    // Default: conversation metadata
+    vi.mocked(conversationRepository.getConversationMetadata).mockResolvedValue({
+      messageCount: 5,
+      firstMessageTime: new Date('2025-01-01'),
+      lastMessageTime: new Date('2025-01-02'),
+    });
+
+    // Default: soft delete succeeds
+    vi.mocked(conversationRepository.softDeleteConversation).mockResolvedValue(undefined);
+
+    // Default: audit log succeeds
+    vi.mocked(conversationRepository.logConversationDeletion).mockResolvedValue(undefined);
+
+    // Default: the thread belongs to no workspace, so the membership half is
+    // never reached. Tests about the guard set a workspace explicitly.
+    vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+    vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
+  });
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe("the never-empty guard, now decided against the workspace's own tree", () => {
+    it("refuses to delete a thread that is its workspace's LAST conversation", async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('last_conversation');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
@@ -570,38 +838,16 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
     });
 
-    it('still soft-deletes a row whose session was cleared between the pre-lock read and the lock-held read — detached is not the same as history-deleted', async () => {
-      // `conversations.workspaceId` is `ON DELETE SET NULL`: a session
-      // deleted between the two reads leaves this row active but detached.
-      // The prior version folded "workspaceId no longer matches" into
-      // "already deleted" and silently skipped the soft-delete, so a
-      // detached-but-active conversation was reported as removed while
-      // staying in History (review finding — coderabbitai on PR #2296).
-      vi.mocked(conversationRepository.getConversation)
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null }))
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: null, closedInWorkspaceAt: null }));
+    it('deletes when the workspace holds another conversation', async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
 
       expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
-    });
-
-    it('is idempotent when a concurrent request already history-deleted the row before this one entered the lock', async () => {
-      vi.mocked(conversationRepository.getConversation)
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null }))
-        .mockResolvedValueOnce(mockConversationRow({ workspaceId: 'ses_1', closedInWorkspaceAt: null, isActive: false }));
-
-      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
-      const context = createContext(mockAgentId, mockConversationId);
-      const response = await DELETE(request, context);
-
-      expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
-      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
     });
   });
 

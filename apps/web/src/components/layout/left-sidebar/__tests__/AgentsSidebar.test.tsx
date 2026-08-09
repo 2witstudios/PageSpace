@@ -25,7 +25,6 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
-import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -166,22 +165,50 @@ const SESSION: SessionFixture = {
 };
 
 /**
- * Serve a listing the way the ROUTE serves one (issue #2373): each thread
- * annotated with its pane placement, using the server's own
- * `annotateConversationsWithPanes`. Fixtures cannot drift from the shape the
- * sidebar actually receives — a `workspace` grid and a `conversations` list
- * that disagreed about placement is precisely the bug this suite now guards.
+ * Serve a listing the way the sidebar currently CONSUMES one: each thread
+ * annotated with its pane placement.
+ *
+ * This used to call the server's own `annotateConversationsWithPanes` so the
+ * fixture could not drift from the shape the route produced. That module is
+ * gone — membership is the node row now, so the route's listing carries
+ * `nodeId` and `attached` off the same row that decided the thread is in the
+ * workspace at all, and there is nothing left to annotate. The annotation is
+ * inlined HERE, unchanged, purely so this component suite keeps describing what
+ * `AgentsSidebar` reads today: the sidebar's own move onto `attached` belongs
+ * to the client phase, and this fixture is what the two phases meet at.
  */
 const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
   (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
 
+interface PanePlacement {
+  paneId: string;
+  columnId: string;
+  orderIndex: number;
+}
+
+function annotate<T extends { conversationId: string }>(
+  conversations: readonly T[],
+  grid: readonly PersistedColumnState[] | null,
+): (T & { pane: PanePlacement | null })[] {
+  const byConversation = new Map<string, PanePlacement>();
+  for (const column of grid ?? []) {
+    column.panes.forEach((pane, orderIndex) => {
+      const scope = pane.scope;
+      if (!scope || scope.kind !== 'chat' || !scope.targetId) return;
+      if (byConversation.has(scope.targetId)) return;
+      byConversation.set(scope.targetId, { paneId: pane.id, columnId: column.id, orderIndex });
+    });
+  }
+  return conversations.map((conversation) => ({
+    ...conversation,
+    pane: byConversation.get(conversation.conversationId) ?? null,
+  }));
+}
+
 const respondWithSessions = (sessions: SessionFixture[]) => {
   const annotated = sessions.map((session) => ({
     ...session,
-    conversations: annotateConversationsWithPanes(
-      session.conversations,
-      gridOf(session.workspace),
-    ),
+    conversations: annotate(session.conversations, gridOf(session.workspace)),
   }));
   mockFetchWithAuth.mockResolvedValue({
     ok: true,

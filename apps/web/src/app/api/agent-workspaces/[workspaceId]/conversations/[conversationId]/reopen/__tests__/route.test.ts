@@ -117,13 +117,16 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(response.status).toBe(404);
   });
 
-  it("429s a session already at MAX_SESSION_CONVERSATIONS, as a quota refusal with the shared human message", async () => {
-    mockReopenConversationInSession.mockResolvedValue('session_full');
+  it('reopens into a workspace at MAX_SESSION_CONVERSATIONS — a member returning consumes no slot', async () => {
+    // The 429 this replaces existed because reopening restored a listing slot
+    // the close had freed. Under a `move` the node never stopped existing:
+    // closing frees no slot and reopening consumes none, so the cap — which now
+    // bounds MEMBERSHIP, enforced where membership is created — has nothing to
+    // say here and `session_full` is not an outcome this route can receive.
+    mockReopenConversationInSession.mockResolvedValue('reopened');
     const response = await post();
-    expect(response.status).toBe(429);
-    const body = await response.json();
-    expect(body.error).toMatch(/maximum number of conversations/i);
-    expect(mockAuditRequest).toHaveBeenCalledWith(
+    expect(response.status).toBe(200);
+    expect(mockAuditRequest).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'security.rate.limited' }),
     );
