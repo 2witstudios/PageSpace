@@ -7,6 +7,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
+  be two separate records of what a session contained, kept in step by convention, so a pane you or
+  an agent opened could take up to two minutes to show up in the list. They are now two views of
+  one thing, so there is nothing to fall out of step.
+- **A thread can no longer go missing from its own session** — a session's membership and its
+  layout were stored separately, and a thread that had no pane was simply absent from the list.
+  Sessions existed with more threads than the sidebar would show. Membership is now the same record
+  as placement, so a thread that is in a session is always visible in it, open or not.
 - **Opening a conversation that is already open in another session says so, instead of leaving a
   dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
   another session already holds used to fail as a server error. The pane you had just opened stayed
@@ -96,6 +104,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   deploy) silently dropped the whole session's usage. Heartbeat settling bounds any loss to at most
   one interval, and a payer who runs out of credits mid-session is disconnected instead of running
   free.
+
+### Changed
+
+- **Closing the last pane no longer ends your session** — it leaves the session open with an empty
+  layout, and the threads still listed. Ending a session is now only the explicit action on the
+  session row, so there is one way to end one instead of two.
+- **A thread you close stays in the session's list** — closing takes it off the screen rather than
+  out of the session, and you can open it again from where you left it. Previously closing removed
+  it from the list entirely. If you were using close to tidy the sidebar, that is the behaviour that
+  changed; the trade is that a thread can no longer quietly leave a session it belongs to, which is
+  what allowed the same conversation to end up claimed by a different session.
 
 ### Added
 
