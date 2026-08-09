@@ -556,6 +556,245 @@ describe('deriveWorkspaceNodes — what the real data can contain', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The threads that are NOT members any more
+//
+// The single most dangerous shape in the whole corpus, and the only finding on
+// this migration's list that cannot be corrected after the fact: on the old
+// model, closing a thread out of a workspace stamped `closedInWorkspaceAt` and
+// NOTHING removed its pane row, so "a live pane bound to a dismissed thread" is
+// ordinary production data. Post-cutover membership IS the node, so a pane
+// materialised for such a thread does not merely put it back in the sidebar —
+// it puts it back ON THE GRID, which is strictly worse than the reappearance
+// the membership path already refuses.
+//
+// `openConversationIds` is that refusal, applied to the pane path: the same
+// predicate the membership load uses (`isActive`, `closedInWorkspaceAt IS
+// NULL`), resolved over every conversation any pane row names.
+// ---------------------------------------------------------------------------
+
+describe('deriveWorkspaceNodes — a pane bound to a thread that is not a member', () => {
+  /** A workspace whose one column shows three threads, of which `open` are still members. */
+  function grid(open: readonly string[], known: readonly string[]) {
+    return deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [
+          pane('p1', 'c1', 0, chat('t1')),
+          pane('p2', 'c1', 1, chat('t2')),
+          pane('p3', 'c1', 2, chat('t3')),
+        ],
+        conversations: open.map((id, index) => member(id, index)),
+      }),
+      { openConversationIds: new Set(open), knownConversationIds: new Set(known) },
+    );
+  }
+
+  it('does not materialise a pane whose conversation was DISMISSED out of the workspace', () => {
+    // `closedInWorkspaceAt` stamped, row alive. The bug, stated exactly.
+    const derived = grid(['t1', 't3'], ['t1', 't2', 't3']);
+    assertWritable(derived);
+    expect(nodeById(derived, 'p2')).toBeUndefined();
+    const targets = derived.rows.filter((row) => row.targetKind === 'chat').map((row) => row.targetId);
+    expect(targets).not.toContain('t2');
+    expect(derived.notes.map((entry) => entry.code)).toContain('chat_pane_not_a_member');
+  });
+
+  it('does not materialise a pane whose conversation was HISTORY-DELETED', () => {
+    // A history delete is `isActive: false` — the row survives, the membership
+    // does not. Worse than a dismissal, because `expelConversationFromSession`
+    // is what removes such a thread's node and it runs at DELETION time: it
+    // will never run for anything deleted before the cutover, so the node would
+    // be a permanent member holding a cap slot nothing can ever release.
+    const derived = grid(['t1', 't2'], ['t1', 't2', 't3']);
+    assertWritable(derived);
+    expect(nodeById(derived, 'p3')).toBeUndefined();
+    expect(derived.notes.map((entry) => entry.code)).toContain('chat_pane_not_a_member');
+  });
+
+  it('does not materialise a pane whose conversation has NO ROW at all', () => {
+    // Hard-deleted with its page or drive (`conversation-cleanup.ts`). "Repairs
+    // at read time" was written for a node whose thread is deleted LATER, where
+    // the delete path expels it; nothing will ever expel this one.
+    const derived = grid(['t1', 't2'], ['t1', 't2']);
+    assertWritable(derived);
+    expect(nodeById(derived, 'p3')).toBeUndefined();
+    expect(derived.notes.map((entry) => entry.code)).toContain('chat_pane_no_conversation');
+  });
+
+  it('RENUMBERS the survivors rather than leaving a hole where the pane was', () => {
+    // `position` must stay contiguous per sibling group or `validateTree`
+    // refuses the whole workspace — so a hole is not an option the model has.
+    const derived = grid(['t1', 't3'], ['t1', 't2', 't3']);
+    assertWritable(derived);
+    expect(nodeById(derived, 'p1')).toMatchObject({ position: 0 });
+    expect(nodeById(derived, 'p3')).toMatchObject({ position: 1 });
+  });
+
+  it('drops a column the removal EMPTIED, rather than leaving a degenerate split', () => {
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0), column('c2', 1)],
+        panes: [
+          pane('p1', 'c1', 0, chat('gone-a')),
+          pane('p2', 'c2', 0, chat('t2')),
+          pane('p3', 'c2', 1, chat('t3')),
+        ],
+        conversations: [member('t2'), member('t3', 1)],
+      }),
+      {
+        openConversationIds: new Set(['t2', 't3']),
+        knownConversationIds: new Set(['gone-a', 't2', 't3']),
+      },
+    );
+    assertWritable(derived);
+    expect(nodeById(derived, 'c1')).toBeUndefined();
+    expect(nodeById(derived, 'c2')).toMatchObject({ nodeType: 'split', position: 0 });
+    // BOTH notes fire, and the operator wants both. The column row itself is
+    // still in `source.columns` — only its panes left — so it reaches
+    // `orderColumns` holding nothing and is dropped by the rule that already
+    // existed for columns that were empty to begin with. Observed on the
+    // rehearsal database: `ws-a` reported
+    // `chat_pane_not_a_member,…,empty_column_dropped,fractions_read_as_unsized`.
+    const codes = derived.notes.map((entry) => entry.code);
+    expect(codes).toContain('chat_pane_not_a_member');
+    expect(codes).toContain('empty_column_dropped');
+  });
+
+  it('COLLAPSES a two-pane column the removal reduced to one', () => {
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [pane('p1', 'c1', 0, chat('t1')), pane('p2', 'c1', 1, chat('dead'))],
+        conversations: [member('t1')],
+      }),
+      { openConversationIds: new Set(['t1']), knownConversationIds: new Set(['t1', 'dead']) },
+    );
+    assertWritable(derived);
+    // The survivor takes the column's place directly under the root — keeping
+    // the split would be a `degenerate_split` and skip the whole workspace.
+    expect(nodeById(derived, 'c1')).toBeUndefined();
+    expect(nodeById(derived, 'p1')).toMatchObject({ nodeType: 'pane', position: 0 });
+    expect(nodeById(derived, 'p1')?.parentId).toBe('w1::root');
+  });
+
+  it('reads a shrunken column’s shares as UNSIZED — they no longer sum to 1', () => {
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [
+          pane('p1', 'c1', 0, chat('t1'), 0.5),
+          pane('p2', 'c1', 1, chat('t2'), 0.3),
+          pane('p3', 'c1', 2, chat('dead'), 0.2),
+        ],
+        conversations: [member('t1'), member('t2', 1)],
+      }),
+      { openConversationIds: new Set(['t1', 't2']), knownConversationIds: new Set(['t1', 't2', 'dead']) },
+    );
+    assertWritable(derived);
+    expect(nodeById(derived, 'p1')).not.toHaveProperty('fraction');
+    expect(derived.notes.map((entry) => entry.code)).toContain('fractions_read_as_unsized');
+  });
+
+  it('leaves TERMINAL and PAGE panes alone — the predicate is about chat membership', () => {
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [
+          pane('p1', 'c1', 0, terminal('sh1')),
+          pane('p2', 'c1', 1, { kind: 'page', targetId: 'page-1' }),
+          pane('p3', 'c1', 2),
+        ],
+      }),
+      { openConversationIds: new Set<string>(), knownConversationIds: new Set<string>() },
+    );
+    assertWritable(derived);
+    expect(derived.census.panesDroppedNotMember).toBe(0);
+    expect(derived.census.paneNodesOut).toBe(3);
+  });
+
+  it('counts the drop in the census and keeps membersIn === paneNodesOut', () => {
+    const derived = grid(['t1'], ['t1', 't2']);
+    assertWritable(derived);
+    // `panesIn` still reports every ROW READ — the operator has to see the
+    // difference between what production holds and what was materialised.
+    expect(derived.census.panesIn).toBe(3);
+    expect(derived.census.panesDroppedNotMember).toBe(2);
+    expect(derived.census.membersIn).toBe(1);
+    expect(derived.census.paneNodesOut).toBe(1);
+  });
+
+  it('CARRIES the pane when the caller supplies no membership set at all', () => {
+    // The predicate is the caller's to resolve — it needs rows this module
+    // never sees. Absent, the derivation behaves exactly as it did before, and
+    // `scripts/backfill-agent-workspace-nodes.ts` is the one caller that must
+    // always supply it.
+    const derived = deriveWorkspaceNodes(
+      source({ workspaceId: 'w1', columns: [column('c1', 0)], panes: [pane('p1', 'c1', 0, chat('t1'))] }),
+    );
+    assertWritable(derived);
+    expect(nodeById(derived, 'p1')).toMatchObject({ target: { kind: 'chat', id: 't1' } });
+    expect(derived.census.panesDroppedNotMember).toBe(0);
+  });
+
+  it('answers DISMISSED before it answers foreign — a dead thread is not another workspace’s', () => {
+    const derived = deriveWorkspaceNodes(
+      source({ workspaceId: 'w1', columns: [column('c1', 0)], panes: [pane('p1', 'c1', 0, chat('t1'))] }),
+      {
+        chatClaims: new Map([['t1', 'w2']]),
+        openConversationIds: new Set<string>(),
+        knownConversationIds: new Set(['t1']),
+      },
+    );
+    assertWritable(derived);
+    const codes = derived.notes.map((entry) => entry.code);
+    expect(codes).toContain('chat_pane_not_a_member');
+    expect(codes).not.toContain('chat_target_foreign');
+  });
+
+  it('does not let a dropped pane’s id block a column that shares it', () => {
+    // The row is not in the derivation at all, so it reserves nothing.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('x', 0)],
+        panes: [pane('x', 'x', 0, chat('dead')), pane('p2', 'x', 1, chat('t1')), pane('p3', 'x', 2, chat('t2'))],
+        conversations: [member('t1'), member('t2', 1)],
+      }),
+      { openConversationIds: new Set(['t1', 't2']), knownConversationIds: new Set(['dead', 't1', 't2']) },
+    );
+    assertWritable(derived);
+    expect(nodeById(derived, 'x')).toMatchObject({ nodeType: 'split' });
+    expect(derived.notes.map((entry) => entry.code)).not.toContain('column_id_renamed');
+  });
+
+  it('still SEATS the threads that ARE members when a pane beside them is dropped', () => {
+    // The half that must not regress: dropping a dead thread's pane must not
+    // cost a live thread its node. Production shape #1, with one dismissal.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w-prod-a',
+        columns: [column('ca1', 0)],
+        panes: [pane('pa1', 'ca1', 0, chat('ta1')), pane('pa2', 'ca1', 1, chat('ta2'))],
+        conversations: [member('ta1'), member('ta3', 2)],
+      }),
+      {
+        openConversationIds: new Set(['ta1', 'ta3']),
+        knownConversationIds: new Set(['ta1', 'ta2', 'ta3']),
+      },
+    );
+    assertWritable(derived);
+    const targets = derived.rows.filter((row) => row.targetKind === 'chat').map((row) => row.targetId);
+    expect(targets.sort()).toEqual(['ta1', 'ta3']);
+    expect(derived.census.seatedOut).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fractions
 // ---------------------------------------------------------------------------
 
@@ -758,6 +997,12 @@ describe('the rehearsal census', () => {
   interface Fixture {
     name: string;
     source: WorkspaceBackfillSource;
+    /**
+     * Conversation ids that still have a ROW, when that is not simply the
+     * workspace's members. The two sets differ exactly where the dangerous data
+     * lives: a thread whose row is alive but whose membership is not.
+     */
+    known?: readonly string[];
   }
 
   const FIXTURES: Fixture[] = [
@@ -827,6 +1072,25 @@ describe('the rehearsal census', () => {
       }),
     },
     {
+      // Production shape #1 again, carrying what the OLD model actually leaves
+      // behind: the user dismissed `td2` months ago and its pane row is STILL
+      // THERE, because closing a listing stamped `closedInWorkspaceAt` and
+      // nothing on the server ever removed a pane. `td3`'s page was deleted, so
+      // its row is gone entirely. Two panes read, ONE materialised.
+      name: 'production: live panes bound to a dismissed thread and a deleted one',
+      source: source({
+        workspaceId: 'w-prod-dismissed',
+        columns: [column('cd1', 0)],
+        panes: [
+          pane('pd1', 'cd1', 0, chat('td1')),
+          pane('pd2', 'cd1', 1, chat('td2')),
+          pane('pd3', 'cd1', 2, chat('td3')),
+        ],
+        conversations: [member('td1')],
+      }),
+      known: ['td1', 'td2'],
+    },
+    {
       name: 'an empty session — no grid, no threads, no shells',
       source: source({ workspaceId: 'w-empty' }),
     },
@@ -835,7 +1099,12 @@ describe('the rehearsal census', () => {
   const derived = FIXTURES.map((fixture) => ({
     name: fixture.name,
     result: deriveWorkspaceNodes(fixture.source, {
-      knownConversationIds: new Set(fixture.source.conversations.map((entry) => entry.id)),
+      // The membership predicate, resolved: a workspace's OPEN conversations
+      // are exactly the members the caller handed over.
+      openConversationIds: new Set(fixture.source.conversations.map((entry) => entry.id)),
+      knownConversationIds: new Set(
+        fixture.known ?? fixture.source.conversations.map((entry) => entry.id),
+      ),
     }),
   }));
 
@@ -870,10 +1139,39 @@ describe('the rehearsal census', () => {
     }
   });
 
+  it('materialises no node for the dismissed thread, and none for the deleted one', () => {
+    // The finding, asserted on the production shape rather than on a minimal
+    // one: three pane rows read, one node written, and the two threads the user
+    // cannot see today are still invisible tomorrow.
+    const result = derived.find((entry) => entry.result.workspaceId === 'w-prod-dismissed')?.result;
+    expect(result).toBeDefined();
+    const census = result!.census;
+    expect(census.panesIn).toBe(3);
+    expect(census.panesDroppedNotMember).toBe(2);
+    expect(census.paneNodesOut).toBe(1);
+    const codes = result!.notes.map((entry) => entry.code);
+    expect(codes).toContain('chat_pane_not_a_member');
+    expect(codes).toContain('chat_pane_no_conversation');
+  });
+
+  it('never materialises a node for a thread that is not a member, across the whole run', () => {
+    // The invariant behind the finding, stated once over every fixture: the
+    // chat targets written are a SUBSET of the members handed over. Anything
+    // else is a thread reappearing on somebody's grid.
+    for (const { result } of derived) {
+      const fixture = FIXTURES.find((entry) => entry.source.workspaceId === result.workspaceId);
+      const members = new Set((fixture?.source.conversations ?? []).map((entry) => entry.id));
+      for (const row of result.rows.filter((entry) => entry.targetKind === 'chat')) {
+        expect(members.has(row.targetId as string)).toBe(true);
+      }
+    }
+  });
+
   it('prints the census', () => {
     const totals = {
       workspaces: 0,
       panesIn: 0,
+      panesDroppedNotMember: 0,
       conversationsIn: 0,
       shellsIn: 0,
       membersIn: 0,
@@ -888,6 +1186,7 @@ describe('the rehearsal census', () => {
       const c = result.census;
       totals.workspaces += 1;
       totals.panesIn += c.panesIn;
+      totals.panesDroppedNotMember += c.panesDroppedNotMember;
       totals.conversationsIn += c.conversationsIn;
       totals.shellsIn += c.shellsIn;
       totals.membersIn += c.membersIn;
@@ -897,7 +1196,7 @@ describe('the rehearsal census', () => {
       totals.skipped += result.skipped === null ? 0 : 1;
       totals.notes += result.notes.length;
       lines.push(
-        `${name}: panes ${c.panesIn}→${c.paneNodesOut - c.seatedOut}, ` +
+        `${name}: panes ${c.panesIn}→${c.paneNodesOut - c.seatedOut} (${c.panesDroppedNotMember} not a member), ` +
           `threads ${c.conversationsIn}, shells ${c.shellsIn}, ` +
           `members ${c.membersIn}→${c.paneNodesOut}, seated ${c.seatedOut}, ` +
           `nodes ${c.nodesOut}, notes ${result.notes.length}` +
