@@ -160,12 +160,26 @@ describe('useSessionDirectoryListener', () => {
       expect(mockMutate.mock.calls[0]).toHaveLength(1); // bare revalidate: no updater, no options
     });
 
-    it('given a listing-membership stamp change, should re-read', () => {
+    /**
+     * The `closedInWorkspaceAt` branch is GONE — handed over by the runtime
+     * cluster that deletes its only emitters. A handler for an event nothing
+     * fires is worse than no handler, because the next reader takes it as
+     * evidence the path is live.
+     *
+     * Asserted as a NON-outcome rather than simply deleted with the code: "we
+     * stopped writing that branch" and "that stamp no longer drives a re-read
+     * from here" are different claims, and only the second one stops someone
+     * reinstating it. Both directions are still covered — by `closed` and
+     * `reopened`, which are tested above and below — and the membership fact
+     * itself now rides structurally on `workspace:nodes-updated`, a plane this
+     * module deliberately does not touch.
+     */
+    it('given a listing-membership stamp change, should do nothing — that plane moved', () => {
       renderHook(() => useSessionDirectoryListener());
 
       fire('conversation:updated', base({ changes: { closedInWorkspaceAt: null } }));
 
-      expect(mockMutate.mock.calls[0]).toHaveLength(1);
+      expect(mockMutate).not.toHaveBeenCalled();
     });
 
     it('given a rename, should re-read (the row renders the title)', () => {

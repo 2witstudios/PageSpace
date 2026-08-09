@@ -106,6 +106,8 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 
 /** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
 const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
@@ -134,6 +136,34 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/**
+ * Seat a workspace's TREE the way the listing does. There is no client-side
+ * grid seed any more — a workspace's root is minted server-side by whatever
+ * write first needs one — so a fixture states the tree it wants directly.
+ */
+const rootOf = (workspaceId: string): WorkspaceNode => ({
+  nodeType: 'root',
+  id: workspaceId,
+  parentId: null,
+  position: 0,
+  axis: 'row',
+});
+const chatNode = (
+  id: string,
+  parentId: string,
+  position: number,
+  conversationId: string,
+): WorkspaceNode => ({
+  nodeType: 'pane',
+  id,
+  parentId,
+  position,
+  target: { kind: 'chat', id: conversationId },
+});
+const seatTree = (workspaceId: string, nodes: WorkspaceNode[], targets: WorkspaceNodeTarget[] = []) =>
+  useAgentWorkspaceStore.getState().hydrateFromServer(workspaceId, { rev: 1, nodes, targets });
+
 
 describe('AgentsSurface', () => {
   test('hydrates the selection from a deep link on mount', () => {
@@ -238,12 +268,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
 
   it('forgets the persisted grid and backs out to the empty state', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: null }) });
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-gone', {
-      kind: 'chat',
-      name: 'x',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
+    seatTree('ses-gone', [rootOf('ses-gone'), chatNode('n1', 'ses-gone', 0, 'conv-1')]);
     window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-gone&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
@@ -255,12 +280,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
 
   it('a session the server confirms exists is left untouched', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-live', {
-      kind: 'chat',
-      name: 'x',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
+    seatTree('ses-live', [rootOf('ses-live'), chatNode('n1', 'ses-live', 0, 'conv-1')]);
     window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-live&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
@@ -354,24 +374,11 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     // with no listing left — a refresh or deep link back to this URL would
     // reopen it, silently replacing whatever pane is actually live (caught
     // in review).
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
-      kind: 'chat',
-      name: 'Conversation',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
-    const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-    useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId);
-    const secondPaneId = useAgentWorkspaceStore
-      .getState()
-      .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-      .find((p) => p.id !== firstPaneId)!.id;
-    useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-      kind: 'chat',
-      name: 'Conversation',
-      targetId: 'conv-2',
-      agentPageId: 'agent-2',
-    });
+    seatTree(
+      'ses-1',
+      [rootOf('ses-1'), chatNode('n1', 'ses-1', 0, 'conv-1'), chatNode('n2', 'ses-1', 1, 'conv-2')],
+      [{ id: 'conv-2', kind: 'chat', title: 'Second', lastMessageAt: null, agentPageId: 'agent-2' }],
+    );
 
     const { getByTestId } = render(<AgentsSurface />);
     await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());

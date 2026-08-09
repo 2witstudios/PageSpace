@@ -92,12 +92,20 @@ export function useSessionDirectoryListener(): void {
         revalidateWorkspaceListings(mutate);
         return;
       }
-      // `closedInWorkspaceAt` moving is a listing membership change in either
-      // direction; the listing query owns that predicate, so re-read.
-      if (changes.closedInWorkspaceAt !== undefined) {
-        revalidateWorkspaceListings(mutate);
-        return;
-      }
+      // A `closedInWorkspaceAt` branch used to sit here, re-reading the listing
+      // whenever that column moved in either direction. It is GONE, handed over
+      // by the runtime cluster that deletes the three repository writers which
+      // were its only emitters — a handler for an event nothing fires is worse
+      // than no handler, because the next reader takes it as evidence the path
+      // is live.
+      //
+      // Both directions are still covered, and by more specific handlers than
+      // the one removed: `CONVERSATION_EVENTS.closed` drops the row from the
+      // cache outright, and `reopened` re-reads to bring it back. What that
+      // branch uniquely carried — "this thread's membership of the workspace
+      // moved" — is now carried structurally, by the node's own location on the
+      // `workspace:nodes-updated` broadcast, which is a plane this module
+      // deliberately does not touch (`workspace-nodes-listener.ts` owns it).
       if (changes.lastMessageAt !== undefined) {
         touchConversationInCache(mutate, payload.conversationId, changes.lastMessageAt);
       }

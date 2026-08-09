@@ -194,6 +194,24 @@ export interface WorkspaceNodeTarget {
    * `session.conversations` this is where that ordering comes from.
    */
   lastMessageAt: string | null;
+  /**
+   * WHICH AGENT a chat target belongs to — `null` for every other kind, and for
+   * a thread that names no page (a global-assistant one).
+   *
+   * Added in the client phase, and it is not decoration: `PaneScope.agentPageId`
+   * was the pane header's route to `useResolvedAgent`, `useConversations`,
+   * `useAgentConfig`, `useProviderSettings` and the stream channel, and the node
+   * model has no `PaneScope`. Nothing in a `{id, kind, title, lastMessageAt}`
+   * target can reconstruct it, so the alternative was a SECOND authorized read
+   * for a fact this join has already paid for — the row is selected and the
+   * derivation is one shared call to `conversationPageId`, the rule five call
+   * sites had each re-spelled before it existed.
+   *
+   * It rides the same gate the title does. A target the viewer may not read has
+   * no entry at all, so this can never say which agent owns a thread they could
+   * not otherwise name.
+   */
+  agentPageId: string | null;
 }
 
 /**

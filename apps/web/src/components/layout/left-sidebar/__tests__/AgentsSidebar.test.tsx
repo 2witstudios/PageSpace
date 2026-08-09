@@ -113,8 +113,8 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
+import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
@@ -141,19 +141,38 @@ interface SessionFixture {
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
   /**
-   * The saved pane grid, omitted in most fixtures. Since issue #2373 the
-   * sidebar no longer picks a row shape from this — it annotates the list
-   * above with it, exactly as the route does. Left `unknown` because the
-   * fixtures are deliberately loose literals; `gridOf` narrows it once.
+   * THE TREE, exactly as the route serves it. The sidebar seats this into
+   * `useAgentWorkspaceStore` and then renders the STORE — so a fixture and the
+   * rows it produces cannot disagree the way a `workspace` grid and a
+   * `conversations` list once could.
    */
-  workspace?: unknown;
+  rev?: number;
+  nodes?: WorkspaceNode[];
+  targets?: WorkspaceNodeTarget[];
 }
+
+const WS = 'ses-1';
+/** The root a seeded workspace carries — its id is the workspace's own. */
+const treeRoot: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
+
+function paneNode(
+  id: string,
+  parentId: string | null,
+  position: number,
+  target: PaneTarget | null,
+): WorkspaceNode {
+  return { nodeType: 'pane', id, parentId, position, target };
+}
+const chatNode = (id: string, parentId: string | null, position: number, conversationId: string) =>
+  paneNode(id, parentId, position, { kind: 'chat', id: conversationId });
+const pageNode = (id: string, parentId: string | null, position: number, pageId: string) =>
+  paneNode(id, parentId, position, { kind: 'page', id: pageId });
 
 const SESSION: SessionFixture = {
   // The listing spreads AgentSessionDTO, which carries the canonical id AND
   // the rolling-deploy compat twin. The sidebar reads the canonical one.
-  workspaceId: 'ses-1',
-  sessionId: 'ses-1',
+  workspaceId: WS,
+  sessionId: WS,
   driveId: 'drive-1',
   name: 'api refactor',
   sandboxStatus: 'running',
@@ -164,55 +183,33 @@ const SESSION: SessionFixture = {
   shells: [],
 };
 
-/**
- * Serve a listing the way the sidebar currently CONSUMES one: each thread
- * annotated with its pane placement.
- *
- * This used to call the server's own `annotateConversationsWithPanes` so the
- * fixture could not drift from the shape the route produced. That module is
- * gone — membership is the node row now, so the route's listing carries
- * `nodeId` and `attached` off the same row that decided the thread is in the
- * workspace at all, and there is nothing left to annotate. The annotation is
- * inlined HERE, unchanged, purely so this component suite keeps describing what
- * `AgentsSidebar` reads today: the sidebar's own move onto `attached` belongs
- * to the client phase, and this fixture is what the two phases meet at.
- */
-const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
-  (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
-
-interface PanePlacement {
-  paneId: string;
-  columnId: string;
-  orderIndex: number;
-}
-
-function annotate<T extends { conversationId: string }>(
-  conversations: readonly T[],
-  grid: readonly PersistedColumnState[] | null,
-): (T & { pane: PanePlacement | null })[] {
-  const byConversation = new Map<string, PanePlacement>();
-  for (const column of grid ?? []) {
-    column.panes.forEach((pane, orderIndex) => {
-      const scope = pane.scope;
-      if (!scope || scope.kind !== 'chat' || !scope.targetId) return;
-      if (byConversation.has(scope.targetId)) return;
-      byConversation.set(scope.targetId, { paneId: pane.id, columnId: column.id, orderIndex });
-    });
-  }
-  return conversations.map((conversation) => ({
-    ...conversation,
-    pane: byConversation.get(conversation.conversationId) ?? null,
-  }));
-}
-
+/** Serve a listing the way the ROUTE serves one: threads, shells, and the tree. */
 const respondWithSessions = (sessions: SessionFixture[]) => {
-  const annotated = sessions.map((session) => ({
-    ...session,
-    conversations: annotate(session.conversations, gridOf(session.workspace)),
-  }));
-  mockFetchWithAuth.mockResolvedValue({
-    ok: true,
-    json: async () => ({ sessions: annotated }),
+  mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+    // A node WRITE that never settles, so what these assertions read is the
+    // optimistic apply — what the user sees the instant they click. The same
+    // discipline the store's own suite runs on.
+    if (typeof url === 'string' && url.includes('/nodes') && init?.method === 'POST') {
+      return new Promise<never>(() => {});
+    }
+    // The sidebar seats the tree from the LISTING; the per-workspace node read
+    // only fires from a surface that mounts `useWorkspaceLayoutSync`, which this
+    // suite never renders. Answering rev 0 keeps an accidental one honest —
+    // the store's own guard drops a snapshot older than what it holds.
+    if (typeof url === 'string' && url.includes('/nodes')) {
+      return { ok: true, status: 200, json: async () => ({ rev: 0, nodes: [], targets: [] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        sessions: sessions.map((session) => ({
+          rev: 1,
+          nodes: [],
+          targets: [],
+          ...session,
+        })),
+      }),
+    };
   });
 };
 
@@ -241,9 +238,8 @@ beforeEach(() => {
   // test so one test's fixture never leaks into the next via the persisted
   // store.
   useDriveStore.setState({ drives: [] });
-  // Same leak risk for panes: two tests opening the same session id (every
-  // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
-  // panes[0], since nothing else clears this store between tests.
+  // Same leak risk for the tree: two tests opening the same workspace id would
+  // otherwise see each other's nodes, since nothing else clears this store.
   __resetWorkspaceQueuesForTests();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
@@ -273,9 +269,6 @@ describe('AgentsSidebar', () => {
     // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
-    // Unfiltered (no driveId arg) now in both modes — see AgentsSidebar.tsx's
-    // comment on the `usePageAgents` call — but the load-bearing half of
-    // this assertion is `enabled: false`, unchanged.
     expect(mockUsePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
   });
 
@@ -307,78 +300,35 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  // Named for the deleted fork ("falls back to a flat conversation list") until
-  // issue #2373. There is no fallback now — there is one list, and a session
-  // with no grid is just the case where every thread in it is unplaced. Keeping
-  // the old name would have implied the branch still exists.
-  test('lists a session\'s threads when it has no saved pane grid at all', async () => {
-    // SESSION carries no `workspace` — a session never opened in the grid (or
-    // opened only by a client old enough to predate the layout sync).
-    const user = userEvent.setup();
-    renderSidebar();
+  /**
+   * THE MEMBERSHIP RULE, and the one this suite guards hardest.
+   *
+   * Every member of a workspace has a row, whether or not it is on the screen.
+   * A thread with no node at all (#2373 — placement is best-effort, so "created
+   * but never placed" is a resting state), a thread whose node is PARKED
+   * (closing a pane no longer destroys it), and a page pane in either state.
+   */
+  describe('the workspace tree', () => {
+    const nodes = [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')];
 
-    await user.click(await screen.findByLabelText(/expand api refactor/i));
-
-    expect(screen.getByText('Researcher — First chat')).toBeDefined();
-    expect(screen.queryByText(/split/i)).toBeNull();
-  });
-
-  describe('a session with a saved pane grid', () => {
-    const workspaceFixture = {
-      id: 'ses-1',
-      columns: [
-        {
-          id: 'col-1',
-          panes: [
-            {
-              id: 'pane-1',
-              scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
-            },
-            {
-              id: 'pane-2',
-              scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-2', agentPageId: 'agent-1' },
-            },
-          ],
-        },
-      ],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    };
-
-    test('groups conversations by PANE — one row per pane, each labeled by its own conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+    test("lists a session's threads when its tree holds no nodes at all", async () => {
+      // Every thread is unplaced — a workspace nothing has ever been placed into.
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      // Two panes, each showing its own conversation — two sibling rows.
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
       expect(screen.getByText('Researcher — Second chat')).toBeDefined();
     });
 
-    /**
-     * THE BUG (issue #2373). The expansion used to be
-     * `chatPanes ? … : session.conversations`, and an open workspace always
-     * has a grid — so the pane branch always won and a thread with no pane row
-     * simply did not render. Placement is best-effort, so that is the ordinary
-     * state of a freshly spawned worker: production showed one workspace with
-     * 3 threads and 2 panes, another with 10 threads and 4 panes. Six threads
-     * were unreachable from the sidebar entirely.
-     *
-     * Fails on the pre-fix component: only the two placed rows appear.
-     */
-    test('renders a thread that has NO pane, alongside the placed ones', async () => {
+    test('renders a thread that has NO node, alongside the ones that do', async () => {
       respondWithSessions([
         {
           ...SESSION,
-          conversations: [
-            ...SESSION.conversations,
-            // Spawned, claimed, never placed — the "hi" conversation from the
-            // production repro.
-            { conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' },
-          ],
-          workspace: workspaceFixture,
+          conversations: [...SESSION.conversations, { conversationId: 'conv-3', title: 'Unplaced', agentPageId: 'agent-1' }],
+          rev: 1,
+          nodes,
         },
       ]);
       const user = userEvent.setup();
@@ -387,77 +337,34 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
-      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
-      expect(screen.getByText('Researcher — hi')).toBeDefined();
-      expect(screen.getAllByTestId('sidebar-conversation-row')).toHaveLength(3);
+      expect(screen.getByText('Researcher — Unplaced')).toBeDefined();
     });
 
-    test('an unplaced thread closes the THREAD — there is no pane to unbind', async () => {
+    test('renders a PARKED thread — a member that is not on the screen', async () => {
       respondWithSessions([
-        {
-          ...SESSION,
-          conversations: [{ conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' }],
-          workspace: workspaceFixture,
-        },
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', null, 0, 'conv-2')] },
       ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — hi'));
-      await user.click(await screen.findByText('Close'));
 
-      // The conversation DELETE, not a layout verb: an unplaced thread has no
-      // pane binding to reset.
-      await waitFor(() => {
-        expect(mockDel).toHaveBeenCalledWith(
-          expect.stringContaining('/conversations/conv-unplaced'),
-        );
-      });
+      const rows = screen.getAllByTestId('sidebar-conversation-row');
+      expect(rows).toHaveLength(2);
+      // Both are listed; the parked one is visibly distinguished.
+      expect(within(rows[0]).getByTitle('Researcher — First chat')).toBeDefined();
+      expect(within(rows[1]).getByTitle('Researcher — Second chat (not open)')).toBeDefined();
     });
 
-    test('clicking a pane row selects its conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Researcher — First chat'));
-
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
-      expect(mockPush).not.toHaveBeenCalled();
-    });
-
-    test('clicking the OTHER pane\'s row selects ITS conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Researcher — Second chat'));
-
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
-    });
-
-    test('lists a PAGE pane as its own row, labeled by the page title', async () => {
-      // A document/task page opened into the grid (picker or an agent's
-      // `open_page_pane`) is a persisted pane like any other — it must not
-      // be invisible in the sidebar while chat panes and shells are listed.
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+    test('lists a PAGE pane as its own row, titled from targets[]', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [...nodes, pageNode('n3', WS, 2, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
@@ -466,431 +373,211 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('Spec doc')).toBeDefined();
     });
 
-    test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
-      // Deliberately NO local grid: the session isn't the displayed one, so
-      // `AgentPanes` and its layout sync never hydrated it. The click
-      // must seat the row's own server-listing snapshot before focusing —
-      // `selectPane` no-ops on a session the store has never seen (review
-      // P1, chatgpt-codex-connector).
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+    test('lists a PARKED page pane too, rather than only the attached tree', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [...nodes, pageNode('n3', null, 0, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Spec doc'));
 
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-3');
+      expect(screen.getByTitle('Spec doc (not open)')).toBeDefined();
     });
 
-    test('closing a page pane row persists the close to the server — the sync hook only covers the displayed session (review P1)', async () => {
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+    test('falls back to a generic title for a page whose target the viewer cannot resolve', async () => {
+      // No `targets[]` entry — gone, or not this viewer's to read. The node
+      // still renders and is still closable; it must not collapse to nothing.
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [...nodes, pageNode('n3', WS, 2, 'page-1')] }]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
 
-      // The local grid dropped the pane…
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
-      });
-      // …and the close crossed the wire as its own `close_pane` VERB. The
-      // hand-rolled PUT this test used to pin is gone: the store posts every
-      // mutation for every session, displayed or not, so the sidebar has no
-      // persistence of its own left to get wrong.
-      await waitFor(() => {
-        const verbCall = mockFetchWithAuth.mock.calls.find(
-          ([url, init]) =>
-            url === '/api/agent-workspaces/ses-1/workspace/verbs' &&
-            (init as RequestInit | undefined)?.method === 'POST',
-        );
-        expect(verbCall).toBeDefined();
-        const body = JSON.parse((verbCall![1] as RequestInit).body as string) as {
-          opId: string;
-          baseRev: number;
-          verb: { type: string; paneId: string };
-        };
-        expect(body.verb).toEqual({ type: 'close_pane', paneId: 'pane-3' });
-        expect(body.opId).toBeTruthy();
-      });
-      // Nothing was PUT — the legacy blob route survives one release for
-      // rolling deploys, but this client no longer calls it.
-      expect(
-        mockFetchWithAuth.mock.calls.find(
-          ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
-        ),
-      ).toBeUndefined();
+      expect(screen.getByText('Page')).toBeDefined();
     });
+  });
 
-    test('closing a row the local store no longer knows refreshes the listing instead of clobbering the server', async () => {
-      // The store holds a DIFFERENT grid for ses-1 with no page pane —
-      // zustand persist rehydrates every session's grid from localStorage
-      // at page load, and another tab/device may have moved past this
-      // row's snapshot. A wholesale PUT of that grid would overwrite the
-      // server's newer layout AND leave the clicked pane alive (review P2).
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', {
-          id: 'ses-1',
-          columns: [
-            {
-              id: 'col-9',
-              panes: [{ id: 'pane-9', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-9', agentPageId: null } }],
-            },
-          ],
-          activePaneId: 'pane-9',
-          pendingPickerPaneId: null,
-        } as WorkspaceState);
-      });
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+  /**
+   * THE MENU AND THE ACTION READ ONE STATE.
+   *
+   * They used to read two — a server annotation up to 120 seconds old, and the
+   * store — so a row could offer "Close pane" for a node the store knew was
+   * already gone, and the click then meant something else entirely.
+   */
+  describe('the close decision', () => {
+    test('a thread ON THE GRID offers "Close pane", and closing PARKS its node without a DELETE', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close pane'));
 
-      await waitFor(() => {
-        // The listing was asked to refresh… (the GET listing call count grows)
-        expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(1);
-      });
-      // …but nothing was PUT, and the local grid is untouched.
-      const putCall = mockFetchWithAuth.mock.calls.find(
-        ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
-      );
-      expect(putCall).toBeUndefined();
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-9');
+      expect(mockDel).not.toHaveBeenCalled();
+      const parked = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n1');
+      expect(parked?.parentId).toBeNull();
     });
 
-    test('a close whose verb the server rejects converges on the server truth, not a guessed rollback', async () => {
-      // The old hand-rolled PUT rolled back to `session.workspace` and
-      // toasted. The queue's answer is better and needs no local guess: a
-      // 4xx abandons the op and re-reads the server's own snapshot, so what
-      // the user ends up looking at is what is actually durable.
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      mockFetchWithAuth.mockImplementation(async (...args: unknown[]) => {
-        const url = args[0] as string;
-        const init = args[1] as RequestInit | undefined;
-        if (url.endsWith('/workspace/verbs')) return { ok: false, status: 404, json: async () => ({}) };
-        if (url.endsWith('/workspace') && init?.method === undefined) {
-          return { ok: true, status: 200, json: async () => ({ rev: 4, grid: withPagePane.columns }) };
-        }
-        return { ok: true, status: 200, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
-      });
+    test('a thread with NO node offers "Close conversation", and closing DELETEs the listing', async () => {
+      mockDel.mockResolvedValue({});
+      // No nodes at all — every thread is unplaced.
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
-
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
-      });
-      expect(useAgentWorkspaceStore.getState().sync['ses-1'].rev).toBe(4);
-    });
-
-    test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
-      const pageOnlyWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      respondWithSessions([{ ...SESSION, conversations: [], workspace: pageOnlyWorkspace }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
-
-      // The end-session confirm opened; nothing was closed or PUT yet.
-      expect(await screen.findByText(/end session/i)).toBeDefined();
-      const putCall = mockFetchWithAuth.mock.calls.find(
-        ([url, init]) =>
-          url === '/api/agent-workspaces/ses-1/workspace' &&
-          (init as RequestInit | undefined)?.method === 'PUT',
-      );
-      expect(putCall).toBeUndefined();
-    });
-
-    test('selecting a session with a saved grid opens the ACTIVE pane\'s own conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByText('api refactor'));
-
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
-    });
-
-    test('closing a pane row\'s "Close" menu item closes its conversation\'s listing and resets the pane to its picker', async () => {
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', workspaceFixture as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      mockDel.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
-        expect(pane.scope).toBeNull();
-      });
     });
 
-    test("closing the grid's ONLY pane rebinds it to another open listing instead of leaving it on an empty picker", async () => {
-      // conv-2 is a real open listing elsewhere in the SESSION (per
-      // `SESSION.conversations`) with no pane of its own — the grid never
-      // empties (contract invariant 3), so closing this pane's own
-      // conversation should repoint it at that other listing rather than
-      // vanishing to a blank picker, the same grid-last rebind the pane
-      // grid's own close control already gets from `decideClosePane` (review
-      // finding — chatgpt-codex-connector on PR #2308).
-      const singlePaneWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', singlePaneWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: singlePaneWorkspace }]);
-      mockDel.mockResolvedValue(undefined);
+    test('a PARKED thread offers "Close conversation" — there is nothing left to take off the screen', async () => {
+      mockDel.mockResolvedValue({});
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', null, 0, 'conv-1')] }]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
-        expect(pane.scope?.targetId).toBe('conv-2');
-      });
     });
 
     /**
-     * THE SAME CASE, FROM A SESSION THE STORE HAS NEVER SEEN (review finding —
-     * CodeRabbit).
-     *
-     * A sidebar row can act on a session that is not the displayed one, and for
-     * that session `AgentPanes` — and the layout sync that seats its grid — was
-     * never mounted. `closePaneConversation` read the store raw, got undefined,
-     * defaulted `shownElsewhere` to FALSE, and turned "close this pane" into
-     * "DELETE this conversation" for a thread still open in another pane.
-     *
-     * The test above pre-hydrates the store, which is exactly why it could not
-     * see this. Here the store is deliberately left empty: the fix seats the
-     * row's own `session.workspace` snapshot through `ensureLocalWorkspace`
-     * first, so the second pane is visible and only the clicked pane resets.
-     *
-     * Fails on the pre-fix component with a DELETE.
+     * The agreement itself. A broadcast parks the node between the render and
+     * the click; the menu must have already followed it, because both read the
+     * same live tree rather than the snapshot the row arrived on.
      */
-    test('closing a shared pane in an UNHYDRATED session still resets locally — never DELETEs', async () => {
-      const sharedWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      // NO hydrateWorkspace — this session was never opened in the grid.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
-      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+    test('follows a live broadcast: a thread parked under the sidebar switches to closing the THREAD', async () => {
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')] }]);
+      mockDel.mockResolvedValue({});
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      expect(await screen.findByTitle('Researcher — First chat')).toBeDefined();
+
+      // Somebody else closed the pane. No poll, no refetch — just the event.
+      act(() => {
+        useAgentWorkspaceStore.getState().applyRemoteUpdate({
+          workspaceId: WS,
+          rev: 2,
+          nodes: [treeRoot, chatNode('n1', null, 0, 'conv-1')],
+        });
+      });
+
+      expect(await screen.findByTitle('Researcher — First chat (not open)')).toBeDefined();
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
+      );
+    });
+
+    test('closing a page pane row PARKS it rather than destroying it', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', WS, 1, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(screen.getByText('Spec doc').closest('[data-slot="row-menu"]') ?? screen.getByText('Spec doc'));
       await user.click(await screen.findByText('Close'));
 
-      // Assert the RESET, not merely the absence of a DELETE (review finding —
-      // CodeRabbit): a bare early return on `shownElsewhere` would leave the
-      // clicked pane still bound and pass a no-DELETE-only assertion. The
-      // clicked pane must be emptied and its sibling left alone, which is also
-      // what proves the fix seated the grid — an unseated one cannot see
-      // pane-2, so it would have taken the DELETE branch instead.
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0].panes;
-        expect(panes?.find((p) => p.id === 'pane-1')?.scope).toBeNull();
-      });
-      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-      expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      const parked = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
+      expect(parked?.parentId).toBeNull();
       expect(mockDel).not.toHaveBeenCalled();
     });
 
-    test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
-      const sharedWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', sharedWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+    test('a PARKED page pane offers Show, and clicking it brings the node back onto the grid', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', null, 0, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      // ONE row, though the thread occupies two panes — `findByText` throws on
-      // a second match, so this also pins the property the pane-keyed rows
-      // could not give: the sidebar lists THREADS. The row acts on the thread's
-      // first placement (pane-1), which is what the annotator records.
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(screen.getByTitle('Spec doc (not open)'));
 
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-        expect(panes.find((p) => p.id === 'pane-1')?.scope).toBeNull();
-        // The other pane is untouched, and the server listing was never
-        // asked to close — it's still shown there.
-        expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      const shown = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
+      expect(shown?.parentId).not.toBeNull();
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe(WS);
+    });
+  });
+
+  describe('the live tree', () => {
+    test('a pane placed by an agent appears without a refetch', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [],
+          rev: 1,
+          nodes: [treeRoot],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      expect(screen.queryByText('Spec doc')).toBeNull();
+      const callsBefore = mockFetchWithAuth.mock.calls.length;
+
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateFromServer(WS, {
+          rev: 2,
+          nodes: [treeRoot, pageNode('n9', WS, 0, 'page-9')],
+          targets: [{ id: 'page-9', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        });
       });
-      expect(mockDel).not.toHaveBeenCalled();
+
+      expect(await screen.findByText('Spec doc')).toBeDefined();
+      expect(mockFetchWithAuth.mock.calls.length).toBe(callsBefore);
     });
 
-    test('closing a pane reads the LIVE workspace store, not the stale SWR session.workspace snapshot', async () => {
-      // `session.workspace` is only as fresh as the last 20s poll or
-      // `onChanged()` — a second pane opened on this conversation moments
-      // ago can be invisible to it. Seed a STALE single-pane snapshot (as if
-      // the second pane had not yet been opened when this SWR response
-      // landed) while the live store already has it in TWO panes, and
-      // confirm the close decision follows the live store (review finding).
-      const staleSnapshot = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      const liveWorkspace = {
-        ...staleSnapshot,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...staleSnapshot.columns[0].panes,
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', liveWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: staleSnapshot }]);
+    test('selecting a session opens the ACTIVE pane\'s own conversation', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
-
-      // If the decision had read the stale snapshot, it would see conv-1 as
-      // shown in only ONE pane and issue a real DELETE. It must not.
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-        expect(panes.find((p) => p.id === 'pane-1')?.scope).toBeNull();
+      await screen.findByText('api refactor');
+      act(() => {
+        useAgentWorkspaceStore.getState().selectNode(WS, 'n2');
       });
-      expect(mockDel).not.toHaveBeenCalled();
+      await user.click(screen.getByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
     });
   });
 
@@ -921,11 +608,13 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('api refactor'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+      // The node holds an ID and nothing else — the shell's NAME is resolved
+      // per viewer beside the tree, so it is not carried into the placement.
+      const placed = useAgentWorkspaceStore.getState().workspaces['ses-1']?.nodes ?? [];
+      expect(placed.filter((node) => node.nodeType === 'pane')).toHaveLength(1);
+      expect(placed.find((node) => node.nodeType === 'pane')?.target).toEqual({
         kind: 'terminal',
-        name: 'Shell',
-        targetId: 'shell-fallback-1',
-        agentPageId: null,
+        id: 'shell-fallback-1',
       });
     });
 
@@ -1066,46 +755,31 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('shell-1'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+      const placed = useAgentWorkspaceStore.getState().workspaces['ses-1']?.nodes ?? [];
+      expect(placed.find((node) => node.nodeType === 'pane')?.target).toEqual({
         kind: 'terminal',
-        name: 'shell-1',
-        targetId: 'shell-a',
-        agentPageId: null,
+        id: 'shell-a',
       });
     });
 
-    // issue #2295 (adversarial review, PR #2307): `openShell` calls the
-    // store's `openConversation` directly — a second, independent path into
-    // the same eviction-prone `isReplaceable` heuristic the main fix
-    // protects, reachable without ever touching AgentPanes.tsx's seeding
-    // effect. A pane already showing a conversation absent from THIS
-    // session's own live listing (closed-in-session) must not be silently
-    // overwritten just because the user reattached an unrelated shell.
+    // issue #2295: `openShell` runs the SAME shared placement policy an
+    // agent's own open does, so it is a second, independent path into the
+    // eviction rules — reachable without ever mounting the pane grid. A node
+    // showing a conversation absent from THIS workspace's own live listing
+    // (closed-in-workspace) must not be displaced because the user reattached
+    // an unrelated shell.
     test('reattaching a shell does not evict a pane showing a conversation closed out of the session', async () => {
-      const existingGrid = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              {
-                id: 'pane-1',
-                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-closed', agentPageId: 'agent-1' },
-              },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', existingGrid as WorkspaceState);
-      });
       // `conv-closed` is deliberately absent from `conversations` — this
-      // session's own live listing — simulating it having been closed out
-      // of the session while its pane is still bound to it.
+      // workspace's own live listing — simulating it having been closed out
+      // while its node is still bound to it.
       respondWithSessions([
-        { ...SESSION, conversations: [], shells: [{ shellId: 'shell-a', name: 'shell-1' }], workspace: existingGrid },
+        {
+          ...SESSION,
+          conversations: [],
+          shells: [{ shellId: 'shell-a', name: 'shell-1' }],
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-closed')],
+        },
       ]);
       const user = userEvent.setup();
       renderSidebar();
@@ -1113,15 +787,18 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       await user.click(await screen.findByText('shell-1'));
 
-      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']!.columns.flatMap((c) => c.panes);
-      // Protected: the original pane still shows conv-closed, untouched.
-      expect(panes.find((p) => p.id === 'pane-1')?.scope?.targetId).toBe('conv-closed');
-      // The shell opened in a NEW pane instead of evicting it.
-      expect(panes.find((p) => p.scope?.kind === 'terminal')?.scope).toEqual({
+      const panes = (useAgentWorkspaceStore.getState().workspaces[WS]?.nodes ?? []).filter(
+        (node) => node.nodeType === 'pane',
+      );
+      // Protected: the original node still shows conv-closed, and is still on
+      // the grid rather than having been parked to make room.
+      const survivor = panes.find((node) => node.id === 'n1');
+      expect(survivor?.target).toEqual({ kind: 'chat', id: 'conv-closed' });
+      expect(survivor?.parentId).not.toBeNull();
+      // The shell opened in a NEW node instead of displacing it.
+      expect(panes.find((node) => node.target?.kind === 'terminal')?.target).toEqual({
         kind: 'terminal',
-        name: 'shell-1',
-        targetId: 'shell-a',
-        agentPageId: null,
+        id: 'shell-a',
       });
       expect(panes).toHaveLength(2);
     });
@@ -1182,7 +859,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
 
-    test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
+    test('spawning a shell-first session places its shell in the new workspace, addressed by id alone', async () => {
       mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
       const user = userEvent.setup();
       renderSidebar();
@@ -1195,14 +872,15 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'My Custom Session{Enter}');
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-new']?.columns[0]?.panes[0]?.scope).toEqual({
-          kind: 'terminal',
-          name: 'Shell 2',
-          targetId: 'shell-new',
-          agentPageId: null,
-        }),
-      );
+      // The shell's NAME is deliberately not carried: a node holds an id, and
+      // the title is resolved per viewer beside the tree, so the pane header
+      // and the sidebar row read one authorized answer rather than two copies.
+      await waitFor(() => {
+        const panes = (useAgentWorkspaceStore.getState().workspaces['ses-new']?.nodes ?? []).filter(
+          (node) => node.nodeType === 'pane',
+        );
+        expect(panes.map((node) => node.target)).toEqual([{ kind: 'terminal', id: 'shell-new' }]);
+      });
     });
 
     test('a drive with no agents still offers Shell — no empty chooser', async () => {
@@ -1224,8 +902,13 @@ describe('AgentsSidebar', () => {
   });
 
   describe('end session', () => {
-    test('confirming ends it: DELETE, grid forgotten, selection cleared, list refetched', async () => {
-      mockDel.mockResolvedValue(undefined);
+    test('confirming ends it: DELETE, tree forgotten, selection cleared, list refetched', async () => {
+      // The DELETE takes the row out of the listing too, as the route does —
+      // otherwise the refetch it triggers would legitimately re-seat the very
+      // tree this assertion is about.
+      mockDel.mockImplementation(async () => {
+        respondWithSessions([]);
+      });
       // The session is open in the centre, with a persisted pane grid.
       useAgentSurfaceStore.setState({
         selectedSessionId: 'ses-1',
@@ -1234,7 +917,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1264,7 +947,7 @@ describe('AgentsSidebar', () => {
       expect(mockDel).not.toHaveBeenCalled();
     });
 
-    test('the grid, selection, and sidebar row drop instantly — before the sandbox-kill DELETE resolves, not after', async () => {
+    test('the tree, selection, and sidebar row drop instantly — before the sandbox-kill DELETE resolves, not after', async () => {
       // The whole point: ending a session must not wait on the sandbox
       // teardown this DELETE triggers server-side, which can take real
       // seconds. Everything user-visible updates the moment the user
@@ -1278,7 +961,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1297,7 +980,7 @@ describe('AgentsSidebar', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    test('a failed end-session restores the grid and selection, but does not yank the user back if they already navigated elsewhere', async () => {
+    test('a failed end-session re-reads the tree and restores the selection, but does not yank the user back if they already navigated elsewhere', async () => {
       // `selectSession` also pushes a URL — restoring a stale selection on a
       // rare rollback must not silently override wherever the user has since
       // navigated during this request's round trip.
@@ -1310,7 +993,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1327,8 +1010,12 @@ describe('AgentsSidebar', () => {
       rejectDel(new Error('boom'));
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
 
-      // The grid is restored (nothing else could have touched it)...
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      // The tree is re-READ rather than restored from a client snapshot: the
+      // store keeps no copy of its own any more, and the server's is the only
+      // honest one. The rollback's job is to ask for it.
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/nodes'),
+      );
       // ...but the user's own, later navigation stands — not clobbered back
       // to the session whose end just failed.
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
@@ -1385,7 +1072,7 @@ describe('AgentsSidebar', () => {
   });
 
   describe('conversation close', () => {
-    test('right-click "Close" DELETEs the session-scoped route and refetches on success', async () => {
+    test('right-click "Close conversation" DELETEs the session-scoped route and refetches on success', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
       renderSidebar();
@@ -1393,7 +1080,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
@@ -1402,7 +1089,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
     });
 
-    test('the 3-dots dropdown "Close" drives the same DELETE', async () => {
+    test('the 3-dots dropdown "Close conversation" drives the same DELETE', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
       renderSidebar();
@@ -1414,7 +1101,7 @@ describe('AgentsSidebar', () => {
         '[data-slot="context-menu-trigger"]',
       ) as HTMLElement;
       await user.click(within(firstChatRow).getByLabelText('Conversation actions'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
@@ -1428,7 +1115,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
     });
@@ -1440,7 +1127,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
       expect(screen.queryByRole('alertdialog')).toBeNull();

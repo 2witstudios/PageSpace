@@ -1,63 +1,28 @@
 /**
- * The layout endpoints' RESPONSE bodies — declared once, for the route that
- * writes them and the store that parses them.
+ * The LEGACY layout endpoints' response bodies — the two-level `columns[].panes[]`
+ * model, kept alive for the migration window.
  *
- * Both sides used to declare their own. `WorkspaceLayoutSnapshot` existed
- * twice under the same name (`workspace-layout-runtime.ts` and
- * `useAgentWorkspaceStore.ts`), structurally equal and related by nothing, and
- * the store's verb-response schema silently dropped the `applied` field the
- * route actually returns. Two declarations of one wire is exactly the drift the
- * rest of this epic spent its time removing.
+ * **The runtime SCHEMAS that used to live here are gone with their only
+ * consumer.** They were the browser's parse of these responses, and the browser
+ * no longer speaks this wire at all: the store reads `{rev, nodes, targets}`
+ * from the node endpoint. What survives is the TYPES, which the verb route and
+ * its runtime still use to describe what they write. A zod schema nothing parses
+ * with is not a contract, it is a second description of one — the exact
+ * duplication this module was created to remove, arriving from the other side.
  *
- * It lives in `packages/lib` rather than beside the route because the client
+ * It lives in `packages/lib` rather than beside the route because a client
  * cannot import the runtime module — that one pulls in `@pagespace/db`.
  */
 
-import { z } from 'zod';
-import { persistedColumnStateSchema, type PersistedColumnState } from './contract';
-
-/** A grid as it crosses the wire: columns in order, each with its panes. */
-export const workspaceLayoutGridSchema = z.array(persistedColumnStateSchema);
-
-/**
- * `GET /workspace` — the whole truth for one workspace.
- * `grid: null` means the workspace has no pane rows at all, which is different
- * from an empty array and is why the field is nullable rather than defaulted.
- */
-export const workspaceLayoutSnapshotSchema = z.object({
-  rev: z.number().int().min(0),
-  grid: workspaceLayoutGridSchema.nullable(),
-});
-
-/**
- * A verb POST's 200 body.
- *
- * `applied` is the store's authority on whether anything actually changed —
- * the reducer's structural verdict only says the target resolved, while this
- * comes from the persistence layer's content diff. It was being parsed away.
- */
-export const workspaceLayoutVerbResponseSchema = z.object({
-  rev: z.number().int().min(0),
-  grid: workspaceLayoutGridSchema,
-  applied: z.boolean(),
-});
-
-/**
- * A verb POST's 409 body: the current truth to rebase against. No `applied` —
- * nothing was applied, which is the whole point of the status code.
- */
-export const workspaceLayoutStaleResponseSchema = z.object({
-  rev: z.number().int().min(0),
-  grid: workspaceLayoutGridSchema,
-});
+import type { PersistedColumnState } from './contract';
 
 /*
- * Written out rather than `z.infer`ed. `persistedColumnStateSchema` carries a
- * `.transform()`, and inferring through it across the package's emitted `.d.ts`
- * degrades to `any` at the consumer — which is worse than the duplication this
- * module exists to remove, because it fails silently. Referencing
- * `PersistedColumnState` directly keeps the declaration stable across the
- * build.
+ * Written out rather than `z.infer`ed, from when the schemas were still here:
+ * `persistedColumnStateSchema` carries a `.transform()`, and inferring through
+ * it across the package's emitted `.d.ts` degraded to `any` at the consumer —
+ * worse than duplication, because it failed silently. Referencing
+ * `PersistedColumnState` directly keeps the declaration stable across the build,
+ * and is now simply how these are declared.
  */
 export interface WorkspaceLayoutSnapshot {
   rev: number;
