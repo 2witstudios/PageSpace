@@ -14,6 +14,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { decideNodeWrite } from '../workspace-node-write';
+import { applyNodeWrite } from '../workspace-node-algebra';
+import { validateTree } from '../workspace-node-validate';
 import { workspaceNodeWriteRequestSchema } from '../workspace-node-wire';
 import type { WireWorkspaceNode } from '../workspace-node-wire';
 import type { PaneNode, RootNode, SplitNode, WorkspaceNode } from '../workspace-node';
@@ -465,5 +467,53 @@ describe('the wire schema', () => {
     });
     const node: WireWorkspaceNode = parsed.put[0];
     expect('fraction' in node).toBe(false);
+  });
+});
+
+describe('a write that MOVES a conversation between nodes in one commit', () => {
+  /**
+   * The reviewer's scenario (PR #2378, CodeRabbit on `.pu-reports/pu-fix-xws.md`):
+   * a client rebases, and its replayed write drops the node currently bound to a
+   * conversation while putting a different node bound to the same one. The
+   * concern was that this is "permanently rejected" — that `target_already_shown`
+   * fires on a target which is unique in the tree the write is ASKING FOR.
+   *
+   * It is not, and the reason is worth pinning rather than re-deriving: the
+   * refusal is a property of the FINAL tree, never of the intermediate one.
+   * `applyNodeWrite` puts before it drops, so both nodes exist for an instant in
+   * the middle — and nothing validates the middle. `validateTree` sees only what
+   * the write settles on.
+   *
+   * The database agrees by a different route: `writeWorkspaceNodes` issues its
+   * DELETE before its INSERT, so the partial unique index never sees the pair
+   * either. Two layers, one answer, and neither is load-bearing alone.
+   */
+  const chat = { kind: 'chat' as const, id: 'conv-moving' };
+
+  const before: WorkspaceNode[] = [
+    { nodeType: 'root', id: 'root', parentId: null, position: 0, axis: 'row' },
+    { nodeType: 'pane', id: 'pane-old', parentId: 'root', position: 0, target: chat },
+  ];
+
+  it('is accepted, because the target is unique in the tree the write asks for', () => {
+    const after = applyNodeWrite(before, {
+      put: [{ nodeType: 'pane', id: 'pane-new', parentId: 'root', position: 0, target: chat }],
+      drop: ['pane-old'],
+    });
+
+    expect(after.map((node) => node.id).sort()).toEqual(['pane-new', 'root']);
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('is refused when the write KEEPS both — the same put without the drop', () => {
+    // The mutation that proves the test above is testing the drop and not the
+    // put: leave `pane-old` in place and the same payload becomes the duplicate
+    // the constraint exists to refuse.
+    const after = applyNodeWrite(before, {
+      put: [{ nodeType: 'pane', id: 'pane-new', parentId: 'root', position: 1, target: chat }],
+      drop: [],
+    });
+
+    expect(validateTree(after)).toMatchObject({ ok: false, code: 'duplicate_chat_target' });
   });
 });

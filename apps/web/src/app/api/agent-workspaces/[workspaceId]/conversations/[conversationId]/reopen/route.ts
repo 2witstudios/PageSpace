@@ -59,6 +59,17 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
 
+  if (outcome === 'session_full') {
+    // 409, not 404: the thread exists and is the caller's, and the workspace is
+    // simply full. This is the one refusal on this path a user can resolve —
+    // close something and retry — so it says so, rather than joining the
+    // "nothing here" shape above and inviting no action at all.
+    return NextResponse.json(
+      { error: 'This session is full. Close a conversation and try again.' },
+      { status: 409 },
+    );
+  }
+
   if (outcome === 'reopened') {
     auditRequest(request, {
       eventType: 'data.write',

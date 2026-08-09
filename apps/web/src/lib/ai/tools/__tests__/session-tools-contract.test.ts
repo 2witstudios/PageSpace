@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tool } from 'ai';
 import {
   createSessionTools,
+  movePaneInputSchema,
   type PaneGridListing,
   type PaneGridNodeEntry,
   type SessionToolsDeps,
@@ -446,12 +447,13 @@ const LAYOUT: PaneGridListing = {
     { nodeId: 'pane-1', nodeType: 'pane', parentId: 'col-1', position: 0, axis: null, kind: 'chat', targetId: 'conv-1', name: 'Planning', fraction: 0.7 },
     { nodeId: 'pane-1b', nodeType: 'pane', parentId: 'col-1', position: 1, axis: null, kind: null, targetId: null, name: '', fraction: 0.3 },
     { nodeId: 'pane-2', nodeType: 'pane', parentId: 'root', position: 1, axis: null, kind: 'terminal', targetId: 'shell-1', name: 'shell-1', fraction: 0.4 },
-    // PARKED: in the workspace, out of the layout, still in the sidebar. The
-    // state the two-level model had nowhere to put, and the reason "closed" and
-    // "parked" stopped being two different structures.
-    { nodeId: 'pane-parked', nodeType: 'pane', parentId: null, position: 0, axis: null, kind: 'chat', targetId: 'conv-2', name: 'Old thread', fraction: null },
   ],
 };
+
+/** Does the wire refuse "move it to nowhere"? The schema, asked directly. */
+function movePaneRefusesNullDestination(): boolean {
+  return !movePaneInputSchema.safeParse({ nodeId: 'pane-1', toParentId: null }).success;
+}
 
 /** Layout deps on top of the shared fakes — both are OPTIONAL on the interface. */
 function layoutDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
@@ -492,20 +494,24 @@ describe('list_panes description: "Returns the nodeIds that resize_pane/move_pan
       'pane-1',
       'pane-1b',
       'pane-2',
-      'pane-parked',
     ]);
   });
 
-  it('reports a PARKED pane, which is the state a two-level grid could not spell', async () => {
+  it('reports exactly one parentless node — the root — because that is the whole of the flat-tree contract', async () => {
+    // This test PINNED THE OPPOSITE until the one-removal correction: a
+    // `pane-parked` fixture with a null parent, asserted to be reported as "in
+    // the workspace, off the layout". That state is now unspellable at every
+    // layer — `validateTree` returns `null_parent`, `nodeFromRow` throws, and
+    // the `agent_workspace_nodes` root CHECK is biconditional — so a fixture
+    // carrying it was pinning a shape the rest of the system would refuse, and
+    // pinning it in the one place a model reads the layout from.
     const tools = createSessionTools(layoutDeps());
     const result = await run(tools.list_panes, {}, layoutOptions());
-    const parked = (result as { nodes: PaneGridNodeEntry[] }).nodes.filter(
-      (node) => node.nodeType === 'pane' && node.parentId === null,
+    const parentless = (result as { nodes: PaneGridNodeEntry[] }).nodes.filter(
+      (node) => node.parentId === null,
     );
-    // Its `parentId` is what says it is off screen — never its absence from the
-    // list, which is the whole point of one flat list.
-    expect(parked.map((node) => node.nodeId)).toEqual(['pane-parked']);
-    expect(parked[0].targetId).toBe('conv-2');
+    expect(parentless.map((node) => node.nodeId)).toEqual(['root']);
+    expect(parentless[0].nodeType).toBe('root');
   });
 
   it('a workspace with no layout yet is a reportable state, not an error', async () => {
@@ -603,13 +609,13 @@ describe('move_pane / arrange_panes descriptions: what they promise the command 
     );
   });
 
-  it('move_pane with toParentId null is how a pane is CLOSED — parked, not destroyed', async () => {
-    const deps = layoutDeps();
-    const tools = createSessionTools(deps);
-    await run(tools.move_pane, { nodeId: 'pane-1', toParentId: null }, layoutOptions());
-    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
-      expect.objectContaining({ command: { type: 'move', nodeId: 'pane-1', parentId: null } }),
-    );
+  it('move_pane REFUSES a null destination — there is nowhere outside the layout to move to', async () => {
+    // The inverse of what this test asserted before the one-removal
+    // correction, when `toParentId: null` was how a pane got closed. Taking a
+    // pane away is `close_pane` now, and it is a destroy: the schema is the
+    // first place that has to stop offering a model the parking space, because
+    // a tool description is the only specification a model ever reads.
+    expect(movePaneRefusesNullDestination()).toBe(true);
   });
 
   it('arrange_panes sends the partial list through verbatim — the command owns the prefix rule', async () => {

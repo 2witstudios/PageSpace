@@ -93,7 +93,6 @@ export async function spawnShell(input: {
           target: { kind: 'terminal', id: shellId },
           newNodeId: createId(),
           newSplitId: createId(),
-          newRootId: createId(),
         }),
       within: async (tx) => {
         const store = await createDbSessionShellStore(tx);

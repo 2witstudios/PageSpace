@@ -1,5 +1,5 @@
 {
-  "id": "a699f694-91c0-4315-bf8d-60e7de1384da",
+  "id": "57e1df3c-e447-4a3d-a10b-9f95a9ac9fb6",
   "prevId": "5d6b0703-1fe5-4a8a-b507-850d0f7942c6",
   "version": "7",
   "dialect": "postgresql",
@@ -4358,15 +4358,15 @@
           "primaryKey": false,
           "notNull": false
         },
-        "agentPageId": {
-          "name": "agentPageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "closedInWorkspaceAt": {
           "name": "closedInWorkspaceAt",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -4418,6 +4418,21 @@
         }
       },
       "indexes": {
+        "conversations_workspace_id_idx": {
+          "name": "conversations_workspace_id_idx",
+          "columns": [
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "conversations_user_id_idx": {
           "name": "conversations_user_id_idx",
           "columns": [
@@ -4480,21 +4495,6 @@
           "columns": [
             {
               "expression": "contextId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "conversations_workspace_id_idx": {
-          "name": "conversations_workspace_id_idx",
-          "columns": [
-            {
-              "expression": "workspaceId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20814,7 +20814,7 @@
       "checkConstraints": {
         "agent_workspace_nodes_root_no_parent_chk": {
           "name": "agent_workspace_nodes_root_no_parent_chk",
-          "value": "\"agent_workspace_nodes\".\"nodeType\" <> 'root' OR \"agent_workspace_nodes\".\"parentId\" IS NULL"
+          "value": "(\"agent_workspace_nodes\".\"nodeType\" = 'root') = (\"agent_workspace_nodes\".\"parentId\" IS NULL)"
         },
         "agent_workspace_nodes_node_type_chk": {
           "name": "agent_workspace_nodes_node_type_chk",

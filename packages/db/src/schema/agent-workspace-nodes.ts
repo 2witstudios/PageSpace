@@ -268,15 +268,23 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    * unconstrained rather than accidentally forbidden (the form conversations'
    * type checks use).
    *
-   * Its CONVERSE — a non-root node always carries one — is a real invariant now
-   * rather than the "detached" state it used to describe, and it is enforced one
-   * layer up (the row parse, and `validateTree`'s `null_parent`) rather than
-   * here. Adding it as a CHECK would be a strict improvement and needs its own
-   * migration; see the self-FK's comment above.
+   * BICONDITIONAL, and that is the whole of it: root IF AND ONLY IF parentless.
+   * An implication in one direction only (`nodeType <> 'root' OR parentId IS
+   * NULL`) constrains a root to be parentless but says nothing about a `pane`
+   * or `split` that carries no parent — and the composite self-FK does not
+   * close that half either, because `MATCH SIMPLE` skips the check entirely
+   * when any referencing column is NULL.
+   *
+   * That gap was not academic. A parentless non-root is exactly the "detached"
+   * state this epic deleted: `validateTree` returns `null_parent` for it and
+   * `nodeFromRow` throws on it, so the row the database would have accepted is
+   * one every reader crashes on. A workspace holding it cannot be read at all —
+   * strictly worse than the write being refused. The invariant the model
+   * already depends on is now stated where it can be violated.
    */
   rootHasNoParent: check(
     'agent_workspace_nodes_root_no_parent_chk',
-    sql`${table.nodeType} <> 'root' OR ${table.parentId} IS NULL`,
+    sql`(${table.nodeType} = 'root') = (${table.parentId} IS NULL)`,
   ),
 
   /**

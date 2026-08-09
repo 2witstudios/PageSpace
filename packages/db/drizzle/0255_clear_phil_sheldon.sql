@@ -16,7 +16,7 @@ CREATE TABLE "agent_workspace_nodes" (
 	"createdAt" timestamp DEFAULT now() NOT NULL,
 	"updatedAt" timestamp NOT NULL,
 	CONSTRAINT "agent_workspace_nodes_rootId_id_pk" PRIMARY KEY("rootId","id"),
-	CONSTRAINT "agent_workspace_nodes_root_no_parent_chk" CHECK ("agent_workspace_nodes"."nodeType" <> 'root' OR "agent_workspace_nodes"."parentId" IS NULL),
+	CONSTRAINT "agent_workspace_nodes_root_no_parent_chk" CHECK (("agent_workspace_nodes"."nodeType" = 'root') = ("agent_workspace_nodes"."parentId" IS NULL)),
 	CONSTRAINT "agent_workspace_nodes_node_type_chk" CHECK ("agent_workspace_nodes"."nodeType" IN ('root', 'split', 'pane')),
 	CONSTRAINT "agent_workspace_nodes_target_kind_chk" CHECK ("agent_workspace_nodes"."targetKind" IS NULL OR "agent_workspace_nodes"."targetKind" IN ('chat', 'terminal', 'page'))
 );

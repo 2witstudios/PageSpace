@@ -248,6 +248,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     // `planPageId` travels, but like `agentPageId` it is nulled by the exporter
     // when the plan page is outside the bundle (tenant-export.ts) — a binding
     // may point into a drive the migration does not carry.
+    excluded: {
+      workspaceId:
+        'The OLD membership column, still in the schema only because its drop is a separately deployable stage — every pending migration runs in one invocation, so a drop registered beside 0255 would run before the backfill that moves these rows into `agent_workspace_nodes` could execute. Nothing writes it any more; membership travels as a chat-bound node in that table, which IS carried. Carrying this too would ship a second, staler answer to the one question this epic gave a single source of truth.',
+      closedInWorkspaceAt:
+        'The other half of the old membership pair — whether a thread was still in its workspace listing. Superseded by the presence or absence of a node, and excluded for the same reason as `workspaceId` above: it survives in the schema only until the follow-up drop.',
+    },
   },
 
   messages: {
@@ -335,11 +341,16 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'A per-instance STREAMING CHECKPOINT, not a durable record: `parts` is the debounced replay buffer a reconnecting client resumes from, and a completed turn is committed to `messages`, which the bundle carries. Every other column names SOURCE-instance runtime — `stream_id` (the in-process abort-registry key, UNIQUE-indexed, so a carried duplicate also collides), `browser_session_id`, `last_heartbeat_at`, `abort_requested_at`, `raw_parts_count` (a replay cursor with no live multicast to count against). Carrying a `status = streaming` row would manufacture a phantom live stream in the tenant that no worker will ever finish and no abort can reach.',
 
   /*
-   * `agent_workspace_pane_columns`, `agent_workspace_panes`,
-   * `agent_workspace_layout_revs` and `agent_workspace_layout_ops` WERE
-   * EXCLUDED HERE. All four tables are dropped — the two-level pane grid they
-   * held is replaced by `agent_workspace_nodes` — so there is nothing left to
-   * decide about them.
+   * THE OLD TWO-LEVEL PANE GRID, and it is excluded for the reason it always
+   * was — ARRANGEMENT was judged not worth the bundle weight — except that the
+   * reason no longer has to carry any weight, because nothing reads or writes
+   * these four tables at all. `agent_workspace_nodes` replaced them.
+   *
+   * They are still listed rather than deleted because their DROP is a
+   * separately deployable stage: `runMigrations` applies every pending
+   * migration in one invocation, so a drop registered in this release would run
+   * before the backfill that moves their rows into the node tree could be
+   * executed. They go in the follow-up, and these four entries go with them.
    *
    * `agent_workspace_nodes` IS CARRIED (`TABLE_IMPORT_ORDER`, with its spec in
    * `TENANT_EXPORT_COLUMNS` and its query in `tenant-export.ts`). It spent one
@@ -357,6 +368,14 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
    * session and is no longer separable from the thing that had to travel
    * anyway.
    */
+  agent_workspace_pane_columns:
+    'DEAD: the old two-level grid\'s columns. Nothing reads or writes it; the tree is `agent_workspace_nodes`, which is carried. Awaiting the follow-up drop, which is staged separately so the backfill can run between the two migrations.',
+  agent_workspace_panes:
+    'DEAD: the old grid\'s panes, superseded by pane nodes in `agent_workspace_nodes`. Awaiting the same follow-up drop.',
+  agent_workspace_layout_revs:
+    'DEAD: the old grid\'s optimistic-concurrency counter, superseded by `agent_workspace_node_revs`, which is carried alongside the nodes it versions. Awaiting the same follow-up drop.',
+  agent_workspace_layout_ops:
+    'DEAD, and retired by construction rather than by replacement: it was an idempotency memory for verbs that minted their own ids on replay. The node write is an upsert, so a replayed write re-applies to the same result and there is nothing to remember. Awaiting the same follow-up drop.',
 
   /**
    * The rev's own table, deliberately left behind — the ONE thing in the node

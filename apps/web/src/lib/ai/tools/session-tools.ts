@@ -168,12 +168,17 @@ export const killShellInputSchema = z.object({ shellId: z.string().min(1) }).str
 //
 // THE SHAPE CHANGED WITH THE MODEL. These tools used to address a
 // `columnId` + a `paneId`, because the layout was literally two levels:
-// columns of panes. It is now ONE FLAT TREE in which `parentId` decides both
-// where a node is and whether it is on screen at all, so "column" is no longer
-// a kind of thing — it is a container that happens to sit directly in the root.
-// Keeping the old two-level vocabulary would have meant either a lossy
-// projection (a nested split has no column to be reported as) or a model
-// addressing furniture the server does not have.
+// columns of panes. It is now ONE FLAT TREE in which `parentId` says where a
+// node is, so "column" is no longer a kind of thing — it is a container that
+// happens to sit directly in the root. Keeping the old two-level vocabulary
+// would have meant either a lossy projection (a nested split has no column to
+// be reported as) or a model addressing furniture the server does not have.
+//
+// `parentId` does NOT also decide whether a node is on screen. Only the root
+// carries a null parent; every other node is somewhere, and there is no parked
+// or off-screen state for a model to reason about or accidentally create.
+// `move_pane` therefore requires a container, and `close_pane` REMOVES the pane
+// from the workspace rather than setting it aside — the one removal.
 
 export const listPanesInputSchema = z.object({}).strict();
 

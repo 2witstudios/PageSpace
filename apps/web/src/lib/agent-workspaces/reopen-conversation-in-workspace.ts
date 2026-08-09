@@ -31,15 +31,31 @@
  */
 
 import type { ConversationCloseSubject } from './close-conversation-in-workspace';
+import { announceWithoutUnsucceeding } from './close-conversation-in-workspace';
 
 export type ReopenConversationOutcome =
   | 'reopened'
   | 'already_open'
   | 'not_in_session'
-  | 'history_deleted';
+  | 'history_deleted'
+  /**
+   * The cap refused the return. Named rather than folded into `not_in_session`
+   * because the module doc above promises the caller exactly this — "a
+   * workspace that filled up in the meantime refuses" — and a caller can act on
+   * it: close something, then retry. `not_in_session` is the answer that admits
+   * nothing and invites no action, which is the wrong thing to say about a
+   * thread that is merely one slot short of returning.
+   */
+  | 'session_full';
 
 /** How the membership write answered the re-admission. */
-export type ReadmitConversationOutcome = 'readmitted' | 'already_attached' | 'not_a_member' | 'refused';
+export type ReadmitConversationOutcome =
+  | 'readmitted'
+  | 'already_attached'
+  | 'not_a_member'
+  /** The cap. Distinct from `refused` so the outcome survives the wiring. */
+  | 'session_full'
+  | 'refused';
 
 export interface ReopenConversationInSessionDeps<TRow extends ConversationCloseSubject = ConversationCloseSubject> {
   /** Row facts for the ownership and history gates. Same shape the close side reads. */
@@ -86,11 +102,14 @@ export async function reopenConversationInSessionWith<TRow extends ConversationC
       // Only the branch that actually re-admitted. `already_attached` below is
       // a retry meeting a row that is already there — nothing changed, so
       // nothing is announced.
-      deps.announceReopened(row);
+      announceWithoutUnsucceeding(() => deps.announceReopened(row));
       return 'reopened';
     // Already on screen: a retry, or a second tab that got there first.
     case 'already_attached':
       return 'already_open';
+    // The one refusal a caller can do something about, so it keeps its name.
+    case 'session_full':
+      return 'session_full';
     case 'not_a_member':
     case 'refused':
       return 'not_in_session';

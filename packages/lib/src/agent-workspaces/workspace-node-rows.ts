@@ -112,6 +112,23 @@ const nodeAxisSchema = z.enum(['row', 'column']);
 const paneTargetKindSchema = z.enum(['chat', 'terminal', 'page']);
 
 /**
+ * An id, as the ALGEBRA defines one — non-blank after trimming, not merely
+ * non-empty. `z.string().min(1)` is satisfied by `'   '`, and `create`/`bind`
+ * use `trim()` for exactly that reason: a blank id reached Postgres once and
+ * made a workspace permanently unreadable, because `text NOT NULL` accepts it
+ * and every later read then threw.
+ *
+ * The row parse is the OTHER door onto the same table. Everything a blank id
+ * could do here still fails closed downstream — `blank_id` from the validator,
+ * `dangling_parent` for a parent nothing resolves — so this refuses EARLIER
+ * rather than closing a hole. Two doors onto one table should not disagree
+ * about what an id is.
+ */
+const idString = z.string().refine((value) => value.trim().length > 0, {
+  message: 'expected a non-blank id',
+});
+
+/**
  * Every column a given `nodeType` must NOT carry is pinned to `z.null()` rather
  * than merely ignored, so a row that contradicts its own type is rejected
  * instead of silently losing the contradictory value. That rejection is the
@@ -129,7 +146,7 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
   z
     .object({
       nodeType: z.literal('root'),
-      id: z.string().min(1),
+      id: idString,
       // The root is the row whose TYPE says so, and its null parent is a
       // consequence the schema insists on rather than a definition. Pinned to
       // `z.null()` so a root row carrying a parent is refused rather than
@@ -145,9 +162,9 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
   z
     .object({
       nodeType: z.literal('split'),
-      id: z.string().min(1),
+      id: idString,
       /** Never null. Only the root has no parent, and this is not the root. */
-      parentId: z.string().min(1),
+      parentId: idString,
       position: z.number().int(),
       axis: nodeAxisSchema,
       fraction: z.number().nullable(),
@@ -165,7 +182,7 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
   z
     .object({
       nodeType: z.literal('pane'),
-      id: z.string().min(1),
+      id: idString,
       /**
        * NEVER NULL, and this line is the correction. It was
        * `.nullable()`, and the null was read as "detached": a pane in the
@@ -181,12 +198,12 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
        * indistinguishable from the user having closed the pane, which is the
        * confusion this change exists to end.
        */
-      parentId: z.string().min(1),
+      parentId: idString,
       position: z.number().int(),
       axis: z.null(),
       fraction: z.number().nullable(),
       targetKind: paneTargetKindSchema.nullable(),
-      targetId: z.string().min(1).nullable(),
+      targetId: idString.nullable(),
     })
     // Two columns, one value: the pair is the binding, so half of it is not a
     // partially-bound pane but a corrupt one. `PaneTarget` exists precisely so

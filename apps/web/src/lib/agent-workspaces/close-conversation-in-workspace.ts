@@ -102,6 +102,30 @@ export interface CloseConversationInSessionDeps<TRow extends ConversationCloseSu
   announceClosed: (row: TRow) => void;
 }
 
+/**
+ * Make an announcement keep the promise its type already makes.
+ *
+ * `announceClosed` and `announceReopened` are declared fire-and-forget: a
+ * broadcast that fails must not un-succeed a committed write. Both return
+ * `void`, so a rejected promise is already nobody's problem — but a SYNCHRONOUS
+ * throw from the injected callback is not. It propagates out of the caller and
+ * turns a committed membership change into a reported failure, and the retry
+ * that follows meets a workspace where the change already happened and answers
+ * `not_in_session`. The user is told twice that nothing happened, about a thing
+ * that happened.
+ *
+ * Swallowing is therefore the contract and not a shrug: the write is committed
+ * before this runs, and the sidebar has a 120s backstop poll for exactly the
+ * broadcast that never lands.
+ */
+export function announceWithoutUnsucceeding(announce: () => void): void {
+  try {
+    announce();
+  } catch {
+    // Deliberately swallowed — see above. The committed write is the outcome.
+  }
+}
+
 export async function closeConversationInSessionWith<TRow extends ConversationCloseSubject>(
   deps: CloseConversationInSessionDeps<TRow>,
   { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
@@ -130,7 +154,7 @@ export async function closeConversationInSessionWith<TRow extends ConversationCl
       // AFTER the write, and only on the branch that wrote. Announcing beside
       // the call would announce the refusals too, which is the failure mode
       // that reads as "the row vanished and came back".
-      deps.announceClosed(row);
+      announceWithoutUnsucceeding(() => deps.announceClosed(row));
       return 'closed';
     // "This workspace does not hold that thread" and "the tree would not take
     // the removal" collapse to one answer, the same shape a nonexistent id gets.

@@ -33,6 +33,7 @@ import {
   memberNode,
   type MembershipResult,
 } from '../workspace-membership';
+import { seedRoot } from '../workspace-node-commands';
 import { applyNodeWrite } from '../workspace-node-algebra';
 import { validateTree } from '../workspace-node-validate';
 import {
@@ -85,23 +86,44 @@ function atCapacity(count = MAX_SESSION_CONVERSATIONS): WorkspaceNode[] {
   return nodes;
 }
 
-const ids = { newNodeId: 'node-new', newSplitId: 'split-new', newRootId: 'root-new' };
+const ids = { newNodeId: 'node-new', newSplitId: 'split-new' };
 
 // ---------------------------------------------------------------------------
 // admit
 // ---------------------------------------------------------------------------
 
 describe('admit — the membership chokepoint', () => {
-  it('brings a workspace with NO TREE AT ALL into being in one write', () => {
+  it('brings a workspace with NO TREE AT ALL into being in one write — seeded, then admitted', () => {
     // A freshly spawned workspace has zero rows. If the root were a separate
     // write, the window between the two would be a workspace that exists
-    // holding nothing — the epic's headline production symptom.
-    const result = admit([], { ...ids, target: { kind: 'chat', id: 'conv-1' } });
+    // holding nothing — the epic's headline production symptom. That is still
+    // exactly one write; what moved is WHO CHOOSES THE ROOT'S ID.
+    //
+    // `admit` used to take a caller-supplied `newRootId` and mint the root
+    // itself. Both production callers passed `createId()`, so two first
+    // admissions racing each other proposed two different roots and the
+    // single-root index arbitrated. `seedRoot` derives the id from the
+    // workspace instead, so racing seeds propose the SAME root and converge on
+    // the upsert — and `commitUnderLock` runs it before the producer, putting
+    // the seed at the head of the same `put`. One write, one root, no race.
+    const workspaceId = 'ws-fresh';
+    const { nodes: seated, seed } = seedRoot([], workspaceId);
+    expect(seed).not.toBeNull();
 
-    const next = applied([], result);
-    expect(rootOf(next)?.id).toBe('root-new');
+    const result = admit(seated, { ...ids, target: { kind: 'chat', id: 'conv-1' } });
+    const next = applied(seated, result);
+
+    expect(rootOf(next)?.id).toBe(seed?.id);
     expect(chatMembers(next)).toEqual(['conv-1']);
-    expect(memberNode(next, { kind: 'chat', id: 'conv-1' })?.parentId).toBe('root-new');
+    expect(memberNode(next, { kind: 'chat', id: 'conv-1' })?.parentId).toBe(seed?.id);
+  });
+
+  it('two clients seeding the same fresh workspace propose the IDENTICAL root', () => {
+    // The property the derivation buys, stated directly: this is what a caller
+    // -chosen `createId()` could not give, and the reason `admit` no longer
+    // takes one. Converges on the upsert instead of colliding on the index.
+    expect(seedRoot([], 'ws-fresh').seed?.id).toBe(seedRoot([], 'ws-fresh').seed?.id);
+    expect(seedRoot([], 'ws-a').seed?.id).not.toBe(seedRoot([], 'ws-b').seed?.id);
   });
 
   it('PLACES every admission — there is no parked half-membership to choose', () => {

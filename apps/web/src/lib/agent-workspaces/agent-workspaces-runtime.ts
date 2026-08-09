@@ -287,7 +287,6 @@ async function admitConversationNode(input: {
         // optimistically.
         newNodeId: createId(),
         newSplitId: createId(),
-        newRootId: createId(),
         ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
       }),
     ...(input.within === undefined ? {} : { within: input.within }),
@@ -587,7 +586,12 @@ export async function reopenConversationInSession(input: {
             return 'readmitted';
           case 'already_a_member':
             return 'already_attached';
+          // Kept distinct through the wiring. Folding it into `refused` here is
+          // what made the caller hear `not_in_session` for a thread that is a
+          // member of nothing only because the workspace is one slot short —
+          // the one refusal on this path a user can actually resolve.
           case 'session_full':
+            return 'session_full';
           case 'bound_elsewhere':
           case 'refused':
             return 'refused';

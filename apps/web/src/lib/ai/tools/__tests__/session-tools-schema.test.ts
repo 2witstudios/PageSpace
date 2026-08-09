@@ -207,14 +207,19 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       //
       // RE-PINNED, deliberately, by the node-model cutover. The layout stopped
       // being two levels of furniture (columns of panes) and became ONE FLAT
-      // TREE in which `parentId` decides both where a node sits and whether it
-      // is on screen at all. Keeping `columnId` on the wire would have meant
-      // either lying to the model about a structure the server no longer has,
-      // or projecting the tree back into columns — which is lossy the moment a
-      // split nests, and lossy in exactly the direction that makes a rearrange
-      // address the wrong rectangle. So there is one address now, a nodeId, and
-      // `toParentId: null` is how a pane is closed: parked, in the workspace
-      // and out of the layout, which is a state the old wire could not spell.
+      // TREE in which `parentId` says where a node sits. Keeping `columnId` on
+      // the wire would have meant either lying to the model about a structure
+      // the server no longer has, or projecting the tree back into columns —
+      // which is lossy the moment a split nests, and lossy in exactly the
+      // direction that makes a rearrange address the wrong rectangle. So there
+      // is one address now: a nodeId.
+      //
+      // `parentId` does NOT also say whether a node is on screen. Only the root
+      // is parentless; `move_pane` requires a real container, and `close_pane`
+      // REMOVES a pane from the workspace. An earlier cut of this comment
+      // described `toParentId: null` as parking a pane "in the workspace and
+      // out of the layout" — the two-structure state this epic deleted, and the
+      // last place it survived was a description a model reads as the spec.
       list_panes: {
         description:
           'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). Only the root has a null parentId; every pane is on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',

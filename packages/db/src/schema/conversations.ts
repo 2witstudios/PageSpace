@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from '
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
+import { agentWorkspaces } from './agent-workspaces';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -15,21 +16,21 @@ export const conversations = pgTable('conversations', {
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
   /*
-   * `workspaceId` USED TO BE HERE, and `closedInWorkspaceAt` below it. They
-   * were the OTHER half of a workspace's membership — one column saying which
-   * workspace held a thread, another saying whether it was still in that
-   * workspace's listing — while the pane rows said where it was on screen. Two
-   * structures for one fact, reconciled by convention, which is what this epic
-   * exists to delete.
+   * STILL HERE, AND DELIBERATELY. These two columns are the OTHER half of a
+   * workspace's membership — one saying which workspace held a thread, the
+   * other whether it was still in that workspace's listing — while the pane
+   * rows said where it was on screen. Two structures for one fact, which is
+   * what this epic deletes.
    *
-   * Membership is a row in `agent_workspace_nodes`: a conversation is IN a
-   * workspace exactly when a node of that workspace's tree is bound to it, and
-   * the table's global `UNIQUE (targetId) WHERE targetKind = 'chat'` states
-   * "a thread has one workspace" as a constraint rather than as a WHERE clause
-   * a future writer could forget. The reads that used these columns are
-   * `findChatMembership` / `findWorkspaceOfChat` / `countChatMembers`
-   * (`@pagespace/lib/services/agent-workspaces/workspace-membership-store`).
+   * Nothing writes them any more; membership is a node in
+   * `agent_workspace_nodes`. They are NOT dropped here because the drop is a
+   * separately deployable stage: `runMigrations` applies every pending
+   * migration in one invocation, so a drop registered beside 0255 would run
+   * before the backfill that gives those rows a second home could possibly be
+   * executed. They go in a follow-up, after the backfill has run.
    */
+  workspaceId: text('workspaceId').references(() => agentWorkspaces.id, { onDelete: 'set null' }),
+  closedInWorkspaceAt: timestamp('closedInWorkspaceAt', { mode: 'date' }),
   /**
    * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
    * `POST /api/v1/conversations` mints for pagespace-cli and other
@@ -117,6 +118,7 @@ export const conversations = pgTable('conversations', {
   isActive: boolean('isActive').default(true).notNull(),
   isShared: boolean('isShared').default(false).notNull(),
 }, (table) => ({
+  workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
   userIdx: index('conversations_user_id_idx').on(table.userId),
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),

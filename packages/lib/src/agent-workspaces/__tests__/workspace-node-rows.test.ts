@@ -716,3 +716,25 @@ describe('nodes the ALGEBRA built ⟷ rows', () => {
     }
   });
 });
+
+describe('a whitespace-only id is not an id', () => {
+  // `z.string().min(1)` is satisfied by '   '. The algebra learned this the
+  // expensive way — `create` and `bind` use `trim()` because a blank id reached
+  // Postgres once and made a workspace permanently unreadable. The row parse is
+  // the OTHER door onto the same table and was still using the length check.
+  // Everything below fails closed downstream (`blank_id`, or `dangling_parent`
+  // for a parent nothing resolves), so this is the parse refusing earlier
+  // rather than a hole being closed — but two doors onto one table should not
+  // disagree about what an id is.
+  it('should refuse a whitespace-only node id', () => {
+    expect(() => nodeFromRow(paneRow({ id: '   ' }))).toThrow();
+  });
+
+  it('should refuse a whitespace-only parentId', () => {
+    expect(() => nodeFromRow(paneRow({ parentId: '   ' }))).toThrow();
+  });
+
+  it('should refuse a whitespace-only targetId', () => {
+    expect(() => nodeFromRow(paneRow({ targetKind: 'chat', targetId: '   ' }))).toThrow();
+  });
+});

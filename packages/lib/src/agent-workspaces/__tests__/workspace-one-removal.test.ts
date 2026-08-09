@@ -222,7 +222,6 @@ describe('membership has no unplaced state', () => {
       target: { kind: 'chat', id: 'conv-new' },
       newNodeId: 'pane-new',
       newSplitId: 'split-new',
-      newRootId: 'root-new',
     });
     expectOk(result);
     const minted = result.write.put.find(
@@ -232,16 +231,25 @@ describe('membership has no unplaced state', () => {
     expect(minted?.parentId).not.toBeNull();
   });
 
-  it('admit into an EMPTY workspace mints the root and seats the newcomer under it', () => {
+  it('admit into an EMPTY workspace REFUSES rather than minting a root of its own', () => {
+    // The inverse of what this pinned before, and the inversion is the fix.
+    // `admit` used to take a caller-chosen `newRootId` and mint the tree here;
+    // both production callers chose `createId()`, so two first admissions
+    // racing each other proposed two DIFFERENT roots and the single-root index
+    // picked a loser. Seeding moved to `seedRoot`, which derives the id from
+    // the workspace inside the same locked transaction, so racing seeds now
+    // produce an identical write and converge on the upsert.
+    //
+    // `admit` cannot do that derivation without being handed a workspaceId, and
+    // the pure model deliberately has no such thing — a node list with nothing
+    // to point across with is what makes a cross-workspace parent unspellable.
+    // So it refuses, and `commitUnderLock` makes sure it is never asked.
     const result = admit([], {
       target: { kind: 'chat', id: 'conv-new' },
       newNodeId: 'pane-new',
       newSplitId: 'split-new',
-      newRootId: 'root-new',
     });
-    expectOk(result);
-    const minted = result.write.put.find((node) => node.id === 'pane-new');
-    expect(minted?.parentId).toBe('root-new');
+    expect(result).toMatchObject({ ok: false, code: 'no_root' });
   });
 
   it('expel removes the member entirely — there is no parked half-membership', () => {

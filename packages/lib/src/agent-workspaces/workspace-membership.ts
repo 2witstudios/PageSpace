@@ -154,27 +154,12 @@ export interface AdmitInput {
   newNodeId: string;
   /** The container minted if an attached placement has to split. */
   newSplitId: string;
-  /**
-   * The root minted if this workspace has no tree at all.
-   *
-   * A freshly spawned workspace has ZERO rows — `validateTree` calls an empty
-   * list `no_root`, so the first membership write is also the write that brings
-   * the tree into being. Making that a separate act would reintroduce the
-   * moment where the first landed and the second did not, which is the state
-   * this epic is deleting.
-   */
-  newRootId: string;
   /** The split's direction when the placement comes to that. */
   axis?: NodeAxis;
   /** Where the user is looking — a preference, honoured only if it resolves. */
   activeNodeId?: string;
   /** The invoking conversation: never evicted by the thing it spawned. */
   excludeTargetId?: string;
-}
-
-/** A root that holds nothing: the tree a workspace is born with. */
-function newRoot(id: string, axis: NodeAxis): RootNode {
-  return { nodeType: 'root', id, parentId: null, position: 0, axis };
 }
 
 /** A step that writes exactly what it is given — for the one node no operation mints. */
@@ -240,7 +225,7 @@ function place(
  * arrived and must not be refused by the ceiling it is already inside.
  */
 export function admit(nodes: readonly WorkspaceNode[], input: AdmitInput): MembershipResult {
-  const { target, newNodeId, newRootId } = input;
+  const { target, newNodeId } = input;
 
   if (memberNode(nodes, target) !== undefined) return NOTHING;
 
@@ -251,16 +236,30 @@ export function admit(nodes: readonly WorkspaceNode[], input: AdmitInput): Membe
     );
   }
 
-  const root = rootOf(nodes);
-  if (root === undefined) {
-    // The workspace has no tree yet, so this write is both. There is no grid to
-    // apply a placement policy to — the newcomer is the first thing in it — so
-    // it goes straight under the root this same write mints.
-    const axis = input.axis ?? 'row';
-    return compile(nodes, [
-      staged({ put: [newRoot(newRootId, axis)], drop: [] }),
-      (current) => create(current, { nodeId: newNodeId, target, parentId: newRootId, index: 0 }),
-    ]);
+  /*
+   * ADMIT DOES NOT MINT A ROOT, and that is a deliberate narrowing.
+   *
+   * It used to: a caller passed a `newRootId` and a rootless workspace got its
+   * tree from the same write that admitted its first member. That made the root
+   * id a CALLER's choice, and both production callers chose `createId()` — so
+   * two first admissions racing each other proposed two different roots, and
+   * the single-root index decided which one lost.
+   *
+   * Nothing about the workspace made those two writes disagree; only the ids
+   * did. `seedRoot` (in `workspace-node-commands.ts`) mints the root from
+   * `rootSeedFor(workspaceId)` instead, inside the same locked transaction that
+   * reads the tree, so two racing seeds produce the IDENTICAL write and
+   * converge through the upsert rather than colliding. `commitUnderLock` runs it
+   * before every producer, which is why a rootless tree no longer reaches here.
+   *
+   * The alternative — teach `admit` the same derivation — would mean handing a
+   * `workspaceId` to the pure model, and the model's whole defence against a
+   * pane relocating into another workspace is that it has NOTHING to point
+   * across with. Refusing is the honest answer for a layer that cannot name the
+   * workspace it is in.
+   */
+  if (rootOf(nodes) === undefined) {
+    return refuse('no_root', 'this workspace has no tree to admit anything into');
   }
 
   return place(nodes, target, input);
