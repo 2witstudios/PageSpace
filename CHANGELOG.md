@@ -7,6 +7,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Opening a conversation that is already open in another session says so, instead of leaving a
+  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
+  another session already holds used to fail as a server error. The pane you had just opened stayed
+  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
+  now refused properly and the layout corrects itself straight away.
 - **Panes and sidebars no longer sit blank while the messages are right there in the database** —
   every surface used to keep its own private copy of a conversation and its own theory of when to
   refresh, so a message written from one surface could stay invisible in another until you

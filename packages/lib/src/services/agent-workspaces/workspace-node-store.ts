@@ -1,8 +1,9 @@
 /**
- * The node model's DB shell: ONE read, ONE write, and no decisions.
+ * The node model's DB shell: THE read, THE write, and no decisions.
  *
  * Successor to `workspace-layout-store.ts`, and deliberately smaller than it.
- * That store had six methods; this has two, and the difference is not tidiness:
+ * That store had six methods; this has three, and the difference is not
+ * tidiness:
  *
  *  * `getWorkspaceGrid` + `currentRev` are GONE, not renamed. They were two
  *    queries answering one question, and {@link readWorkspaceNodeSnapshots}
@@ -15,6 +16,16 @@
  *    primitive here is an UPSERT of a node set, so a retried POST re-applies to
  *    the same state and an idempotency memory has nothing left to remember.
  *
+ * **The third method is not a second reader of a workspace.**
+ * {@link readChatTargetHolders} asks the ONE question a workspace's own rows
+ * cannot answer: `agent_workspace_nodes_chat_target_idx` is keyed on `targetId`
+ * alone, with no `rootId` in it, so a conversation already bound in ANOTHER
+ * workspace is invisible to every read above and to `validateTree` alike. It is
+ * the runtime counterpart of the arbitration the backfill already performs
+ * across the whole table (`resolveChatClaims`), and it lives here because this
+ * module owns the node table. It still decides nothing — what the rows MEAN is
+ * `../../agent-workspaces/workspace-node-chat-binding.ts`'s business.
+ *
  * **The lock is deliberately the OLD one.** `withWorkspaceLayoutLock` is
  * imported rather than re-cut, so a node write and a legacy verb write for the
  * same workspace serialize against EACH OTHER for the whole of the migration
@@ -26,6 +37,7 @@
 import { z } from 'zod';
 import { and, eq, inArray, sql, type SQL } from '@pagespace/db/operators';
 import { readFraction } from '../../agent-workspaces/workspace-layout-verbs';
+import type { ChatTargetHolder } from '../../agent-workspaces/workspace-node-chat-binding';
 import type { WorkspaceNode } from '../../agent-workspaces/workspace-node';
 import { nodesFromRows, rowFromNode, type WorkspaceNodeRow } from '../../agent-workspaces/workspace-node-rows';
 import type { PersistedNodeWrite } from '../../agent-workspaces/workspace-node-write';
@@ -220,6 +232,63 @@ export async function readWorkspaceNodeSnapshot(
 ): Promise<WorkspaceNodeSnapshot> {
   const snapshots = await readWorkspaceNodeSnapshots(executor, [workspaceId]);
   return snapshots.get(workspaceId) ?? { rev: 0, nodes: [] };
+}
+
+/**
+ * WHO ELSE HOLDS THESE CONVERSATIONS — across the WHOLE table, not one
+ * workspace.
+ *
+ * The one query in this module that is deliberately unscoped by `rootId`,
+ * because the constraint it stands in front of is:
+ * `UNIQUE (targetId) WHERE targetKind = 'chat'` has no `rootId` in its key, so
+ * "is this conversation free to bind" is not a question a workspace's own rows
+ * can be asked. Mirrors `loadClaimedChatTargets` in
+ * `scripts/backfill-agent-workspace-nodes.ts`, which asks the identical
+ * question of the identical index for historical rows — one shape, two
+ * callers, rather than a second way of asking.
+ *
+ * It returns the HOLDER, not a boolean: the caller has to tell "held here" from
+ * "held elsewhere", and that discrimination belongs in
+ * {@link conflictingChatTargets} where it can be read, not in a `where` clause
+ * where it cannot.
+ *
+ * Unchunked, unlike the backfill's version, and the difference is a real bound
+ * rather than an oversight: a write payload is capped at `MAX_NODES` (2048) by
+ * the wire schema, so the `IN` list has a ceiling the migration's full-table
+ * sweep does not have.
+ *
+ * Takes the caller's executor so the lookup runs on the transaction that will
+ * do the write, rather than reaching past it for a second pooled connection
+ * while that transaction holds the workspace's advisory lock.
+ */
+export async function readChatTargetHolders(
+  executor: DbExecutor,
+  targetIds: readonly string[],
+): Promise<ChatTargetHolder[]> {
+  if (targetIds.length === 0) return [];
+  const { agentWorkspaceNodes } = await import('@pagespace/db/schema/agent-workspace-nodes');
+
+  const rows = await executor
+    .select({
+      rootId: agentWorkspaceNodes.rootId,
+      nodeId: agentWorkspaceNodes.id,
+      targetId: agentWorkspaceNodes.targetId,
+    })
+    .from(agentWorkspaceNodes)
+    .where(
+      and(
+        eq(agentWorkspaceNodes.targetKind, 'chat'),
+        inArray(agentWorkspaceNodes.targetId, [...targetIds]),
+      ),
+    );
+
+  // `targetId` is a nullable column, so the row type is nullable however
+  // impossible the predicate makes it. Narrowed by filtering rather than by a
+  // cast, for the reason this whole model states everywhere else: a cast is a
+  // lie the type checker vouches for.
+  return rows.flatMap((row) =>
+    row.targetId === null ? [] : [{ rootId: row.rootId, nodeId: row.nodeId, targetId: row.targetId }],
+  );
 }
 
 /**

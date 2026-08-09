@@ -74,6 +74,14 @@ export async function applyLayoutCommandForWorkspace(input: {
     const result = await applyWorkspaceNodeCommand(input);
     if (result.status === 'ok') return { ok: true, changed: result.changed };
     if (result.status === 'refused') return { ok: false, reason: result.code };
+    // A conversation already shown by a node in ANOTHER workspace. Reported by
+    // its code like any other refusal — a tool caller has no snapshot to rebase
+    // onto (it holds none; the command was resolved under the lock), so the
+    // rebase body the HTTP route needs is not something this path can use. It
+    // is named rather than falling through, because the fall-through below says
+    // `stale`, and reporting a real domain refusal as a contended workspace
+    // would send an agent retrying a write that can never succeed.
+    if (result.status === 'conflict') return { ok: false, reason: result.code };
     // Unreachable: a command's `baseRev` IS the rev the lock read, so there is
     // no snapshot for it to be stale against. Named rather than collapsed into
     // the refusal above, because a `stale` arriving here would mean the funnel

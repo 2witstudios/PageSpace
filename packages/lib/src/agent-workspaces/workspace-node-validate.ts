@@ -13,12 +13,19 @@
  * here re-checks them.
  *
  * With ONE deliberate exception, stated last: a conversation is bound to at
- * most one node. That is a domain rule rather than a structural one, and it is
- * here because it is a property of a SET of nodes that the TABLE also enforces
- * (`UNIQUE (targetId) WHERE targetKind = 'chat'`) — and this function is what
- * runs before every write. A rule the storage refuses and the model permits is
- * a rejection the client can only receive as a raw constraint error, too late
- * to do anything with.
+ * most one node OF THIS SET. That is a domain rule rather than a structural
+ * one, and it is here because it is a property of a SET of nodes that the TABLE
+ * also enforces (`UNIQUE (targetId) WHERE targetKind = 'chat'`) — and this
+ * function is what runs before every write. A rule the storage refuses and the
+ * model permits is a rejection the client can only receive as a raw constraint
+ * error, too late to do anything with.
+ *
+ * That exception is also the one check here that does NOT cover its constraint
+ * completely, and the check's own comment says where the rest lives. The index
+ * is keyed on `targetId` alone — no `rootId` — so it is global, while this
+ * function's input is one workspace. Every OTHER constraint on the node table
+ * carries `rootId`, which is exactly why one workspace's list is enough to
+ * settle them.
  *
  * **It validates and never repairs.** The only outputs are `ok: true` and a
  * violation; there is no branch anywhere below that reassigns a `parentId`,
@@ -404,18 +411,37 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     }
   }
 
-  // A conversation is bound to at most ONE node, anywhere — the model's side of
-  // `UNIQUE (targetId) WHERE targetKind = 'chat'`. A conversation belongs to
-  // exactly one workspace (`conversations.workspaceId`, permanent — moving a
-  // thread is a FORK, never a rebind), so one conversation → one workspace → at
-  // most one pane, and a set naming it twice is a set the storage refuses.
+  // A conversation is bound to at most one node IN THIS SET — the part of
+  // `UNIQUE (targetId) WHERE targetKind = 'chat'` a set of nodes can settle.
   //
-  // It lives here, and not only in `bind`/`create`, because THIS is what every
-  // write path runs. The wire primitive is an upsert of a node SET, so a client
-  // that assembled its own nodes never goes through the algebra's operations —
-  // and without this the duplicate would be learned from a raw index violation,
-  // after the optimistic edit is already on screen and in a form the client
-  // cannot interpret. It is the same rule stated where the write can see it.
+  // **AND THAT IS NOT THE WHOLE INDEX.** Its key is `targetId` ALONE, with no
+  // `rootId` in it, so it is global: one conversation, one node, across the
+  // entire table. This function is handed ONE workspace's list, so a node in
+  // another workspace holding the same conversation is not something it fails to
+  // notice — it is something the input does not contain. The rest of the rule is
+  // closed at the write path, where the table is: a pre-flight lookup and a
+  // catch on the constraint by name, both in
+  // `apps/web/src/lib/agent-workspaces/workspace-node-runtime.ts`, over
+  // `workspace-node-chat-binding.ts`.
+  //
+  // It would be easy to write the missing half off as unreachable, on the
+  // grounds that a conversation belongs to exactly one workspace
+  // (`conversations.workspaceId`, permanent — moving a thread is a FORK, never a
+  // rebind). It is not: this branch's own backfill says so in as many words
+  // ("a pane naming a conversation in another session is reachable today",
+  // `workspace-node-backfill.ts`), which is why that migration has to arbitrate
+  // chat claims globally. A pane's target is free-form in the payload and is not
+  // held to `conversations.workspaceId` by anything.
+  //
+  // DO NOT close the gap by giving this function IO. It is pure and it runs on
+  // the client, and a global fact is not one an offline reducer can be handed.
+  //
+  // The within-set half lives here, and not only in `bind`/`create`, because
+  // THIS is what every write path runs. The wire primitive is an upsert of a
+  // node SET, so a client that assembled its own nodes never goes through the
+  // algebra's operations — and without this the duplicate would be learned from
+  // a raw index violation, after the optimistic edit is already on screen and in
+  // a form the client cannot interpret.
   //
   // LAST, and deliberately: it is the only DOMAIN invariant in a function whose
   // others are all structural, and a tree that is also misnumbered or cyclic has
