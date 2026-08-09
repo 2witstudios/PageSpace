@@ -1,3 +1,13 @@
+/**
+ * The two agent-workspace contracts that outlive the layout model:
+ * `session-contract.ts` (session identity + sandbox lifecycle) and
+ * `shells-contract.ts` (shells and the shell bridge).
+ *
+ * This file was `contract.test.ts`, covering all three concerns the one-time
+ * `contract.ts` grab-bag held. The third — the pane grid's wire shape
+ * (`PANE_KINDS`, `paneScopeSchema`, the `persisted*` family) — is gone with the
+ * model it described, and so are its cases.
+ */
 import { describe, it, expect } from 'vitest';
 import { ZodError } from 'zod';
 import { SANDBOX_STATUSES, sandboxStatusSchema, agentSessionDtoSchema } from '../session-contract';
@@ -16,13 +26,6 @@ import {
   MAX_SHELL_INPUT_BYTES,
   MAX_SCROLLBACK_TAIL_LINES,
 } from '../shells-contract';
-import {
-  PANE_KINDS,
-  paneScopeSchema,
-  persistedPaneStateSchema,
-  persistedColumnStateSchema,
-  persistedWorkspaceStateSchema,
-} from '../contract';
 
 const session = {
   workspaceId: 'ses-1',
@@ -276,122 +279,5 @@ describe('shellSendPayloadSchema', () => {
     expect(
       shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '€'.repeat(1366) }).success,
     ).toBe(false);
-  });
-});
-
-describe('paneScopeSchema', () => {
-  it('should offer every surface — a pane that can only be a terminal makes panes pointless', () => {
-    // The regression this guards: `SHELL_AGENT_TYPES` being PTY-only was read as
-    // "the whole pane surface is PTY-only", which removed the ability to open an
-    // agent conversation in a pane and left splitting with nothing to split into.
-    // `'page'` extends this the same way: a page pane addresses an existing
-    // PageSpace page directly, so a pane surface still isn't just PTY-only.
-    expect([...PANE_KINDS].sort()).toEqual(['chat', 'page', 'terminal']);
-  });
-
-  it('should bind a chat pane to a conversation and its agent', () => {
-    const parsed = paneScopeSchema.parse({
-      kind: 'chat',
-      name: 'Planning',
-      targetId: 'conv-1',
-      agentPageId: 'page-1',
-    });
-    expect(parsed).toEqual({ kind: 'chat', name: 'Planning', targetId: 'conv-1', agentPageId: 'page-1' });
-  });
-
-  it('should allow a null agentPageId — a global-assistant conversation has no agent page', () => {
-    expect(
-      paneScopeSchema.safeParse({ kind: 'chat', name: 'Assistant', targetId: 'conv-2', agentPageId: null }).success,
-    ).toBe(true);
-  });
-
-  it('should let two panes name different agents, so one grid holds several side by side', () => {
-    const left = paneScopeSchema.parse({ kind: 'chat', name: 'A', targetId: 'conv-a', agentPageId: 'agent-a' });
-    const right = paneScopeSchema.parse({ kind: 'chat', name: 'B', targetId: 'conv-b', agentPageId: 'agent-b' });
-    expect(left.agentPageId).not.toBe(right.agentPageId);
-  });
-
-  it('should accept a null targetId — the picker chose a kind before the row exists', () => {
-    expect(
-      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: null, agentPageId: null }).success,
-    ).toBe(true);
-  });
-
-  it('should reject an empty targetId — absent is a state, blank is a bug', () => {
-    expect(
-      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: '', agentPageId: null }).success,
-    ).toBe(false);
-  });
-
-  it('should reject an unknown kind', () => {
-    expect(
-      paneScopeSchema.safeParse({ kind: 'pagespace', name: 'x', targetId: 'c1', agentPageId: null }).success,
-    ).toBe(false);
-  });
-});
-
-const chatScope = (targetId: string, agentPageId: string | null = null) =>
-  paneScopeSchema.parse({ kind: 'chat', name: 'Conversation', targetId, agentPageId });
-
-describe('persistedPaneStateSchema', () => {
-  it('should parse a pane with just an id and a scope', () => {
-    const active = chatScope('conv-1', 'agent-a');
-    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active });
-    expect(parsed).toEqual({ id: 'pane-1', scope: active });
-  });
-
-  it('given a grid saved before pane tabs were removed (a tabs array on the pane), should parse it and drop tabs from the result', () => {
-    const active = chatScope('conv-1', 'agent-a');
-    const background = chatScope('conv-2', 'agent-b');
-    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active, tabs: [active, background] });
-    expect(parsed).toEqual({ id: 'pane-1', scope: active });
-    expect(parsed).not.toHaveProperty('tabs');
-  });
-
-  it('should reject an empty pane id', () => {
-    expect(persistedPaneStateSchema.safeParse({ id: '', scope: null }).success).toBe(false);
-  });
-});
-
-describe('persistedColumnStateSchema', () => {
-  it('should require at least one pane — a column is never empty', () => {
-    expect(persistedColumnStateSchema.safeParse({ id: 'col-1', panes: [] }).success).toBe(false);
-  });
-
-  it('should parse a column with panes', () => {
-    const parsed = persistedColumnStateSchema.parse({
-      id: 'col-1',
-      panes: [{ id: 'pane-1', scope: null }],
-    });
-    expect(parsed.panes).toHaveLength(1);
-  });
-});
-
-describe('persistedWorkspaceStateSchema', () => {
-  const workspace = {
-    id: 'ses-1',
-    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-1') }] }],
-    activePaneId: 'pane-1',
-    pendingPickerPaneId: null,
-  };
-
-  it('given a well-formed grid, should parse', () => {
-    expect(persistedWorkspaceStateSchema.parse(workspace)).toEqual(workspace);
-  });
-
-  it('should require at least one column — a grid is never empty', () => {
-    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, columns: [] }).success).toBe(false);
-  });
-
-  it('should allow a null pendingPickerPaneId', () => {
-    expect(persistedWorkspaceStateSchema.parse(workspace).pendingPickerPaneId).toBeNull();
-  });
-
-  it('should reject an empty activePaneId', () => {
-    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, activePaneId: '' }).success).toBe(false);
-  });
-
-  it('should reject an empty-string pendingPickerPaneId — same non-empty rule as every other pane id', () => {
-    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, pendingPickerPaneId: '' }).success).toBe(false);
   });
 });

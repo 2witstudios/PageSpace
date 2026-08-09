@@ -24,11 +24,16 @@
  *   ROOM — the directory plane, `directoryRoomsFor`: always the owner's
  *   `user:<ownerId>:sessions`, PLUS the bare page room when the conversation
  *   is `isShared` AND page-scoped. Never `conv:<id>` (content plane) and never
- *   `session:<workspaceId>` — the workspace is a payload FIELD here, not a room.
+ *   `session:<workspaceId>` — a conversation's workspace is not this plane's
+ *   business at all.
  *
- *   PAYLOAD — `{ conversationId, rev, scope, workspaceId, triggeredBy,
- *   conversation: { id, title, type, contextId, workspaceId, isShared,
- *   createdAt, lastMessageAt } }`. `rev` must be a NUMBER on the wire: the
+ *   PAYLOAD — `{ conversationId, rev, scope, triggeredBy,
+ *   conversation: { id, title, type, contextId, isShared,
+ *   createdAt, lastMessageAt } }`. **No `workspaceId` on either level**: it was
+ *   a `conversations` column, it is now an `agent_workspace_nodes` row, and the
+ *   write that creates that row broadcasts `workspace:nodes-updated` rather
+ *   than folding a workspace into a conversation's birth. `rev` must be a
+ *   NUMBER on the wire: the
  *   column is `bigint`, every call site launders it through `Number(...)`, and
  *   a string/bigint leaking out would silently break the subscriber's
  *   `rev === watermark + 1` arithmetic.
@@ -42,9 +47,10 @@
  *   4. `createWorkerSession` — the epic-central spawn — which owns no INSERT
  *      of its own: it funnels through `createConversationInSession` →
  *      `createConversationInSessionWith`, which calls (3) for a global worker
- *      (`agentPageId === null`) and (1) for a page-agent worker, then binds
- *      the workspace with a SEPARATE `conversation:updated` (the claim). Both
- *      legs are asserted below, including that follow-up binding event.
+ *      (`agentPageId === null`) and (1) for a page-agent worker, then admits it
+ *      into the workspace with a SEPARATE node write, which announces itself as
+ *      `workspace:nodes-updated`. Both legs are asserted below, including that
+ *      follow-up membership event.
  *
  * Requires DATABASE_URL → a Postgres with migrations applied. Deliberately
  * NOT skip-on-no-database: a suite that silently passes when it never ran is
@@ -222,7 +228,6 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       conversationId,
       rev: row.rev,
       scope: { kind: 'page', pageId: agentPage.id },
-      workspaceId: null,
       // No explicit actor → the server stamp, so no pane self-echo-skips it.
       triggeredBy: { userId: owner.id, browserSessionId: 'server' },
       conversation: {
@@ -230,7 +235,6 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
         title: 'Page thread',
         type: 'page',
         contextId: agentPage.id,
-        workspaceId: null,
         isShared: false,
         createdAt: row.createdAt.toISOString(),
         lastMessageAt: null,
@@ -290,14 +294,12 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       conversationId: created.id,
       rev: 0,
       scope: { kind: 'global', ownerId: owner.id },
-      workspaceId: null,
       triggeredBy: { userId: owner.id, browserSessionId: 'server' },
       conversation: {
         id: created.id,
         title: 'Global thread',
         type: 'global',
         contextId: null,
-        workspaceId: null,
         isShared: false,
         createdAt: created.createdAt.toISOString(),
         lastMessageAt: null,
@@ -325,14 +327,12 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       conversationId,
       rev: 0,
       scope: { kind: 'global', ownerId: owner.id },
-      workspaceId: null,
       triggeredBy: { userId: owner.id, browserSessionId: 'server' },
       conversation: {
         id: conversationId,
         title: 'Lazy global',
         type: 'global',
         contextId: null,
-        workspaceId: null,
         isShared: false,
         createdAt: first.conversation.createdAt.toISOString(),
         lastMessageAt: null,
@@ -386,20 +386,18 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       .where(eq(conversations.id, workerConversationId));
 
     // A global worker funnels through resolveOrCreateConversation, so the birth
-    // event is global-scoped and — because creation and binding are decoupled
-    // (workspaceId is written only by the claim) — carries workspaceId null.
+    // event is global-scoped — and names no workspace at all, because creation
+    // and membership are two writes and only the second one knows one.
     expect(captured.payload).toEqual({
       conversationId: workerConversationId,
       rev: 0,
       scope: { kind: 'global', ownerId: owner.id },
-      workspaceId: null,
       triggeredBy: { userId: owner.id, browserSessionId: 'server' },
       conversation: {
         id: workerConversationId,
         title: 'spawned worker',
         type: 'global',
         contextId: null,
-        workspaceId: null,
         isShared: false,
         createdAt: row.createdAt.toISOString(),
         lastMessageAt: null,
@@ -468,14 +466,12 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       conversationId: workerConversationId,
       rev: 0,
       scope: { kind: 'page', pageId: agentPage.id },
-      workspaceId: null,
       triggeredBy: { userId: owner.id, browserSessionId: 'server' },
       conversation: {
         id: workerConversationId,
         title: 'page worker',
         type: 'page',
         contextId: agentPage.id,
-        workspaceId: null,
         isShared: false,
         createdAt: row.createdAt.toISOString(),
         lastMessageAt: null,

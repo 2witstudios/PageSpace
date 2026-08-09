@@ -23,7 +23,7 @@
  */
 
 import { isUniqueViolation } from '../subdomain-allocation';
-import type { DbExecutor } from './workspace-layout-store';
+import type { DbExecutor } from './workspace-lock';
 
 /** One `agent_workspace_shells` row. `id` IS the shellId — the wire address. */
 export interface SessionShellRecord {

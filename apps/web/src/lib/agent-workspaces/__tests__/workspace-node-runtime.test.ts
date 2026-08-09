@@ -70,7 +70,7 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
     // runs INSIDE the lock deliberately, so the broadcast can reach the owner's
     // directory plane without a second query on the hot path. A `{}` here would
     // pass every rollback test and throw on every broadcast one.
-    withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => {
+    withWorkspaceLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => {
       const snapshot = {
         rev: store.rev,
         nodes: structuredClone(store.nodes),

@@ -2,7 +2,6 @@ import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from '
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
-import { agentWorkspaces } from './agent-workspaces';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -15,19 +14,22 @@ export const conversations = pgTable('conversations', {
   title: text('title'), // Auto-generated from first message or user-defined
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
-  /**
-   * The agent session (working context / sandbox) this thread lives in, or
-   * NULL for a plain chat with no session. The binding is write-once: set
-   * either at creation, or — for a conversation that has never had one — by
-   * exactly one guarded claim of the caller's own row
-   * (`conversationRepository.claimConversation`, `WHERE workspaceId IS NULL AND
-   * userId = :caller`; see `apps/web/src/lib/agent-workspaces/claim-conversation-in-workspace.ts`).
-   * It never re-points an already-bound row: a thread's history and its
-   * filesystem always agree, so moving a thread to another session is a
-   * fork, never a rebind. ON DELETE SET NULL: deleting a session keeps its
-   * threads as plain history (also reachable via the same claim path again).
+  /*
+   * `workspaceId` USED TO BE HERE, and `closedInWorkspaceAt` below it. They
+   * were the OTHER half of a workspace's membership — one column saying which
+   * workspace held a thread, another saying whether it was still in that
+   * workspace's listing — while the pane rows said where it was on screen. Two
+   * structures for one fact, reconciled by convention, which is what this epic
+   * exists to delete.
+   *
+   * Membership is a row in `agent_workspace_nodes`: a conversation is IN a
+   * workspace exactly when a node of that workspace's tree is bound to it, and
+   * the table's global `UNIQUE (targetId) WHERE targetKind = 'chat'` states
+   * "a thread has one workspace" as a constraint rather than as a WHERE clause
+   * a future writer could forget. The reads that used these columns are
+   * `findChatMembership` / `findWorkspaceOfChat` / `countChatMembers`
+   * (`@pagespace/lib/services/agent-workspaces/workspace-membership-store`).
    */
-  workspaceId: text('workspaceId').references(() => agentWorkspaces.id, { onDelete: 'set null' }),
   /**
    * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
    * `POST /api/v1/conversations` mints for pagespace-cli and other
@@ -56,9 +58,10 @@ export const conversations = pgTable('conversations', {
    * `POST /api/v1/chat/completions` against the thread claims it
    * (`conversationRepository.stampClientConversationPage`, `WHERE type='client'
    * AND "agentPageId" IS NULL`); later requests naming a different agent never
-   * re-point it, for the same reason `workspaceId` is write-once.
+   * re-point it — a thread's history and the agent that wrote it always agree,
+   * so re-homing one is a fork, never a rebind.
    *
-   * `ON DELETE SET NULL`, matching `workspaceId` and NOT the
+   * `ON DELETE SET NULL`, and NOT the
    * `chat_messages.pageId` cascade it replaces: this column must not become an
    * implicit deleter of `conversations` rows, because SET NULL is also what
    * makes a *soft*-deleted or moved page harmless.
@@ -79,15 +82,6 @@ export const conversations = pgTable('conversations', {
    * is defined exactly once.
    */
   agentPageId: text('agentPageId').references(() => pages.id, { onDelete: 'set null' }),
-  /**
-   * Stamped when this thread is closed OUT OF its session's listing — a fact
-   * separate from `isActive` (history soft-delete) on purpose: closing from
-   * the session must never touch history. NULL = open in the session's
-   * working set; set = closed from the listing (and, symmetrically, no
-   * longer counted against the session's conversation cap). Reopening is
-   * just clearing the stamp.
-   */
-  closedInWorkspaceAt: timestamp('closedInWorkspaceAt', { mode: 'date' }),
   /**
    * Monotonic per-conversation revision counter (Agent-Session Single Source
    * of Truth epic, Phase 2). Every committed message/conversation mutation
@@ -127,7 +121,6 @@ export const conversations = pgTable('conversations', {
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
-  workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
   planPageIdx: index('conversations_plan_page_id_idx').on(table.planPageId),
   /**
    * The `type='client'` half of `unifiedPageScope()`. Page-scoped reads join
@@ -251,10 +244,6 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   user: one(users, {
     fields: [conversations.userId],
     references: [users.id],
-  }),
-  workspace: one(agentWorkspaces, {
-    fields: [conversations.workspaceId],
-    references: [agentWorkspaces.id],
   }),
   planPage: one(pages, {
     fields: [conversations.planPageId],

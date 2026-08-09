@@ -1,22 +1,20 @@
 /**
- * MAY THIS CALLER BIND THIS TARGET INTO THIS GRID? (security review HIGH 1,
- * attack B.)
+ * MAY THIS CALLER BIND THIS TARGET INTO THIS WORKSPACE? (security review
+ * HIGH 1, attack B.)
  *
- * A layout verb's `scope` is caller-supplied: `workspaceLayoutVerbSchema`
- * validates that `ensure` / `assign_pane` / `open_conversation` /
- * `replace_conversation` carry a `{kind, targetId}`, and nothing more. The
- * verbs route checked only that the caller could reach the WORKSPACE, so any
- * authenticated user could create a workspace of their own, bind an arbitrary
- * conversation / shell / page id into it, and read the joined title back out
- * of the response grid — a title oracle (and an existence oracle) over
- * resources they have no access to whatsoever.
+ * A pane's target is caller-supplied: the write payload states a
+ * `{kind, targetId}` and nothing more. A route that checked only that the
+ * caller could reach the WORKSPACE would let any authenticated user create a
+ * workspace of their own, bind an arbitrary conversation / shell / page id into
+ * it, and read the joined title back out of the response — a title oracle (and
+ * an existence oracle) over resources they have no access to whatsoever.
  *
- * This is the WRITE half of the fix. The read half (`resolvePaneLabels` in
- * ./workspace-layout-runtime.ts) refuses to resolve a label the viewer has no
+ * This is the WRITE half of the fix. The read half (`resolveTargets` in
+ * ./workspace-node-runtime.ts) refuses to resolve a label the viewer has no
  * authority for, and is what actually stops the disclosure; this gate stops
- * the bad row from being written at all, which matters because a pane row
+ * the bad row from being written at all, which matters because a node row
  * outlives the request that created it and is re-read by every later viewer
- * of that grid.
+ * of that workspace.
  *
  * The two halves share ONE rule per kind, deliberately:
  *   - `page`     — the viewer must be able to view the page.
@@ -43,9 +41,7 @@ import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
-import type { PaneKind, PaneScope } from '@pagespace/lib/agent-workspaces/contract';
-import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { PaneTargetKind, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 
 /** The conversation facts the chat rule needs — a subset of a `conversations` row. */
 export interface PaneScopeConversationRow {
@@ -74,50 +70,6 @@ export interface PaneScopeAuthorityDeps {
 
 /** The slice of a Drizzle client the row lookups need — `db` and a transaction alike. */
 type PaneScopeExecutor = Pick<typeof db, 'select'>;
-
-/**
- * PURE: every pane scope a verb would bind. Exhaustive over the verb union by
- * construction — a new scope-carrying verb that is not listed here is a
- * compile error rather than a silently ungated write path.
- *
- * Every one of the twelve verbs is named, and the fall-through assigns to
- * `never`. A `default: return []` would have made the claim above false in the
- * most dangerous direction: a verb added to `workspaceLayoutVerbSchema` with a
- * `scope` would yield NO scopes here, so `authorizeVerbScopes` would wave it
- * through and the unauthorized pane row would be written. The read half
- * (`resolvePaneLabels`) would still redact the label, but the row outlives the
- * request. So the cost of forgetting must be a build failure, not a silent
- * hole — which means listing the scope-free verbs by name rather than letting
- * a default absorb them.
- */
-export function paneScopesOfVerb(verb: WorkspaceLayoutVerb): PaneScope[] {
-  switch (verb.type) {
-    // Scope-carrying: these are the write paths the gate exists for.
-    case 'ensure':
-    case 'assign_pane':
-    case 'open_conversation':
-    case 'replace_conversation':
-      return [verb.scope];
-
-    // Structural only — they move, size or clear panes that are already bound,
-    // and carry no target to authorize.
-    case 'split_right':
-    case 'split_down':
-    case 'close_pane':
-    case 'reset_pane':
-    case 'resize_column':
-    case 'resize_pane':
-    case 'move_pane':
-    case 'reorder_columns':
-      return [];
-
-    default: {
-      const _exhaustive: never = verb;
-      void _exhaustive;
-      return [];
-    }
-  }
-}
 
 /**
  * The production lookups, bound to an EXECUTOR.
@@ -168,17 +120,17 @@ export function paneScopeDeps(executor: PaneScopeExecutor = db): PaneScopeAuthor
 const defaultDeps: PaneScopeAuthorityDeps = paneScopeDeps();
 
 /**
- * The half of a `PaneScope` this gate actually reads.
+ * The half of a pane binding this gate actually reads.
  *
- * Narrowed to `{kind, targetId}` so the NODE model's `PaneTarget` — which
- * carries no display label, because a node's title is resolved beside the tree
- * rather than stored inside it — reaches the same gate as the verb model's
- * scope. One rule per kind, one implementation, two callers: the alternative was
- * a second copy of the chat containment rule for the node route, which is the
- * drift this epic exists to remove.
+ * `{kind, targetId}` and deliberately not `PaneTarget` itself: a `targetId` of
+ * `null` is an unbound pane, which the node model spells as `target: null` on
+ * the node rather than as a target with a null id. Widening here rather than
+ * narrowing at every call site keeps one rule per kind and one implementation
+ * of it — the alternative was a second copy of the chat containment rule, which
+ * is the drift this epic exists to remove.
  */
 export interface AuthorizablePaneTarget {
-  kind: PaneKind;
+  kind: PaneTargetKind;
   /** `null` is an unbound pane — nothing to resolve, so nothing to authorize. */
   targetId: string | null;
 }
@@ -263,25 +215,6 @@ export async function authorizePaneTargets(
   deps: PaneScopeAuthorityDeps = defaultDeps,
 ): Promise<boolean> {
   for (const scope of input.targets) {
-    const allowed = await authorizePaneScope(
-      { viewerId: input.viewerId, workspaceId: input.workspaceId, scope },
-      deps,
-    );
-    if (!allowed) return false;
-  }
-  return true;
-}
-
-/**
- * Authorize every scope a verb carries. `true` when the verb binds nothing —
- * a resize or a close has no target to check.
- */
-export async function authorizeVerbScopes(
-  input: { viewerId: string; workspaceId: string; verb: WorkspaceLayoutVerb },
-  deps: PaneScopeAuthorityDeps = defaultDeps,
-): Promise<boolean> {
-  const scopes = paneScopesOfVerb(input.verb);
-  for (const scope of scopes) {
     const allowed = await authorizePaneScope(
       { viewerId: input.viewerId, workspaceId: input.workspaceId, scope },
       deps,

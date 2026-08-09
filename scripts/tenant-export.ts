@@ -266,22 +266,32 @@ export async function exportData(
   ));
 
   /**
-   * Agent sessions — the working contexts the exported conversations are bound
-   * to (`conversations.workspaceId`).
+   * Agent sessions — the working contexts that HOLD the exported conversations.
    *
-   * Carried because the binding is otherwise unrecoverable: a session owns a
-   * thread's filesystem and its pane layout, and `workspaceId` is write-once by
-   * design (moving a thread is a fork, never a rebind), so a migration that
-   * drops it cannot be repaired afterwards. Only the sessions an exported
-   * conversation actually names are pulled — a session is never empty, so
-   * this is the whole set that matters — and only those whose `ownerId`
-   * (NOT NULL, FK'd) is already in the export. The Sprite-identity columns do
-   * NOT travel; see the exclusion allowlist in ./lib/tenant-export-columns.ts.
+   * "Hold" is a chat-bound `agent_workspace_nodes` row, not a column: this used
+   * to map `conversations.workspaceId` off the rows already in hand, and that
+   * column is dropped. It is a query now rather than a projection, which is the
+   * only real difference — the set it produces is the same one.
+   *
+   * Carried because a session owns a thread's filesystem, which is otherwise
+   * unrecoverable. Only the sessions an exported conversation is actually in
+   * are pulled, and only those whose `ownerId` (NOT NULL, FK'd) is already in
+   * the export. The Sprite-identity columns do NOT travel; see the exclusion
+   * allowlist in ./lib/tenant-export-columns.ts.
+   *
+   * NOTE, and it is the honest caveat on this whole block: the nodes THEMSELVES
+   * are not carried — `agent_workspace_nodes` is an undecided table in
+   * ./lib/tenant-export-columns.ts, with the reasoning recorded there. So the
+   * bundle carries the sessions and their threads, and the tenant rebuilds the
+   * membership rather than inheriting it.
    */
   const referencedSessionIds = new Set(
-    conversationsData
-      .map((r) => r.workspaceId as string | null)
-      .filter((id): id is string => Boolean(id)),
+    conversationIds.length > 0
+      ? (await queryRows(db, sql.raw(
+          `SELECT DISTINCT "rootId" FROM agent_workspace_nodes`
+          + ` WHERE "targetKind" = 'chat' AND "targetId" IN (${toSqlInList(conversationIds)})`,
+        ))).map((r) => r.rootId as string)
+      : [],
   );
   const agentSessionsDataRaw = referencedSessionIds.size > 0
     ? await queryRows(db, sql.raw(
@@ -295,10 +305,10 @@ export async function exportData(
   // outside this migration degrades to the same shape rather than dangling.
   nullifyOrphanedRefs(agentSessionsData, new Set(driveIds), 'driveId');
 
-  // Threads bound to a session that did not make the cut become plain history
-  // — exactly what `ON DELETE SET NULL` on this column already means.
+  // Threads whose session did not make the cut travel as plain history. There
+  // is nothing to null on them any more: membership was a node, the nodes are
+  // not carried, and a conversation row says nothing about a workspace.
   const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
-  nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'workspaceId');
 
   /**
    * The sessions' TERMINALS. Scoped to the sessions that survived the owner
@@ -413,8 +423,9 @@ export async function exportData(
     buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
     buildInsert('tags', cols('tags'), tagsData),
     buildInsert('page_tags', cols('page_tags'), pageTagsData),
-    // `agent_workspaces` precedes `conversations`: `conversations.workspaceId`
-    // FKs it, and a session row also needs its drive and owner, both above.
+    // `agent_workspaces` sits with `conversations` and before it by convention
+    // rather than by an FK now — nothing on a conversation row references a
+    // session. A session row still needs its drive and owner, both above.
     buildInsert('agent_workspaces', cols('agent_workspaces'), agentSessionsData),
     // Both of this table's FKs (`workspaceId`, `ownerId`) are NOT NULL, so it
     // must follow `agent_workspaces` and `users`. It does NOT have to precede

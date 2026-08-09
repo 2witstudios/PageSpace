@@ -91,8 +91,14 @@ export function conversationSelectionWhere(userInList: string, pageInList: strin
 }
 
 /**
- * The workspaces a bundle carries: owned by an exported user AND bound to one
+ * The workspaces a bundle carries: owned by an exported user AND holding one
  * of the exported conversations.
+ *
+ * "Holding" is a NODE, not a column. This read `conversations."workspaceId" IS
+ * NOT NULL` until that column was dropped; a thread is in a workspace exactly
+ * when a chat-bound row of `agent_workspace_nodes` names it, and the table's
+ * global `UNIQUE (targetId) WHERE targetKind = 'chat'` means the subselect
+ * yields at most one workspace per conversation by construction.
  *
  * `ownerInList` must be the set of ALL exported users — the requested ones plus
  * the conversation owners DISCOVERED by `conversationSelectionWhere`'s page
@@ -103,7 +109,8 @@ export function conversationSelectionWhere(userInList: string, pageInList: strin
  */
 export function workspaceSelectionWhere(ownerInList: string, conversationInList: string): string {
   return `"ownerId" IN (${ownerInList})`
-    + ` AND id IN (SELECT "workspaceId" FROM conversations WHERE id IN (${conversationInList}) AND "workspaceId" IS NOT NULL)`;
+    + ` AND id IN (SELECT "rootId" FROM agent_workspace_nodes`
+    + ` WHERE "targetKind" = 'chat' AND "targetId" IN (${conversationInList}))`;
 }
 
 /**

@@ -127,7 +127,7 @@ describe('useWorkspaceLayoutSync — room membership', () => {
   });
 });
 
-describe('useWorkspaceLayoutSync — workspace:updated', () => {
+describe('useWorkspaceLayoutSync — workspace:nodes-updated', () => {
   it('applies a payload addressed to THIS workspace', () => {
     renderHook(() => useWorkspaceLayoutSync(SESSION));
 

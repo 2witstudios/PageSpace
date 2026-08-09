@@ -64,10 +64,10 @@ import {
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
-import type { PaneKind } from '@pagespace/lib/agent-workspaces/contract';
 import type { SandboxStatus } from '@pagespace/lib/agent-workspaces/session-contract';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
-import { MAX_GRID_COLUMNS } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { PaneTargetKind } from '@pagespace/lib/agent-workspaces/workspace-node';
+import { MAX_SIBLINGS } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import type { ToolExecutionContext } from '../core/types';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
@@ -202,7 +202,7 @@ export const movePaneInputSchema = z
      */
     toParentId: z.string().min(1),
     /** 0-based slot in the destination. Omit to append. Out of range is REFUSED, never clamped. */
-    toIndex: z.number().int().min(0).max(MAX_GRID_COLUMNS).optional(),
+    toIndex: z.number().int().min(0).max(MAX_SIBLINGS).optional(),
   })
   .strict();
 
@@ -226,7 +226,7 @@ export const arrangePanesInputSchema = z
     /** The container whose children are being reordered. Omit for the root's own children. */
     parentId: z.string().min(1).optional(),
     /** nodeIds in the order you want. Unlisted children keep their order behind these. */
-    nodeIds: z.array(z.string().min(1)).min(1).max(MAX_GRID_COLUMNS),
+    nodeIds: z.array(z.string().min(1)).min(1).max(MAX_SIBLINGS),
   })
   .strict();
 
@@ -329,8 +329,8 @@ export interface WorkerRow {
    */
   workspaceId: string | null;
   /**
-   * The human closed this conversation's LISTING (`conversations.closedInWorkspaceAt`
-   * set) — it no longer shows in their sidebar, even though its history is
+   * The human closed this conversation out of its workspace — its node is
+   * gone, so it no longer shows in their sidebar, even though its history is
    * untouched. `openOwnSession` refuses on this: a worker verb must never
    * dispatch new work into, read, or kill a sibling the user has already
    * closed.
@@ -577,7 +577,7 @@ export interface PaneGridNodeEntry {
   /** A container's split direction; null on a pane. */
   axis: 'row' | 'column' | null;
   /** `'chat' | 'terminal' | 'page'`, or null for an unbound pane showing the picker. */
-  kind: PaneKind | null;
+  kind: PaneTargetKind | null;
   /** The conversationId / shellId / pageId this pane shows, or null when unbound. */
   targetId: string | null;
   /** Display label only — never an address. Empty when the target resolves to nothing. */

@@ -22,6 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-workspaces-store';
 
@@ -47,7 +48,39 @@ const sandboxIds = new Set<string>(['sbx-integration-outbox']);
 
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
-/** A session row (its own id), plus one conversation BOUND to it via conversations.workspaceId. */
+/**
+ * Bind a conversation into a workspace the way membership is expressed: a
+ * root, and a pane node under it whose chat target is the thread. This IS the
+ * binding — `conversations` carries no workspace column any more.
+ */
+async function bindConversation(workspaceId: string, conversationId: string): Promise<void> {
+  const now = new Date();
+  await db.insert(agentWorkspaceNodes).values([
+    {
+      id: `${workspaceId}-root`,
+      rootId: workspaceId,
+      parentId: null,
+      position: 0,
+      nodeType: 'root',
+      axis: 'row',
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: `${conversationId}-pane`,
+      rootId: workspaceId,
+      parentId: `${workspaceId}-root`,
+      position: 0,
+      nodeType: 'pane',
+      targetKind: 'chat',
+      targetId: conversationId,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ]).onConflictDoNothing();
+}
+
+/** A session row (its own id), plus one conversation BOUND to it by a chat node. */
 async function seedSession(
   over: Partial<{ sandboxId: string; spriteInstanceId: string | null; spriteTornDownAt: Date; endedAt: Date }> = {},
 ) {
@@ -72,8 +105,8 @@ async function seedSession(
     title: 'integration',
     type: 'page',
     contextId: agentPageId,
-    workspaceId,
   });
+  await bindConversation(workspaceId, conversationId);
   return workspaceId;
 }
 
@@ -134,8 +167,8 @@ describe('create + findByConversation', () => {
         title: convName,
         type: 'page',
         contextId: agentPageId,
-        workspaceId: created.id,
       });
+      await bindConversation(created.id, conversationId);
       // The payoff of the un-conflation, proven against real Postgres: every
       // thread in a session resolves the one row whose id folds the ONE
       // Sprite key.
@@ -157,17 +190,24 @@ describe('create + findByConversation', () => {
     expect(await store.findByConversation(conversationId)).toBeNull();
   });
 
-  it('deleting a session NULLs the binding and the thread survives as history', async () => {
+  it('deleting a session drops the binding and the thread survives as history', async () => {
     const workspaceId = await seedSession();
-    const [bound] = await db.select().from(conversations).where(eq(conversations.workspaceId, workspaceId));
-    expect(bound).toBeDefined();
+    const [boundNode] = await db
+      .select()
+      .from(agentWorkspaceNodes)
+      .where(eq(agentWorkspaceNodes.rootId, workspaceId));
+    expect(boundNode).toBeDefined();
+    const conversationId = boundNode.targetId ?? conversationIds[conversationIds.length - 1];
 
     await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, workspaceId));
 
-    const [after] = await db.select().from(conversations).where(eq(conversations.id, bound.id));
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
     expect(after).toBeDefined();
-    expect(after.workspaceId).toBeNull();
-    expect(await store.findByConversation(bound.id)).toBeNull();
+    // The node rows cascade from `agent_workspaces`; the thread does not.
+    expect(
+      await db.select().from(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.rootId, workspaceId)),
+    ).toHaveLength(0);
+    expect(await store.findByConversation(conversationId)).toBeNull();
   });
 });
 
@@ -507,9 +547,9 @@ describe('conversation delete', () => {
     // The inversion of the old PK-is-the-FK design: a session hosts many
     // threads, so one thread's deletion says nothing about the workspace.
     const workspaceId = await seedSession({ sandboxId: 'sbx-conv-delete', spriteInstanceId: 'i' });
-    const [bound] = await db.select().from(conversations).where(eq(conversations.workspaceId, workspaceId));
+    const boundId = conversationIds[conversationIds.length - 1];
 
-    await db.delete(conversations).where(eq(conversations.id, bound.id));
+    await db.delete(conversations).where(eq(conversations.id, boundId));
 
     const rows = await db.select().from(agentWorkspaces).where(eq(agentWorkspaces.id, workspaceId));
     expect(rows).toHaveLength(1);

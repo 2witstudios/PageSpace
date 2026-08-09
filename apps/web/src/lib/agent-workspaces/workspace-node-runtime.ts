@@ -1,7 +1,7 @@
 /**
  * The node model's production wiring: THE read and THE write.
  *
- * Successor to `workspace-layout-runtime.ts`, and shorter for three reasons
+ * Successor to the deleted `workspace-layout-runtime.ts`, and shorter for three reasons
  * that are all the same reason — the model underneath stopped having two of
  * everything.
  *
@@ -66,7 +66,7 @@ import {
   readChatTargetHolders,
   readWorkspaceNodeSnapshot,
   readWorkspaceNodeSnapshots,
-  withWorkspaceLayoutLock,
+  withWorkspaceLock,
   writeWorkspaceNodes,
   type DbExecutor,
   type WorkspaceNodeSnapshot,
@@ -279,7 +279,7 @@ class NodeWriteRefused extends Error {
 /**
  * THE ONE WRITE FUNNEL — lock, read, decide, gate, persist, broadcast.
  *
- * The whole read-decide-persist cycle is inside `withWorkspaceLayoutLock`,
+ * The whole read-decide-persist cycle is inside `withWorkspaceLock`,
  * because the lock closes a lost update only if the read that DECIDED the write
  * is in the same scope as the write itself. It is deliberately the same advisory
  * lock the legacy verb path takes, so during the migration window a node write
@@ -327,7 +327,7 @@ async function commitUnderLock(input: {
   let attemptedChatBindings: readonly string[] = [];
 
   const commit = () =>
-    withWorkspaceLayoutLock(workspaceId, async (tx) => {
+    withWorkspaceLock(workspaceId, async (tx) => {
     const before = await readWorkspaceNodeSnapshot(tx, workspaceId);
 
     // THE WORKSPACE'S BIRTH, folded into the first write that needs it. A

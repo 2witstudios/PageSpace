@@ -56,10 +56,9 @@
  * fractional ordering gives up in exchange for avoiding a renumbering cost
  * this model does not have.
  *
- * Successor to the two-level `columns[].panes[]` model in
- * `workspace-layout-verbs.ts`, which keeps its own `orderIndex` — it is on its
- * way out, and renaming there would be churn. Both exist during the migration
- * window.
+ * Successor to the two-level `columns[].panes[]` model, which spelled the same
+ * field `orderIndex`. That model and its tables are deleted; this is the only
+ * ordering in the domain.
  */
 
 /** A container's split direction. A row of columns; a column of stacked panes. */

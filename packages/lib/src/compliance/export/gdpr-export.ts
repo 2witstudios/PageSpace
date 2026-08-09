@@ -935,8 +935,8 @@ export async function collectUserPersonalization(database: DB, userId: string): 
  *     shell inside someone else's workspace travels — as a `participant` entry
  *     carrying the shells and nothing descriptive about the other person's
  *     workspace — and another member's shell inside the SUBJECT's workspace
- *     does NOT. `conversations.workspaceId` binds the threads, which
- *     `collectUserMessages` already exports under its own boundary.
+ *     does NOT. The threads themselves are bound by `agent_workspace_nodes`,
+ *     and `collectUserMessages` already exports them under its own boundary.
  */
 export async function collectUserAgentWorkspaces(
   database: DB,

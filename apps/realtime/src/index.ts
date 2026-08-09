@@ -1248,7 +1248,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Join an agent workspace's LAYOUT room (`session:<id>`) — where
-  // rev-carrying `workspace:updated` pane-grid events fan out (epic Phase 3).
+  // rev-carrying `workspace:nodes-updated` tree events fan out.
   // Authorization is the SAME one session-access decision the web routes run
   // (`checkAgentSessionAccess` → `decideAgentSessionAccess`): a session is a
   // drive-level workspace, so access is drive access. Deliberately NOT

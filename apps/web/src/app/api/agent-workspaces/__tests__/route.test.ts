@@ -7,7 +7,6 @@ const {
   mockListSessions,
   mockListShellsBulk,
   mockListSessionConversationsBulk,
-  mockReadWorkspaceGridsBulk,
   mockReadWorkspaceNodesBulk,
   mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
@@ -28,7 +27,6 @@ const {
   mockListSessions: vi.fn(),
   mockListShellsBulk: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
-  mockReadWorkspaceGridsBulk: vi.fn(),
   mockReadWorkspaceNodesBulk: vi.fn(),
   mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
@@ -81,13 +79,6 @@ vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));
-// `workspaceListEntryFromGrid` stays REAL — the point of the list's
-// `workspace` field now is that it is derived from the pane rows, so mocking
-// the derivation would test nothing.
-vi.mock('@/lib/agent-workspaces/workspace-layout-runtime', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/agent-workspaces/workspace-layout-runtime')>()),
-  readWorkspaceGridsBulk: (...args: unknown[]) => mockReadWorkspaceGridsBulk(...args),
-}));
 vi.mock('@/lib/agent-workspaces/workspace-node-runtime', () => ({
   readWorkspaceNodesBulk: (...args: unknown[]) => mockReadWorkspaceNodesBulk(...args),
 }));
@@ -131,7 +122,6 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
-  mockReadWorkspaceGridsBulk.mockResolvedValue(new Map());
   mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
@@ -151,7 +141,6 @@ describe('GET /api/agent-workspaces', () => {
           ...SESSION_DTO,
           shells: [SHELL_DTO],
           conversations: [CONVERSATION_ENTRY],
-          workspace: null,
           rev: 0,
           nodes: [],
           targets: [],
@@ -163,24 +152,9 @@ describe('GET /api/agent-workspaces', () => {
     expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
     expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
-    // Pane labels are a permissioned join (security review HIGH 1) — the bulk
-    // read names the viewer it is resolving for.
-    expect(mockReadWorkspaceGridsBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
-  });
-
-  it('given a session with pane rows, should attach the grid as `workspace` in the whole-state shape', async () => {
-    const columns = [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }];
-    mockReadWorkspaceGridsBulk.mockResolvedValue(new Map([['ses-1', columns]]));
-    const response = await GET(new Request('http://localhost/api/agent-workspaces'));
-    const body = await response.json();
-    // The wire shape a pre-verbs client still expects, rebuilt from rows: the
-    // two view-state fields carry defaults, because no column stores them.
-    expect(body.sessions[0].workspace).toEqual({
-      id: 'ses-1',
-      columns,
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    });
+    // The tree is a permissioned join (security review HIGH 1) — the bulk read
+    // names the viewer it is resolving titles for.
+    expect(mockReadWorkspaceNodesBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
   });
 
   /**

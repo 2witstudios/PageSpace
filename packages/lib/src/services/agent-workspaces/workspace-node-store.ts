@@ -1,9 +1,9 @@
 /**
  * The node model's DB shell: THE read, THE write, and no decisions.
  *
- * Successor to `workspace-layout-store.ts`, and deliberately smaller than it.
- * That store had six methods; this has three, and the difference is not
- * tidiness:
+ * Successor to the deleted `workspace-layout-store.ts`, and deliberately
+ * smaller than it. That store had six methods; this has three, and the
+ * difference is not tidiness:
  *
  *  * `getWorkspaceGrid` + `currentRev` are GONE, not renamed. They were two
  *    queries answering one question, and {@link readWorkspaceNodeSnapshots}
@@ -26,25 +26,25 @@
  * module owns the node table. It still decides nothing — what the rows MEAN is
  * `../../agent-workspaces/workspace-node-chat-binding.ts`'s business.
  *
- * **The lock is deliberately the OLD one.** `withWorkspaceLayoutLock` is
- * imported rather than re-cut, so a node write and a legacy verb write for the
- * same workspace serialize against EACH OTHER for the whole of the migration
- * window. Two advisory locks keyed on the same workspace by two different hashes
- * would let the two models write the same session at the same instant, which is
- * the one thing a cutover cannot survive.
+ * **The lock is re-exported, not re-cut.** {@link withWorkspaceLock} lives in
+ * `./workspace-lock` because it is not this module's concern — it serializes
+ * every writer of one workspace, whatever that writer writes — and callers reach
+ * it from here so a node write imports its lock and its store from one place.
+ * Two advisory locks keyed on the same workspace by two different hashes would
+ * let two writers touch the same session at the same instant, so there is one.
  */
 
 import { z } from 'zod';
 import { and, eq, inArray, sql, type SQL } from '@pagespace/db/operators';
-import { readFraction } from '../../agent-workspaces/workspace-layout-verbs';
+import { readFraction } from '../../agent-workspaces/workspace-fractions';
 import type { ChatTargetHolder } from '../../agent-workspaces/workspace-node-chat-binding';
 import type { WorkspaceNode } from '../../agent-workspaces/workspace-node';
 import { nodesFromRows, rowFromNode, type WorkspaceNodeRow } from '../../agent-workspaces/workspace-node-rows';
 import type { PersistedNodeWrite } from '../../agent-workspaces/workspace-node-write';
-import type { DbExecutor } from './workspace-layout-store';
+import type { DbExecutor } from './workspace-lock';
 
-export { withWorkspaceLayoutLock } from './workspace-layout-store';
-export type { DbExecutor } from './workspace-layout-store';
+export { withWorkspaceLock } from './workspace-lock';
+export type { DbExecutor } from './workspace-lock';
 
 /**
  * One workspace's whole truth: a rev and the nodes that rev DESCRIBES.
@@ -310,7 +310,7 @@ export async function readChatTargetHolders(
  * `agent_workspace_layout_revs`' did — and lives in its own table so that lock
  * never lands on the `agent_workspaces` row sandbox provisioning contends on.
  *
- * Must run inside `withWorkspaceLayoutLock`: the read that decided this write has
+ * Must run inside `withWorkspaceLock`: the read that decided this write has
  * to be in the same lock scope, or two callers compute from one base and the
  * later commit silently drops the earlier one's change.
  */
