@@ -48,15 +48,35 @@
  *   bun scripts/backfill-agent-workspace-nodes.ts --apply         # live write
  *
  * ─── Production procedure ──────────────────────────────────────────────────
- * 1. Deploy migration 0255 (the node tables — additive and inert on arrival).
+ * 1. Ship the release carrying `0255`. `.github/workflows/docker-images.yml`
+ *    runs the migration one-shot and THEN deploys web, in that order and with
+ *    nothing between them, so the app that reads nodes is live within minutes
+ *    of the tables existing.
  * 2. Run this DRY and read the census. **It must exit 0.** A non-zero exit is
  *    one of: a workspace SKIPPED, a write that failed, or members ≠ pane nodes.
  * 3. Run with `--apply` as a one-off machine on the migrate image, and require
  *    exit 0 from that too.
- * 4. Deploy the app image that reads nodes.
- * 5. ONLY THEN apply migration 0256, which drops the tables this script read.
+ * 4. Re-run DRY and confirm the census is clean over the whole corpus.
+ * 5. ONLY THEN ship the follow-up release carrying `0256`, which drops the
+ *    tables this script reads.
  *
- * **Step 2's exit code is the gate on step 5, and this is the whole reason the
+ * **STEP 1 IS NOT A QUIET STEP, and the ordering above is why.** The app reads
+ * membership only from `agent_workspace_nodes`, with no fallback to the old
+ * columns anywhere, so between the deploy and step 3 every pre-existing
+ * workspace READS EMPTY. Nothing is lost and step 3 restores all of it — and a
+ * WRITE in that window is refused rather than allowed to strand anything
+ * (`awaitsBackfill`, answered 503) — but users see empty sessions until the
+ * backfill runs, so step 3 belongs immediately after step 1 rather than
+ * whenever someone gets to it.
+ *
+ * The pipeline has an insertion point for automating that (between the
+ * "Run migrations" and "Deploy web" steps, which is exactly what step 3's
+ * "one-off machine on the migrate image" describes) and deliberately does not
+ * use it: no backfill in this repo runs from a deploy, and making this the
+ * first would put a full-corpus scan on every subsequent deploy for a window
+ * that closes once.
+ *
+ * **Step 4's exit code is the gate on step 5, and this is the whole reason the
  * order matters.** A skipped workspace does NOT stay safely on the old model —
  * 0256 deletes the old model. It loses its grid outright, and its threads,
  * belonging to no node, read as homeless and become claimable into a DIFFERENT
