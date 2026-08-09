@@ -290,7 +290,7 @@ function scaleToTotal(values: number[], total: number): number[] {
  * take an even share of the new container and the survivors keep their
  * relative proportions inside whatever is left.
  */
-function rebalanceFractions(before: Array<number | null | undefined>): Array<number | null> {
+export function rebalanceFractions(before: Array<number | null | undefined>): Array<number | null> {
   const count = before.length;
   if (count === 0) return [];
   // A LONE member is always unsized: it owns its whole container, so a stored
@@ -322,7 +322,7 @@ function rebalanceFractions(before: Array<number | null | undefined>): Array<num
  * sized, an even split when it is not. The starting point every resize
  * materializes from.
  */
-function currentShares(before: Array<number | null | undefined>): number[] {
+export function currentShares(before: Array<number | null | undefined>): number[] {
   const known = before.map(readFraction);
   if (known.some((fraction) => fraction === null)) return known.map(() => 1 / known.length);
   return settleToOne(scaleToTotal(known as number[], 1));
@@ -333,7 +333,7 @@ function currentShares(before: Array<number | null | undefined>): number[] {
  * difference in proportion. The request is CLAMPED into what the floor leaves
  * available rather than refused — see {@link MIN_FRACTION}.
  */
-function resizeShare(shares: number[], index: number, requested: number): number[] {
+export function resizeShare(shares: number[], index: number, requested: number): number[] {
   const count = shares.length;
   const floor = Math.min(MIN_FRACTION, 1 / count);
   const ceiling = 1 - floor * (count - 1);
