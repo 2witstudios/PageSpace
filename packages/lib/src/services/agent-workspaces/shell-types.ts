@@ -23,7 +23,7 @@
  * drifting: adding a type to the contract without a spec here fails to compile.
  */
 
-import type { ShellAgentType } from '../../agent-workspaces/contract';
+import type { ShellAgentType } from '../../agent-workspaces/shells-contract';
 
 export interface ShellLaunchSpecEntry {
   command: string;

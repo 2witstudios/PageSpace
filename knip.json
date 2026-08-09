@@ -175,6 +175,8 @@
     "packages/lib": {
       "entry": [
         "src/agent-workspaces/contract.ts",
+        "src/agent-workspaces/session-contract.ts",
+        "src/agent-workspaces/shells-contract.ts",
         "src/agent-workspaces/decide-workspace-access.ts",
         "src/agent-workspaces/plan-workspace-lifecycle.ts",
         "src/agent-workspaces/plan-spawn-worker.ts",

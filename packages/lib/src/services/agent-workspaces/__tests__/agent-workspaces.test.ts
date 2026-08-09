@@ -8,7 +8,7 @@ import {
 } from '../agent-workspaces';
 import type { AgentSessionListFilter } from '../agent-workspaces-store';
 import { ensureAgentSessionSandbox, type AgentSessionSpriteRow } from '../agent-workspace-sprite';
-import { agentSessionDtoSchema } from '../../../agent-workspaces/contract';
+import { agentSessionDtoSchema } from '../../../agent-workspaces/session-contract';
 import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
 import {
   DRIVE_ID,

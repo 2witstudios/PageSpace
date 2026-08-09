@@ -1,7 +1,7 @@
 import {
   shellConnectPayloadSchema,
   type ShellConnectPayload,
-} from '@pagespace/lib/agent-workspaces/contract';
+} from '@pagespace/lib/agent-workspaces/shells-contract';
 
 export type TerminalConnectPayload = { pageId: string; cols: number; rows: number };
 

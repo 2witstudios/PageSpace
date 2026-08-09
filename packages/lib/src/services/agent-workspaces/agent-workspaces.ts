@@ -21,7 +21,7 @@
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import { planAgentSessionLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
-import type { AgentSessionDTO } from '../../agent-workspaces/contract';
+import type { AgentSessionDTO } from '../../agent-workspaces/session-contract';
 import { deriveSandboxStatus } from './workspace-status';
 import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
 

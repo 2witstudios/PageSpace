@@ -5,7 +5,7 @@ import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { parseShellConnectPayload } from './validation';
-import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/contract';
+import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-workspaces/shell-scrollback';
 

@@ -68,7 +68,7 @@ import {
   resolveDriveMembership,
   canRunCodeForSession,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
@@ -115,7 +115,7 @@ export { isCodeExecutionEnabled };
  * makes "a listing never truncates an owner's real set" structural rather
  * than a two-constants-kept-equal-by-hand invariant (epic Phase 1, D7).
  */
-export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-workspaces/contract';
+export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-workspaces/session-contract';
 
 // ---------------------------------------------------------------------------
 // Lazy singletons — the store reconnects to one DB pool; the host is stateless.

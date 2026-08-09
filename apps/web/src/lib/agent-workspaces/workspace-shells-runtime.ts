@@ -22,7 +22,7 @@ import {
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
-import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { admit } from '@pagespace/lib/agent-workspaces/workspace-membership';
 import { createId } from '@paralleldrive/cuid2';
 import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';

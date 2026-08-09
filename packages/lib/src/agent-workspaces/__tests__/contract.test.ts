@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ZodError } from 'zod';
+import { SANDBOX_STATUSES, sandboxStatusSchema, agentSessionDtoSchema } from '../session-contract';
 import {
-  SANDBOX_STATUSES,
-  sandboxStatusSchema,
-  agentSessionDtoSchema,
   shellDtoSchema,
   shellConnectPayloadSchema,
   clampShellDimensions,
@@ -12,16 +10,18 @@ import {
   MAX_COLS,
   MAX_ROWS,
   SHELL_AGENT_TYPES,
-  PANE_KINDS,
-  paneScopeSchema,
-  persistedPaneStateSchema,
-  persistedColumnStateSchema,
-  persistedWorkspaceStateSchema,
   shellReadPayloadSchema,
   shellSendPayloadSchema,
   MAX_SHELLS_PER_READ,
   MAX_SHELL_INPUT_BYTES,
   MAX_SCROLLBACK_TAIL_LINES,
+} from '../shells-contract';
+import {
+  PANE_KINDS,
+  paneScopeSchema,
+  persistedPaneStateSchema,
+  persistedColumnStateSchema,
+  persistedWorkspaceStateSchema,
 } from '../contract';
 
 const session = {
