@@ -16,12 +16,23 @@ describe('renderAgentWiringGuidance', () => {
     expect(embeddedJson(lines)).toEqual({
       mcpServers: {
         pagespace: {
-          command: 'pagespace',
-          args: ['mcp'],
+          // `npx`, not `pagespace`: the mint may have run via `npx -p
+          // @pagespace/cli`, and GUI MCP clients don't inherit the shell PATH,
+          // so a bare `pagespace` command is the form most likely to fail.
+          // `-p` is required — two bins here, neither named `cli`.
+          command: 'npx',
+          args: ['-y', '-p', '@pagespace/cli', 'pagespace-mcp'],
           env: { PAGESPACE_KEY: 'ci-bot' },
         },
       },
     });
+  });
+
+  it('offers the global-install shorthand as a follow-up line rather than as the pasted config', () => {
+    const lines = renderAgentWiringGuidance({ keyName: 'ci-bot', host: DEFAULT_HOST });
+    const afterConfig = lines.slice(lines.lastIndexOf('}') + 1).join('\n');
+    expect(afterConfig).toContain('"command": "pagespace", "args": ["mcp"]');
+    expect(afterConfig).toMatch(/globally/i);
   });
 
   it('adds PAGESPACE_API_URL to the env block only for a non-default host', () => {

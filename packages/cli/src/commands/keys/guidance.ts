@@ -19,11 +19,23 @@ export interface AgentWiringGuidanceParams {
 
 /**
  * Ready-to-paste agent-wiring guidance printed after a successful mint.
- * Mirrors the MCP integration docs
- * (`apps/marketing/src/app/docs/integrations/mcp/page.tsx`): named-key
- * config for this machine, raw-token env var for .env/CI/other machines.
- * `PAGESPACE_API_URL` is included only for a non-default host — against
- * production it would be noise.
+ * Mirrors the zero-install block in the README (`## pagespace mcp`):
+ * named-key config for this machine, raw-token env var for .env/CI/other
+ * machines. `PAGESPACE_API_URL` is included only for a non-default host —
+ * against production it would be noise.
+ *
+ * The `npx` form leads rather than `{command: 'pagespace', args: ['mcp']}`
+ * because nothing here knows how the CLI was invoked: the mint may well have
+ * run through `npx -y -p @pagespace/cli pagespace keys`, leaving no
+ * `pagespace` on PATH at all. Even after a global install, GUI MCP clients
+ * (Claude Desktop, Cursor) launch without the shell's PATH and often can't
+ * find a bare `pagespace`. `npx` works in every one of those cases, so the
+ * global-install shorthand is offered as a follow-up line instead.
+ *
+ * `-p` is load-bearing: this package publishes two bins (`pagespace` and
+ * `pagespace-mcp`) and neither is named `cli`, so without it npx takes
+ * `@pagespace/cli` as the command and exits "could not determine executable
+ * to run".
  */
 export function renderAgentWiringGuidance(params: AgentWiringGuidanceParams): readonly string[] {
   const env: Record<string, string> = { [KEY_ENV_VAR_NAME]: params.keyName };
@@ -33,8 +45,8 @@ export function renderAgentWiringGuidance(params: AgentWiringGuidanceParams): re
   const config = {
     mcpServers: {
       pagespace: {
-        command: 'pagespace',
-        args: ['mcp'],
+        command: 'npx',
+        args: ['-y', '-p', '@pagespace/cli', 'pagespace-mcp'],
         env,
       },
     },
@@ -44,6 +56,8 @@ export function renderAgentWiringGuidance(params: AgentWiringGuidanceParams): re
     '',
     'Add this to your MCP client config (Claude Code, Claude Desktop, Cursor):',
     ...JSON.stringify(config, null, 2).split('\n'),
+    '',
+    'Installed globally and on your MCP client\'s PATH? "command": "pagespace", "args": ["mcp"] does the same thing.',
     '',
     'For .env or CI (or a different machine), use the raw token instead:',
     `${TOKEN_ENV_VAR_NAME}=mcp_...   (shown once, at mint time only)`,

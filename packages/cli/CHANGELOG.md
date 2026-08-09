@@ -2,6 +2,18 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The MCP config printed after `pagespace keys` / `pagespace keys create` no longer assumes a
+  global install.** It emitted only `{"command": "pagespace", "args": ["mcp"]}`, which needs
+  `pagespace` on the PATH of whatever launches the MCP client — not the case if you minted the key
+  through `npx -y -p @pagespace/cli pagespace keys`, and frequently not the case for GUI clients
+  (Claude Desktop, Cursor) that launch without your shell's PATH. It now prints the zero-install
+  `npx -y -p @pagespace/cli pagespace-mcp` form, matching the README, and offers the global-install
+  shorthand on a following line.
+
 ## [1.6.1] — 2026-07-08
 
 ### Fixed

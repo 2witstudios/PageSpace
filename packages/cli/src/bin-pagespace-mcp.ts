@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * The `pagespace-mcp` bin — a first-class, zero-install way to run the
- * `pagespace mcp` stdio server via `npx -y @pagespace/cli pagespace-mcp`.
+ * `pagespace mcp` stdio server via `npx -y -p @pagespace/cli pagespace-mcp`
+ * (`-p` required — two bins here, neither named `cli`).
  * Mirrors `bin.ts`'s process wiring exactly, but delegates all argv/route
  * logic to the pure `runPagespaceMcpBin` in `pagespace-mcp-bin.ts` — this
  * file only touches `process.*`.
