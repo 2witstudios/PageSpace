@@ -11,7 +11,15 @@ export type ConversationProps = ComponentProps<typeof StickToBottom>;
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
+    // `initial` fires exactly once per mounted content element — the content
+    // going 0 -> full height. Animating that scrolls the entire thread past the
+    // user from top to bottom every time this mounts: on first open, and on each
+    // conversation switch in the main chat, where ChatLayout keys the messages
+    // panel by conversationId and so remounts this. (The sidebar's Conversation
+    // is not remounted per conversation, so there it only affects first open.)
+    // `resize` — every subsequent growth, i.e. normal token streaming — stays
+    // smooth so following the stream still reads as motion rather than a snap.
+    initial="instant"
     resize="smooth"
     role="log"
     {...props}
