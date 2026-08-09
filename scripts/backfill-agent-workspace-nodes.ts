@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Backfill Script: every workspace's pane grid and membership → the flat node
- * model (`agent_workspace_nodes`, migration `0255_boring_leo.sql`).
+ * model (`agent_workspace_nodes`, migration `0255_clear_phil_sheldon.sql`).
  *
  * EVERY workspace, ended ones included — see the scan loop for why an ended
  * workspace is neither finished nor a safe thing to skip.

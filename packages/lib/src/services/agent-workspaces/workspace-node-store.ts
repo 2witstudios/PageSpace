@@ -292,6 +292,41 @@ export async function readChatTargetHolders(
 }
 
 /**
+ * Which of these chat targets no longer have a thread behind them.
+ *
+ * The third global question about a chat target, beside "may this caller show
+ * it" (the ACL gate) and "will the table let anyone" ({@link
+ * readChatTargetHolders}): is there still a conversation here at all. Like
+ * those, it is unscoped by `rootId` — liveness is a property of the thread, not
+ * of the grid asking about it — and like `readChatTargetHolders` it takes the
+ * caller's executor so it runs on the transaction that is about to write,
+ * rather than on a pooled connection whose answer can go stale before the
+ * insert lands. That is the entire point of it: every admission path already
+ * asks this question BEFORE taking the lock, and a history-delete fits in the
+ * gap.
+ *
+ * A target with NO conversation row is reported here too, though nothing can
+ * reach this with one: `authorizePaneScope` refuses an unknown conversation as
+ * `forbidden_target` first, and that 403 has to win so a caller cannot use this
+ * answer as an existence oracle.
+ */
+export async function readDeletedChatTargets(
+  executor: DbExecutor,
+  targetIds: readonly string[],
+): Promise<string[]> {
+  if (targetIds.length === 0) return [];
+  const { conversations } = await import('@pagespace/db/schema/conversations');
+
+  const live = await executor
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(and(inArray(conversations.id, [...targetIds]), eq(conversations.isActive, true)));
+
+  const alive = new Set(live.map((row) => row.id));
+  return targetIds.filter((id) => !alive.has(id));
+}
+
+/**
  * Persist a decided write and mint the workspace's next rev.
  *
  * Takes {@link PersistedNodeWrite} — the storage instruction `decideNodeWrite`

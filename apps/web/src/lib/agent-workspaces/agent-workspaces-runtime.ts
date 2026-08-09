@@ -1205,8 +1205,18 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
   // carries rather than one this call would have to be told.
   const ownerId = row?.ownerId;
   if (ownerId !== undefined) {
-    const destroyed = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerId });
-    if (destroyed.status !== 'ok') {
+    // `requireEnded` re-reads `endedAt` inside the destroy's own transaction, so
+    // an admission that reopened this session between the stamp above and the
+    // write below keeps its tree instead of having it wiped out from under it.
+    // See the flag's own doc for the ghost that produces.
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerId, requireEnded: true });
+    if (destroyed.status === 'refused' && destroyed.code === 'session_reopened') {
+      // Not a failure: the session is live again because someone put work into
+      // it, and the tree that work created is the one that should stand.
+      loggers.api.info('Session end did not destroy its tree: it was reopened by a concurrent admission', {
+        workspaceId,
+      });
+    } else if (destroyed.status !== 'ok') {
       loggers.api.error('Session ended but its tree was not destroyed; re-issuing the end will clear it', undefined, {
         workspaceId,
         status: destroyed.status,

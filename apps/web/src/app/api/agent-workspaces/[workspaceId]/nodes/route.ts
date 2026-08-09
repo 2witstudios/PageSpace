@@ -124,7 +124,7 @@ export async function POST(request: Request, context: RouteContext) {
     // 503, because nothing is wrong with the write and nothing the caller can
     // change would help: this database still holds membership only the previous
     // model records, and writing would strand it permanently (see
-    // `hasUnmigratedLegacyMembership`). It is the SERVER that is not ready, and
+    // `awaitsBackfill`). It is the SERVER that is not ready, and
     // it stops being unready when the backfill runs — which is what 503 means
     // and what neither 400 nor 409 does. A client must not treat it as a
     // rebase-and-retry, so it carries no snapshot.

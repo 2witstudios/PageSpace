@@ -88,7 +88,36 @@ describe('endSession', () => {
     // funnel takes an actor, and the row itself carries the identity rather than
     // this call having to be told one.
     await runtime.endSession('ws-1');
-    expect(destroyWorkspaceTree).toHaveBeenCalledWith({ workspaceId: 'ws-1', actingUserId: 'user-1' });
+    expect(destroyWorkspaceTree).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      actingUserId: 'user-1',
+      requireEnded: true,
+    });
+  });
+
+  it('asks the destroy to REQUIRE the end still being in force', async () => {
+    // The other half of "lifecycle first, tree second". The stamp above lands
+    // outside the workspace lock, so an admission can take the lock in between,
+    // write its node and clear `endedAt` (new work reopens an ended session's
+    // listing). Without this flag the destroy that follows wipes that tree and
+    // leaves a LIVE workspace holding nothing — the zero-pane session this epic
+    // exists to delete, produced by its own end path.
+    await runtime.endSession('ws-1');
+    const [call] = destroyWorkspaceTree.mock.calls as unknown as [{ requireEnded?: boolean }][];
+    expect(call[0].requireEnded).toBe(true);
+  });
+
+  it('treats a REOPENED session as a non-failure — the newer work keeps its tree', async () => {
+    // The admission won the race, so the session is live again on purpose. The
+    // end is stale, not broken: nothing is logged as an error and the caller
+    // still hears that the lifecycle end succeeded, because it did.
+    destroyWorkspaceTree.mockResolvedValueOnce({
+      status: 'refused',
+      code: 'session_reopened',
+      detail: 'reopened',
+    } as never);
+    const result = await runtime.endSession('ws-1');
+    expect(result.ok).toBe(true);
   });
 
   it('does NOT destroy the tree when the lifecycle end failed', async () => {

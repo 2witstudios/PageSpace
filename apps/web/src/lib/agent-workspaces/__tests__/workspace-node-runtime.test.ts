@@ -50,6 +50,10 @@ const { store, mockBroadcast, authorize, labelRows, chatBindings } = vi.hoisted(
     holders: [] as ChatTargetHolder[],
     asked: [] as string[][],
     throwOnWrite: null as Error | null,
+    /** Conversations whose history has been deleted — the liveness backstop's answer. */
+    deleted: [] as string[],
+    /** Every id the LIVENESS check looked up, so a test can pin that it did not look. */
+    livenessAsked: [] as string[][],
   },
 }));
 
@@ -94,6 +98,10 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
     readChatTargetHolders: async (_tx: unknown, targetIds: readonly string[]) => {
       chatBindings.asked.push([...targetIds]);
       return chatBindings.holders.filter((holder) => targetIds.includes(holder.targetId));
+    },
+    readDeletedChatTargets: async (_tx: unknown, targetIds: readonly string[]) => {
+      chatBindings.livenessAsked.push([...targetIds]);
+      return targetIds.filter((id) => chatBindings.deleted.includes(id));
     },
     writeWorkspaceNodes: async (_tx: unknown, input: { write: PersistedNodeWrite }) => {
       if (chatBindings.throwOnWrite !== null) throw chatBindings.throwOnWrite;
@@ -173,6 +181,8 @@ beforeEach(() => {
   chatBindings.holders = [];
   chatBindings.asked = [];
   chatBindings.throwOnWrite = null;
+  chatBindings.deleted = [];
+  chatBindings.livenessAsked = [];
 });
 
 function write(over: { baseRev?: number; put?: WorkspaceNode[]; drop?: string[] } = {}) {
@@ -494,6 +504,64 @@ describe('a chat target already bound in ANOTHER workspace', () => {
       put: [pane('pane-new', 'root', 0, { kind: 'chat', id: 'conv-1' })],
     });
     expect(result.status).toBe('ok');
+  });
+});
+
+/**
+ * THE LIVENESS BACKSTOP — the third global question about a chat target, after
+ * "may this caller show it" and "will the table let anyone".
+ *
+ * Every admission path asks it before taking the lock, and a history-delete
+ * fits in that window: `expelConversationFromSession` removes the node under
+ * the lock and RELEASES it before `softDeleteConversation` flips `isActive`, so
+ * in between the thread is homeless and still active — exactly what a claim
+ * admits. Asked on the writing transaction, there is no window left.
+ */
+describe('a chat target whose thread has been DELETED', () => {
+  it('is a typed refusal, and writes nothing', async () => {
+    chatBindings.deleted = ['conv-1'];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('target_deleted');
+    expect(result.detail).toContain('conv-1');
+    expect(store.writes).toEqual([]);
+    expect(store.rev).toBe(3);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('is asked ONLY about targets the write INTRODUCES', async () => {
+    // The containment rule the ACL gate already lives by, and here it is what
+    // keeps a pane whose thread died under it movable and CLOSABLE — closing
+    // re-sends the node, so checking the whole payload would make the pane
+    // permanent.
+    store.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })];
+    chatBindings.deleted = ['conv-1'];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('ok');
+    expect(chatBindings.livenessAsked).toEqual([]);
+  });
+
+  it('runs AFTER the ACL gate, so a refusal never confirms a conversation the caller may not touch', async () => {
+    // Same oracle argument as the holder check above: "that thread is deleted"
+    // is a fact about a conversation, and a caller with no authority over it
+    // must not learn it. The 403 wins.
+    authorize.allow = false;
+    chatBindings.deleted = ['conv-1'];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('forbidden_target');
+    expect(chatBindings.livenessAsked).toEqual([]);
+  });
+
+  it('is not asked at all by a write that binds no chat target', async () => {
+    const result = await write({ put: [pane('pane-a', 'root', 0)] });
+    expect(result.status).toBe('ok');
+    expect(chatBindings.livenessAsked).toEqual([]);
   });
 });
 

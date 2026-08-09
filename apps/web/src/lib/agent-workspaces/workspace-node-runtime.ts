@@ -65,6 +65,7 @@ import {
 import {
   awaitsBackfill,
   readChatTargetHolders,
+  readDeletedChatTargets,
   readWorkspaceNodeSnapshot,
   readWorkspaceNodeSnapshots,
   withWorkspaceLock,
@@ -182,7 +183,11 @@ export type NodeWriteRefusal =
   | 'foreign_scope'
   | 'forbidden_target'
   | 'bound_elsewhere'
-  | 'awaiting_backfill';
+  | 'awaiting_backfill'
+  /** The write would show a conversation whose history has been deleted — see the liveness backstop in {@link commitUnderLock}. */
+  | 'target_deleted'
+  /** An end lost its race with an admission that reopened the session — see {@link destroyWorkspaceTree}'s `requireEnded`. */
+  | 'session_reopened';
 
 /**
  * What the write answers.
@@ -365,10 +370,12 @@ async function commitUnderLock(input: {
      *
      * Reading such a workspace shows it empty, which is recoverable: the
      * backfill fills it in. WRITING to it is not. The backfill skips any
-     * workspace already holding a node row, so the root this line is about to
-     * mint would strand that workspace's real membership permanently — and it
-     * would be counted `alreadyMigrated`, so the census gating the rollout would
-     * call the run clean. Silent, irreversible, and invisible to its own gate.
+     * workspace that has already been through the node model — it reads the
+     * same `agent_workspace_node_revs` marker `awaitsBackfill` does, and this
+     * write would mint one — so the root this line is about to seed would strand
+     * that workspace's real membership permanently, and it would be counted
+     * `alreadyMigrated`, so the census gating the rollout would call the run
+     * clean. Silent, irreversible, and invisible to its own gate.
      *
      * So the seed refuses, loudly, instead. Only on the seed path: a workspace
      * that already has a tree is either backfilled or was always node-native,
@@ -498,6 +505,46 @@ async function commitUnderLock(input: {
         // TypeScript said so at all three call sites; a package-scoped
         // typecheck is why nobody heard it.
         throw new NodeWriteConflicted(chatHeldElsewhereDetail(taken), before);
+      }
+
+      // THE LIVENESS BACKSTOP, and it is a third distinct question from the two
+      // above: not "may this caller show it" and not "will the table let
+      // anyone", but "is there still a thread here to show".
+      //
+      // Every admission path already asks it — `claim` refuses `!row.isActive`
+      // as `not_found`, `reopen` as `history_deleted` — and every one of them
+      // asks it OUTSIDE this transaction, on the pooled connection, before the
+      // lock is taken. That is a read-then-act window, and a history-delete
+      // fits inside it: `expelConversationFromSession` removes the node under
+      // this lock and RELEASES it before `softDeleteConversation` flips
+      // `isActive`, deliberately (the two cannot be one write without threading
+      // an executor through message deactivation, room kicks and emits — see
+      // that function's doc). In the gap the thread is homeless and still
+      // active, so a concurrent claim passes its liveness read, admits it, and
+      // the delete then lands on a conversation a node is holding.
+      //
+      // The result is a pane bound to a dead thread and a cap slot nobody can
+      // reclaim — which is precisely the outcome expel-then-delete was ordered
+      // to avoid, arrived at through concurrency instead of through a crash.
+      // The order defends against the second and not the first.
+      //
+      // Asked HERE it needs no executor threading and no second lock: the row
+      // is read on the transaction that is about to write the node, so the
+      // delete either commits before (and this refuses) or after (and it is
+      // serialized behind a node this transaction has already written, which
+      // the delete's own expel then removes). Only INTRODUCED targets are
+      // checked, so a resize or a move that re-sends an existing pane never
+      // pays for it, and a pane whose thread died under it is not made
+      // un-draggable by a write that binds nothing new.
+      const dead = await readDeletedChatTargets(tx, attemptedChatBindings);
+      if (dead.length > 0) {
+        // THROWN for the same reason as the two refusals above it: `within` may
+        // already have written, and those rows must not survive a write that
+        // does not happen.
+        throw new NodeWriteRefused(
+          'target_deleted',
+          `conversation(s) ${dead.join(', ')} no longer exist, so nothing can be shown for them`,
+        );
       }
     }
 
@@ -683,11 +730,55 @@ export async function destroyWorkspaceTree(input: {
   workspaceId: string;
   /** The acting HUMAN. Nothing new is bound here, so the gate has nothing to judge — but the funnel takes one. */
   actingUserId: string;
+  /**
+   * Destroy only while the workspace is STILL ENDED, checked inside this
+   * write's own transaction. `endSession` passes true and is the only caller
+   * that does — it is the half of the composition above that makes "lifecycle
+   * first, tree second" safe against a concurrent admission.
+   *
+   * Without it the order has a window with a ghost in it. `endAgentSession`
+   * stamps `endedAt` outside this lock, so between the stamp and this destroy
+   * an admission can take the lock, write its node, and then clear `endedAt`
+   * (`reopenEndedSessionListing` — new work in an ended session reopens its
+   * listing, #2335). The destroy that follows then wipes a tree the reopen had
+   * just legitimately populated, leaving a workspace that is LIVE, in the
+   * sidebar, holding zero nodes, with a conversation that lost its only record
+   * of membership — the exact zero-pane workspace this epic exists to delete,
+   * produced by the epic's own end path.
+   *
+   * Re-reading the stamp under the lock linearizes the two: either the end is
+   * still in force and the tree goes, or the admission got there first and the
+   * end is stale, in which case the newer intent — a user putting work back
+   * into this session — wins and the tree stands. The torn-down Sprite is not a
+   * problem for the survivor; a reopened session re-provisions under the same
+   * `spriteKey` on its next `ensure`, which is the same state a resumed session
+   * is always in.
+   */
+  requireEnded?: boolean;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
   return commitUnderLock({
     workspaceId: input.workspaceId,
     actingUserId: input.actingUserId,
     viewerId: null,
+    ...(input.requireEnded === true
+      ? {
+          within: async (tx) => {
+            const [row] = await tx
+              .select({ endedAt: agentWorkspaces.endedAt })
+              .from(agentWorkspaces)
+              .where(eq(agentWorkspaces.id, input.workspaceId))
+              .limit(1);
+            // A row that vanished has no tree worth defending; the destroy is
+            // idempotent and the FK would have taken the nodes anyway.
+            if (row !== undefined && row.endedAt === null) {
+              throw new NodeWriteRefused(
+                'session_reopened',
+                'this session was reopened after the end began; its tree belongs to the newer work',
+              );
+            }
+          },
+        }
+      : {}),
     // See the flag's own doc: seeding here would mint a root in order to
     // destroy it, and the composed write would land as a CREATE.
     seed: false,

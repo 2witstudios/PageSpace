@@ -396,10 +396,12 @@ describe('a workspace the backfill has not reached yet', () => {
    *
    * Reading such a workspace shows it empty, and that is recoverable: the
    * backfill fills it in. Writing to it is not. `loadAlreadyMigrated` in
-   * `scripts/backfill-agent-workspace-nodes.ts` skips any workspace holding ANY
-   * node row, so one seeded root strands that workspace's real membership for
-   * good — and it is then counted `alreadyMigrated`, so the census that gates
-   * the rollout calls the run clean. The failure hides from its own gate.
+   * `scripts/backfill-agent-workspace-nodes.ts` skips any workspace that has
+   * been through the node model — it reads the same `agent_workspace_node_revs`
+   * marker this guard does, and a seed mints one — so one seeded root strands
+   * that workspace's real membership for good, and it is then counted
+   * `alreadyMigrated`, so the census that gates the rollout calls the run clean.
+   * The failure hides from its own gate.
    *
    * Three states have to stay distinguishable, and all three are here: a fresh
    * deployment with no legacy rows at all, a workspace the backfill has already
@@ -641,6 +643,171 @@ describe('a workspace the backfill has not reached yet', () => {
       drop: [],
       viewerId: ownerIds[0],
     });
+
+    expect(result.status).toBe('ok');
+  });
+});
+
+describe('the liveness backstop — a write that introduces a DELETED thread', () => {
+  /**
+   * The gap `expelConversationFromSession` documents but does not close.
+   *
+   * A history-delete is two writes on purpose: expel removes the node under the
+   * workspace lock, RELEASES it, and only then does `softDeleteConversation`
+   * flip `isActive` — the two cannot be one without threading an executor
+   * through message deactivation, room kicks and emits. In between, the thread
+   * is homeless and still active, which is exactly the state a claim admits. So
+   * a concurrent claim passes its own liveness read (taken on the pooled
+   * connection, before the lock) and the delete lands on a conversation a node
+   * is now holding: a pane bound to a dead thread and a cap slot nobody can
+   * reclaim — the outcome the expel-then-delete ORDER was chosen to prevent,
+   * reached through concurrency rather than through a crash.
+   *
+   * The backstop asks the question on the transaction that writes the node, so
+   * there is no window left between the asking and the writing.
+   */
+  it('REFUSES a write that binds a conversation whose history is gone', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await db.update(conversations).set({ isActive: false }).where(eq(conversations.id, conversationId));
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [
+        {
+          nodeType: 'pane',
+          id: 'p1',
+          parentId: rootSeedFor(workspaceId).id,
+          position: 0,
+          target: { kind: 'chat', id: conversationId },
+        },
+      ],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('target_deleted');
+
+    // And nothing was written — including the root the seed would have minted.
+    const after = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(after.nodes).toEqual([]);
+  });
+
+  it('lets a LIVE conversation through, so the refusal is about liveness and nothing else', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [
+        {
+          nodeType: 'pane',
+          id: 'p1',
+          parentId: rootSeedFor(workspaceId).id,
+          position: 0,
+          target: { kind: 'chat', id: conversationId },
+        },
+      ],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('does NOT refuse a pane that ALREADY holds the thread — only INTRODUCED bindings are asked', async () => {
+    // Containment, and it is load-bearing rather than an optimisation. A thread
+    // deleted out from under an open pane must still leave that pane movable,
+    // resizable and CLOSABLE — closing is a write that re-sends the node, and a
+    // liveness check over the whole payload would make the pane permanent.
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+    await db.update(conversations).set({ isActive: false }).where(eq(conversations.id, conversationId));
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      // The same node, re-sent with its existing binding — a resize, or the
+      // first half of a close.
+      put: [chatPane('n1', 0, conversationId)],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+});
+
+describe('ending a session that a concurrent admission REOPENED', () => {
+  /**
+   * `endSession` is an ORDER, not a transaction: `endAgentSession` stamps
+   * `endedAt` outside the workspace lock (a Sprite teardown is a network call
+   * and must not sit inside it), and `destroyWorkspaceTree` takes the lock
+   * afterwards. An admission landing in that window writes its node AND clears
+   * `endedAt`, because new work in an ended session reopens its listing
+   * (#2335) — and the destroy that follows then wipes the tree that reopen just
+   * created, leaving a LIVE workspace holding zero nodes and a conversation
+   * with no record of membership anywhere.
+   *
+   * `requireEnded` re-reads the stamp inside the destroy's own transaction, so
+   * the two linearize: whichever of the end and the admission got there first,
+   * the state that survives is one someone asked for.
+   */
+  it('REFUSES the destroy and leaves the tree standing', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await db.update(agentWorkspaces).set({ endedAt: new Date() }).where(eq(agentWorkspaces.id, workspaceId));
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+
+    // The admission's half of the race: it wrote its node (seeded above) and
+    // reopened the listing.
+    await db.update(agentWorkspaces).set({ endedAt: null }).where(eq(agentWorkspaces.id, workspaceId));
+
+    const result = await destroyWorkspaceTree({
+      workspaceId,
+      actingUserId: ownerIds[0],
+      requireEnded: true,
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('session_reopened');
+
+    const after = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(after.nodes.map((node) => node.id).sort()).toEqual(['n1', 'root']);
+  });
+
+  it('DESTROYS when the end is still in force', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await db.update(agentWorkspaces).set({ endedAt: new Date() }).where(eq(agentWorkspaces.id, workspaceId));
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+
+    const result = await destroyWorkspaceTree({
+      workspaceId,
+      actingUserId: ownerIds[0],
+      requireEnded: true,
+    });
+
+    expect(result.status).toBe('ok');
+    const after = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(after.nodes).toEqual([]);
+  });
+
+  it('still destroys a LIVE workspace when the caller does not require the end — the flag is the guard, not the funnel', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+
+    const result = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerIds[0] });
 
     expect(result.status).toBe('ok');
   });
