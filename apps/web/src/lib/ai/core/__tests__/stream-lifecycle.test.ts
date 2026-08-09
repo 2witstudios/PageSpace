@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const {
-  mockRegistryRegister,
-  mockRegistryPush,
-  mockRegistryFinish,
-  mockRegistryGetBufferedParts,
-  mockRegistryGetMeta,
   mockBroadcastStart,
   mockBroadcastComplete,
   mockInsertValues,
@@ -17,11 +12,6 @@ const {
   mockEnsureWatcher,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
-  mockRegistryRegister: vi.fn(),
-  mockRegistryPush: vi.fn(),
-  mockRegistryFinish: vi.fn(),
-  mockRegistryGetBufferedParts: vi.fn().mockReturnValue([]),
-  mockRegistryGetMeta: vi.fn().mockReturnValue({ pageId: 'page-1', userId: 'u1', displayName: 'U', conversationId: 'conv-1', browserSessionId: 's1' }),
   mockBroadcastStart: vi.fn().mockResolvedValue(undefined),
   mockBroadcastComplete: vi.fn().mockResolvedValue(undefined),
   mockInsertValues: vi.fn(),
@@ -34,22 +24,14 @@ const {
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
 
-vi.mock('@/lib/ai/core/stream-multicast-registry', () => ({
-  streamMulticastRegistry: {
-    register: mockRegistryRegister,
-    push: mockRegistryPush,
-    finish: mockRegistryFinish,
-    getBufferedParts: mockRegistryGetBufferedParts,
-    // A REGISTERED stream has meta. The old fixture returned undefined — i.e. it modelled a
-    // stream whose registry entry was already evicted — which was harmless only because
-    // production never asked. It asks now: the parts checkpoint skips when the entry is gone,
-    // because `getBufferedParts()` then returns `[]` meaning "no entry", and persisting that
-    // would wipe the crash-recovery snapshot.
-    getMeta: mockRegistryGetMeta,
-    subscribe: vi.fn(),
-  },
-}));
-
+/**
+ * The channel registry is NOT mocked, deliberately.
+ *
+ * It is pure in-memory with no I/O, so the real thing makes these assertions about captured
+ * frames rather than about "did we call the collaborator". The suite this replaces mocked
+ * `streamMulticastRegistry` and then asserted on the mock — which is why a whole class of
+ * behaviour (what actually ends up in the snapshot) was never covered.
+ */
 vi.mock('@/lib/websocket', () => ({
   broadcastAiStreamStart: mockBroadcastStart,
   broadcastAiStreamComplete: mockBroadcastComplete,
@@ -107,6 +89,8 @@ vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
   consumePendingAbort: mockConsumePendingAbort,
 }));
 
+import type { UIMessageChunk } from 'ai';
+import { streamChannelRegistry } from '../stream-channel-registry';
 import { createStreamLifecycle as createStreamLifecycleUntracked } from '../stream-lifecycle';
 import { CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '../checkpoint-scheduler';
 
@@ -134,14 +118,27 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
 
 const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-const textPart = { type: 'text' as const, text: 'hello' };
-const toolPart = {
-  type: 'tool-list_pages' as const,
+const chunk = (value: unknown): UIMessageChunk => value as UIMessageChunk;
+
+/**
+ * A text part arrives as three frames. The fold needs the `text-start` before any delta —
+ * an orphaned delta is skipped — so tests that want visible text must open the part first.
+ */
+const textStart = chunk({ type: 'text-start', id: 't1' });
+const textDelta = (delta = 'hello') => chunk({ type: 'text-delta', id: 't1', delta });
+
+/** A durability boundary: bypasses the dirty-flush throttle. See isDurabilityBoundary. */
+const toolBoundary = chunk({
+  type: 'tool-input-available',
   toolCallId: 'tc1',
   toolName: 'list_pages',
-  state: 'output-available' as const,
   input: { driveId: 'd1' },
-  output: { pages: [] },
+});
+
+/** Open a text part and write `text` into it, as the pump would. */
+const writeText = (handle: { channel: { append: (c: UIMessageChunk) => void } }, text = 'hello') => {
+  handle.channel.append(textStart);
+  handle.channel.append(textDelta(text));
 };
 
 describe('createStreamLifecycle', () => {
@@ -149,11 +146,9 @@ describe('createStreamLifecycle', () => {
     vi.clearAllMocks();
     mockConsumePendingAbort.mockResolvedValue(false);
     mockEnsureWatcher.mockImplementation(() => {});
-    // clearAllMocks() clears calls, NOT implementations — a mockReturnValue set inside one test
-    // otherwise leaks into every test after it. These two drive the parts-checkpoint guards, so
-    // a leak here silently changes what later tests are actually exercising.
-    mockRegistryGetBufferedParts.mockReturnValue([]);
-    mockRegistryGetMeta.mockReturnValue({ pageId: 'page-1', userId: 'u1', displayName: 'U', conversationId: 'conv-1', browserSessionId: 's1' });
+    // The registry is module-global state, not a mock, so it leaks across tests unless reset.
+    // Same hazard the old mockReturnValue leak had, different mechanism.
+    streamChannelRegistry.reset();
     mockInsertOnConflict.mockResolvedValue(undefined);
     mockUpdateWhere.mockResolvedValue(undefined);
     mockBroadcastStart.mockResolvedValue(undefined);
@@ -172,10 +167,10 @@ describe('createStreamLifecycle', () => {
   });
 
   describe('register / insert / broadcastStart on creation', () => {
-    it('given valid params, should register the messageId in the multicast registry with full meta', async () => {
+    it('given valid params, should open a channel for the messageId carrying full stream meta', async () => {
       await createStreamLifecycle(params());
 
-      expect(mockRegistryRegister).toHaveBeenCalledWith('msg-1', {
+      expect(streamChannelRegistry.getMeta('msg-1')).toEqual({
         pageId: 'page-1',
         userId: 'user-1',
         displayName: 'Alice',
@@ -304,23 +299,27 @@ describe('createStreamLifecycle', () => {
     });
   });
 
-  describe('pushPart', () => {
-    it('given a part, should forward it to the multicast registry under the messageId', async () => {
+  describe('channel — the handle exposes one object the pump and every joiner share', () => {
+    it('given a frame appended, should be captured on the channel under this messageId', async () => {
       const lifecycle = await createStreamLifecycle(params());
 
-      lifecycle.pushPart(textPart);
+      lifecycle.channel.append(textStart);
 
-      expect(mockRegistryPush).toHaveBeenCalledWith('msg-1', textPart);
+      expect(lifecycle.channel.getFrames()).toEqual([textStart]);
+      expect(streamChannelRegistry.get('msg-1')).toBe(lifecycle.channel);
     });
 
-    it('given finish() already ran, should no-op instead of forwarding to the registry', async () => {
+    it('given finish() already ran, should refuse further frames rather than accept and drop them', async () => {
+      // The pre-inversion handle exposed `pushPart`, which silently no-op'd after finish.
+      // A finished channel REFUSES, so a caller still pumping is observable instead of
+      // quietly losing a generation.
       const lifecycle = await createStreamLifecycle(params());
       lifecycle.finish(false);
-      mockRegistryPush.mockClear();
 
-      lifecycle.pushPart(textPart);
+      lifecycle.channel.append(textStart);
 
-      expect(mockRegistryPush).not.toHaveBeenCalled();
+      expect(lifecycle.channel.getFrames()).toEqual([]);
+      expect(lifecycle.channel.finished).toBe(true);
     });
 
     it('given finish() already ran, should not count toward the checkpoint (would otherwise race the final write with an empty snapshot)', async () => {
@@ -328,134 +327,124 @@ describe('createStreamLifecycle', () => {
       lifecycle.finish(false);
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 25; i++) lifecycle.pushPart(textPart);
+      for (let i = 0; i < 25; i++) lifecycle.channel.append(textDelta());
       await flushMicrotasks();
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
-
-    it('given the registry throws on push, should not throw out of pushPart', async () => {
-      mockRegistryPush.mockImplementationOnce(() => { throw new Error('push'); });
-      const lifecycle = await createStreamLifecycle(params());
-
-      expect(() => lifecycle.pushPart(textPart)).not.toThrow();
-    });
-
-    it('given the registry throws on push, should warn-log so the swallow is observable', async () => {
-      mockRegistryPush.mockImplementationOnce(() => { throw new Error('boom'); });
-      const lifecycle = await createStreamLifecycle(params());
-
-      mockLoggerWarn.mockClear();
-      lifecycle.pushPart(textPart);
-
-      expect(mockLoggerWarn).toHaveBeenCalled();
-    });
   });
 
-  describe('pushPart — time-based checkpoint cadence', () => {
+  describe('checkpoint cadence — time-based, with a durability-boundary bypass', () => {
     beforeEach(() => {
       vi.useFakeTimers();
     });
 
     afterEach(() => {
       // Tests that don't call finish() leave the heartbeat and checkpoint intervals armed —
-      // clear them explicitly, or a leftover setInterval fires (with THIS test's stale mock
-      // return values) during a later test's fake-timer advance and pollutes its assertions.
+      // clear them explicitly, or a leftover setInterval fires during a later test's
+      // fake-timer advance and pollutes its assertions.
       vi.clearAllTimers();
       vi.useRealTimers();
     });
 
-    it('given a part pushed right after start, should not persist immediately (throttled to the dirty-flush window)', async () => {
+    /** The folded snapshot the checkpoint is expected to write for a single 'hello' text part. */
+    const helloSnapshot = [
+      { type: 'text', text: 'hello', state: 'streaming', providerMetadata: undefined },
+    ];
+
+    it('given a frame right after start, should not persist immediately (throttled to the dirty-flush window)', async () => {
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      lifecycle.pushPart(textPart);
+      writeText(lifecycle);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
-    it('given a dirty buffer and at least 1s elapsed since the last checkpoint, should persist on the next pushed part', async () => {
-      const fakeParts = [textPart];
-      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
+    it('given a dirty buffer and at least 1s elapsed since the last checkpoint, should persist the folded snapshot on the next frame', async () => {
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      lifecycle.pushPart(textPart);
-      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
-      lifecycle.pushPart(textPart);
+      writeText(lifecycle);
+      // The clock is moved WITHOUT running timers on purpose. Advancing by the interval would
+      // fire the interval's own flush, and then this test would be pinning that path instead —
+      // which the "no further frames" case already covers. Here the frame must do it.
+      vi.setSystemTime(Date.now() + CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+      lifecycle.channel.append(textDelta(''));
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
       expect(mockUpdateSet).toHaveBeenCalledWith({
-        parts: fakeParts,
-        rawPartsCount: fakeParts.length,
-        lastHeartbeatAt: expect.any(Date),
+        parts: helloSnapshot,
+        rawPartsCount: 3,
+        // Not expect.any(Date): the checkpoint stamps this AFTER awaiting the fold, and under
+        // fake timers the value is a ClockDate rather than a Date instance.
+        lastHeartbeatAt: expect.anything(),
       });
     });
 
-    it('given a tool-boundary part, should persist immediately even inside the 1s throttle window', async () => {
-      const fakeParts = [toolPart];
-      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
+    it('given a tool-boundary frame, should persist immediately even inside the 1s throttle window', async () => {
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      lifecycle.pushPart(toolPart);
+      lifecycle.channel.append(toolBoundary);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
       expect(mockUpdateSet).toHaveBeenCalledWith({
-        parts: fakeParts,
-        rawPartsCount: fakeParts.length,
-        lastHeartbeatAt: expect.any(Date),
+        parts: [expect.objectContaining({ type: 'tool-list_pages', state: 'input-available' })],
+        rawPartsCount: 1,
+        lastHeartbeatAt: expect.anything(),
       });
     });
 
-    it('given a tool-boundary flush just landed, should still throttle the very next text part for 1s', async () => {
+    it('given a reasoning frame, should NOT bypass the throttle (it streams token-by-token like text)', async () => {
+      // The bypass is an explicit allow-list rather than "anything that is not a text delta".
+      // A negative check would fire on every frame of a long chain-of-thought and turn the
+      // checkpoint back into a per-token write.
       const lifecycle = await createStreamLifecycle(params());
-
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(0);
       mockUpdateSet.mockClear();
 
-      lifecycle.pushPart(textPart);
+      lifecycle.channel.append(chunk({ type: 'reasoning-start', id: 'r1' }));
+      lifecycle.channel.append(chunk({ type: 'reasoning-delta', id: 'r1', delta: 'thinking' }));
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
-    // The whole reason for a dedicated interval, independent of pushPart: a stream sitting in a
-    // long tool call pushes exactly one part (tool-input-available) and then nothing for minutes
-    // — a rejoining client should still see that the tool started, not a snapshot frozen from
+    it('given a tool-boundary flush just landed, should still throttle the very next text frame for 1s', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+
+      lifecycle.channel.append(toolBoundary);
+      await vi.advanceTimersByTimeAsync(0);
+      mockUpdateSet.mockClear();
+
+      writeText(lifecycle);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    // The whole reason for a dedicated interval, independent of the frame flow: a stream sitting
+    // in a long tool call emits one frame (tool-input-available) and then nothing for minutes —
+    // a rejoining client should still see that the tool started, not a snapshot frozen from
     // before the call began.
-    it('given a dirty buffer and no further parts pushed, the unref\'d 1s interval should flush it mid-tool-call', async () => {
-      const fakeParts = [toolPart];
-      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
+    it('given a dirty buffer and no further frames, the unref\'d 1s interval should flush it mid-tool-call', async () => {
       const lifecycle = await createStreamLifecycle(params());
+      writeText(lifecycle);
       mockUpdateSet.mockClear();
 
-      // A non-boundary text part first, so the tool-boundary bypass isn't what causes the
-      // flush below — the throttle must still be respected...
-      lifecycle.pushPart(textPart);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mockUpdateSet).not.toHaveBeenCalled();
-
-      // ...until the interval ticks past the 1s window with nothing else pushed.
       await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        parts: fakeParts,
-        rawPartsCount: fakeParts.length,
-        lastHeartbeatAt: expect.any(Date),
-      });
     });
 
-    it('given no parts pushed at all, the 1s interval should never persist (nothing dirty to flush)', async () => {
+    it('given no frames at all, the 1s interval should never persist (nothing dirty to flush)', async () => {
       await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      await vi.advanceTimersByTimeAsync(10 * CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS * 3);
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
@@ -463,117 +452,82 @@ describe('createStreamLifecycle', () => {
     it('given the checkpoint persist rejects, should warn and not throw', async () => {
       mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
       const lifecycle = await createStreamLifecycle(params());
-      mockLoggerWarn.mockClear();
 
-      lifecycle.pushPart(toolPart);
+      lifecycle.channel.append(toolBoundary);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(mockLoggerWarn).toHaveBeenCalled();
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        'stream-lifecycle: aiStreamSessions parts persist failed',
+        expect.objectContaining({ messageId: 'msg-1' }),
+      );
     });
 
     it('given a persist is still in flight, should skip scheduling another until it settles', async () => {
-      let resolveFirst!: () => void;
+      let release: (() => void) | undefined;
       mockUpdateWhere.mockImplementationOnce(
-        () => new Promise<void>((res) => { resolveFirst = res; }),
+        () => new Promise<void>((resolve) => { release = resolve; }),
       );
       const lifecycle = await createStreamLifecycle(params());
+
+      lifecycle.channel.append(toolBoundary);
+      await vi.advanceTimersByTimeAsync(0);
       mockUpdateSet.mockClear();
 
-      lifecycle.pushPart(toolPart);
+      lifecycle.channel.append(chunk({ type: 'tool-output-available', toolCallId: 'tc1', output: {} }));
       await vi.advanceTimersByTimeAsync(0);
-      // A second tool-boundary part arrives while the first write is still in flight — the
-      // in-flight guard must fold it into the next opportunity rather than race a second write.
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
 
-      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
-
-      resolveFirst();
-      await vi.advanceTimersByTimeAsync(0);
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+      release?.();
     });
 
-    it('given consecutive text-delta parts pushed before a checkpoint, should merge them into one text part on the persisted snapshot', async () => {
-      mockRegistryGetBufferedParts.mockReturnValue([
-        { type: 'text', text: 'hel' },
-        { type: 'text', text: 'lo' },
-        { type: 'text', text: ' world' },
+    it('given consecutive text-delta frames before a checkpoint, should fold them into one text part on the persisted snapshot', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      lifecycle.channel.append(textStart);
+      lifecycle.channel.append(textDelta('one '));
+      lifecycle.channel.append(textDelta('two '));
+      lifecycle.channel.append(textDelta('three'));
+      lifecycle.channel.append(toolBoundary);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parts: [
+            { type: 'text', text: 'one two three', state: 'streaming', providerMetadata: undefined },
+            expect.objectContaining({ type: 'tool-list_pages' }),
+          ],
+        }),
+      );
+    });
+
+    it('given reasoning, a file and a source frame, should persist them — the projection this replaces dropped all three', async () => {
+      // The headline fidelity gain, asserted directly. `chunkToPart` forwarded four chunk
+      // types; everything here was silently absent from the snapshot, from every re-attach,
+      // and from the durable save whenever onFinish never ran.
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      lifecycle.channel.append(chunk({ type: 'reasoning-start', id: 'r1' }));
+      lifecycle.channel.append(chunk({ type: 'reasoning-delta', id: 'r1', delta: 'because' }));
+      lifecycle.channel.append(chunk({ type: 'reasoning-end', id: 'r1' }));
+      lifecycle.channel.append(chunk({ type: 'file', mediaType: 'image/png', url: 'https://x.test/a.png' }));
+      lifecycle.channel.append(chunk({ type: 'source-url', sourceId: 's1', url: 'https://x.test/d', title: 'D' }));
+      lifecycle.channel.append(chunk({ type: 'data-commandExecution', id: 'm1-command-0', data: { command: 'plan' } }));
+      // The first boundary flushes immediately; the rest are skipped while that write is in
+      // flight. Advance past the throttle so the interval flushes the complete snapshot.
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS * 2);
+
+      const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { parts: { type: string }[] };
+      expect(persisted.parts.map((part) => part.type)).toEqual([
+        'reasoning',
+        'file',
+        'source-url',
+        'data-commandExecution',
       ]);
-      const lifecycle = await createStreamLifecycle(params());
-      mockUpdateSet.mockClear();
-
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        parts: [{ type: 'text', text: 'hello world' }],
-        // The RAW count (3 pushed chunks), NOT the merged array's length (1) — a rejoining
-        // client's live-replay skip must be counted against the raw multicast buffer, which
-        // the merged snapshot no longer has a 1:1 length relationship with.
-        rawPartsCount: 3,
-        lastHeartbeatAt: expect.any(Date),
-      });
-    });
-
-    it('given a buffered snapshot over the ~5MB serialized cap, should truncate the oldest parts and warn exactly once across repeated checkpoints', async () => {
-      const huge = { type: 'text' as const, text: 'x'.repeat(6 * 1024 * 1024) };
-      const recent = { type: 'text' as const, text: 'recent' };
-      mockRegistryGetBufferedParts.mockReturnValue([huge, toolPart, recent]);
-      const lifecycle = await createStreamLifecycle(params());
-      mockUpdateSet.mockClear();
-      mockLoggerWarn.mockClear();
-
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(0);
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
-
-      expect(mockUpdateSet).toHaveBeenCalledTimes(2);
-      for (const call of mockUpdateSet.mock.calls) {
-        const written = call[0] as { parts: unknown[]; rawPartsCount: number };
-        expect(written.parts).not.toContainEqual(huge);
-        // D-task yfz5p85c584z3ekvdfc3qx4e: once capping drops `huge` (raw index 0), the seed
-        // no longer reflects the frame(s) that fed it — reporting the raw total (3) here would
-        // tell a rejoining client to skip past those frames too, permanently losing that
-        // content (the live multicast replay is the only place it still exists). Reporting the
-        // raw index the surviving content (`toolPart`, raw index 1) actually starts at instead
-        // means the client only under-skips (harmless, self-correcting) rather than over-skips.
-        expect(written.rawPartsCount).toBe(1);
-      }
-      expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
-    });
-
-    // Codex review finding (P2): when the raw buffer is many small chunks that ALL merge into
-    // ONE giant text part exceeding the cap alone, capPartsToByteBudget keeps it (nothing is
-    // droppable) but still reports wasCapped=true. rawPartsCount must fall back to the true raw
-    // total here, NOT the merged part's origin index — the seed already reflects every one of
-    // those raw chunks (they all fed the single surviving part), so skipping only 1 of e.g. 5
-    // would re-replay the whole already-seeded text on top of itself.
-    it('given many small raw chunks merge into one part that alone exceeds the cap, should persist the TRUE raw total, not the merged part\'s origin index', async () => {
-      const chunk = { type: 'text' as const, text: 'x'.repeat(6 * 1024 * 1024) };
-      // 5 raw chunks, all merging into ONE giant text part (same running text stream).
-      mockRegistryGetBufferedParts.mockReturnValue([chunk, chunk, chunk, chunk, chunk]);
-      const lifecycle = await createStreamLifecycle(params());
-      mockUpdateSet.mockClear();
-
-      // `chunk` is a plain text part (not a tool-boundary part), so the checkpoint only flushes
-      // once the dirty-flush throttle interval elapses — unlike the tool-boundary pushes above,
-      // which bypass it and flush immediately.
-      lifecycle.pushPart(chunk);
-      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
-
-      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
-      const written = mockUpdateSet.mock.calls[0][0] as { parts: unknown[]; rawPartsCount: number };
-      // The true raw count (5), not 0 (the merged part's origin index, raw frame 0) — nothing
-      // was dropped, so the full raw total is still correct to skip.
-      expect(written.rawPartsCount).toBe(5);
     });
   });
 
-  // Liveness must NOT ride the parts checkpoint. A stream sitting in a long tool call
-  // (sandbox exec, deep research, a slow MCP tool) pushes no parts for minutes — a
-  // checkpoint-driven heartbeat would declare a perfectly healthy stream dead: it would
-  // vanish from /active-streams so no client could attach, and the next send would fail
-  // to abort it and would generate alongside it.
   describe('heartbeat — an independent timer, not the parts checkpoint', () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -641,7 +595,6 @@ describe('createStreamLifecycle', () => {
     // advertises a live, joinable stream that no client can join and whose Stop button is a
     // silent no-op, while the generation keeps running its tools and keeps billing.
     it('given a stream still pushing parts past the horizon, should stop refreshing its heartbeat rather than look live forever', async () => {
-      mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
 
       // Past the horizon, but still generating hard. The 1s checkpoint interval makes this
@@ -650,7 +603,7 @@ describe('createStreamLifecycle', () => {
       await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 60; i++) lifecycle.pushPart(toolPart);
+      for (let i = 0; i < 60; i++) lifecycle.channel.append(toolBoundary);
       await vi.advanceTimersByTimeAsync(0);
 
       // Not one write. The row is allowed to go stale, so the next takeover can reconcile it.
@@ -661,24 +614,39 @@ describe('createStreamLifecycle', () => {
     // entry, so getBufferedParts() returns [] meaning "no entry" — not "no content". The old
     // checkpoint serialized that [] straight over the parts column, erasing the crash-recovery
     // snapshot a client needs to restore mid-stream content after the originator's process dies.
-    it('given the registry entry is gone, should not overwrite the parts snapshot with an empty array', async () => {
-      const lifecycle = await createStreamLifecycle(params());
+    it('given a retry superseded this lifecycle, should stop checkpointing rather than write stale frames over the new generation', async () => {
+      // The case the pre-inversion guard could not see. A retry/takeover opens a new channel on
+      // the same messageId; this lifecycle's `finished` flag is still false and its interval is
+      // still armed, so without an identity check it keeps writing ITS frames onto the row the
+      // new generation now owns.
+      const superseded = await createStreamLifecycle(params());
+      superseded.channel.append(textStart);
+      superseded.channel.append(textDelta('stale'));
+
+      streamChannelRegistry.open('msg-1', {
+        pageId: 'page-1',
+        userId: 'user-1',
+        displayName: 'Alice',
+        conversationId: 'conv-1',
+        browserSessionId: 'session-1',
+      });
       mockUpdateSet.mockClear();
 
-      // The registry evicted it (horizon), so it reports no entry and an empty buffer.
-      mockRegistryGetMeta.mockReturnValue(undefined);
-      mockRegistryGetBufferedParts.mockReturnValue([]);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS * 2);
 
-      // Tool-boundary parts force an immediate checkpoint attempt, which is exactly the case
-      // that must still respect the "entry gone" guard rather than write parts: [].
-      lifecycle.pushPart(toolPart);
-      await vi.advanceTimersByTimeAsync(0);
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
 
-      const wroteEmptyParts = mockUpdateSet.mock.calls.some(
-        (c) => Array.isArray((c[0] as { parts?: unknown }).parts)
-          && ((c[0] as { parts: unknown[] }).parts).length === 0,
-      );
-      expect(wroteEmptyParts).toBe(false);
+    it('given the registry evicted this channel at the horizon, should stop checkpointing', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      lifecycle.channel.append(textStart);
+      lifecycle.channel.append(textDelta('orphaned'));
+      streamChannelRegistry.close('msg-1');
+      mockUpdateSet.mockClear();
+
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS * 2);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
     it('given the stream finishes, should stop beating', async () => {
@@ -701,7 +669,9 @@ describe('createStreamLifecycle', () => {
       lifecycle.finish(false);
       await flushMicrotasks();
 
-      expect(mockRegistryFinish).toHaveBeenCalledWith('msg-1', false);
+      expect(lifecycle.channel.finished).toBe(true);
+      expect(lifecycle.channel.aborted).toBe(false);
+      expect(streamChannelRegistry.get('msg-1')).toBeUndefined();
       expect(mockUpdateSet).toHaveBeenCalledWith({
         status: 'complete',
         completedAt: expect.any(Date),
@@ -745,7 +715,7 @@ describe('createStreamLifecycle', () => {
       lifecycle.finish(false);
       await flushMicrotasks();
 
-      expect(mockRegistryFinish).toHaveBeenCalledTimes(1);
+      expect(lifecycle.channel.finished).toBe(true);
     });
 
     it('given finish() is called twice, should fire the DB UPDATE only once', async () => {
@@ -781,17 +751,20 @@ describe('createStreamLifecycle', () => {
   });
 
   describe('finish — invocation order', () => {
-    it('given finish(), should call registry.finish, then DB UPDATE, then broadcastComplete in that order', async () => {
+    it('given finish(), should close the channel, then DB UPDATE, then broadcastComplete in that order', async () => {
+      // Ordering is load-bearing: subscribers must be told the stream ended before the row is
+      // driven terminal, and the row must settle before anyone is told to reload from it.
       const lifecycle = await createStreamLifecycle(params());
+      const probe = vi.fn();
+      lifecycle.channel.subscribe({ fromSeq: 0, onFrame: () => {}, onEnd: () => probe() });
 
-      mockRegistryFinish.mockClear();
       mockUpdateSet.mockClear();
       mockBroadcastComplete.mockClear();
 
       lifecycle.finish(false);
       await flushMicrotasks();
 
-      const finishOrder = mockRegistryFinish.mock.invocationCallOrder[0];
+      const finishOrder = probe.mock.invocationCallOrder[0];
       const updateOrder = mockUpdateSet.mock.invocationCallOrder[0];
       const broadcastOrder = mockBroadcastComplete.mock.invocationCallOrder[0];
 
@@ -802,7 +775,6 @@ describe('createStreamLifecycle', () => {
 
   describe('finish — parts cleared on completion', () => {
     it('given a stream with buffered parts, should clear parts to empty in the final write rather than persist the full content', async () => {
-      mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
 
       lifecycle.finish(false);
@@ -819,7 +791,6 @@ describe('createStreamLifecycle', () => {
         rawPartsCount: 0,
       });
 
-      mockRegistryGetBufferedParts.mockReturnValue([]);
     });
 
     it('given a periodic persist is in flight when finish() is called, should await it before writing the final (cleared) snapshot', async () => {
@@ -828,10 +799,9 @@ describe('createStreamLifecycle', () => {
       mockUpdateWhere.mockImplementationOnce(
         () => new Promise<void>((res) => { resolvePeriodic = res; }),
       );
-      mockRegistryGetBufferedParts.mockReturnValue([toolPart]);
       const lifecycle = await createStreamLifecycle(params());
 
-      lifecycle.pushPart(toolPart);
+      lifecycle.channel.append(toolBoundary);
       await vi.advanceTimersByTimeAsync(0);
 
       mockUpdateSet.mockClear();
@@ -852,7 +822,6 @@ describe('createStreamLifecycle', () => {
         rawPartsCount: 0,
       });
 
-      mockRegistryGetBufferedParts.mockReturnValue([]);
       vi.clearAllTimers();
       vi.useRealTimers();
     });
@@ -877,11 +846,19 @@ describe('createStreamLifecycle', () => {
       expect(() => lifecycle.finish(false)).not.toThrow();
     });
 
-    it('given registry.finish throws, should still UPDATE and broadcast', async () => {
-      mockRegistryFinish.mockImplementationOnce(() => { throw new Error('reg err'); });
+    it('given a subscriber throws while the channel closes, should still UPDATE and broadcast', async () => {
+      // The channel swallows a subscriber's teardown throw so one bad joiner cannot block the
+      // terminal write. Same guarantee the old registry.finish try/catch gave, enforced a level
+      // down where the fan-out actually happens.
       const lifecycle = await createStreamLifecycle(params());
+      lifecycle.channel.subscribe({
+        fromSeq: 0,
+        onFrame: () => {},
+        onEnd: () => { throw new Error('bad subscriber'); },
+      });
+      mockUpdateSet.mockClear();
 
-      lifecycle.finish(false);
+      expect(() => lifecycle.finish(false)).not.toThrow();
       await flushMicrotasks();
 
       expect(mockUpdateSet).toHaveBeenCalled();
@@ -911,13 +888,14 @@ describe('createStreamLifecycle', () => {
       expect(mockConsumePendingAbort).toHaveBeenCalledTimes(1);
     });
 
-    it('given a pending-abort intent exists, should still register in the multicast registry (then evict it)', async () => {
+    it('given a pending-abort intent exists, should still open a channel (then close it)', async () => {
       mockConsumePendingAbort.mockResolvedValue(true);
 
-      await createStreamLifecycle(params());
+      const handle = await createStreamLifecycle(params());
 
-      expect(mockRegistryRegister).toHaveBeenCalled();
-      expect(mockRegistryFinish).toHaveBeenCalledWith('msg-1', true);
+      expect(handle.channel.finished).toBe(true);
+      expect(handle.channel.aborted).toBe(true);
+      expect(streamChannelRegistry.get('msg-1')).toBeUndefined();
     });
 
     it('given a pending-abort intent exists, should NOT broadcast stream_start', async () => {
@@ -946,22 +924,24 @@ describe('createStreamLifecycle', () => {
       mockConsumePendingAbort.mockResolvedValue(true);
 
       const handle = await createStreamLifecycle(params());
-      mockRegistryFinish.mockClear();
+      // Creation itself flips the row to 'aborted', so clear first: what is under test is
+      // that finish() adds NOTHING on top, not that the pre-abort path never writes.
+      mockUpdateSet.mockClear();
 
       handle.finish(false);
       await flushMicrotasks();
 
-      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalled();
       expect(mockBroadcastComplete).not.toHaveBeenCalled();
     });
 
-    it('given a pending-abort intent exists, pushPart should be a no-op', async () => {
+    it('given a pending-abort intent exists, the channel should refuse frames', async () => {
       mockConsumePendingAbort.mockResolvedValue(true);
 
       const handle = await createStreamLifecycle(params());
-      handle.pushPart({ type: 'text', text: 'hello' });
+      handle.channel.append(textStart);
 
-      expect(mockRegistryPush).not.toHaveBeenCalled();
+      expect(handle.channel.getFrames()).toEqual([]);
     });
 
     it('given the pre-abort UPDATE rejects, should warn and still return preAborted=true', async () => {
@@ -980,30 +960,34 @@ describe('createStreamLifecycle', () => {
       const handle = await createStreamLifecycle(params());
 
       expect(handle.preAborted).toBe(false);
-      expect(mockRegistryRegister).toHaveBeenCalled();
       expect(mockBroadcastStart).toHaveBeenCalled();
       // Not evicted — this is the normal, still-streaming path.
-      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(handle.channel.finished).toBe(false);
     });
   });
 
-  describe('getBufferedParts', () => {
-    it('delegates to streamMulticastRegistry.getBufferedParts with the messageId', async () => {
-      const fakeParts = [{ type: 'text' as const, text: 'hi' }];
-      mockRegistryGetBufferedParts.mockReturnValueOnce(fakeParts);
+  describe('getParts — the folded view of everything captured', () => {
+    it('given captured frames, should return the SDK reduction of them rather than a re-derived projection', async () => {
       const lifecycle = await createStreamLifecycle(params());
+      lifecycle.channel.append(textStart);
+      lifecycle.channel.append(textDelta('folded'));
 
-      const result = lifecycle.getBufferedParts();
-
-      expect(mockRegistryGetBufferedParts).toHaveBeenCalledWith('msg-1');
-      expect(result).toBe(fakeParts);
+      expect(await lifecycle.getParts()).toEqual([
+        { type: 'text', text: 'folded', state: 'streaming', providerMetadata: undefined },
+      ]);
     });
 
-    it('returns an empty array when the registry returns none', async () => {
-      mockRegistryGetBufferedParts.mockReturnValueOnce([]);
+    it('given nothing captured, should return no parts', async () => {
       const lifecycle = await createStreamLifecycle(params());
 
-      expect(lifecycle.getBufferedParts()).toEqual([]);
+      expect(await lifecycle.getParts()).toEqual([]);
+    });
+
+    it('given a pre-aborted handle, should return no parts', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(true);
+      const handle = await createStreamLifecycle(params());
+
+      expect(await handle.getParts()).toEqual([]);
     });
   });
 });

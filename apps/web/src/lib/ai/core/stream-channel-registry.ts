@@ -1,5 +1,13 @@
+import type { UIMessage } from 'ai';
 import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 import { openStreamChannel, type StreamChannel } from '@/lib/ai/core/stream-channel';
+
+/**
+ * Re-exported from here so consumers can stop importing it from
+ * `stream-multicast-registry`, which the Deletion wave removes. Five modules still
+ * import it from the old home; they move with that leaf, not this one.
+ */
+export type UIMessagePart = UIMessage['parts'][number];
 
 /**
  * Process-local index of live stream channels, keyed by assistant `messageId`.
