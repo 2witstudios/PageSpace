@@ -170,6 +170,23 @@ describe('the answers', () => {
     expect((await post({ baseRev: 4, put: [], drop: [] })).status).toBe(400);
   });
 
+  it('503 while the backfill has not reached this workspace — the SERVER is unready, not the write', async () => {
+    // Not 400: the write was valid and nothing the caller changes would help.
+    // Not 409 either, which invites a rebase-and-retry against a tree that must
+    // not be written at all — so this carries no snapshot. It stops being true
+    // when the backfill runs, which is exactly what 503 says.
+    mockApply.mockResolvedValue({
+      status: 'refused',
+      code: 'awaiting_backfill',
+      detail: 'this workspace still holds membership that only the previous model records',
+    });
+    const response = await post({ baseRev: 4, put: [], drop: [] });
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toMatchObject({ code: 'awaiting_backfill' });
+    expect(body).not.toHaveProperty('nodes');
+  });
+
   it('403 for a binding the caller may not make, and says nothing about which', async () => {
     mockApply.mockResolvedValue({
       status: 'refused',

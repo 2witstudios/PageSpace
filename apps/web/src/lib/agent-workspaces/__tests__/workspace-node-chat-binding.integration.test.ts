@@ -34,10 +34,11 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { rootSeedFor } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import { factories } from '@pagespace/db/test/factories';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import {
@@ -375,5 +376,137 @@ describe('moving a conversation between nodes that BOTH survive the write', () =
     const { nodes } = await readWorkspaceNodeSnapshot(db, workspaceId);
     const holder = nodes.find((node) => node.nodeType === 'pane' && node.target?.id === conv);
     expect(holder?.id).toBe('n2');
+  });
+});
+
+describe('a workspace the backfill has not reached yet', () => {
+  /**
+   * THE UN-BACKFILLED REFUSAL, against a real database, because the whole
+   * question is what a JOIN across two tables says and no fake can answer it.
+   *
+   * This release ships the node tables but NOT the drop of the old membership
+   * columns — they stage separately, after the backfill. In that window a
+   * database can hold membership only `conversations.workspaceId` records.
+   *
+   * Reading such a workspace shows it empty, and that is recoverable: the
+   * backfill fills it in. Writing to it is not. `loadAlreadyMigrated` in
+   * `scripts/backfill-agent-workspace-nodes.ts` skips any workspace holding ANY
+   * node row, so one seeded root strands that workspace's real membership for
+   * good — and it is then counted `alreadyMigrated`, so the census that gates
+   * the rollout calls the run clean. The failure hides from its own gate.
+   *
+   * Three states have to stay distinguishable, and all three are here: a fresh
+   * deployment with no legacy rows at all, a workspace the backfill has already
+   * done, and one it has not.
+   */
+  async function legacyMember(workspaceId: string): Promise<string> {
+    const conversationId = await createConversation();
+    await db
+      .update(conversations)
+      .set({ workspaceId, closedInWorkspaceAt: null })
+      .where(eq(conversations.id, conversationId));
+    return conversationId;
+  }
+
+  it('REFUSES the seed, rather than stranding the membership it cannot see', async () => {
+    const workspaceId = await createWorkspace();
+    await legacyMember(workspaceId);
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(before.nodes).toEqual([]);
+
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('awaiting_backfill');
+
+    // And it wrote NOTHING — the point of refusing rather than warning.
+    const after = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(after.nodes).toEqual([]);
+  });
+
+  it('ALLOWS a workspace with no legacy membership at all — a fresh deployment is not un-backfilled', async () => {
+    // The distinction the guard has to get right. A brand-new install has zero
+    // conversations naming a workspace through the old column, so the predicate
+    // is false and the seed proceeds exactly as it always did.
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [
+        {
+          nodeType: 'pane',
+          id: 'p1',
+          parentId: rootSeedFor(workspaceId).id,
+          position: 0,
+          target: { kind: 'chat', id: conversationId },
+        },
+      ],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('ALLOWS when the legacy pointer is STALE and the node lives in another workspace', async () => {
+    // The case that makes the `NOT EXISTS` clause unscoped by `rootId`, and the
+    // only one that can reach it: the guard runs only when a workspace has NO
+    // nodes, so a workspace whose own member already has a node never asks.
+    //
+    // Here `conversations.workspaceId` still names W1 while the conversation's
+    // node lives in W2 — reachable because a thread can be claimed into another
+    // workspace, and the chat index is global with no `rootId` in it. The
+    // membership DID move; W1's pointer is just stale. Nothing is left to
+    // strand, so W1 may be seeded.
+    //
+    // Scoping the clause to `rootId` would invert this into a refusal that no
+    // backfill run could ever clear.
+    const stale = await createWorkspace();
+    const holder = await createWorkspace();
+    const conversationId = await legacyMember(stale);
+    await seedTree(holder, [root, chatPane('n1', 0, conversationId)]);
+
+    const before = await readWorkspaceNodeSnapshot(db, stale);
+    expect(before.nodes).toEqual([]);
+
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId: stale,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(stale).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('ALLOWS a workspace whose legacy member ALREADY has a node — the backfill got here', async () => {
+    // The other side: the old column still says what it always said, but the
+    // membership has a node, so there is nothing left to strand.
+    const workspaceId = await createWorkspace();
+    const conversationId = await legacyMember(workspaceId);
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'n2', parentId: 'root', position: 1, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
   });
 });

@@ -333,6 +333,62 @@ export async function readChatTargetHolders(
  * to be in the same lock scope, or two callers compute from one base and the
  * later commit silently drops the earlier one's change.
  */
+/**
+ * Does this workspace still hold membership that only the OLD model records?
+ *
+ * True exactly when a conversation names this workspace through
+ * `conversations.workspaceId`, is live by the old model's own reckoning
+ * (`isActive`, never closed out of the workspace), and has no chat node. That
+ * is the definition of "the backfill has not reached this workspace yet", and
+ * it is the same predicate `scripts/backfill-agent-workspace-nodes.ts` derives
+ * from — which is the reason those two columns are still in the schema at all.
+ *
+ * **Why this question has to be asked before a root is minted.** Membership is
+ * read only from `agent_workspace_nodes`; there is no fallback. On a database
+ * the backfill has not run against, an un-backfilled workspace opens EMPTY —
+ * which is recoverable, because running the backfill fills it in. What is not
+ * recoverable is what happens if anything WRITES to it first: the backfill
+ * skips any workspace that already holds a node row (`loadAlreadyMigrated` is a
+ * bare `SELECT DISTINCT rootId`, with no notion of how many nodes it should
+ * have found), so a single seeded root permanently strands that workspace's
+ * real membership — and the backfill then counts it as `alreadyMigrated`, so
+ * the census that gates the whole rollout reports the run clean.
+ *
+ * Silent, permanent, and invisible to the gate built to catch it. Hence a
+ * refusal rather than a warning.
+ *
+ * Costs one indexed lookup, and only on the seed path — the first write to a
+ * workspace that has no tree. A workspace that already has nodes is never
+ * asked, and on any deployment with no legacy rows at all the answer is always
+ * false. After the follow-up migration drops the columns, this function and its
+ * call site go with them.
+ */
+export async function hasUnmigratedLegacyMembership(
+  executor: DbExecutor,
+  workspaceId: string,
+): Promise<boolean> {
+  const { conversations } = await import('@pagespace/db/schema/conversations');
+  const { agentWorkspaceNodes } = await import('@pagespace/db/schema/agent-workspace-nodes');
+
+  const [row] = await executor
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.workspaceId, workspaceId),
+        eq(conversations.isActive, true),
+        sql`${conversations.closedInWorkspaceAt} IS NULL`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${agentWorkspaceNodes} n
+           WHERE n."targetKind" = 'chat' AND n."targetId" = ${conversations.id}
+        )`,
+      ),
+    )
+    .limit(1);
+
+  return row !== undefined;
+}
+
 export async function writeWorkspaceNodes(
   executor: DbExecutor,
   input: { workspaceId: string; write: PersistedNodeWrite },
