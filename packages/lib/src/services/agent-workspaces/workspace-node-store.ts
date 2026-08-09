@@ -353,20 +353,33 @@ export async function writeWorkspaceNodes(
   }
 
   if (write.put.length > 0) {
-    // The second half of the release — see the docblock. Scoped to `chat`
-    // because that is the only kind the partial index covers, and to the ids
-    // this write is about to restate, so it can never disturb a node the write
-    // did not name.
-    await executor
-      .update(agentWorkspaceNodes)
-      .set({ targetKind: null, targetId: null })
-      .where(
-        and(
-          eq(agentWorkspaceNodes.rootId, workspaceId),
-          inArray(agentWorkspaceNodes.id, write.put.map((node) => node.id)),
-          eq(agentWorkspaceNodes.targetKind, 'chat'),
-        ),
-      );
+    // The second half of the release — see the docblock. Scoped three ways, and
+    // each one is load-bearing:
+    //
+    //  * to writes that TAKE a chat target at all. A resize drag or a move puts
+    //    nodes without binding anything, and nothing can collide on an index
+    //    over a value no row is acquiring — so the commonest write on the
+    //    system skips this statement entirely rather than paying for a case it
+    //    cannot be in.
+    //  * to `chat`, the only kind the partial index covers.
+    //  * to the ids this write is about to restate, so it can never disturb a
+    //    node the write did not name — which is also what keeps a genuine
+    //    duplicate refused instead of quietly released.
+    const takesChatTarget = write.put.some(
+      (node) => node.nodeType === 'pane' && node.target?.kind === 'chat',
+    );
+    if (takesChatTarget) {
+      await executor
+        .update(agentWorkspaceNodes)
+        .set({ targetKind: null, targetId: null })
+        .where(
+          and(
+            eq(agentWorkspaceNodes.rootId, workspaceId),
+            inArray(agentWorkspaceNodes.id, write.put.map((node) => node.id)),
+            eq(agentWorkspaceNodes.targetKind, 'chat'),
+          ),
+        );
+    }
 
     const now = new Date();
     await executor
