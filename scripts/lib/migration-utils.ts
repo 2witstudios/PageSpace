@@ -115,11 +115,33 @@ export function workspaceSelectionWhere(ownerInList: string, conversationInList:
 
 /**
  * Build an INSERT statement with ON CONFLICT DO NOTHING for idempotency.
+ *
+ * `conflictTarget` NARROWS which conflicts are forgiven, and the difference is
+ * the difference between a skipped row and a failed import. Untargeted,
+ * Postgres takes the do-nothing branch on ANY unique violation the row causes;
+ * with a target it arbitrates on that key alone and every OTHER unique index
+ * raises. Measured on a table shaped like `agent_workspace_nodes`:
+ *
+ *   ON CONFLICT DO NOTHING                → a row colliding on the global
+ *                                           partial chat index is SKIPPED
+ *                                           (`INSERT 0 0`, no error)
+ *   ON CONFLICT ("rootId", "id") DO NOTHING → the same row raises
+ *                                           `duplicate key … n_chat_idx`
+ *   …and re-inserting an IDENTICAL row under the second form is still a
+ *   silent no-op, because the arbiter index is consulted first and the row is
+ *   never speculatively inserted.
+ *
+ * So a table whose only forgivable conflict is "this bundle was already
+ * imported" passes its primary key here: idempotent re-import is preserved,
+ * and a collision with somebody ELSE's row aborts the transaction instead of
+ * dropping a row on the floor. Pass nothing for tables where every unique
+ * violation means the same thing.
  */
 export function buildInsert(
   tableName: string,
   columns: readonly string[],
   rows: Record<string, unknown>[],
+  conflictTarget?: readonly string[],
 ): string {
   if (rows.length === 0) return '';
 
@@ -128,12 +150,15 @@ export function buildInsert(
     const vals = columns.map((col) => escapeSqlValue(row[col]));
     return `  (${vals.join(', ')})`;
   });
+  const onConflict = conflictTarget?.length
+    ? `ON CONFLICT (${conflictTarget.map((c) => `"${c}"`).join(', ')}) DO NOTHING;`
+    : 'ON CONFLICT DO NOTHING;';
 
   return [
     `INSERT INTO "${tableName}" (${quotedCols})`,
     'VALUES',
     valueRows.join(',\n'),
-    'ON CONFLICT DO NOTHING;',
+    onConflict,
     '',
   ].join('\n');
 }

@@ -97,6 +97,63 @@ const nullifyOrphanedUserRefs = nullifyOrphanedRefs;
 /** Null out FK references to pages not in the export set. */
 const nullifyOrphanedPageRefs = nullifyOrphanedRefs;
 
+/** The id sets a node's `targetId` can be checked against, by `targetKind`. */
+interface NodeTargetSets {
+  chat: Set<string>;
+  terminal: Set<string>;
+  page: Set<string>;
+}
+
+/**
+ * UNBIND every workspace node whose target does not travel — the polymorphic
+ * analogue of `nullifyOrphanedRefs`, which cannot do this job because there is
+ * no FK to follow: `agent_workspace_nodes.targetId` names a conversation, a
+ * shell or a page ACCORDING TO `targetKind`, and the column itself references
+ * nothing.
+ *
+ * UNBIND, NOT PRUNE, and that is the whole decision here. Dropping the row
+ * would be the intuitive move and it is the wrong one twice over. A pane's
+ * parent split exists to divide space between at least two children —
+ * `validateTree` calls a split with fewer `degenerate_split` — so removing one
+ * pane leaves a tree the tenant REFUSES to read (`nodesFromRows` rejects the
+ * whole set, not the bad row), turning "one thread did not come" into "this
+ * workspace does not open". Repairing that properly means collapsing the split
+ * and reseating fractions, i.e. re-implementing the node algebra inside a SQL
+ * exporter. Nulling the pair instead preserves the tree exactly and lands on a
+ * state the model already spells: an unbound pane rendering the target picker,
+ * which is what a user sees when they split a pane and have not chosen its
+ * contents yet.
+ *
+ * BOTH COLUMNS OR NEITHER. The row parse refuses a half-bound pane outright
+ * (`a pane target needs both a kind and an id, or neither`) and rejects the
+ * whole workspace with it, so clearing one column and leaving the other would
+ * export precisely the unreadable state the paragraph above is avoiding. A row
+ * that arrives here ALREADY half-bound — the database has no CHECK against it —
+ * is cleared for the same reason rather than carried forward.
+ */
+function unbindOutOfBundleTargets(
+  nodes: Record<string, unknown>[],
+  sets: NodeTargetSets,
+): void {
+  for (const node of nodes) {
+    const kind = node.targetKind as string | null;
+    const targetId = node.targetId as string | null;
+    if (kind === null && targetId === null) continue;
+
+    const inBundle =
+      kind !== null && targetId !== null &&
+      (kind === 'chat' ? sets.chat.has(targetId)
+        : kind === 'terminal' ? sets.terminal.has(targetId)
+        : kind === 'page' ? sets.page.has(targetId)
+        : false);
+
+    if (!inBundle) {
+      node.targetKind = null;
+      node.targetId = null;
+    }
+  }
+}
+
 export interface ExportResult {
   manifest: ExportManifest;
   sqlStatements: string;
@@ -279,11 +336,10 @@ export async function exportData(
    * the export. The Sprite-identity columns do NOT travel; see the exclusion
    * allowlist in ./lib/tenant-export-columns.ts.
    *
-   * NOTE, and it is the honest caveat on this whole block: the nodes THEMSELVES
-   * are not carried — `agent_workspace_nodes` is an undecided table in
-   * ./lib/tenant-export-columns.ts, with the reasoning recorded there. So the
-   * bundle carries the sessions and their threads, and the tenant rebuilds the
-   * membership rather than inheriting it.
+   * The nodes THEMSELVES are carried too, below — membership travels rather
+   * than being rebuilt by the tenant. See ./lib/tenant-export-columns.ts for
+   * why, and `unbindOutOfBundleTargets` above for the one thing that makes
+   * carrying them more than a query.
    */
   const referencedSessionIds = new Set(
     conversationIds.length > 0
@@ -327,6 +383,44 @@ export async function exportData(
   const agentShellsData = shellsDataRaw.filter(
     (s) => allExportedUserIdSet.has(s.ownerId as string),
   );
+
+  /**
+   * THE SESSIONS' TREES — and therefore their MEMBERSHIP. A thread is in a
+   * workspace exactly when a chat-bound node of that workspace names it, so
+   * this is the table that used to be `conversations.workspaceId`; without it
+   * the tenant opens every session empty and every thread is reachable only
+   * through past-conversation history.
+   *
+   * SCOPED BY `rootId`, WHICH IS WHAT KEEPS A TREE WHOLE. The composite self-FK
+   * `(rootId, parentId) → (rootId, id)` cannot cross workspaces by
+   * construction, so a node's parent is always in this same result set: taking
+   * every row of a carried session takes every parent with it, and no filter
+   * downstream removes rows (the unbinding above rewrites two columns and drops
+   * nothing). A tree therefore travels whole or not at all — there is no
+   * predicate here that could separate a child from its parent. Row ORDER
+   * inside the INSERT is likewise irrelevant: Postgres queues RI checks as
+   * AFTER-ROW triggers fired when the statement completes, so a child listed
+   * before its parent resolves, exactly as the channel-message self-references
+   * do.
+   *
+   * `agent_workspace_node_revs` is NOT carried; the reason is recorded in
+   * ./lib/tenant-export-columns.ts.
+   */
+  const workspaceNodesData = exportedSessionIdSet.size > 0
+    ? await queryRows(db, sql.raw(
+        `SELECT * FROM agent_workspace_nodes WHERE "rootId" IN (${toSqlInList(exportedSessionIdSet)})`,
+      ))
+    : [];
+  unbindOutOfBundleTargets(workspaceNodesData, {
+    // A pane's thread. The conversations carried are the ones the requested
+    // users own plus those on an exported page, so a session owned by a
+    // DISCOVERED user can legitimately hold threads that stay behind.
+    chat: new Set(conversationIds),
+    // A pane's terminal — the shells above, already filtered by owner.
+    terminal: new Set(agentShellsData.map((s) => s.id as string)),
+    // A pane's page, which may be in a drive this migration does not carry.
+    page: pageIdSet,
+  });
 
   // `conversations.agentPageId` FKs `pages` (ON DELETE SET NULL) and is a
   // `type='client'` thread's only page link. A thread whose agent page is
@@ -432,6 +526,33 @@ export async function exportData(
     // `conversations` — nothing references a shell — but it sits with its
     // parent to keep the session's rows together.
     buildInsert('agent_workspace_shells', cols('agent_workspace_shells'), agentShellsData),
+    /**
+     * The session's tree, after the session its `rootId` FKs. Nothing else
+     * constrains its position: `targetId` carries no foreign key, so it does
+     * not have to follow `conversations` or `pages`.
+     *
+     * THE CONFLICT TARGET IS THE PRIMARY KEY, AND IT IS LOAD-BEARING. This
+     * table's `UNIQUE (targetId) WHERE targetKind = 'chat'` is GLOBAL — a
+     * conversation is bound to at most one node anywhere — so a destination
+     * that already holds one of these threads makes the incoming node a
+     * duplicate key. Under the bundle's usual untargeted `ON CONFLICT DO
+     * NOTHING`, Postgres forgives ANY unique violation, and the node would be
+     * skipped in silence: the import reports success and one thread is missing
+     * from the workspace it belongs to, which is the exact failure mode this
+     * table was carried to prevent. Naming `("rootId", "id")` makes the primary
+     * key the only forgiven conflict — a re-imported bundle is still a no-op —
+     * and a collision on the chat index raises, aborting the single
+     * BEGIN/COMMIT the whole bundle replays in. The import fails loudly with
+     * the constraint name, nothing lands, and the operator resolves a real
+     * conflict between two databases rather than discovering it months later
+     * as a thread that is simply not there.
+     */
+    buildInsert(
+      'agent_workspace_nodes',
+      cols('agent_workspace_nodes'),
+      workspaceNodesData,
+      ['rootId', 'id'],
+    ),
     // `conversations` MUST precede `messages`: the latter has a real
     // (non-deferrable) FK onto the former, and the whole bundle replays inside
     // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
@@ -467,6 +588,7 @@ export async function exportData(
     channelReadStatus: channelReadStatusData.length,
     agentWorkspaces: agentSessionsData.length,
     agentWorkspaceShells: agentShellsData.length,
+    agentWorkspaceNodes: workspaceNodesData.length,
     conversations: conversationsData.length,
     messages: messagesData.length,
     files: filesData.length,

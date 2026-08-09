@@ -183,9 +183,8 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   // The pane grid used to ride along in this table's `workspaceState` jsonb,
   // then in four `agent_workspace_pane_*` / `_layout_*` tables. All of it is
   // gone: a workspace's tree is `agent_workspace_nodes`, and that table is
-  // where BOTH its arrangement and its MEMBERSHIP now live. It is not yet
-  // registered either way — see the note above
-  // `TENANT_EXPORT_EXCLUDED_TABLES`.
+  // where BOTH its arrangement and its MEMBERSHIP now live. It travels — see
+  // its own spec below, and the note above `TENANT_EXPORT_EXCLUDED_TABLES`.
   agent_workspaces: {
     columns: [
       'id', 'driveId', 'ownerId', 'name',
@@ -216,6 +215,28 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       spriteExecId:
         'Names an exec session on a SOURCE-fleet Sprite. The parent session migrates with `sandboxId` NULL (never provisioned), so a carried exec id would address a PTY inside a VM the tenant does not own; NULL correctly means "not attached", which is what the reattach path already expects of a cold shell.',
     },
+  },
+
+  /**
+   * A session's TREE — and, since this epic merged the two structures, its
+   * MEMBERSHIP: a thread is in a workspace exactly when a chat-bound node names
+   * it. Every column is carried; there is nothing here that describes the
+   * SOURCE instance, which is what the exclusions on the two tables above are
+   * about.
+   *
+   * `targetId` is polymorphic with NO foreign key, so the exporter's referential
+   * rules cannot see what it names — a node whose conversation, shell or page
+   * is outside the bundle is UNBOUND on the way out (both `targetKind` and
+   * `targetId` set to NULL, never one of them), which is the same treatment
+   * `conversations.agentPageId`/`planPageId` get and lands on a state the model
+   * spells natively: an unbound pane rendering the picker. The whole rule, and
+   * why unbinding rather than pruning, is in `tenant-export.ts`.
+   */
+  agent_workspace_nodes: {
+    columns: [
+      'id', 'rootId', 'parentId', 'position', 'nodeType', 'axis', 'fraction',
+      'targetKind', 'targetId', 'createdAt', 'updatedAt',
+    ],
   },
 
   conversations: {
@@ -289,6 +310,20 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
  * dropped by the tenant one. (`packages/lib/src/compliance/export/gdpr-export-coverage.ts`
  * is the whole-schema analogue for Art 15; the two answer different questions
  * and are allowed to differ — see `ai_stream_sessions` below.)
+ *
+ * THE TEST THIS REGION IS ALLOWED TO APPLY, stated once so the next decision
+ * does not have to be re-derived from the two entries below. A table in the
+ * closure is EXCLUDED only when its rows describe the SOURCE INSTANCE rather
+ * than the user: a Sprite in a fleet the tenant has no access to, a stream a
+ * worker in another deployment is midway through, a counter issued by another
+ * database. Everything else — anything a user would notice the absence of on
+ * the morning after their migration — travels. `agent_workspace_nodes` is the
+ * clearest case of the second kind and is carried for exactly that reason; it
+ * spent one release UNDECIDED here, and the cost of that was not theoretical:
+ * `conversations.workspaceId` carried membership until `0256` dropped it, so
+ * the same non-decision that used to cost a user their pane WIDTHS came to cost
+ * them every thread's membership instead, silently, with the bundle still
+ * importing cleanly.
  */
 export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   /**
@@ -306,26 +341,46 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
    * held is replaced by `agent_workspace_nodes` — so there is nothing left to
    * decide about them.
    *
-   * **`agent_workspace_nodes` and `agent_workspace_node_revs` are UNDECIDED,
-   * and the table guard below is red because of it.** That is deliberate, and
-   * it predates the column drop above: the node model landed without
-   * registering its own tables here, and nobody has since chosen whether a
-   * tenant bundle carries a workspace's tree.
-   *
-   * The choice is not the formality it was for the pane tables. Those held
-   * ARRANGEMENT only, so dropping them cost a user their column widths. This
-   * table holds MEMBERSHIP — a conversation is in a workspace exactly when a
-   * node of that workspace is bound to it — so a bundle without it hands the
-   * migrated user workspaces that list no threads at all, with the threads
-   * themselves present but reachable only through past-conversation history.
-   * Carrying it is not a copy either: `targetId` is polymorphic with NO foreign
-   * key, so every node naming a conversation, page or shell outside the bundle
-   * has to be pruned or unbound on the way out, and the table's global
-   * `UNIQUE (targetId) WHERE targetKind = 'chat'` turns a mistake there into a
-   * failed import rather than a bad row. That is a real piece of export logic,
-   * not a registry line, which is why this note names the decision instead of
-   * pretending to have made it.
+   * `agent_workspace_nodes` IS CARRIED (`TABLE_IMPORT_ORDER`, with its spec in
+   * `TENANT_EXPORT_COLUMNS` and its query in `tenant-export.ts`). It spent one
+   * release undecided here, and the decision reduced to a fact about what the
+   * table now is. MEMBERSHIP used to be `conversations.workspaceId`, an
+   * ordinary carried column, while the pane grid beside it was excluded because
+   * ARRANGEMENT was judged not worth the bundle weight. This epic merged those
+   * two structures into one table, which merged the two decisions into one: the
+   * only way to keep dropping the arrangement was to start dropping the
+   * membership with it, and a tenant whose every session opens empty — every
+   * thread present but reachable only through past-conversation history — is
+   * the ghost this epic exists to delete, arriving through the export path
+   * instead of the write path. Membership travelled before and travels now;
+   * arrangement rides along, which costs the bundle a handful of small rows per
+   * session and is no longer separable from the thing that had to travel
+   * anyway.
    */
+
+  /**
+   * The rev's own table, deliberately left behind — the ONE thing in the node
+   * model that is about the DATABASE rather than about the user.
+   *
+   * `rev` is a per-workspace monotonic mutation counter minted by
+   * `INSERT … ON CONFLICT ("rootId") DO UPDATE SET rev = rev + 1` in the
+   * transaction that writes the nodes, and it is meaningful only against the
+   * instance that issued it: a client holds it as `baseRev` and every write is
+   * refused unless the server's rev still matches. Carrying a foreign counter
+   * would have a tenant's first write compare a `baseRev` against a number
+   * another database counted, which is not a bigger or smaller number so much
+   * as a number about something else.
+   *
+   * Absent, the read is already correct rather than merely tolerable, and by
+   * construction: `readWorkspaceNodeSnapshots` FULL OUTER JOINs the two tables
+   * and `COALESCE(r."rev", 0)`s exactly so that a workspace with node rows and
+   * no rev row reads as `{rev: 0, nodes: […]}` — the tree present, the counter
+   * fresh — instead of reading as empty. That shape exists because the backfill
+   * produces it; an import is simply its second producer. The tenant's first
+   * write then mints rev 1, which is the state a workspace is born in.
+   */
+  agent_workspace_node_revs:
+    'A per-WORKSPACE monotonic mutation counter (`rev`), issued by the SOURCE database and meaningful only against it: clients hold it as `baseRev` for optimistic concurrency, so a carried value would have the tenant compare a client\'s base against a number another database counted. Its absence is a state the read path already handles exactly — `readWorkspaceNodeSnapshots` FULL OUTER JOINs and `COALESCE(rev, 0)`s so a workspace with nodes and no rev row reads as its tree at rev 0 — and the tenant\'s first write mints rev 1, which is where a fresh workspace starts.',
 };
 
 /** The columns emitted inline in `table`'s INSERT. */
