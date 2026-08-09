@@ -24,8 +24,23 @@ function split(id: string, parentId: string, position: number): SplitNode {
   return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, position: number): PaneNode {
+function pane(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
+}
+
+/**
+ * A pane with NO PARENT — the state the model makes unspellable and a ROW can
+ * still carry.
+ *
+ * The cast is the fixture's whole reason for existing. `PaneNode.parentId` is a
+ * `string`, so nothing in the package can build one of these; nine
+ * mostly-nullable columns can, and `validateTree` is what stands between such a
+ * row and a workspace. Every test that uses this is testing the half of the
+ * failure shape the previous model could not see, because it had made this state
+ * legal and called it "detached".
+ */
+function parentless(id: string, position = 0): WorkspaceNode {
+  return { nodeType: 'pane', id, parentId: null, position, target: null } as unknown as WorkspaceNode;
 }
 
 /**
@@ -35,7 +50,7 @@ function pane(id: string, parentId: string | null, position: number): PaneNode {
  */
 function showing(
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   target: PaneTarget,
 ): PaneNode {
@@ -62,7 +77,7 @@ function deepTree(splitCount: number): WorkspaceNode[] {
 /** A pane carrying an explicit share of its parent. */
 function sized(
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   fraction: number,
 ): PaneNode {
@@ -90,23 +105,25 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
-  it('should reject a tree with no root', () => {
-    const nodes: WorkspaceNode[] = [pane('parked', null, 0)];
+  it('should reject a NON-EMPTY list with no root', () => {
+    const nodes: WorkspaceNode[] = [pane('orphan', 'gone', 0)];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'no_root' });
   });
 
-  it('should reject an empty list, because a workspace without a root is not vacuously fine', () => {
-    expect(validateTree([])).toMatchObject({ ok: false, code: 'no_root' });
+  it('should ACCEPT an empty list, which is what destroying the root leaves behind', () => {
+    // One removal: `destroy(rootId)` ends the session, and what it leaves is no
+    // nodes at all. Calling that `no_root` would make the tree operation that
+    // ends a session produce a tree the write path refuses — which is exactly
+    // how ending a session became a second mechanism last time.
+    expect(validateTree([])).toEqual({ ok: true });
   });
 
-  it('should find the root by its type even when a parked pane comes first in the list', () => {
-    // The root and a parked pane both carry a null parent, so "the node with
-    // no parent" identifies neither. A validator that took the first null
-    // parent would crown the parked pane and declare the real grid unreachable
-    // — which is the confusion between membership and location that this whole
-    // model exists to remove.
-    const nodes: WorkspaceNode[] = [pane('parked', null, 0), root(), pane('onscreen', 'root-1', 0)];
-    expect(validateTree(nodes)).toEqual({ ok: true });
+  it('should find the root by its TYPE, which a row can contradict', () => {
+    // A pane row carrying a null parent is not a root and must not be read as
+    // one — it is `null_parent`, the fault the previous model had no code for
+    // because it had made the state legal.
+    const nodes: WorkspaceNode[] = [parentless('impostor'), root(), pane('onscreen', 'root-1', 0)];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'null_parent' });
   });
 
   it('should reject a tree with more than one root', () => {
@@ -179,17 +196,36 @@ describe('validateTree', () => {
   });
 
   it('should reject a node that hangs off the tree instead of descending from the root', () => {
-    // Acyclic and every pointer resolves, yet nothing renders it: the chain
-    // terminates at a parked pane rather than at the root.
-    const nodes: WorkspaceNode[] = [root(), pane('parked', null, 0), pane('stowaway', 'parked', 0)];
-    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'unreachable' });
+    // Acyclic and every pointer resolves, yet nothing renders it: a second root
+    // claims no parent, so the descent from the real root never reaches what
+    // sits beneath it.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      { ...root(), id: 'root-2', nodeType: 'split', parentId: 'gone' } as unknown as WorkspaceNode,
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'dangling_parent' });
+
+    const stowaway: WorkspaceNode[] = [root(), split('loose', 'loose-2', 0), split('loose-2', 'loose', 1)];
+    expect(validateTree(stowaway)).toMatchObject({ ok: false, code: 'cycle' });
   });
 
-  it('should accept a detached pane, which is in the workspace but off the grid', () => {
-    // The one exception to reachability, and the reason the model is flat: a
-    // parked pane is a member with no location, not a second bucket.
-    const nodes: WorkspaceNode[] = [root(), pane('onscreen', 'root-1', 0), pane('parked', null, 0)];
-    expect(validateTree(nodes)).toEqual({ ok: true });
+  it('should REFUSE a pane with no parent, and name it `null_parent` rather than `unreachable`', () => {
+    // The correction. This state used to be legal and called "detached" — in
+    // the workspace, off the grid — which meant a pane a user closed and a pane
+    // that lost its parent to a defect were the same row. `unreachable` is also
+    // true of it and is the wrong thing to say: that describes the consequence
+    // (nothing would render it), and the fault is that the node is nowhere.
+    const nodes: WorkspaceNode[] = [root(), pane('onscreen', 'root-1', 0), parentless('lost')];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'null_parent' });
+  });
+
+  it('should report `null_parent` ahead of a dangling parent elsewhere in the same tree', () => {
+    // Both are broken pointers and they break differently. A pointer that named
+    // a place now gone is a rebase problem; a pointer that named no place is a
+    // writer that never set one. The fixed order means one bad tree always
+    // yields the more primitive of the two.
+    const nodes: WorkspaceNode[] = [root(), parentless('lost'), pane('dangling', 'nowhere', 1)];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'null_parent' });
   });
 
   it('should reject a tree nested deeper than MAX_DEPTH', () => {
@@ -355,56 +391,34 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
-  it('should ignore the fractions a parked pane kept from the container it left', () => {
-    // Detaching a pane out of a sized column does not scrub the share it held
-    // there, so parked panes routinely carry stale fractions that neither
-    // agree with each other nor add up. Judging them as a container would make
-    // every detach have to rewrite them; they are a list, so it does not.
-    const nodes: WorkspaceNode[] = [
-      root(),
-      pane('onscreen', 'root-1', 0),
-      sized('parked-a', null, 0, 0.25),
-      sized('parked-b', null, 1, 0.6),
-      pane('parked-c', null, 2),
-    ];
-    expect(validateTree(nodes)).toEqual({ ok: true });
-  });
-
-  it('should reject a non-finite share on a PARKED pane, which no container is there to sum', () => {
-    // Skipping `fraction_mixed` and `fraction_sum` for the parked panes is
-    // right — they share no container, so there is nothing for a share to be a
-    // share OF. Finiteness is not that kind of check: it is a property of ONE
-    // number, and the parked group was exempt from it by position rather than
-    // by intent.
+  it('should reject a non-finite share wherever it sits, because it is a fact about ONE number', () => {
+    // This check used to live inside the per-container loop, under the skip
+    // that exempted the parked group — so a NaN on a parked pane was exempted
+    // by POSITION rather than by intent and sailed through. There is no parked
+    // group to be exempt from anything now, and the check is still stated over
+    // every node rather than per container, because finiteness has no
+    // group-level precondition.
     //
-    // The consequence is the same one the attached case has: Postgres `real`
-    // takes NaN and Infinity happily, and `nodeFromRow` then throws on the way
-    // back — an unreadable workspace, reached by parking a pane the client
-    // resized before its container had laid out.
-    const parkedNaN: WorkspaceNode[] = [
+    // Postgres `real` takes NaN and Infinity happily, and `nodeFromRow` then
+    // throws on the way back — an unreadable workspace, reached by resizing a
+    // pane before its container had laid out.
+    const notANumber: WorkspaceNode[] = [
       root(),
-      pane('onscreen', 'root-1', 0),
-      sized('parked', null, 0, Number.NaN),
+      sized('a', 'root-1', 0, Number.NaN),
+      sized('b', 'root-1', 1, 0.5),
     ];
-    expect(validateTree(parkedNaN)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
+    expect(validateTree(notANumber)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
 
-    const parkedInfinity: WorkspaceNode[] = [
+    const infinite: WorkspaceNode[] = [
       root(),
-      pane('onscreen', 'root-1', 0),
-      sized('parked', null, 0, Number.POSITIVE_INFINITY),
+      sized('a', 'root-1', 0, Number.POSITIVE_INFINITY),
+      sized('b', 'root-1', 1, 0.5),
     ];
-    expect(validateTree(parkedInfinity)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
+    expect(validateTree(infinite)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
   });
 
-  it('should not require a parked pane to carry a share of anything', () => {
-    // The parked panes are a list, not a container. They have no parent whose
-    // space they divide, so a fraction invariant over them is meaningless.
-    const nodes: WorkspaceNode[] = [
-      root(),
-      pane('onscreen', 'root-1', 0),
-      pane('parked-a', null, 0),
-      pane('parked-b', null, 1),
-    ];
+  it('should not require an unsized container’s children to carry a share', () => {
+    const nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
@@ -425,23 +439,22 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
-  it('should hold the parked panes to the same ordering as any other group', () => {
-    // They are not a container, but they ARE a list the sidebar renders in
-    // order, so a gap here is the same defect wearing a different hat.
+  it('should hold a nested container to the same ordering as the root’s own children', () => {
     const nodes: WorkspaceNode[] = [
       root(),
-      pane('onscreen', 'root-1', 0),
-      pane('parked-a', null, 0),
-      pane('parked-b', null, 3),
+      split('col', 'root-1', 0),
+      pane('beside', 'root-1', 1),
+      pane('top', 'col', 0),
+      pane('bottom', 'col', 3),
     ];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
-  it('should not let the root and the parked panes collide over index 0', () => {
-    // Both carry a null parent, so a validator that grouped siblings by
-    // parentId alone would see the root's 0 and a parked pane's 0 as a clash.
-    // The root belongs to no sibling group at all.
-    const nodes: WorkspaceNode[] = [root(), pane('onscreen', 'root-1', 0), pane('parked', null, 0)];
+  it('should not put the ROOT in a sibling group, so its position 0 collides with nothing', () => {
+    // The root is a container, not a member of one. It is also the only node
+    // with a null parent, which is why grouping by `parentId` can no longer
+    // collide it with anything: there is nothing else in that bucket.
+    const nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
@@ -459,15 +472,15 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_chat_target' });
   });
 
-  it('should count a PARKED node as showing its conversation, because the index does not read parentId', () => {
-    // A detached node is off the grid and still a member of the workspace,
-    // still holding its binding, still one row under the unique index. Letting
-    // a parked conversation be shown again would be the algebra permitting
-    // exactly what the table goes on rejecting.
+  it('should count a node anywhere in the tree, because the index does not read parentId', () => {
+    // The unique index is on `targetId` alone; where a node sits has never been
+    // part of it. Nesting a duplicate two levels down must not slip past.
     const nodes: WorkspaceNode[] = [
       root(),
-      showing('onscreen', 'root-1', 0, { kind: 'chat', id: 'conv-1' }),
-      showing('parked', null, 0, { kind: 'chat', id: 'conv-1' }),
+      split('col', 'root-1', 0),
+      showing('deep', 'col', 0, { kind: 'chat', id: 'conv-1' }),
+      pane('filler', 'col', 1),
+      showing('shallow', 'root-1', 1, { kind: 'chat', id: 'conv-1' }),
     ];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_chat_target' });
   });
@@ -602,7 +615,7 @@ describe('validateTree', () => {
       split('col', 'root-1', 0),
       sized('top', 'col', 0, 0.4),
       sized('bottom', 'col', 1, 0.6),
-      pane('parked', null, 0),
+      pane('beside', 'root-1', 1),
     ];
     const acceptedBefore = structuredClone(accepted);
     expect(validateTree(accepted)).toEqual({ ok: true });
@@ -612,7 +625,7 @@ describe('validateTree', () => {
       root(),
       pane('a', 'root-1', 0),
       pane('b', 'root-1', 2),
-      pane('parked', null, 3),
+      pane('c', 'root-1', 3),
     ];
     const rejectedBefore = structuredClone(rejected);
     expect(validateTree(rejected)).toMatchObject({ ok: false, code: 'position_contiguity' });

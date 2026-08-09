@@ -209,14 +209,14 @@ beforeEach(() => {
 /** Seat a workspace's tree the way the listing does — there is no client seed. */
 const WS = 'ses-1';
 const rootNode: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
-const paneNode = (id: string, parentId: string | null, position: number, target: PaneTarget | null): WorkspaceNode => ({
+const paneNode = (id: string, parentId: string, position: number, target: PaneTarget | null): WorkspaceNode => ({
   nodeType: 'pane',
   id,
   parentId,
   position,
   target,
 });
-const chatNode = (id: string, parentId: string | null, position: number, conversationId: string) =>
+const chatNode = (id: string, parentId: string, position: number, conversationId: string) =>
   paneNode(id, parentId, position, { kind: 'chat', id: conversationId });
 
 const CONV_1_TARGET: WorkspaceNodeTarget = {
@@ -294,20 +294,28 @@ describe('AgentPanes — selection is an instruction', () => {
   });
 
   /**
-   * A PARKED thread. `open` refuses this deliberately ("showing it again is a
-   * move, and the caller names it"), so without the store naming it, selecting a
-   * closed thread from the sidebar would silently do nothing.
+   * A thread held DEEP in the tree. This was about a PARKED node: `open` refused
+   * it deliberately, so the store had to move it back or selecting a closed
+   * thread from the sidebar silently did nothing. Every holder is on screen now,
+   * and the property that survives is the one that mattered — no SECOND node is
+   * minted for a conversation the workspace already shows.
    */
-  it('brings a PARKED node back onto the grid rather than minting a second one', async () => {
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-9'), chatNode('parked', null, 0, 'conv-1')]);
+  it('focuses a node nested below a split rather than minting a second one', async () => {
+    seat([
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-9'),
+      { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+      chatNode('deep', 's1', 0, 'conv-1'),
+      chatNode('beside', 's1', 1, 'conv-8'),
+    ]);
     renderPanes();
-    await waitFor(() => expect(nodeById('parked')?.parentId).not.toBeNull());
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('deep'));
     expect(panesNow().filter((node) => node.target?.kind === 'chat' && node.target.id === 'conv-1')).toHaveLength(1);
   });
 });
 
 describe('AgentPanes — closing a pane', () => {
-  it('parks the node and closes the thread when the listing has it open', async () => {
+  it('destroys the node and closes the thread when the listing has it open', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     mockDel.mockResolvedValue({});
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
@@ -318,8 +326,10 @@ describe('AgentPanes — closing a pane', () => {
     await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-    // Parked, not destroyed: the node keeps its binding and stays a member.
-    expect(nodeById('n1')?.parentId).toBeNull();
+    // DESTROYED, not parked. It used to survive with a null parent, still a
+    // member holding its binding — the state that made a closed pane and a
+    // broken one the same row.
+    expect(nodeById('n1')).toBeUndefined();
   });
 
   it('leaves an EMPTY GRID when the last pane closes, and does not end the workspace', async () => {
@@ -332,8 +342,9 @@ describe('AgentPanes — closing a pane', () => {
     await screen.findByTestId('pane-chat');
     await user.click(screen.getByLabelText('Close pane'));
 
-    await waitFor(() => expect(nodeById('n1')?.parentId).toBeNull());
-    // No confirm dialog, and the workspace itself is untouched.
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    // No confirm dialog, and the SESSION itself is untouched — closing the last
+    // pane leaves an empty tree, it does not end the workspace.
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
     expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeDefined();
@@ -349,7 +360,7 @@ describe('AgentPanes — closing a pane', () => {
     await user.click(screen.getByLabelText('Close pane'));
 
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-1'));
-    expect(nodeById('n1')?.parentId).toBeNull();
+    expect(nodeById('n1')).toBeUndefined();
   });
 
   it('does nothing while the listing has not resolved — a close never acts on an unverified fact', async () => {
@@ -376,7 +387,7 @@ describe('AgentPanes — closing a pane', () => {
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
     await user.click(screen.getByLabelText('Close pane'));
 
-    await waitFor(() => expect(nodeById('n1')?.parentId).toBeNull());
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
     expect(mockDel).not.toHaveBeenCalled();
   });
 
@@ -508,19 +519,30 @@ describe('AgentPanes — the picker', () => {
   });
 
   /**
-   * A shell bound to a PARKED node is still bound — it has a viewer one click
-   * away — so the reattach list reads every pane, not just the grid.
+   * A shell already bound to a node ANYWHERE in the tree is not offered for
+   * reattach — the list reads every pane, not only the root's own children.
+   * This used to be stated with a PARKED holder, which was the only way to make
+   * "somewhere the picker is not looking" interesting.
    */
-  it('does not offer a shell already bound to a PARKED node', async () => {
+  it('does not offer a shell already bound to a node nested below a split', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
-      if (url.includes('/shells')) return jsonOk({ shells: [{ shellId: 'shell-parked', name: 'parked shell' }] });
+      if (url.includes('/shells')) return jsonOk({ shells: [{ shellId: 'shell-deep', name: 'deep shell' }] });
       return jsonOk(defaultFetchRoute(url));
     });
-    seat([rootNode, paneNode('n1', WS, 0, null), paneNode('gone', null, 0, { kind: 'terminal', id: 'shell-parked' })], []);
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, null),
+        { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+        paneNode('held', 's1', 0, { kind: 'terminal', id: 'shell-deep' }),
+        paneNode('beside', 's1', 1, { kind: 'page', id: 'page-1' }),
+      ],
+      [],
+    );
     renderPanes({ initialConversation: null });
 
     await screen.findByText('Researcher');
-    expect(screen.queryByText('parked shell')).toBeNull();
+    expect(screen.queryByText('deep shell')).toBeNull();
   });
 
   it('binds a page directly, with no mint', async () => {
@@ -599,7 +621,7 @@ describe('AgentPanes — the pane bar', () => {
    * which made "this rectangle" and "this conversation" the same object; here
    * the old node keeps its binding and stays a member until its listing closes.
    */
-  it('parks the outgoing node rather than re-pointing it', async () => {
+  it('DESTROYS the outgoing node rather than re-pointing it', async () => {
     mockSessionConversations([
       { conversationId: 'conv-1', agentPageId: 'agent-1' },
       { conversationId: 'conv-2', agentPageId: 'agent-2' },
@@ -616,8 +638,11 @@ describe('AgentPanes — the pane bar', () => {
     await user.click(await findEnabledSelector(/Researcher/));
     await user.click(await screen.findByText('Writer'));
 
-    await waitFor(() => expect(nodeById('n1')?.parentId).toBeNull());
-    expect(nodeById('n1')).toMatchObject({ target: { kind: 'chat', id: 'conv-1' } });
+    // A binding is for life, so the switch does not re-point this node — it
+    // takes the node away and puts a new one in its slot. The node used to
+    // survive parked, keeping its binding; there is nowhere for it to survive.
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(panesNow().some((node) => node.target?.kind === 'chat' && node.target.id === 'conv-2')).toBe(true);
   });
 
   it("is disabled until THIS workspace's entry appears in the switch decision's own data", async () => {

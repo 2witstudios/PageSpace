@@ -4,11 +4,19 @@
  * **Why the translation is a parse, not a cast.** A row is nine flat, mostly
  * nullable columns; a `WorkspaceNode` is a discriminated union in which those
  * same columns are either required or unspellable. The columns can therefore
- * say things the union cannot — a root with a parent, a split with no axis, a
- * pane holding half a binding — and a cast would carry every one of them into
- * the model as a lie the type checker then vouches for. So the union's
- * invariants are re-established HERE, at the one place untyped storage becomes
- * a node, rather than trusted from the column types.
+ * say things the union cannot — a root with a parent, A NON-ROOT WITH NO
+ * PARENT, a split with no axis, a pane holding half a binding — and a cast
+ * would carry every one of them into the model as a lie the type checker then
+ * vouches for. So the union's invariants are re-established HERE, at the one
+ * place untyped storage becomes a node, rather than trusted from the column
+ * types.
+ *
+ * The parentless case is worth naming on its own, because it is the one this
+ * module used to LET THROUGH. `parentId` was nullable on the pane member and
+ * that null was read as "detached" — a legal state — so a row whose parent had
+ * been nulled by anything at all parsed cleanly into a node nothing rendered.
+ * `parentId text` in Postgres takes NULL from any writer, so the column can
+ * still carry it; the difference is that the parse now refuses.
  *
  * **Why absence is preserved exactly.** `fraction` on the node side is optional
  * and its absence IS a state ("my parent is unsized"), never an explicit null.
@@ -61,10 +69,8 @@
 import { z } from 'zod';
 import {
   childrenOf,
-  detachedOf,
   rootOf,
   type NodeAxis,
-  type PaneNode,
   type PaneTargetKind,
   type WorkspaceNode,
 } from './workspace-node';
@@ -83,7 +89,12 @@ export interface WorkspaceNodeRow {
   id: string;
   /** The workspace this row belongs to. Scoping only — never part of the node. */
   rootId: string;
-  /** `null` is the root OR a detached pane; `nodeType` is what tells them apart. */
+  /**
+   * `null` is THE ROOT, and only the root — a fact the parse below insists on
+   * rather than infers. The column stays nullable because the root's row needs
+   * it to be; every other row carrying a null is a corrupt row, not a parked
+   * one.
+   */
   parentId: string | null;
   position: number;
   nodeType: WorkspaceNode['nodeType'];
@@ -118,9 +129,10 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
     .object({
       nodeType: z.literal('root'),
       id: z.string().min(1),
-      // Not "the node with no parent" — a detached pane has none either. The
-      // root is the row whose TYPE says so, and its null parent is then a
-      // consequence the schema insists on rather than a definition.
+      // The root is the row whose TYPE says so, and its null parent is a
+      // consequence the schema insists on rather than a definition. Pinned to
+      // `z.null()` so a root row carrying a parent is refused rather than
+      // silently losing the value.
       parentId: z.null(),
       position: z.literal(0),
       axis: nodeAxisSchema,
@@ -133,7 +145,7 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
     .object({
       nodeType: z.literal('split'),
       id: z.string().min(1),
-      /** Never null: a split has no durable target, so a parked one is garbage. */
+      /** Never null. Only the root has no parent, and this is not the root. */
       parentId: z.string().min(1),
       position: z.number().int(),
       axis: nodeAxisSchema,
@@ -153,8 +165,22 @@ const workspaceNodeFromRowSchema = z.discriminatedUnion('nodeType', [
     .object({
       nodeType: z.literal('pane'),
       id: z.string().min(1),
-      /** Null here means DETACHED — in the workspace, off the screen. */
-      parentId: z.string().min(1).nullable(),
+      /**
+       * NEVER NULL, and this line is the correction. It was
+       * `.nullable()`, and the null was read as "detached": a pane in the
+       * workspace and off the screen. So a row whose `parentId` had been nulled
+       * — by a bad write, a partial migration, a hand-run UPDATE — parsed into a
+       * legal node that no renderer would ever draw, and was indistinguishable
+       * from a pane the user had closed.
+       *
+       * The type makes it unspellable in memory; a ROW can still carry it, which
+       * is exactly why the refusal has to be here as well as in `validateTree`.
+       * `nodesFromRows` rejects the whole set on one such row rather than
+       * dropping it, for the reason it states: dropping would be
+       * indistinguishable from the user having closed the pane, which is the
+       * confusion this change exists to end.
+       */
+      parentId: z.string().min(1),
       position: z.number().int(),
       axis: z.null(),
       fraction: z.number().nullable(),
@@ -283,30 +309,28 @@ export interface RenderNode {
 }
 
 /**
- * What a workspace draws: one tree, and the panes that are in the workspace but
- * not in it.
+ * What a workspace draws: ONE TREE.
  *
- * SEPARATE FIELDS ON PURPOSE. A detached pane is a member of the workspace with
- * no place in the layout, so a projection that returned only the tree would
- * leave "and also render the parked ones" as something every caller has to
- * remember — which is how a pane came to take two minutes to appear in the
- * sidebar in the first place. Here the sidebar's list is handed over with the
- * grid, from the same single pass over the same single list, and the three
- * fields partition the input exactly: every node is in one of them.
+ * There is no second list beside it any more, and the deletion is the whole
+ * point. This type used to carry a `detached` field — panes in the workspace and
+ * off the grid — which is the two-structure split the epic exists to remove,
+ * reappearing in the projection layer: every caller had to remember "and also
+ * render the parked ones", and the one that forgot was the sidebar bug (#2373)
+ * in a new costume. Nothing has to remember anything now, because there is
+ * nothing to remember: every node is in the tree or the tree is invalid.
  */
 export interface RenderTree {
   /** `null` when the list has no root — a workspace mid-hydration draws nothing. */
   root: RenderNode | null;
-  /** In the workspace, off the grid. Ordered, because the sidebar lists them. */
-  detached: PaneNode[];
   /**
-   * Everything the projection could place NOWHERE: not reached from the root,
-   * and not parked. Usually that is a node claiming a parent the list cannot
-   * resolve, plus anything beneath it — but it is not only those. A SECOND root
-   * claims no parent at all and still lands here, because `rootOf` returns one
-   * node and the descent starts from that one; so does a node parented under a
-   * detached pane, and so does the row a duplicated id made unplaceable. The
-   * rule is the absence of a place, not the presence of a dangling pointer.
+   * Everything the projection could place NOWHERE: not reached from the root.
+   * Usually that is a node claiming a parent the list cannot resolve, plus
+   * anything beneath it — but it is not only those. A SECOND root claims no
+   * parent at all and still lands here, because `rootOf` returns one node and
+   * the descent starts from that one; so does the row a duplicated id made
+   * unplaceable, and so does a node whose `parentId` is null, which
+   * `validateTree` now calls `null_parent` and which used to be an entire
+   * legitimate population.
    *
    * Reported, never repaired: re-parenting one onto the root would put a pane
    * somewhere the user never placed it, and a projection has no business
@@ -355,13 +379,11 @@ export function buildRenderTree(nodes: readonly WorkspaceNode[]): RenderTree {
     return { node, children };
   };
 
-  // Found by TYPE, never by "the node with no parent" — a detached pane has no
-  // parent either, and conflating the two is the bug this model deletes.
+  // Found by TYPE, never by "the node with no parent". The two now select the
+  // same node; asking the type is what keeps a row that disagrees with itself
+  // from being read as a root.
   const root = rootOf(nodes);
   const rendered = root === undefined ? null : descend(root);
 
-  const detached = detachedOf(nodes);
-  for (const pane of detached) placed.add(pane);
-
-  return { root: rendered, detached, orphaned: nodes.filter((node) => !placed.has(node)) };
+  return { root: rendered, orphaned: nodes.filter((node) => !placed.has(node)) };
 }

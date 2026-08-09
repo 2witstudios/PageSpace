@@ -38,14 +38,21 @@ function wireSurface() {
 }
 
 describe('session + shell + layout tools — frozen wire contract', () => {
-  it('exposes exactly the thirteen tool names', () => {
-    // The nine worker/shell verbs have been frozen since Phase 1. The four
-    // LAYOUT verbs are the deliberate addition of issue #2208 — the grid
-    // rearrange surface that had to wait for the pane entities to become
-    // relational rows with a verb API. They are ADDITIVE: nothing above them
-    // changed name, description, or schema, which is what the freeze protects.
+  it('exposes exactly the fourteen tool names', () => {
+    // The nine worker/shell verbs have been frozen since Phase 1. The LAYOUT
+    // verbs are the deliberate addition of issue #2208 — the grid rearrange
+    // surface that had to wait for the pane entities to become relational rows
+    // with a verb API.
+    //
+    // `close_pane` is the fifth, and it is a REPLACEMENT rather than an
+    // addition: `move_pane(toParentId: null)` was an agent's only way to take a
+    // pane off the grid, because `null` was a legal destination meaning PARKED.
+    // There is one place a node can be now, so that destination is gone and the
+    // capability needs its own verb — otherwise removing the null would leave
+    // agents able to rearrange a layout and unable to close anything in it.
     expect(Object.keys(wireSurface()).sort()).toEqual([
       'arrange_panes',
+      'close_pane',
       'kill_session',
       'kill_shell',
       'list_panes',
@@ -210,7 +217,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       // and out of the layout, which is a state the old wire could not spell.
       list_panes: {
         description:
-          'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). A pane with parentId null is PARKED — in the workspace and in the sidebar, but not on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
+          'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). Only the root has a null parentId; every pane is on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -236,19 +243,32 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       move_pane: {
         description:
-          'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes), or null to PARK it — out of the layout, still in the workspace and still listed in the sidebar, which is what closing a pane means here. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
+          'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes) — a real container; there is nowhere outside the layout for a node to go, and taking a pane away is close_pane, which removes it from the workspace. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
           properties: {
             nodeId: { type: 'string', minLength: 1 },
-            // `null` is a real destination, not an absent one: parking a pane
-            // is where it goes, so the schema offers the two spellings rather
-            // than making the field optional.
-            toParentId: { anyOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+            // A plain string. It was `anyOf: [string, null]`, because `null` was
+            // a real destination meaning PARKED — the shape that made a move
+            // also a removal.
+            toParentId: { type: 'string', minLength: 1 },
             toIndex: { type: 'integer', minimum: 0, maximum: 64 },
           },
           required: ['nodeId', 'toParentId'],
+          additionalProperties: false,
+        },
+      },
+      close_pane: {
+        description:
+          'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {
+            nodeId: { type: 'string', minLength: 1 },
+          },
+          required: ['nodeId'],
           additionalProperties: false,
         },
       },

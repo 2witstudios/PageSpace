@@ -122,8 +122,12 @@ async function fillWorkspace(
     rows.map((row, index) => ({
       id: row.id,
       rootId: workspaceId,
-      // PARKED, and it still counts: the cap bounds membership, not visibility.
-      parentId: null,
+      // UNDER THE ROOT. These were seeded PARKED — `parentId: null` — because a
+      // member off the grid still counted toward the cap. There is one place a
+      // node can be, so a parked filler would seed rows the read path now
+      // refuses (`null_parent`), and every write against this workspace would
+      // fail for a reason that has nothing to do with the test.
+      parentId: rootId,
       position: index,
       nodeType: 'pane' as const,
       targetKind: 'chat' as const,
@@ -214,12 +218,18 @@ describe('the cap is a property of the tree, enforced by the write that changes 
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
 
-  it('a REOPEN into a full workspace succeeds — a member returning consumes no slot', async () => {
+  it('CLOSING frees a cap slot, and reopening consumes one again', async () => {
     if (!dbAvailable) return;
+    // The behaviour changed TWICE, and this is the second change. Under the
+    // column model a reopen restored a listing slot the close had freed, so a
+    // reopen into a full workspace was refused. Under the parked model neither
+    // act touched the count, because a closed thread never stopped being a
+    // member — so the refusal went away. Closing DESTROYS the node now, so the
+    // count moves again: a close frees a slot and a reopen takes one, which is
+    // the same rule every other admission follows.
     const { owner, agentPage, workspace } = await seedWorkspace('Reopen At Cap');
     await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
 
-    // Any member will do: every one of them is parked, so every one is closed.
     const [member] = await db
       .select({ targetId: agentWorkspaceNodes.targetId })
       .from(agentWorkspaceNodes)
@@ -227,16 +237,48 @@ describe('the cap is a property of the tree, enforced by the write that changes 
         and(eq(agentWorkspaceNodes.rootId, workspace.id), eq(agentWorkspaceNodes.targetKind, 'chat')),
       )
       .limit(1);
+    const conversationId = member.targetId as string;
 
-    const outcome = await reopenConversationInSession({
-      conversationId: member.targetId as string,
+    expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+      'closed',
+    );
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
+
+    expect(
+      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+    ).toBe('reopened');
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  }, 20_000);
+
+  it('refuses a reopen into a workspace that refilled the slot while the thread was closed', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Reopen Refilled');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+
+    const [member] = await db
+      .select({ targetId: agentWorkspaceNodes.targetId })
+      .from(agentWorkspaceNodes)
+      .where(
+        and(eq(agentWorkspaceNodes.rootId, workspace.id), eq(agentWorkspaceNodes.targetKind, 'chat')),
+      )
+      .limit(1);
+    const conversationId = member.targetId as string;
+
+    await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id });
+    // Somebody else takes the freed slot.
+    await createConversationInSession({
+      conversationId: createId(),
       userId: owner.id,
+      agentPageId: agentPage.id,
       workspaceId: workspace.id,
     });
 
-    // The behaviour change: the old model refused this with `session_full`,
-    // because a reopen restored a listing slot the close had freed.
-    expect(outcome).toBe('reopened');
+    // Refused, and the refusal is the CAP's — collapsed to the one answer this
+    // route gives for "you cannot have this back", the same shape a nonexistent
+    // id gets.
+    expect(
+      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+    ).toBe('not_in_session');
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
 });
@@ -427,14 +469,18 @@ describe('a conversation and its membership are one transaction', () => {
   }, 20_000);
 });
 
-describe('attach is a location, not an existence', () => {
+describe('every admission is PLACED — there is no unplaced membership', () => {
   beforeAll(connect);
 
-  it('an unattached create is a MEMBER, off the grid — the pane-picker routes depend on this', async () => {
+  it('a create lands in the tree, on the grid, with a real parent', async () => {
     if (!dbAvailable) return;
-    // The opt-out is the load-bearing half (issue #2373, review finding — codex
-    // P1): the picker mints its own pane and binds it after the POST returns,
-    // so an attached admission would place a SECOND pane for one thread.
+    // There used to be an opt-out here (`attach: false`), which minted the node
+    // PARKED — a member with no parent — so that the pane picker, which mints
+    // its own pane and binds it after the POST returns, did not get a SECOND
+    // pane for one thread. The placement policy fills an unbound pane before it
+    // splits, so the picker's waiting pane IS what an admission lands in, and
+    // the parked state that made a closed pane and a broken one identical is
+    // gone with the flag.
     const { owner, agentPage, workspace } = await seedWorkspace('Gate Agent');
     const conversationId = createId();
 
@@ -447,13 +493,11 @@ describe('attach is a location, not an existence', () => {
 
     const node = await nodeFor(conversationId);
     expect(node?.rootId).toBe(workspace.id);
-    // Parked. Not absent — which is the difference the old `placeInGrid` gate
-    // could not express, and the reason an unplaced thread used to be invisible.
-    expect(node?.parentId).toBeNull();
+    expect(node?.parentId).not.toBeNull();
     expect(await memberCountFor(workspace.id)).toBe(1);
   }, 20_000);
 
-  it('an attached create lands ON the grid', async () => {
+  it('a create lands ON the grid — every admission is placed', async () => {
     if (!dbAvailable) return;
     const { owner, agentPage, workspace } = await seedWorkspace('Attach Agent');
     const conversationId = createId();
@@ -464,7 +508,6 @@ describe('attach is a location, not an existence', () => {
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
-      attach: true,
     });
 
     expect((await nodeFor(conversationId))?.parentId).not.toBeNull();
@@ -481,7 +524,6 @@ describe('attach is a location, not an existence', () => {
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Caller',
-      attach: true,
     });
 
     const workerId = createId();
@@ -491,7 +533,6 @@ describe('attach is a location, not an existence', () => {
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
-      attach: true,
       excludeTargetId: spawnerId,
     });
 
@@ -511,7 +552,6 @@ describe('attach is a location, not an existence', () => {
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
       title: 'Researcher',
-      attach: true,
     };
 
     await createConversationInSession(input);
@@ -523,7 +563,7 @@ describe('attach is a location, not an existence', () => {
     expect(await memberCountFor(workspace.id)).toBe(1);
   }, 20_000);
 
-  it('closing then reopening moves ONE node, and never mints a second', async () => {
+  it('closing REMOVES the node, and reopening admits a fresh one on the grid', async () => {
     if (!dbAvailable) return;
     const { owner, agentPage, workspace } = await seedWorkspace('Move Agent');
     const conversationId = createId();
@@ -532,26 +572,28 @@ describe('attach is a location, not an existence', () => {
       userId: owner.id,
       agentPageId: agentPage.id,
       workspaceId: workspace.id,
-      attach: true,
     });
     const born = await nodeFor(conversationId);
+    expect(born).not.toBeNull();
 
     expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
       'closed',
     );
-    const closed = await nodeFor(conversationId);
-    // Still a member, still the SAME node — only its location changed, which is
-    // what keeps the binding write-once across a close.
-    expect(closed?.id).toBe(born?.id);
-    expect(closed?.parentId).toBeNull();
-    expect(await memberCountFor(workspace.id)).toBe(1);
+    // The node is GONE. Closing used to park it — same row, null parent, still a
+    // member — which is the state that made a closed pane and a broken one
+    // identical. The thread's history is untouched; only its membership went.
+    expect(await nodeFor(conversationId)).toBeNull();
+    expect(await memberCountFor(workspace.id)).toBe(0);
 
     expect(await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
       'reopened',
     );
     const reopened = await nodeFor(conversationId);
-    expect(reopened?.id).toBe(born?.id);
+    // A NEW node, on the grid. Reopening is re-admitting, because a closed
+    // thread is a member of nothing.
+    expect(reopened).not.toBeNull();
     expect(reopened?.parentId).not.toBeNull();
+    expect(await memberCountFor(workspace.id)).toBe(1);
   }, 20_000);
 });
 

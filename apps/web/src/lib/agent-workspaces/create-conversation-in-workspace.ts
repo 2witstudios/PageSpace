@@ -17,14 +17,17 @@
  * delete to forget, and no state where one exists without the other — which is
  * a property of the transaction rather than of anyone's diligence.
  *
- * **`placeInGrid` became `attach`, and the narrowing matters.** The old flag
- * decided whether the thread was in the grid AT ALL, and a thread it said no to
- * was reachable only through the second structure. Here both answers are
- * membership: `attach: false` mints the node parked — in the workspace, in the
- * sidebar, off the grid — which is a location, not an absence. A caller with a
- * pane already waiting (the picker binds its own pane once the POST returns)
- * still says `false`, but now for an honest reason: the placement policy would
- * mint a SECOND pane beside the one the client is about to fill.
+ * **`placeInGrid` is gone entirely, and so is the `attach` flag that replaced
+ * it.** Both chose whether the new thread would be on screen. `placeInGrid: false`
+ * left it a member of nothing renderable; `attach: false` left it a member with
+ * a node and no parent, which is the same problem wearing the model's own
+ * clothes — a permanent population of parentless nodes, indistinguishable from
+ * panes that lost their parent to a defect. Every admission is PLACED now, by
+ * the same policy `openConversation` runs: it fills an unbound pane if there is
+ * one, and splits rather than evicting if there is not. A caller with a pane
+ * already waiting (the picker binds its own pane once the POST returns) is
+ * served by exactly that rule — its waiting pane IS the unbound one, so the
+ * placement lands there instead of minting a second beside it.
  *
  * **The cap is not here any more.** It is `admit`'s, decided against the tree
  * inside the same locked transaction that writes it. The pre-count this module
@@ -135,7 +138,6 @@ export async function createConversationInSessionWith<Tx>(
     agentPageId,
     workspaceId,
     title = null,
-    attach = false,
     excludeTargetId,
   }: {
     conversationId: string;
@@ -145,8 +147,6 @@ export async function createConversationInSessionWith<Tx>(
     workspaceId: string;
     /** Display label written at birth (a spawned worker's name). Labels only — never an address. */
     title?: string | null;
-    /** Put the new thread on screen, or leave it parked. See the module doc. */
-    attach?: boolean;
     /** The spawning conversation, never evicted by the thing it spawned. */
     excludeTargetId?: string;
   },
@@ -177,7 +177,6 @@ export async function createConversationInSessionWith<Tx>(
   const outcome = await deps.admitConversation({
     conversationId,
     workspaceId,
-    attach,
     ...(excludeTargetId === undefined ? {} : { excludeTargetId }),
     // THE SHARED TRANSACTION. Everything below runs on the same executor as the
     // node write, so a creator that throws takes the node with it and a node

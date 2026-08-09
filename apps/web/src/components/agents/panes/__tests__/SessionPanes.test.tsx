@@ -20,7 +20,7 @@ import SessionPanes from '../SessionPanes';
 const WS = 'ws-1';
 const root: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
 
-function pane(id: string, parentId: string | null, position: number, fraction?: number): WorkspaceNode {
+function pane(id: string, parentId: string, position: number, fraction?: number): WorkspaceNode {
   return { nodeType: 'pane', id, parentId, position, target: null, ...(fraction === undefined ? {} : { fraction }) };
 }
 function split(id: string, parentId: string, position: number, axis: 'row' | 'column'): WorkspaceNode {
@@ -120,11 +120,21 @@ describe('SessionPanes — desktop grid', () => {
     expect(domOrder(container)).toEqual(['a', 'b', 'c']);
   });
 
-  /** A detached node is a member of the workspace, and NOT a rectangle. */
-  it('should not render a PARKED pane', () => {
-    const withParked: WorkspaceNode[] = [root, pane('p1', WS, 0), pane('parked', null, 0)];
-    const { seen } = renderGrid(withParked, 'p1');
-    expect(seen.map((p) => p.id)).toEqual(['p1']);
+  /**
+   * Every pane the workspace holds IS a rectangle now. This used to assert the
+   * opposite for a parked node — a member that was deliberately not drawn — and
+   * what remains worth pinning is that the walk reaches every one of them.
+   */
+  it('should render every pane the tree holds, at every depth', () => {
+    const nested: WorkspaceNode[] = [
+      root,
+      pane('p1', WS, 0),
+      split('s1', WS, 1, 'column'),
+      pane('deep', 's1', 0),
+      pane('beside', 's1', 1),
+    ];
+    const { seen } = renderGrid(nested, 'p1');
+    expect(seen.map((p) => p.id).sort()).toEqual(['beside', 'deep', 'p1']);
   });
 
   it('should ignore a split holding nothing rather than render an empty frame for it', () => {
@@ -135,10 +145,10 @@ describe('SessionPanes — desktop grid', () => {
 });
 
 /**
- * THE EMPTY GRID — a resting state, not a failure. Closing the last pane parks
- * it and leaves the workspace alive, which the two-level model could not
- * represent at all (so the reducer no-oped on the last close and browser code
- * ended the session instead).
+ * THE EMPTY GRID — a resting state, not a failure. Closing the last pane
+ * destroys it and leaves the SESSION alive with a root holding nothing, which
+ * the two-level model could not represent at all (so the reducer no-oped on the
+ * last close and browser code ended the session instead).
  */
 describe('SessionPanes — nothing on the grid', () => {
   it('should render the empty frame for a root holding nothing', () => {
@@ -152,8 +162,8 @@ describe('SessionPanes — nothing on the grid', () => {
     expect(screen.getByTestId('empty-grid')).toBeDefined();
   });
 
-  it('should render the empty frame when every pane is parked', () => {
-    renderGrid([root, pane('parked', null, 0)], null);
+  it('should render the empty frame for a root whose only child is an empty split', () => {
+    renderGrid([root, split('empty', WS, 0, 'row')], null);
     expect(screen.getByTestId('empty-grid')).toBeDefined();
   });
 

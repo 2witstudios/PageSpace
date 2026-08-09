@@ -193,13 +193,31 @@ export const movePaneInputSchema = z
   .object({
     nodeId: z.string().min(1),
     /**
-     * The container to move it into, from list_panes. `null` PARKS it: out of
-     * the layout, still in the workspace and still in the sidebar. That is what
-     * "close" means now — a location, not a deletion.
+     * The container to move it into, from list_panes. REQUIRED.
+     *
+     * It used to accept `null`, meaning PARK: out of the layout, still in the
+     * workspace. That state is gone — a node is in the tree or it is not in the
+     * workspace at all — so a move is only ever a relocation, and taking a pane
+     * away is `close_pane`.
      */
-    toParentId: z.string().min(1).nullable(),
+    toParentId: z.string().min(1),
     /** 0-based slot in the destination. Omit to append. Out of range is REFUSED, never clamped. */
     toIndex: z.number().int().min(0).max(MAX_GRID_COLUMNS).optional(),
+  })
+  .strict();
+
+/**
+ * The successor to `move_pane(toParentId: null)`.
+ *
+ * That was an agent's only way to take a pane off the grid, and it worked
+ * because `null` was a legal destination meaning PARKED — in the workspace, out
+ * of the layout. There is one place a node can be now, so a move is only ever a
+ * relocation and taking a pane away is its own act: the one removal, named.
+ */
+export const closePaneInputSchema = z
+  .object({
+    /** A pane's nodeId from list_panes. A container is refused: closing a column is not closing a pane. */
+    nodeId: z.string().min(1),
   })
   .strict();
 
@@ -540,7 +558,8 @@ export interface SessionToolsDeps {
  */
 export type LayoutCommand =
   | { type: 'resize'; nodeId: string; fraction: number }
-  | { type: 'move'; nodeId: string; parentId: string | null; index?: number }
+  | { type: 'move'; nodeId: string; parentId: string; index?: number }
+  | { type: 'close'; nodeId: string }
   | { type: 'arrange'; parentId?: string; nodeIds: string[] };
 
 /** One node of the caller's layout, as `list_panes` reports it. */
@@ -549,8 +568,8 @@ export interface PaneGridNodeEntry {
   /** `'root' | 'split' | 'pane'`. Only a pane shows anything. */
   nodeType: 'root' | 'split' | 'pane';
   /**
-   * The container this node sits in. `null` on the root, and — on a pane —
-   * PARKED: in the workspace, out of the layout, still listed in the sidebar.
+   * The container this node sits in. `null` ONLY on the root, where it is a
+   * consequence of being the root — `nodeType` is what says so.
    */
   parentId: string | null;
   /** 0-based slot among its siblings. */
@@ -721,6 +740,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
   list_panes: Tool;
   resize_pane: Tool;
   move_pane: Tool;
+  close_pane: Tool;
   arrange_panes: Tool;
 } {
   /**
@@ -1337,7 +1357,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     list_panes: tool({
       description:
-        'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). A pane with parentId null is PARKED — in the workspace and in the sidebar, but not on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
+        'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). Only the root has a null parentId; every pane is on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
       inputSchema: listPanesInputSchema,
       execute: async (_input, options) => {
         const opened = await openOwnGrid(readContext(options));
@@ -1371,7 +1391,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     move_pane: tool({
       description:
-        'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes), or null to PARK it — out of the layout, still in the workspace and still listed in the sidebar, which is what closing a pane means here. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
+        'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes) — a real container; there is nowhere outside the layout for a node to go, and taking a pane away is close_pane, which removes it from the workspace. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
       inputSchema: movePaneInputSchema,
       execute: async ({ nodeId, toParentId, toIndex }, options) =>
         runLayoutCommand(readContext(options), {
@@ -1380,6 +1400,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
           parentId: toParentId,
           ...(toIndex === undefined ? {} : { index: toIndex }),
         }),
+    }),
+
+    close_pane: tool({
+      description:
+        'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
+      inputSchema: closePaneInputSchema,
+      execute: async ({ nodeId }, options) =>
+        runLayoutCommand(readContext(options), { type: 'close', nodeId }),
     }),
 
     arrange_panes: tool({

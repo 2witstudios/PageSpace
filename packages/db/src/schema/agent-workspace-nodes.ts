@@ -12,14 +12,20 @@ import { agentWorkspaces } from './agent-workspaces';
  *
  * **Why it supersedes `agent_workspace_pane_columns` / `agent_workspace_panes`.**
  * Those two tables store a workspace's MEMBERSHIP (which panes exist) and its
- * LAYOUT (where they sit) as the same fact: a pane exists by virtue of being in
- * a column. So a pane that should be in the workspace but not on the grid has
- * nowhere to be, and the correspondence between "in the session" and "on
- * screen" has to be maintained by convention across every write path — which is
- * the bug class this model deletes. Here there is ONE flat list per workspace
- * in which `parentId` decides visibility and location, and nothing decides
- * membership but presence in the list. A non-root node with a NULL `parentId`
- * is DETACHED: in the workspace, off the grid, and still one row in one table.
+ * LAYOUT (where they sit) as two facts kept in correspondence by convention
+ * across every write path — which is the bug class this model deletes. Here
+ * there is ONE flat list per workspace in which `parentId` says where a node
+ * sits, and nothing decides membership but presence in the list: "in the
+ * session" and "on screen" are the same sentence.
+ *
+ * **ONLY THE ROOT CARRIES A NULL `parentId`.** An earlier cut of this model let
+ * a non-root row carry one and called it DETACHED — in the workspace, off the
+ * grid — which rebuilt the same split one level down: a permanent population of
+ * parentless rows existed by design, so a row that lost its parent to a defect
+ * was indistinguishable from a pane a user had closed. Closing a pane DELETES
+ * its row now, and `workspace-node-rows.ts` refuses to parse a non-root row
+ * whose `parentId` is null (`validateTree` calls the same fault
+ * `null_parent`).
  *
  * **Additive and inert on arrival.** Nothing reads or writes these tables at
  * the migration that creates them; the old tables stay live. That is the
@@ -95,28 +101,31 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    * workspace's, so no node can name another session to move into.
    *
    * CONSTRAINT 3 of 6 — the direct FK with `onDelete: 'cascade'`. The pane
-   * tables cascaded only through the column FK, which would leave a DETACHED
-   * node (null `parentId`, hence outside the self-FK) with no cascade path at
-   * all: deleting a workspace would orphan exactly the rows that carry no
-   * parent. Naming `agent_workspaces` directly gives every row one, whether it
-   * is attached or parked.
+   * tables cascaded only through the column FK, which leaves any row outside
+   * the self-FK — the ROOT, whose `parentId` is null — with no cascade path at
+   * all. Naming `agent_workspaces` directly gives every row one.
    */
   rootId: text('rootId')
     .notNull()
     .references(() => agentWorkspaces.id, { onDelete: 'cascade' }),
 
   /**
-   * The containing node, or NULL. NULL means one of two entirely different
-   * things and `nodeType` — never this column — is what tells them apart: on
-   * the root it is a consequence of being the root, and on a pane it means
-   * DETACHED, present in the workspace and absent from the grid.
+   * The containing node, or NULL — and NULL means exactly one thing: this row is
+   * the ROOT. `nodeType`, never this column, is what says so; the null is a
+   * consequence of being the root rather than a definition of it, which is why
+   * every reader finds the root by type.
+   *
+   * A non-root row carrying NULL is CORRUPT, not detached. It used to be legal
+   * (see the module docblock), and the parse in
+   * `@pagespace/lib/agent-workspaces/workspace-node-rows.ts` now refuses it —
+   * which is where the refusal lives, per this file's own rule that row/type
+   * agreement belongs to the parse rather than to a duplicated CHECK.
    */
   parentId: text('parentId'),
 
   /**
-   * Contiguous 0-based position among siblings (or among the detached panes,
-   * which the sidebar lists in order); renumbered by whichever write changes
-   * sibling order. Named `position` and not `orderIndex` because PageSpace's
+   * Contiguous 0-based position among siblings; renumbered by whichever write
+   * changes sibling order. Named `position` and not `orderIndex` because PageSpace's
    * other tree — `pages` — already names it that, and under this name a
    * `WorkspaceNode` structurally satisfies the generic `{id, parentId,
    * position?}` builder in `content/tree-utils.ts`.
@@ -125,8 +134,9 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
 
   /**
    * `'root' | 'split' | 'pane'` — the discriminator, and the thing that
-   * identifies the root. NOT a null `parentId`: a detached pane has none
-   * either, and conflating the two is the bug this model exists to remove.
+   * identifies the root. NOT a null `parentId`: a ROW can carry one without
+   * being a root, and reading the null as the definition is how a corrupt row
+   * gets crowned.
    */
   nodeType: text('nodeType').notNull(),
 
@@ -179,9 +189,15 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    *
    * A NULL `parentId` sits outside this constraint naturally: under Postgres's
    * default `MATCH SIMPLE`, a composite FK with any NULL column is not checked.
-   * That is exactly the detached case — it falls out of the semantics rather
-   * than needing an exemption — and it is why constraint 3 above exists to
-   * give those rows their own cascade path.
+   * That is the ROOT's row — and it is why constraint 3 above exists to give it
+   * its own cascade path.
+   *
+   * It is also why a non-root row carrying NULL is invisible HERE: the FK cannot
+   * refuse what it is not checking, so that refusal lives in the row parse and
+   * in `validateTree` (`null_parent`). The converse CHECK — `nodeType = 'root'
+   * OR parentId IS NOT NULL` — would state it in the table as well; it is not
+   * added here because it needs its own migration, and this table's rule is that
+   * row/type agreement belongs to the parse.
    *
    * ITS NAME IN THE DATABASE IS TRUNCATED. Drizzle derives
    * `agent_workspace_nodes_rootId_parentId_agent_workspace_nodes_rootId_id_fk`,
@@ -250,8 +266,13 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    * CONSTRAINT 5 of 6 — a root never carries a parent. Written as
    * `nodeType <> 'root' OR ...` rather than a CASE so every other type is left
    * unconstrained rather than accidentally forbidden (the form conversations'
-   * type checks use). Its converse is deliberately absent: a non-root node
-   * with a null parent is the detached case, which is legal.
+   * type checks use).
+   *
+   * Its CONVERSE — a non-root node always carries one — is a real invariant now
+   * rather than the "detached" state it used to describe, and it is enforced one
+   * layer up (the row parse, and `validateTree`'s `null_parent`) rather than
+   * here. Adding it as a CHECK would be a strict improvement and needs its own
+   * migration; see the self-FK's comment above.
    */
   rootHasNoParent: check(
     'agent_workspace_nodes_root_no_parent_chk',
@@ -298,9 +319,9 @@ export const agentWorkspaceNodesRelations = relations(agentWorkspaceNodes, ({ on
     fields: [agentWorkspaceNodes.rootId],
     references: [agentWorkspaces.id],
   }),
-  // Self-relation over the compound key. `parent` is optional in the data (the
-  // root and every detached pane have none), which is the relational shape of
-  // the same NULL the self-FK skips.
+  // Self-relation over the compound key. `parent` is optional in the data — the
+  // ROOT has none — which is the relational shape of the same NULL the self-FK
+  // skips.
   parent: one(agentWorkspaceNodes, {
     fields: [agentWorkspaceNodes.rootId, agentWorkspaceNodes.parentId],
     references: [agentWorkspaceNodes.rootId, agentWorkspaceNodes.id],

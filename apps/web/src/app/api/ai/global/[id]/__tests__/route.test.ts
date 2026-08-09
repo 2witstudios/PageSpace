@@ -398,25 +398,29 @@ describe('DELETE /api/ai/global/[id]', () => {
     });
   });
 
-  describe('the never-empty guard, now decided against the workspace\'s own tree', () => {
-    it("refuses to delete a thread that is its workspace's LAST conversation", async () => {
+  describe('the membership half of a history delete', () => {
+    it("DELETES a thread that is its workspace's last conversation", async () => {
+      // The never-empty guard is gone, and with it the `last_conversation` 409.
+      // It refused this delete to uphold "a workspace is never empty" — an
+      // invariant that meant something only while a two-level grid could not
+      // represent zero panes and while closing the last one ended the session.
+      // An empty tree is an ordinary resting state, so the refusal defended
+      // nothing and fired only on legitimate deletions.
       vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
-      vi.mocked(expelConversationFromSession).mockResolvedValue('last_conversation');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createDeleteRequest(mockConversationId);
       const context = createContext(mockConversationId);
       const response = await DELETE(request, context);
-      const body = await response.json();
 
-      expect(response.status).toBe(409);
-      expect(body.reason).toBe('last_conversation');
-      // Refused BEFORE the history write. Under the old shape the guard was a
-      // count on a second connection under a second lock; here it is a count
-      // over the tree inside the transaction that would have changed it.
-      expect(globalConversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalled();
+      // Still audited as an ordinary deletion. The `security.rate.limited`
+      // event that used to ride the `last_conversation` refusal is gone with the
+      // refusal; this is the event that was always the real record.
       expect(auditRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ eventType: 'security.rate.limited' }),
+        expect.objectContaining({ eventType: 'data.delete' }),
       );
     });
 
@@ -433,7 +437,6 @@ describe('DELETE /api/ai/global/[id]', () => {
         conversationId: mockConversationId,
         workspaceId: 'ses_1',
         actingUserId: mockUserId,
-        requireSurvivor: true,
       });
       expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
     });

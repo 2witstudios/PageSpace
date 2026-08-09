@@ -102,7 +102,7 @@
         },
         {
           "file": "apps/web/src/lib/agent-workspaces/__tests__/create-conversation-in-workspace.test.ts",
-          "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
+          "name": "creates a GLOBAL thread on that same transaction",
           "suite": "web-unit"
         }
       ],
@@ -410,7 +410,7 @@
         },
         {
           "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
-          "name": "exposes exactly the thirteen tool names",
+          "name": "exposes exactly the fourteen tool names",
           "suite": "web-unit"
         }
       ],

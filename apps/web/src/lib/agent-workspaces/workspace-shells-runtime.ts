@@ -62,14 +62,15 @@ export function getSessionShellStore(): Promise<SessionShellStore> {
  * wearing a different hat. Here the node IS the membership, and the shell's own
  * row is created on the transaction that writes it.
  *
- * **It arrives PARKED, not on screen**, and that is deliberate rather than
- * conservative. Every caller of this either has a pane already waiting (the
- * shells route's own client mints one and binds it) or is spawning a workspace
- * whose first thing is a shell, where the client draws the terminal itself. An
- * attached admission would place a SECOND pane beside the one the client is
- * about to fill — the identical trap `attach` documents on the conversation
- * side. Parked is membership: the shell is in the workspace and one `move` from
- * being visible.
+ * **It arrives ON SCREEN**, because there is nowhere else for a member to be.
+ * It used to arrive PARKED — in the workspace, off the grid — to avoid placing a
+ * SECOND pane beside the one the shells route's own client mints and then binds.
+ * That is no longer the trade: the placement policy this admission runs fills an
+ * UNBOUND pane and splits only when there is none, so the client's waiting pane
+ * IS what gets filled, and the client's own bind afterwards asks for a state the
+ * node is already in. Two panes for one shell was in fact the OLD outcome — the
+ * parked node and the client's bound one both held the same shell, invisibly,
+ * because terminals carry no uniqueness index.
  */
 export async function spawnShell(input: {
   workspaceId: string;
@@ -93,7 +94,6 @@ export async function spawnShell(input: {
           newNodeId: createId(),
           newSplitId: createId(),
           newRootId: createId(),
-          attach: false,
         }),
       within: async (tx) => {
         const store = await createDbSessionShellStore(tx);

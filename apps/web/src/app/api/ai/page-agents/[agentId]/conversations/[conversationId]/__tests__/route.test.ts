@@ -473,23 +473,21 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     });
   });
 
-  describe("the never-empty guard, now decided against the workspace's own tree", () => {
-    it("refuses to delete a thread that is its workspace's LAST conversation", async () => {
+  describe('the membership half of a history delete', () => {
+    it("DELETES a thread that is its workspace's last conversation", async () => {
+      // See the global route's twin: the never-empty guard defended a state
+      // nobody can reach any more, so its 409 only ever refused legitimate work.
       vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
-      vi.mocked(expelConversationFromSession).mockResolvedValue('last_conversation');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
-      const body = await response.json();
 
-      expect(response.status).toBe(409);
-      expect(body.reason).toBe('last_conversation');
-      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ eventType: 'security.rate.limited' }),
-      );
+      expect(response.status).toBe(200);
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalled();
+      // Still audited as an ordinary deletion — see the global route's twin.
+      expect(auditRequest).toHaveBeenCalled();
     });
 
     it('deletes when the workspace holds another conversation, removing the membership FIRST', async () => {
@@ -510,7 +508,6 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
         conversationId: mockConversationId,
         workspaceId: 'ses_1',
         actingUserId: mockUserId,
-        requireSurvivor: true,
       });
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
     });
@@ -823,19 +820,17 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     });
   });
 
-  describe("the never-empty guard, now decided against the workspace's own tree", () => {
-    it("refuses to delete a thread that is its workspace's LAST conversation", async () => {
+  describe('the membership half of a history delete', () => {
+    it("DELETES a thread that is its workspace's last conversation", async () => {
       vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
-      vi.mocked(expelConversationFromSession).mockResolvedValue('last_conversation');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
       const response = await DELETE(request, context);
-      const body = await response.json();
 
-      expect(response.status).toBe(409);
-      expect(body.reason).toBe('last_conversation');
-      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalled();
     });
 
     it('deletes when the workspace holds another conversation', async () => {

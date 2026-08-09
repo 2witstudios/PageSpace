@@ -956,12 +956,18 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
         workspaceId: membership?.workspaceId ?? null,
-        // The human took this conversation OFF THE GRID (its node is parked).
-        // `openOwnSession` refuses on this, so a worker verb can never
+        // The human CLOSED this conversation out of its workspace, so its node
+        // is gone. `openOwnSession` refuses on this, so a worker verb can never
         // dispatch new work into, read, or kill a worker the user has already
-        // closed. It is one row's `parentId` now, rather than a second column
-        // that had to be kept in step with where the pane was.
-        isClosed: membership !== null && !membership.attached,
+        // closed.
+        //
+        // It used to be "the node is parked" — a row that survived the close
+        // with a null parent. Closing destroys the node, so the absence of a
+        // membership row IS the closed state, which is also why `workspaceId`
+        // above goes null in the same breath. A worker verb addressed at a
+        // closed thread therefore fails the `workspaceId` gate first; this stays
+        // so the answer keeps its own name rather than becoming "never had one".
+        isClosed: membership === null,
       };
     },
 
@@ -993,10 +999,6 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           // The spawning conversation shares this grid when the worker lands in
           // the caller's own workspace — never evicted by its own spawn.
           excludeTargetId: callerConversationId,
-          // An agent minting a worker has no browser pane waiting to be filled,
-          // so the membership write places it. The pane-picker routes
-          // deliberately leave it parked — see `attach`'s doc.
-          attach: true,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then

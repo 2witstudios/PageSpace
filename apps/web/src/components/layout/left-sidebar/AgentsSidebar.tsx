@@ -63,12 +63,13 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  *
  *  - A pane an agent placed appears when its broadcast lands rather than up to
  *    two minutes later, which is the symptom the epic opened with.
- *  - Every member is visible, INCLUDING the ones that are not on screen. A
- *    thread with no node at all is listed (its row comes from the conversation
- *    listing, which is its membership), and a node with no parent — parked, in
- *    the workspace, off the grid — is listed too, dimmed. Rendering only what is
- *    attached would reintroduce #2373 exactly: in production one workspace
- *    showed 2 of its 3 threads and another 4 of its 10.
+ *  - Every member is visible, and now that is a property of the model rather
+ *    than of this component's diligence. There is one place a node can be, so
+ *    walking the tree IS enumerating the members: there is no second list to
+ *    remember and no dimmed "in the workspace, not on your screen" state to
+ *    render. #2373 — one production workspace showing 2 of its 3 threads,
+ *    another 4 of its 10 — cannot recur, because a thread that is in a
+ *    workspace is in its tree.
  *
  * Two modes, one component:
  * - **Drive-scoped** (`driveId` present): that drive's sessions.
@@ -591,23 +592,21 @@ function SessionRow({
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
   /**
-   * THE PAGE AND SHELL ARTIFACTS THIS WORKSPACE HOLDS — attached AND detached.
+   * THE PAGE ARTIFACTS THIS WORKSPACE HOLDS.
    *
-   * The detached half is the #2373 guard restated in the model that replaced it.
-   * The old bug was a fork (grid or thread list) in which the grid always won, so
-   * an unplaced thread was invisible; the flat model deletes the fork and hands
-   * back the same trap in a new shape, because a renderer that walks from the
-   * root sees only what is on screen and a parked node is precisely a member that
-   * is not. `artifactRowsOf` walks the flat list.
+   * One walk over one tree. This used to concatenate a second list — the parked
+   * panes — because a member could be in the workspace and nowhere in it, which
+   * was the #2373 fork rebuilt inside the model that was supposed to have
+   * deleted it. `artifactRowsOf` walks the flat list, and the flat list is all
+   * of it.
    */
   const artifactRows = useMemo(() => (tree ? artifactRowsOf(tree) : []), [tree]);
 
   /**
    * Every thread in this workspace, each annotated with where its node sits.
    *
-   * The THREAD is the row and the node is an attribute of it — a thread with no
-   * node at all is a legitimate resting state (placement is best-effort, and a
-   * thread created without `placeInGrid` is never placed), so this list is keyed
+   * The THREAD is the row and the node is an attribute of it — a thread this
+   * workspace does not hold has no node here at all, so this list is keyed
    * by the listing and never by the tree. What the tree decides is only the
    * annotation, and it decides it LIVE.
    */
@@ -783,9 +782,9 @@ function SessionRow({
    * What "Close" means for one thread's row — decided from the SAME live tree
    * the menu label was decided from.
    *
-   * On the grid, Close takes it off the screen and leaves it in the workspace:
-   * the node parks, the row stays, one click brings it back. Off the grid there
-   * is nothing left to take away, so Close means the thread's listing.
+   * With a node here, Close destroys that node, which is what taking the thread
+   * out of this workspace IS. Without one, the workspace does not hold it and
+   * the close goes to the listing route, which answers the same way.
    *
    * The old version had to seat a snapshot first (`ensureLocalWorkspace`), because
    * a row could act on a workspace whose grid was never mounted and a raw store
@@ -829,14 +828,13 @@ function SessionRow({
   );
 
   const openArtifact = useCallback(
-    (nodeId: string, placement: MemberPlacement) => {
+    (nodeId: string) => {
       selectSession(session.workspaceId);
-      // A parked node is brought back onto the grid; one already there is only
-      // focused. `showNode` is both, and it is the only affordance a parked row
-      // has — without it, clicking one would silently do nothing, which is the
-      // #2373 symptom wearing a new hat.
-      if (placement === 'parked') showNode(session.workspaceId, nodeId);
-      else useAgentWorkspaceStore.getState().selectNode(session.workspaceId, nodeId);
+      // Every row here names a node that is IN the tree, so clicking one is
+      // focus and nothing else. It used to branch: a PARKED node had to be moved
+      // back onto the grid first, and that branch was a parked row's only
+      // affordance. There are no parked rows.
+      showNode(session.workspaceId, nodeId);
     },
     [selectSession, showNode, session.workspaceId],
   );
@@ -908,32 +906,24 @@ function SessionRow({
               key={row.key}
               items={[
                 {
-                  label: row.placement === 'grid' ? 'Close' : 'Show',
+                  // One label, because there is one thing the row can be: open.
+                  // It used to read "Show" for a parked row, which was the
+                  // affordance for a member that was not on screen.
+                  label: 'Close',
                   icon: X,
                   onSelect: () =>
-                    row.nodeId === null
-                      ? undefined
-                      : row.placement === 'grid'
-                        ? closePane(session.workspaceId, row.nodeId)
-                        : openArtifact(row.nodeId, row.placement),
-                  destructive: row.placement === 'grid',
+                    row.nodeId === null ? undefined : closePane(session.workspaceId, row.nodeId),
+                  destructive: true,
                 },
               ]}
               menuLabel="Page pane actions"
-              className={cn(
-                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs hover:bg-accent hover:text-foreground',
-                row.placement === 'parked' ? 'text-muted-foreground/60' : 'text-muted-foreground',
-              )}
+              className="gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <button
                 type="button"
                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                onClick={() => (row.nodeId === null ? undefined : openArtifact(row.nodeId, row.placement))}
-                // The one visual difference a parked row needs. It is a member of
-                // the workspace that is not on the screen, and saying so is what
-                // stops "why is this here?" being the reaction to the row that
-                // exists to prevent the thing being lost.
-                title={row.placement === 'parked' ? `${row.title} (not open)` : row.title}
+                onClick={() => (row.nodeId === null ? undefined : openArtifact(row.nodeId))}
+                title={row.title}
               >
                 <FileText className="size-3 shrink-0" aria-hidden="true" />
                 <span className="truncate">{row.title}</span>
@@ -971,11 +961,10 @@ function SessionRow({
  * does.
  *
  * `placement` comes from the LIVE tree, so the label the user reads and the act
- * the click performs are the same decision. It also makes the third state
- * VISIBLE for the first time: a thread whose pane was closed is `parked`, still
- * a member, still one click from coming back — and dimming it is how the sidebar
- * says "in this workspace, not on your screen" instead of leaving the user to
- * infer it from a row that looks identical to an open one.
+ * the click performs are the same decision. There are two states rather than
+ * three: this workspace holds a node for the thread, or it does not. The third
+ * — `parked`, a member off the screen, rendered dimmed — is gone with the state
+ * it described.
  */
 function ConversationRow({
   placement,
@@ -994,8 +983,9 @@ function ConversationRow({
     <RowMenu
       items={[
         {
-          // On the grid, Close takes it off the screen. Off it, there is nothing
-          // left to take away, so Close means the thread.
+          // Same act either way — the thread leaves this workspace — but the
+          // label names what the click actually addresses, which is the node
+          // when there is one and the listing when there is not.
           label: placement === 'grid' ? 'Close pane' : 'Close conversation',
           icon: X,
           onSelect: onClose,
@@ -1015,7 +1005,7 @@ function ConversationRow({
         type="button"
         className="flex min-w-0 flex-1 items-center text-left"
         onClick={onOpen}
-        title={placement === 'grid' ? label : `${label} (not open)`}
+        title={placement === 'grid' ? label : `${label} (not in this session)`}
       >
         <span className="truncate">{label}</span>
       </button>

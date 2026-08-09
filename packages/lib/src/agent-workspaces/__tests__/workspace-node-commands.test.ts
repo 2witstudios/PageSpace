@@ -5,7 +5,7 @@
  * `closePane` are POLICY compiled down to the five operations of
  * `workspace-node-algebra.ts`. None of them is a fact about the data: a split
  * is *insert container → reparent existing child → insert sibling*, and
- * "closing" a pane is a `move` to no parent. They are shapes a toolbar wants.
+ * "closing" a pane is a `destroy`. They are shapes a toolbar wants.
  *
  * Three properties this suite exists to hold down:
  *
@@ -32,7 +32,6 @@ import { applyNodeWrite, type NodeWrite } from '../workspace-node-algebra';
 import { validateTree } from '../workspace-node-validate';
 import {
   childrenOf,
-  detachedOf,
   findNode,
   type PaneNode,
   type RootNode,
@@ -49,17 +48,17 @@ function container(id: string, parentId: string, position: number): SplitNode {
   return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, position: number): PaneNode {
+function pane(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 
 /** A pane rendering its picker: in the workspace, showing nothing yet. */
-function unbound(id: string, parentId: string | null, position: number): PaneNode {
+function unbound(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: null };
 }
 
 /** A pane showing a running shell — never evictable, so placement must split past it. */
-function terminal(id: string, parentId: string | null, position: number): PaneNode {
+function terminal(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'terminal', id: `sh-${id}` } };
 }
 
@@ -181,13 +180,13 @@ describe('split rejections', () => {
     ).toBe('not_a_pane');
   });
 
-  it('should refuse to split a parked pane, which is in no container for a split to sit in', () => {
-    // `SplitNode.parentId` is a `string`, so a parked container is unspellable —
-    // there is nothing to repair this into, only a rejection.
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0)];
-    expect(
-      refusedWith(split(before, { nodeId: 'parked', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' })),
-    ).toBe('detached_pane');
+  it('should split any pane the workspace holds, because every pane sits in a container', () => {
+    // This used to have a refusal beside it: `detached_pane`, for a pane in the
+    // workspace and not in the grid, which had no container for the new split to
+    // take the place of. There is no such pane, so there is no such refusal.
+    const before = [root(), container('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
+    const result = split(before, { nodeId: 'b', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' });
+    expect(result.ok).toBe(true);
   });
 
   it('should refuse a container id the workspace already holds', () => {
@@ -244,34 +243,37 @@ describe('split rejections', () => {
 });
 
 describe('closePane', () => {
-  it('should take the pane out of the grid and leave it a member of the workspace', () => {
-    // Closing is a `move` to no parent, never a destroy. The node keeps its
-    // binding and keeps appearing in the sidebar; it simply leaves the grid.
+  it('should DESTROY the pane, not park it somewhere off the screen', () => {
+    // Closing was a `move` to no parent, which left the node in the workspace
+    // and nowhere in it. That state is what made a pane the user closed and a
+    // pane that lost its parent to a defect the same row, so closing is now the
+    // one removal pointed at a pane.
     const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
-    const after = applied(before, closePane(before, { nodeId: 'a' }));
+    const write = accepted(closePane(before, { nodeId: 'a' }));
+    expect(write.drop).toEqual(['a']);
+    const after = applyNodeWrite(before, write);
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['b']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['a']);
-    expect(findNode(after, 'a')).toMatchObject({ target: { kind: 'chat', id: 'conv-a' } });
+    expect(findNode(after, 'a')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should append the closed pane after the panes already parked, keeping the sidebar ordered', () => {
-    const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('parked', null, 0)];
+  it('should renumber the siblings the closed pane left behind', () => {
+    const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('c', 'root-1', 2)];
     const after = applied(before, closePane(before, { nodeId: 'a' }));
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['parked', 'a']);
-    expect(detachedOf(after).map((n) => n.position)).toEqual([0, 1]);
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['b', 'c']);
+    expect(childrenOf(after, 'root-1').map((n) => n.position)).toEqual([0, 1]);
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should leave an EMPTY grid when the last pane closes, and not end the workspace', () => {
-    // A deliberate behaviour change. In the model this replaces the decision
-    // lived half in the reducer (`closePane` no-oped on the last pane) and half
-    // in browser code that ended the session. Ending a workspace is an explicit
-    // lifecycle act elsewhere; a grid with nothing in it is an ordinary state.
+  it('should leave an EMPTY tree when the last pane closes, and NOT end the session', () => {
+    // "Closing the last pane ends the session" is gone with the state that
+    // motivated it. The root stands, holding nothing, which `validateTree`
+    // calls an ordinary tree. Ending the session is `destroy(rootId)` — an
+    // explicit target, never inferred from emptiness.
     const before = [root(), pane('only', 'root-1', 0)];
     const after = applied(before, closePane(before, { nodeId: 'only' }));
     expect(childrenOf(after, 'root-1')).toEqual([]);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['only']);
+    expect(findNode(after, 'only')).toBeUndefined();
     expect(findNode(after, 'root-1')).toBeDefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
@@ -292,28 +294,25 @@ describe('closePane', () => {
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should write nothing for a pane that is already out of the grid', () => {
-    // A stale click racing another client's close is not an error, and a
-    // re-sent close must not bump a rev or broadcast.
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0)];
-    expect(accepted(closePane(before, { nodeId: 'parked' }))).toEqual({ put: [], drop: [] });
-  });
-
   it('should refuse a node id that does not resolve', () => {
+    // A stale click racing another client's close: the pane is already gone, so
+    // there is nothing here to close and nothing to write.
     const before = [root(), pane('a', 'root-1', 0)];
     expect(refusedWith(closePane(before, { nodeId: 'ghost' }))).toBe('unknown_node');
   });
 
-  it('should refuse the root, which is the workspace itself', () => {
+  it('should refuse the ROOT, because closing a pane is not ending the session', () => {
+    // `destroy` takes the root happily — that is the correction, and it is what
+    // ending a session IS. This command's name states its subject, and obeying
+    // a caller that pointed "close this pane" at the workspace would end a
+    // session nobody asked to end.
     const before = [root(), pane('a', 'root-1', 0)];
     expect(refusedWith(closePane(before, { nodeId: 'root-1' }))).toBe('root_immutable');
   });
 
   it('should refuse a split, because closing a column is not closing a pane', () => {
-    // A parked split would be garbage: it has no durable target of its own, so
-    // there would be nothing in the sidebar to bring it back by.
     const before = [root(), container('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
-    expect(refusedWith(closePane(before, { nodeId: 'col' }))).toBe('not_detachable');
+    expect(refusedWith(closePane(before, { nodeId: 'col' }))).toBe('not_a_pane');
   });
 
   it('should leave the input untouched', () => {
@@ -325,30 +324,42 @@ describe('closePane', () => {
 });
 
 describe('replaceConversation', () => {
-  it('should move the replacement into the pane’s slot and park the pane it displaced', () => {
-    // TWO MOVES, never a rebind. A bound node's target is fixed for the whole of
-    // its life, so swapping what a rectangle shows is a change of location for
-    // two nodes — which is what keeps "this pane" and "this conversation"
-    // separable, so closing a view never reads as discarding what it showed.
-    const before = [root(), pane('shown', 'root-1', 0), pane('other', 'root-1', 1), pane('parked', null, 0)];
+  it('should move the replacement into the pane’s slot and DESTROY the pane it displaced', () => {
+    // A MOVE AND A DESTROY, never a rebind. A bound node's target is fixed for
+    // the whole of its life, so swapping what a rectangle shows is a change of
+    // occupancy: the node holding the wanted target arrives, and the one it
+    // displaces goes. The displaced node used to be parked, which is the state
+    // this correction deletes.
+    const before = [
+      root(),
+      pane('shown', 'root-1', 0),
+      pane('other', 'root-1', 1),
+      pane('wanted', 'root-1', 2),
+    ];
     const after = applied(
       before,
-      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-parked' } }),
+      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-wanted' } }),
     );
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['parked', 'other']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['shown']);
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['wanted', 'other']);
+    expect(findNode(after, 'shown')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should leave both nodes showing exactly what they showed before', () => {
-    // The property the two moves buy: no node's target changes, ever.
-    const before = [root(), pane('shown', 'root-1', 0), pane('other', 'root-1', 1), pane('parked', null, 0)];
+  it('should leave the SURVIVING node showing exactly what it showed before', () => {
+    // The property the move buys: no node's target changes, ever. What the
+    // displaced node showed goes with the node, which is what "a binding is for
+    // life" costs when the life ends.
+    const before = [
+      root(),
+      pane('shown', 'root-1', 0),
+      pane('other', 'root-1', 1),
+      pane('wanted', 'root-1', 2),
+    ];
     const after = applied(
       before,
-      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-parked' } }),
+      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-wanted' } }),
     );
-    expect(findNode(after, 'shown')).toMatchObject({ target: { kind: 'chat', id: 'conv-shown' } });
-    expect(findNode(after, 'parked')).toMatchObject({ target: { kind: 'chat', id: 'conv-parked' } });
+    expect(findNode(after, 'wanted')).toMatchObject({ target: { kind: 'chat', id: 'conv-wanted' } });
   });
 
   it('should seat the replacement in the displaced pane’s own slot, not at the end of the group', () => {
@@ -357,13 +368,13 @@ describe('replaceConversation', () => {
       pane('a', 'root-1', 0),
       pane('shown', 'root-1', 1),
       pane('c', 'root-1', 2),
-      pane('parked', null, 0),
+      pane('wanted', 'root-1', 3),
     ];
     const after = applied(
       before,
-      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-parked' } }),
+      replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-wanted' } }),
     );
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'parked', 'c']);
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'wanted', 'c']);
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
@@ -399,18 +410,18 @@ describe('replaceConversation', () => {
     );
     expect(findNode(after, 'col')).toBeUndefined();
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['sibling', 'other']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['shown']);
+    expect(findNode(after, 'shown')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should park an unbound pane it displaces like any other, rather than discarding it', () => {
-    const before = [root(), unbound('picker', 'root-1', 0), pane('parked', null, 0)];
+  it('should destroy an unbound pane it displaces like any other', () => {
+    const before = [root(), unbound('picker', 'root-1', 0), pane('wanted', 'root-1', 1)];
     const after = applied(
       before,
-      replaceConversation(before, { nodeId: 'picker', target: { kind: 'chat', id: 'conv-parked' } }),
+      replaceConversation(before, { nodeId: 'picker', target: { kind: 'chat', id: 'conv-wanted' } }),
     );
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['parked']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['picker']);
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['wanted']);
+    expect(findNode(after, 'picker')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
@@ -431,23 +442,23 @@ describe('replaceConversation', () => {
   });
 
   it('should refuse a target of the right id but the wrong kind', () => {
-    const before = [root(), pane('shown', 'root-1', 0), pane('parked', null, 0)];
+    const before = [root(), pane('shown', 'root-1', 0), pane('wanted', 'root-1', 1)];
     expect(
-      refusedWith(replaceConversation(before, { nodeId: 'shown', target: { kind: 'page', id: 'conv-parked' } })),
+      refusedWith(replaceConversation(before, { nodeId: 'shown', target: { kind: 'page', id: 'conv-wanted' } })),
     ).toBe('invalid_target');
   });
 
   it('should refuse a node id that does not resolve', () => {
-    const before = [root(), pane('shown', 'root-1', 0), pane('parked', null, 0)];
+    const before = [root(), pane('shown', 'root-1', 0), pane('wanted', 'root-1', 1)];
     expect(
-      refusedWith(replaceConversation(before, { nodeId: 'ghost', target: { kind: 'chat', id: 'conv-parked' } })),
+      refusedWith(replaceConversation(before, { nodeId: 'ghost', target: { kind: 'chat', id: 'conv-wanted' } })),
     ).toBe('unknown_node');
   });
 
   it('should refuse the root, which shows nothing of its own', () => {
-    const before = [root(), pane('shown', 'root-1', 0), pane('parked', null, 0)];
+    const before = [root(), pane('shown', 'root-1', 0), pane('wanted', 'root-1', 1)];
     expect(
-      refusedWith(replaceConversation(before, { nodeId: 'root-1', target: { kind: 'chat', id: 'conv-parked' } })),
+      refusedWith(replaceConversation(before, { nodeId: 'root-1', target: { kind: 'chat', id: 'conv-wanted' } })),
     ).toBe('root_immutable');
   });
 
@@ -457,31 +468,24 @@ describe('replaceConversation', () => {
       container('col', 'root-1', 0),
       pane('a', 'col', 0),
       pane('b', 'col', 1),
-      pane('parked', null, 0),
+      pane('wanted', 'root-1', 1),
     ];
     expect(
-      refusedWith(replaceConversation(before, { nodeId: 'col', target: { kind: 'chat', id: 'conv-parked' } })),
+      refusedWith(replaceConversation(before, { nodeId: 'col', target: { kind: 'chat', id: 'conv-wanted' } })),
     ).toBe('not_a_pane');
   });
 
-  it('should refuse a parked pane, which displays nothing there is anything to swap', () => {
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0), pane('other', null, 1)];
-    expect(
-      refusedWith(replaceConversation(before, { nodeId: 'parked', target: { kind: 'chat', id: 'conv-other' } })),
-    ).toBe('detached_pane');
-  });
-
   it('should refuse to operate on a tree that is already corrupt, rather than writing into it', () => {
-    const before = [root(), pane('shown', 'root-1', 0), pane('impossible', 'shown', 0), pane('parked', null, 0)];
+    const before = [root(), pane('shown', 'root-1', 0), pane('impossible', 'shown', 0), pane('wanted', 'root-1', 1)];
     expect(
-      refusedWith(replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-parked' } })),
+      refusedWith(replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-wanted' } })),
     ).toBe('not_a_container');
   });
 
   it('should leave the input untouched', () => {
-    const before = [root(), pane('shown', 'root-1', 0), pane('parked', null, 0)];
+    const before = [root(), pane('shown', 'root-1', 0), pane('wanted', 'root-1', 1)];
     const snapshot = JSON.parse(JSON.stringify(before)) as WorkspaceNode[];
-    replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-parked' } });
+    replaceConversation(before, { nodeId: 'shown', target: { kind: 'chat', id: 'conv-wanted' } });
     expect(before).toEqual(snapshot);
   });
 });
@@ -491,8 +495,8 @@ describe('replaceConversation', () => {
  * `resolveOpenPlacement` already held, restated in the node model's terms:
  * prefer a replaceable pane, prefer the active one among those, never evict a
  * terminal or the invoking conversation, and split rather than take anything
- * away. What is new is only what the flat model made expressible — an empty
- * grid, and a node parked outside it.
+ * away. What is new is only what the flat model made expressible: an EMPTY
+ * grid, which the two-level model could not represent.
  */
 describe('openConversation', () => {
   const opening = { newNodeId: 'fresh', newSplitId: 'box' } as const;
@@ -508,10 +512,12 @@ describe('openConversation', () => {
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should mint beside a bound pane and park it, because a binding is for life', () => {
+  it('should mint in a bound pane’s slot and DESTROY it, because a binding is for life', () => {
     // The old model's `assign` onto a bound pane REPOINTED it. A target is fixed
     // for a node's life here, so the same gesture is a new node in that slot and
-    // the old one parked — the conversation it showed is still one click away.
+    // the old one gone. It used to be parked instead — still a member, one click
+    // away — which is the state this correction removes: the evicted pane's
+    // conversation leaves the workspace with its node.
     const before = [root(), pane('shown', 'root-1', 0), pane('other', 'root-1', 1)];
     const after = applied(
       before,
@@ -519,7 +525,7 @@ describe('openConversation', () => {
     );
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['fresh', 'other']);
     expect(findNode(after, 'fresh')).toMatchObject({ target: { kind: 'chat', id: 'conv-1' } });
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['shown']);
+    expect(findNode(after, 'shown')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
@@ -532,7 +538,7 @@ describe('openConversation', () => {
       openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' }, activeNodeId: 'b' }),
     );
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'fresh']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['b']);
+    expect(findNode(after, 'b')).toBeUndefined();
   });
 
   it('should fall back to the first eligible pane when the active one is not', () => {
@@ -619,7 +625,7 @@ describe('openConversation', () => {
       }),
     );
     expect(childrenOf(after, 'box').map((n) => n.id)).toEqual(['invoker', 'fresh']);
-    expect(detachedOf(after)).toEqual([]);
+    expect(findNode(after, 'invoker')).toBeDefined();
   });
 
   it('should write nothing when a pane in the grid already shows the target', () => {
@@ -633,8 +639,9 @@ describe('openConversation', () => {
 
   it('should place into an EMPTY grid, which the model this replaces could not represent', () => {
     // A grid with nothing in it is now an ordinary state, because closing the
-    // last pane leaves one.
-    const before = [root(), pane('parked', null, 0)];
+    // last pane leaves one — and it is a root holding nothing rather than a
+    // root beside a bucket of parked panes, which is what it used to be.
+    const before = [root()];
     const after = applied(
       before,
       openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' } }),
@@ -656,14 +663,17 @@ describe('openConversation', () => {
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['fresh']);
   });
 
-  it('should ignore an activeNodeId that names a parked pane, which is in no grid to look at', () => {
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0)];
+  it('should ignore an activeNodeId that names nothing, rather than refusing the open', () => {
+    // Focus is client-local and no row carries it, so a stale one is an ordinary
+    // thing to receive: it is a PREFERENCE, and one that does not resolve is
+    // simply not honoured.
+    const before = [root(), pane('a', 'root-1', 0)];
     const after = applied(
       before,
       openConversation(before, {
         ...opening,
         target: { kind: 'chat', id: 'conv-1' },
-        activeNodeId: 'parked',
+        activeNodeId: 'gone',
       }),
     );
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['fresh']);
@@ -725,14 +735,17 @@ describe('openConversation', () => {
 describe('openConversation rejections', () => {
   const opening = { newNodeId: 'fresh', newSplitId: 'box' } as const;
 
-  it('should refuse to mint a second node for a target a PARKED node already holds', () => {
-    // Two nodes bound to one conversation is the duplicate-view bug that the
-    // focus rule exists to prevent; a parked node is still the workspace's node
-    // for that conversation. Bringing it back is a `move` the caller names.
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0)];
+  it('should write NOTHING for a target a node already holds, wherever in the tree it sits', () => {
+    // This used to be a refusal (`already_bound`) whenever the holder was
+    // PARKED: minting a second node would have put one conversation in two
+    // places, and bringing the parked one back was a `move` only the caller
+    // could name. A holder is necessarily on the grid now, so "it is already
+    // shown" is the whole answer — and focus is client-local, so the correct
+    // write is no write.
+    const before = [root(), pane('a', 'root-1', 0), pane('holder', 'root-1', 1)];
     expect(
-      refusedWith(openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-parked' } })),
-    ).toBe('already_bound');
+      accepted(openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-holder' } })),
+    ).toEqual({ put: [], drop: [] });
   });
 
   it('should refuse a target with a blank id on the FILL path, which would bind the pane to nothing for good', () => {
@@ -860,7 +873,7 @@ describe('render order', () => {
       }),
     );
     expect(childrenOf(after, 'col').map((n) => n.id)).toEqual(['fresh', 'bottom']);
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['top']);
+    expect(findNode(after, 'top')).toBeUndefined();
     expect(validateTree(after)).toEqual({ ok: true });
   });
 });
@@ -874,15 +887,26 @@ describe('render order', () => {
  * ends up restructured into a session the user never put it in.
  */
 describe('a refused command is refused, never repaired', () => {
-  it('should not re-attach a parked pane to the root in order to split it', () => {
-    // Two parked panes and one in the grid, so a `?? root` fallback would land
-    // the container in a free slot and SUCCEED — the pane would silently
-    // reappear on screen in a place nobody put it. The setup is deliberate: with
-    // a single parked pane the same fallback trips over a position collision
-    // instead, and a refusal for the wrong reason is not this property.
-    const before = [root(), pane('a', 'root-1', 0), pane('first', null, 0), pane('parked', null, 1)];
-    const result = split(before, { nodeId: 'parked', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' });
-    expect(refusedWith(result)).toBe('detached_pane');
+  it('should not re-attach a pane whose parent resolves to nothing in order to split it', () => {
+    // The `?? root` fallback this property exists against would land the
+    // container in a free slot and SUCCEED — the pane would silently reappear on
+    // screen in a place nobody put it. It has to be a REFUSAL so the caller
+    // rebases.
+    const before = [root(), pane('a', 'root-1', 0), pane('stranded', 'ghost-column', 0)];
+    const result = split(before, { nodeId: 'stranded', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' });
+    expect(refusedWith(result)).toBe('dangling_parent');
+    expect(result).not.toHaveProperty('write');
+  });
+
+  it('should not re-attach a pane a ROW left with no parent at all', () => {
+    // The other half of the same failure shape, and the half the previous model
+    // could not see: a null parent was LEGAL, so a pane that lost its parent to
+    // a bad write looked exactly like one the user had closed. It is
+    // `null_parent` now, and the command is refused rather than repaired.
+    const parentless = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    const before: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), parentless];
+    const result = split(before, { nodeId: 'lost', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' });
+    expect(refusedWith(result)).toBe('null_parent');
     expect(result).not.toHaveProperty('write');
   });
 

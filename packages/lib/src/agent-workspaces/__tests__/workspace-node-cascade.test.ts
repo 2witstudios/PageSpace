@@ -64,7 +64,7 @@ function split(id: string, parentId: string, position: number): SplitNode {
   return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, position: number): PaneNode {
+function pane(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 

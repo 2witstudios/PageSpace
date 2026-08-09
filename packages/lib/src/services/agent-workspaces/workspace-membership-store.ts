@@ -31,22 +31,24 @@ import type { DbExecutor } from './workspace-layout-store';
 /** The slice of a Drizzle client these reads need — satisfied by `db` and by a transaction alike. */
 export type MembershipReadExecutor = Pick<DbExecutor, 'select'>;
 
-/** One thread's place in the workspace that holds it. */
+/**
+ * One thread's place in the workspace that holds it.
+ *
+ * It used to carry an `attached` boolean beside these two — on screen, or
+ * parked — because a member could be in a workspace and nowhere in it. There is
+ * one place a node can be, so membership and visibility are one fact and the
+ * boolean has nothing left to report. A caller that wants "is this thread on
+ * screen" is asking whether this row exists.
+ */
 export interface ChatMembershipRow {
   workspaceId: string;
   conversationId: string;
-  /**
-   * On screen, or parked. Parked is still MEMBERSHIP — the sidebar lists it,
-   * the grid does not draw it — which is the distinction the two-structure model
-   * had no way to express and therefore kept getting wrong.
-   */
-  attached: boolean;
 }
 
 /**
- * WHERE THIS THREAD LIVES, and whether it is on screen there — or `null` for a
- * thread that belongs to no workspace (a plain page chat, the global assistant
- * outside a session).
+ * WHERE THIS THREAD LIVES — or `null` for a thread that belongs to no workspace
+ * (a plain page chat, the global assistant outside a session, or one whose node
+ * a close destroyed).
  *
  * The successor to reading `conversations.workspaceId` AND
  * `closedInWorkspaceAt`, and it is one row rather than two columns precisely
@@ -59,20 +61,17 @@ export async function findChatMembership(
   conversationId: string,
 ): Promise<ChatMembershipRow | null> {
   const [row] = await executor
-    .select({ workspaceId: agentWorkspaceNodes.rootId, parentId: agentWorkspaceNodes.parentId })
+    .select({ workspaceId: agentWorkspaceNodes.rootId })
     .from(agentWorkspaceNodes)
     .where(
       and(eq(agentWorkspaceNodes.targetKind, 'chat'), eq(agentWorkspaceNodes.targetId, conversationId)),
     )
     .limit(1);
   if (!row) return null;
-  return { workspaceId: row.workspaceId, conversationId, attached: row.parentId !== null };
+  return { workspaceId: row.workspaceId, conversationId };
 }
 
-/**
- * The workspace holding this conversation, for callers that do not care whether
- * it is on screen — THE lookup a chat turn folds its working context from.
- */
+/** The workspace holding this conversation — THE lookup a chat turn folds its working context from. */
 export async function findWorkspaceOfChat(
   executor: MembershipReadExecutor,
   conversationId: string,

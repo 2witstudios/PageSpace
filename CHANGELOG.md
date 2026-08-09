@@ -108,11 +108,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - **Closing the last pane no longer ends your session** — it leaves the session open with an empty
-  layout. Ending a session is its own act, aimed at the session rather than inferred from the last
-  pane going away, so closing something can never end more than you asked it to.
+  layout. Ending a session is now only the explicit action on the session row, so there is one way
+  to end one instead of two.
+- **Closing a thread takes it out of the session** — it stops being one of that session's threads
+  and leaves the list. Its history is untouched: you find it again in the agent's own conversation
+  list, and reopening it puts it back. An interim build briefly kept a closed thread in the list,
+  dimmed and off-screen; that is gone, because a thread sitting in a session with nowhere to be was
+  indistinguishable from one that had gone missing through a fault — the exact failure the rest of
+  this work exists to make impossible. Closing is one action with one meaning now, whether you close
+  a pane, close a thread, or end the whole session.
 
 ### Added
 
+- **Agents can close a pane** — they could already open, move, resize and reorder them, but taking
+  one away was only possible as a side effect of moving it "nowhere". That is now its own action,
+  which means an agent tidying up its own layout does exactly what it says.
 - **Your agent workspaces now follow you between devices, and agents can arrange their own** —
   the pane grid in the Agents console used to live partly in your browser's local storage, so the
   same workspace looked different on your laptop and your phone, and a collaborator watching a

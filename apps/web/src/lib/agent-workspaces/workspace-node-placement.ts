@@ -37,6 +37,7 @@ import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/wo
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import {
+  closePane,
   compile,
   openConversation,
   openPage,
@@ -234,7 +235,8 @@ export async function placeWorkerPane(input: {
 /** What a rearrange tool asked for. Compiled to the algebra by the builders below. */
 export type LayoutCommandInput =
   | { type: 'resize'; nodeId: string; fraction: number }
-  | { type: 'move'; nodeId: string; parentId: string | null; index?: number }
+  | { type: 'move'; nodeId: string; parentId: string; index?: number }
+  | { type: 'close'; nodeId: string }
   | { type: 'arrange'; parentId?: string; nodeIds: readonly string[] };
 
 /**
@@ -261,11 +263,9 @@ export function layoutCommand(
         // it asked for somewhere else, silently), so "append" has to be a real
         // slot in the destination as it is right now. Measured with the mover
         // discounted, because `move` indexes the group it is arriving in.
-        const destination =
-          command.parentId === null
-            ? nodes.filter((node) => node.nodeType === 'pane' && node.parentId === null)
-            : childrenOf(nodes, command.parentId);
-        const append = destination.filter((sibling) => sibling.id !== command.nodeId).length;
+        const append = childrenOf(nodes, command.parentId).filter(
+          (sibling) => sibling.id !== command.nodeId,
+        ).length;
         return move(nodes, {
           nodeId: command.nodeId,
           parentId: command.parentId,
@@ -273,11 +273,20 @@ export function layoutCommand(
         });
       }
 
+      // THE ONE REMOVAL, reached from the tool surface. An agent used to take a
+      // pane off the grid with `move` to a null parent, which parked it; there
+      // is nowhere to park, so this is the act it has to be. Through the COMMAND
+      // rather than straight to `destroy`, so an agent pointing it at the root
+      // gets the same refusal a user's click does — ending a session is a
+      // different act with a different authorization.
+      case 'close':
+        return closePane(nodes, { nodeId: command.nodeId });
+
       case 'arrange': {
         // Omitted parent means the ROOT's own children — the top-level order,
         // which is what `reorder_columns` meant when the model was two levels
         // deep and the root was the grid. Found BY TYPE, never as "the node with
-        // no parent": a parked pane has none either.
+        // no parent" — a row can carry that and not be a root.
         const root = rootOf(nodes);
         const parentId = command.parentId ?? root?.id;
         if (parentId === undefined) {

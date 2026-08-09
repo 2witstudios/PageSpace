@@ -20,13 +20,13 @@ import {
 const WS = 'ws-1';
 const root: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
 
-function chat(id: string, parentId: string | null, position: number, conversationId: string): PaneNode {
+function chat(id: string, parentId: string, position: number, conversationId: string): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: conversationId } };
 }
-function page(id: string, parentId: string | null, position: number, pageId: string): PaneNode {
+function page(id: string, parentId: string, position: number, pageId: string): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'page', id: pageId } };
 }
-function shell(id: string, parentId: string | null, position: number, shellId: string): PaneNode {
+function shell(id: string, parentId: string, position: number, shellId: string): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'terminal', id: shellId } };
 }
 
@@ -46,10 +46,19 @@ describe('gridPanesOf', () => {
     expect(gridPanesOf(nodes).map((node) => node.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('should exclude PARKED panes — they are members, not rectangles', () => {
-    const nodes = [root, chat('a', WS, 0, 'c1'), chat('parked', null, 0, 'c2')];
-    expect(gridPanesOf(nodes).map((node) => node.id)).toEqual(['a']);
-    expect(paneNodesOf(nodes).map((node) => node.id)).toEqual(['a', 'parked']);
+  it('should agree with paneNodesOf, because every pane is in the tree', () => {
+    // These two used to differ by exactly the PARKED panes: `paneNodesOf`
+    // enumerated members and `gridPanesOf` enumerated rectangles. They are now
+    // the same set in a different ORDER, which is all `gridPanesOf` is for.
+    const nodes = [
+      root,
+      { nodeType: 'split', id: 's', parentId: WS, position: 0, axis: 'column' } as WorkspaceNode,
+      chat('a', 's', 0, 'c1'),
+      chat('b', 's', 1, 'c2'),
+      chat('c', WS, 1, 'c3'),
+    ];
+    expect(gridPanesOf(nodes).map((node) => node.id)).toEqual(['a', 'b', 'c']);
+    expect(paneNodesOf(nodes).map((node) => node.id).sort()).toEqual(['a', 'b', 'c']);
   });
 
   it('should answer nothing for a tree with no root', () => {
@@ -106,9 +115,12 @@ describe('titleOf', () => {
 });
 
 describe('artifactRowsOf', () => {
-  it('should list a page pane that is PARKED as well as one on the grid', () => {
+  it('should list every page pane the tree holds, in render order', () => {
+    // It used to concatenate a second list — the parked panes — so that a member
+    // off the screen still appeared. One walk covers it now, because there is
+    // nowhere off the screen for a member to be.
     const tree = makeTree(
-      [root, page('open', WS, 0, 'page-a'), page('closed', null, 0, 'page-b')],
+      [root, page('open', WS, 0, 'page-a'), page('other', WS, 1, 'page-b')],
       [
         { id: 'page-a', kind: 'page', title: 'Spec', lastMessageAt: null, agentPageId: null },
         { id: 'page-b', kind: 'page', title: 'Notes', lastMessageAt: null, agentPageId: null },
@@ -116,7 +128,7 @@ describe('artifactRowsOf', () => {
     );
     expect(artifactRowsOf(tree)).toEqual([
       { key: 'page:page-a', kind: 'page', targetId: 'page-a', title: 'Spec', placement: 'grid', nodeId: 'open' },
-      { key: 'page:page-b', kind: 'page', targetId: 'page-b', title: 'Notes', placement: 'parked', nodeId: 'closed' },
+      { key: 'page:page-b', kind: 'page', targetId: 'page-b', title: 'Notes', placement: 'grid', nodeId: 'other' },
     ]);
   });
 
@@ -142,17 +154,20 @@ describe('artifactRowsOf', () => {
 });
 
 describe('conversationPlacement', () => {
-  const tree = makeTree([root, chat('open', WS, 0, 'c1'), chat('closed', null, 0, 'c2')]);
+  const tree = makeTree([root, chat('open', WS, 0, 'c1'), chat('nested', WS, 1, 'c2')]);
 
-  it('should report a thread on the grid', () => {
+  it('should report a thread this workspace holds', () => {
     expect(conversationPlacement(tree, 'c1')).toEqual({ placement: 'grid', nodeId: 'open' });
   });
 
-  it('should report a PARKED thread, which is the state the sidebar must not hide', () => {
-    expect(conversationPlacement(tree, 'c2')).toEqual({ placement: 'parked', nodeId: 'closed' });
+  it('has no third answer — a node that exists is on screen', () => {
+    // `'parked'` used to be the middle state: a member off the grid, which the
+    // sidebar rendered dimmed. It is gone with the state it named, so the only
+    // question left is whether this workspace holds a node at all.
+    expect(conversationPlacement(tree, 'c2').placement).toBe('grid');
   });
 
-  /** #2373: a thread created without placement has no node at all, and is still a member. */
+  /** A thread this workspace does not hold is not a member of it. */
   it('should report a thread with no node as unplaced', () => {
     expect(conversationPlacement(tree, 'never-placed')).toEqual({ placement: 'unplaced', nodeId: null });
   });
@@ -163,15 +178,21 @@ describe('conversationPlacement', () => {
 });
 
 describe('nodeShowing / isOnGrid', () => {
-  const nodes = [root, chat('open', WS, 0, 'c1'), chat('closed', null, 0, 'c2')];
+  const nodes: WorkspaceNode[] = [
+    root,
+    chat('open', WS, 0, 'c1'),
+    { nodeType: 'split', id: 's', parentId: WS, position: 1, axis: 'column' },
+    chat('deep', 's', 0, 'c2'),
+    chat('beside', 's', 1, 'c3'),
+  ];
 
-  it('should find a PARKED node, because it still holds the binding', () => {
-    expect(nodeShowing(nodes, 'chat', 'c2')?.id).toBe('closed');
+  it('should find a node NESTED anywhere, because the binding is not a property of depth', () => {
+    expect(nodeShowing(nodes, 'chat', 'c2')?.id).toBe('deep');
   });
 
-  it('should distinguish on-grid from parked', () => {
+  it('should answer for presence, which is now the whole of the question', () => {
     expect(isOnGrid(nodes, 'open')).toBe(true);
-    expect(isOnGrid(nodes, 'closed')).toBe(false);
+    expect(isOnGrid(nodes, 'deep')).toBe(true);
     expect(isOnGrid(nodes, 'ghost')).toBe(false);
   });
 });

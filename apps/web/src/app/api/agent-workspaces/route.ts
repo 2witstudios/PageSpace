@@ -141,16 +141,16 @@ export async function GET(request: Request) {
         shells: shellsBySession.get(session.workspaceId) ?? [],
         // THE list of threads in this workspace, and there is nothing left to
         // annotate it with (issue #2373). Membership IS the node row, so each
-        // entry already carries its `nodeId` and whether it is `attached` —
-        // read off the same row that decided the thread is here at all.
+        // entry carries its `nodeId` — read off the same row that decided the
+        // thread is here at all.
         //
         // `annotateConversationsWithPanes` existed to reconcile this listing
         // with a separate grid, and it is deleted rather than ported: a listing
         // and a grid that come from one table cannot disagree, so there is no
-        // correspondence left to maintain. A thread with `attached: false` is a
-        // RESTING STATE — created without a placement, or closed — and it is in
-        // this list either way, which is the guarantee the annotation was
-        // reaching for.
+        // correspondence left to maintain. Every entry here is on screen, which
+        // is why the `attached` boolean that used to ride beside `nodeId` is
+        // gone too: a thread in this list is in the tree, and the tree is what
+        // the grid draws.
         conversations: conversationsBySession.get(session.workspaceId) ?? [],
         // The grid's GEOMETRY — column widths, pane heights, ordering — for the
         // pane surface to render. Deliberately no longer the sidebar's source

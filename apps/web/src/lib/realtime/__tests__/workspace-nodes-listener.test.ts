@@ -49,7 +49,7 @@ import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-no
 
 const WS = 'ws-1';
 const root: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
-const pane = (id: string, parentId: string | null, position: number, conversationId: string): WorkspaceNode => ({
+const pane = (id: string, parentId: string, position: number, conversationId: string): WorkspaceNode => ({
   nodeType: 'pane',
   id,
   parentId,

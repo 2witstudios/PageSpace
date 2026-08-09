@@ -83,7 +83,7 @@ const workspaceNodeWireSchema = z.discriminatedUnion('nodeType', [
       nodeType: z.literal('split'),
       id: z.string().min(1),
       rootId: z.string().min(1).optional(),
-      /** Never null: a split has no durable target, so a parked one is garbage. */
+      /** Never null. Only the root has no parent, and this is not the root. */
       parentId: z.string().min(1),
       position: z.number().int().min(0),
       axis: nodeAxisSchema,
@@ -95,8 +95,13 @@ const workspaceNodeWireSchema = z.discriminatedUnion('nodeType', [
       nodeType: z.literal('pane'),
       id: z.string().min(1),
       rootId: z.string().min(1).optional(),
-      /** Null here means DETACHED — in the workspace, off the grid. */
-      parentId: z.string().min(1).nullable(),
+      /**
+       * NEVER NULL. A pane that is in the workspace is on the screen; a payload
+       * offering a pane with no parent is a client that still holds the
+       * detached model, and the honest answer is 400 rather than a row nothing
+       * will render.
+       */
+      parentId: z.string().min(1),
       position: z.number().int().min(0),
       fraction: fractionSchema.optional(),
       /**
