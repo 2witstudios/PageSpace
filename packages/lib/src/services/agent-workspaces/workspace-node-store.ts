@@ -334,99 +334,87 @@ export async function readChatTargetHolders(
  * later commit silently drops the earlier one's change.
  */
 /**
- * Is this workspace still WAITING FOR THE BACKFILL — membership the old model
- * records and the node model has never been given?
+ * Is this workspace still WAITING FOR THE BACKFILL — does it hold membership
+ * the old model records and the node model has never been given?
  *
- * Three conditions, and each one is here because leaving it out bricks a
- * workspace permanently. The refusal this feeds is unrecoverable by design, so
- * every clause is chosen to make the predicate STOP being true once the backfill
- * has done its job — and to never become true again afterwards.
+ * Two conditions, and the shape of them is the third attempt. The refusal this
+ * feeds is unrecoverable by design, so the predicate has to be true for every
+ * workspace the backfill still owes a node to, and false the moment it has paid.
  *
- *  1. **The workspace is live.** `backfill()` paginates `endedAt IS NULL`, so an
- *     ENDED workspace is one it will never visit. Its legacy rows are not going
- *     to be migrated by anybody, which means there is no stranding left to
- *     prevent and refusing only blocks a write the product supports (a thread
- *     can be claimed into an ended workspace — see
- *     `claim-conversation-in-workspace.ts`). Matching the backfill's own scope
- *     is what keeps "the guard refuses" and "the backfill will fix it" the same
- *     set.
- *  2. **The workspace has no rev row**, which is the MIGRATION MARKER and the
- *     whole reason this function is not simply "are there nodes?". The backfill
- *     writes `agent_workspace_node_revs (rev = 0)` in the same transaction as
- *     the nodes, `writeWorkspaceNodes` only ever increments it, and NOTHING
- *     deletes it — `destroy` removes nodes and leaves the rev standing. So it
- *     answers "has this workspace ever been through the node model" monotonically
- *     and cannot un-answer itself.
+ *  1. **No `agent_workspace_node_revs` row.** THE MIGRATION MARKER, and the
+ *     reason this is not simply "are there nodes?". The backfill writes
+ *     `rev = 0` in the same transaction as the nodes, `writeWorkspaceNodes` only
+ *     ever increments it, and nothing deletes it — `destroy` removes nodes and
+ *     leaves the rev standing. So it answers "has this workspace ever been
+ *     through the node model" monotonically and cannot un-answer itself.
  *
- *     An earlier cut of this predicate asked "is there a legacy row with no
- *     node", which is a different question that happens to coincide during the
- *     migration window and diverges the moment a tree is legitimately emptied.
- *     `endSession` destroys the whole tree, so ending a session and later
- *     reusing it made a correctly-backfilled workspace look un-backfilled and
- *     refused every subsequent write — on a perfectly migrated database, with no
- *     legacy data involved in the failure at all.
- *  3. **A live legacy conversation has no chat node anywhere.** This is what
- *     separates "never backfilled" from "brand new": a fresh deployment has no
- *     conversation naming a workspace through the old column, so the predicate
- *     is false and nothing changes for it.
+ *     An earlier cut asked "is there a legacy row with no node", which is a
+ *     different question that coincides during the migration window and diverges
+ *     the moment a tree is legitimately emptied: `endSession` destroys the whole
+ *     tree, so ending a session and reusing it made a correctly-backfilled
+ *     workspace look un-backfilled and refused every write after that.
  *
- *     `isActive` and `closedInWorkspaceAt IS NULL` are the old model's own
- *     definition of live membership, and they are the backfill's: it does not
- *     mint nodes for dismissed or history-deleted threads. Counting one would
- *     make every workspace in which a user ever closed a thread refuse forever,
- *     because no backfill run would ever satisfy it. The `NOT EXISTS` is
- *     deliberately unscoped by `rootId` — a thread claimed into another
- *     workspace has moved, not been stranded, and the chat index is global.
+ *  2. **Some legacy source row exists.** This is what separates "never
+ *     backfilled" from "brand new". Given (1), any such row is one the backfill
+ *     has not processed, so the three sources it derives from are checked the
+ *     way it derives them — panes, conversations, AND shells. An earlier cut
+ *     looked only at `conversations.workspaceId` while claiming to cover the
+ *     backfill's sources, so a workspace whose legacy membership was a pane row
+ *     or a shell passed the guard, got seeded, and was then reported
+ *     `alreadyMigrated` by the very run that should have saved it.
+ *
+ *     A brand-new workspace matches none of them: the pane tables are dead,
+ *     nothing writes `conversations.workspaceId`, and a shell created after the
+ *     cutover goes through the node write path and therefore already has (1).
+ *
+ * **There is deliberately no `endedAt` clause.** One used to be here, exempting
+ * ended workspaces because the backfill skipped them. That exemption permitted
+ * exactly the write that makes the exemption false: claiming a thread into an
+ * ended workspace UN-ENDS it (`planSessionReopen` clears `endedAt`), which mints
+ * a rev row and disarms this guard for good, after which the backfill reports
+ * the workspace `alreadyMigrated` and its real membership is stranded forever.
+ * The backfill now covers every workspace instead, so the guard needs no
+ * exemption and its scope is the drop's scope.
  *
  * Costs two indexed lookups, and only on the seed path — a workspace's first
  * write while it has no tree. After the follow-up migration drops the old
- * columns, this function and its call site go with them.
+ * columns and tables, this function and its call site go with them.
  */
 export async function awaitsBackfill(
   executor: DbExecutor,
   workspaceId: string,
 ): Promise<boolean> {
-  const { conversations } = await import('@pagespace/db/schema/conversations');
-  const { agentWorkspaces } = await import('@pagespace/db/schema/agent-workspaces');
-  const { agentWorkspaceNodes, agentWorkspaceNodeRevs } = await import(
-    '@pagespace/db/schema/agent-workspace-nodes'
-  );
+  const { agentWorkspaceNodeRevs } = await import('@pagespace/db/schema/agent-workspace-nodes');
 
-  // (1) and (2) together: live, and never marked as migrated.
-  const [unmarked] = await executor
-    .select({ id: agentWorkspaces.id })
-    .from(agentWorkspaces)
-    .where(
-      and(
-        eq(agentWorkspaces.id, workspaceId),
-        sql`${agentWorkspaces.endedAt} IS NULL`,
-        sql`NOT EXISTS (
-          SELECT 1 FROM ${agentWorkspaceNodeRevs} r WHERE r."rootId" = ${workspaceId}
-        )`,
-      ),
-    )
+  const [migrated] = await executor
+    .select({ rootId: agentWorkspaceNodeRevs.rootId })
+    .from(agentWorkspaceNodeRevs)
+    .where(eq(agentWorkspaceNodeRevs.rootId, workspaceId))
     .limit(1);
 
-  if (unmarked === undefined) return false;
+  if (migrated !== undefined) return false;
 
-  // (3) is there anything left to strand?
-  const [stranded] = await executor
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.workspaceId, workspaceId),
-        eq(conversations.isActive, true),
-        sql`${conversations.closedInWorkspaceAt} IS NULL`,
-        sql`NOT EXISTS (
-          SELECT 1 FROM ${agentWorkspaceNodes} n
-           WHERE n."targetKind" = 'chat' AND n."targetId" = ${conversations.id}
-        )`,
-      ),
+  // The backfill's own three sources, asked as one question. `sql` rather than
+  // the query builder because this is a pure existence test across three
+  // unrelated tables and a UNION of `SELECT 1`s says that plainly.
+  const result = await executor.execute(sql`
+    SELECT 1 AS present WHERE EXISTS (
+      SELECT 1 FROM "agent_workspace_panes" p WHERE p."workspaceId" = ${workspaceId}
+      UNION ALL
+      SELECT 1 FROM "agent_workspace_shells" s WHERE s."workspaceId" = ${workspaceId}
+      UNION ALL
+      SELECT 1 FROM "conversations" c
+       WHERE c."workspaceId" = ${workspaceId}
+         AND c."isActive" = true
+         AND c."closedInWorkspaceAt" IS NULL
     )
-    .limit(1);
+  `);
 
-  return stranded !== undefined;
+  // node-postgres hands back a `QueryResult`; a driver that returns the rows
+  // directly is handled too, because this module is also run against a
+  // transaction executor and the two differ on exactly this.
+  const rows = Array.isArray(result) ? result : (result as { rows?: unknown[] }).rows ?? [];
+  return rows.length > 0;
 }
 
 export async function writeWorkspaceNodes(

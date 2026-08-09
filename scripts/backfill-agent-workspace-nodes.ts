@@ -155,7 +155,6 @@ async function loadChatClaims(dbInstance: Db): Promise<Map<string, string>> {
     .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, legacyPanes.workspaceId))
     .where(
       and(
-        isNull(agentWorkspaces.endedAt),
         eq(legacyPanes.kind, 'chat'),
         isNotNull(legacyPanes.targetId),
       ),
@@ -182,7 +181,6 @@ async function loadChatClaims(dbInstance: Db): Promise<Map<string, string>> {
           inArray(legacyConversations.id, chunk),
           eq(legacyConversations.isActive, true),
           isNull(legacyConversations.closedInWorkspaceAt),
-          isNull(agentWorkspaces.endedAt),
         ),
       );
     for (const owner of owners) {
@@ -370,7 +368,26 @@ export async function backfill(
   // so a re-run walks the corpus identically even as rows are added underneath.
   let cursor: string | null = null;
   for (;;) {
-    const conditions = [isNull(agentWorkspaces.endedAt)];
+    /*
+     * EVERY workspace, ended ones included. This used to be
+     * `isNull(agentWorkspaces.endedAt)`, on the reasoning that an ended
+     * workspace is finished and not worth migrating. Two things make that
+     * wrong, and the second one is data loss:
+     *
+     *  - An ended workspace can be UN-ENDED. `planSessionReopen` clears
+     *    `endedAt` when a thread is claimed into it, so "ended" is not a
+     *    terminal state and the set this scan skipped was never stable.
+     *  - `0256` drops `conversations.workspaceId`. A thread whose only record of
+     *    membership is that column, in a workspace this scan skipped, becomes a
+     *    thread belonging to nothing — reachable only through past-conversation
+     *    history — and the census exits 0 over it, because a workspace that was
+     *    never scanned cannot be reported as unmigrated.
+     *
+     * Migrating them costs a handful of rows per workspace and makes the
+     * corpus this script walks the same set the drop will affect, which is the
+     * only scope under which "census clean" means "nothing will be lost".
+     */
+    const conditions = [];
     if (only !== undefined) conditions.push(eq(agentWorkspaces.id, only));
     if (cursor !== null) conditions.push(gt(agentWorkspaces.id, cursor));
 

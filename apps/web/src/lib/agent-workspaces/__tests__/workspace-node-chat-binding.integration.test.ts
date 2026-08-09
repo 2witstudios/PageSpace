@@ -34,7 +34,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -465,27 +465,22 @@ describe('a workspace the backfill has not reached yet', () => {
     expect(result.status).toBe('ok');
   });
 
-  it('ALLOWS when the legacy pointer is STALE and the node lives in another workspace', async () => {
-    // The case that makes the `NOT EXISTS` clause unscoped by `rootId`, and the
-    // only one that can reach it: the guard runs only when a workspace has NO
-    // nodes, so a workspace whose own member already has a node never asks.
+  it('REFUSES on a stale legacy pointer too — the question is whether the backfill RAN, not whether anything is strandable this instant', async () => {
+    // THIS TEST ASSERTED THE OPPOSITE under the old predicate, which asked "is
+    // there something to strand right now" and answered no, because the
+    // conversation's node already lives in another workspace.
     //
-    // Here `conversations.workspaceId` still names W1 while the conversation's
-    // node lives in W2 — reachable because a thread can be claimed into another
-    // workspace, and the chat index is global with no `rootId` in it. The
-    // membership DID move; W1's pointer is just stale. Nothing is left to
-    // strand, so W1 may be seeded.
-    //
-    // Scoping the clause to `rootId` would invert this into a refusal that no
-    // backfill run could ever clear.
+    // The predicate asks a different question now — "has the backfill been
+    // through this workspace" — and for this one it has not. That is the point:
+    // a workspace is not safe to seed because the first legacy row you look at
+    // happens to be accounted for. The backfill will visit it, derive at least a
+    // root, and write the rev row that clears this refusal.
     const stale = await createWorkspace();
     const holder = await createWorkspace();
     const conversationId = await legacyMember(stale);
     await seedTree(holder, [root, chatPane('n1', 0, conversationId)]);
 
     const before = await readWorkspaceNodeSnapshot(db, stale);
-    expect(before.nodes).toEqual([]);
-
     const result = await applyWorkspaceNodeWrite({
       workspaceId: stale,
       baseRev: before.rev,
@@ -494,7 +489,9 @@ describe('a workspace the backfill has not reached yet', () => {
       viewerId: ownerIds[0],
     });
 
-    expect(result.status).toBe('ok');
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('awaiting_backfill');
   });
 
   it('ALLOWS a workspace whose legacy member ALREADY has a node — the backfill got here', async () => {
@@ -515,13 +512,21 @@ describe('a workspace the backfill has not reached yet', () => {
 
     expect(result.status).toBe('ok');
   });
-  it('ALLOWS an ENDED workspace — the backfill will never visit it, so there is nothing to strand (F1)', async () => {
-    // `backfill()` paginates `endedAt IS NULL`. A workspace outside that scope
-    // is one no backfill run will ever migrate, so refusing its writes prevents
-    // a loss that was never going to be prevented — and blocks a write the
-    // product supports, since a thread can be claimed into an ended workspace
-    // (issue #2335). The guard's scope has to be the backfill's scope, or
-    // "refused" and "the backfill will fix it" stop being the same set.
+  it('REFUSES an ENDED workspace, because ending is not terminal and the backfill now covers it', async () => {
+    // THE SECOND INVERSION, and the one that matters most. This test used to
+    // assert the opposite, on the reasoning that the backfill skipped ended
+    // workspaces so there was nothing left to strand.
+    //
+    // A review refuted it: the very write the exemption permitted is the one
+    // that UN-ENDS the workspace. Claiming a thread into an ended workspace runs
+    // `planSessionReopen`, which clears `endedAt` — so the exemption minted a
+    // rev row, permanently disarmed this guard, and the backfill then reported
+    // the workspace `alreadyMigrated` while its real membership was stranded
+    // for good, with the census exiting 0 over it.
+    //
+    // The fix was not a better exemption. `backfill()` no longer filters on
+    // `endedAt` at all, so the guard needs none and its scope is the drop's
+    // scope.
     const workspaceId = await createWorkspace();
     await legacyMember(workspaceId);
     await db.update(agentWorkspaces).set({ endedAt: new Date() }).where(eq(agentWorkspaces.id, workspaceId));
@@ -535,7 +540,40 @@ describe('a workspace the backfill has not reached yet', () => {
       viewerId: ownerIds[0],
     });
 
-    expect(result.status).toBe('ok');
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('awaiting_backfill');
+  });
+
+  it('REFUSES a workspace whose only legacy membership is a PANE ROW, not a conversation pointer', async () => {
+    // The other half of the same review finding. The backfill derives nodes from
+    // panes ∪ conversations ∪ shells; the predicate used to look only at
+    // `conversations.workspaceId`, so a workspace whose membership lived in a
+    // pane row sailed through, got seeded, and was then counted
+    // `alreadyMigrated` by the run that should have rescued it.
+    const workspaceId = await createWorkspace();
+    const conversationId = await createConversation();
+    await db.execute(sql`
+      INSERT INTO "agent_workspace_pane_columns" ("id","workspaceId","orderIndex","widthFraction","createdAt","updatedAt")
+      VALUES (${'col-' + workspaceId}, ${workspaceId}, 0, 1, now(), now())
+    `);
+    await db.execute(sql`
+      INSERT INTO "agent_workspace_panes" ("id","workspaceId","columnId","orderIndex","kind","targetId","heightFraction","createdAt","updatedAt")
+      VALUES (${'pane-' + workspaceId}, ${workspaceId}, ${'col-' + workspaceId}, 0, 'chat', ${conversationId}, 1, now(), now())
+    `);
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('awaiting_backfill');
   });
 
   it('ALLOWS a backfilled workspace whose tree was later DESTROYED by endSession (F2)', async () => {
