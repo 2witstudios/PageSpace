@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Trash2 } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteDriveDialog } from '@/components/dialogs/DeleteDriveDialog';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -19,7 +19,6 @@ export function DriveDeleteSection({ driveId, driveName }: DriveDeleteSectionPro
   const [showDialog, setShowDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [memberCount, setMemberCount] = useState(1);
-  const { toast } = useToast();
   const router = useRouter();
   const removeDrive = useDriveStore((state) => state.removeDrive);
 
@@ -43,10 +42,7 @@ export function DriveDeleteSection({ driveId, driveName }: DriveDeleteSectionPro
     try {
       await del(`/api/drives/${driveId}`);
 
-      toast({
-        title: 'Drive deleted',
-        description: 'The drive has been moved to trash.',
-      });
+      toast.success('The drive has been moved to trash.');
 
       // Remove from local store
       removeDrive(driveId);
@@ -55,11 +51,7 @@ export function DriveDeleteSection({ driveId, driveName }: DriveDeleteSectionPro
       router.push('/dashboard');
     } catch (error) {
       console.error('Error deleting drive:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to delete drive. Please try again.',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete drive. Please try again.');
     } finally {
       setIsDeleting(false);
       setShowDialog(false);

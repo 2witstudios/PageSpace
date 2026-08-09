@@ -14,17 +14,19 @@ export type StopAction =
  *
  * WHY THE LOCAL STOP IS NOT PART OF THIS DECISION.
  *
- * Callers call `rawStop()` (useChat's own stop) unconditionally, before applying this result —
- * the same order AiChatView already uses, and for the reason useChatStop's docblock gives: the
- * local stop is synchronous and purely local, while the server abort can now WAIT seconds to
- * find out whether a cross-instance owner actually stopped the generation. Running the local
- * stop first gives instant UI feedback and guarantees it strictly harder than a `finally` would.
+ * Callers call `rawStop()` (useChat's own stop) before applying this result — the same order
+ * AiChatView already uses, and for the reason useChatStop's docblock gives: the local stop is
+ * synchronous and purely local, while the server abort can now WAIT seconds to find out whether
+ * a cross-instance owner actually stopped the generation. Running the local stop first gives
+ * instant UI feedback and guarantees it strictly harder than a `finally` would.
  *
- * It is unconditional because it is a no-op in every case where it isn't wanted: `stop()` on a
- * useChat that is idle (a bootstrapped stream after a refresh, or a remote user's stream) does
- * nothing. Branching on ownership here would add a branch that no test could distinguish by
- * behaviour — so the ownership fact stays where it is actually used (rendering the Stop button
- * and the streaming indicator) rather than being threaded through a decision it cannot change.
+ * It used to be UNCONDITIONAL, because `stop()` on an idle useChat is a no-op and the chat could
+ * not be busy with anything but the conversation being stopped. Conversation-scoped consuming
+ * (the dual-stream fix) broke that: the same chat instance can be locally consuming conversation
+ * B's stream while conversation A's handed-off stream renders via the socket on this surface, and
+ * a Stop on A must not abort B's live local fetch. `useStopStream` gates `rawStop` on the
+ * mirror's latched conversation for exactly that case; the SERVER-side decision below is
+ * unchanged — it names streams by store entry / send-time conversation, never by the local fetch.
  *
  * AND CANCELLING THE FETCH STOPS NOTHING ANYWAY. Streams are deliberately server-owned and
  * survive a client disconnect — that is the architecture. So a Stop that names nothing on the
@@ -75,3 +77,33 @@ export const decideStopAction = ({
   // surfaces do not offer a Stop button for someone else's stream. Don't invent a name.
   return { type: 'none' };
 };
+
+/**
+ * Should Stop also abort THIS surface's local `useChat` fetch?
+ *
+ * With conversation-scoped consuming (the dual-stream fix), one chat instance can be locally
+ * consuming conversation B's stream while conversation A's handed-off stream renders via the
+ * socket on the same surface. A Stop pressed on A must not cancel B's live local read — that
+ * would send B dark mid-token (its generation continues server-side, unwatched).
+ *
+ * `localSendConversationId` is the own-stream mirror's latch: which conversation the local fetch
+ * belongs to, or undefined when the chat is idle (where rawStop is a harmless no-op — absence
+ * never suppresses a wanted local stop). An EMPTY-STRING latch is the mirror's
+ * `currentConversationId ?? ''` placeholder from a surface whose identity had not resolved; no
+ * real send can be made without a conversation id, so it is treated as no latch — withholding
+ * the local stop on its account would be withholding it on garbage. The same rule is applied by
+ * `useConversationSendHandoff` when deciding whether a handoff is needed at all.
+ */
+export const shouldRunLocalStop = ({
+  localSendConversationId,
+  targetConversationId,
+}: {
+  /** The mode-selected mirror's latched conversation, or undefined when idle. */
+  localSendConversationId: string | undefined;
+  /** The conversation on screen — the one being stopped. */
+  targetConversationId: string | null;
+}): boolean =>
+  localSendConversationId === undefined ||
+  localSendConversationId === '' ||
+  targetConversationId === null ||
+  localSendConversationId === targetConversationId;

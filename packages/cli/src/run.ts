@@ -10,13 +10,8 @@ import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import {
-  hasExplicitCredential,
-  mcpNoExplicitCredentialMessage,
-  noExplicitCredentialMessage,
-  resolveAuth,
-  resolveKeyName,
-} from './auth/resolve.js';
+import { mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
+import { resolveCredentialSource } from './auth/resolve-credential-source.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
@@ -31,7 +26,6 @@ import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
 import { createNullActiveKeyStore, type ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
-import type { HostCredential } from './credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
 import type { HandlerContext, OutputSink } from './handler-context.js';
 import { resolveRoute } from './router/router.js';
@@ -156,42 +150,24 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   const resolution = resolveRoute(ROUTES, parsed.args);
   const routedHandler = resolution.kind === 'match' ? resolution.route.handler : null;
   const isAuthExempt = routedHandler !== null && AUTH_EXEMPT_HANDLERS.has(routedHandler);
-  const explicit = hasExplicitCredential({ token: parsed.flags.token, key: parsed.flags.key }, deps.env);
 
   // The active key (`pagespace keys use`) is the lowest-priority source, and
   // only for gated CONTENT commands: explicit --token/--key/env always wins
-  // (`explicit` above), auth-exempt handlers keep their ambient login
+  // (`explicit` below), auth-exempt handlers keep their ambient login
   // credential (the keys family needs its `manage_keys` scope, which a
   // drive-scoped active key doesn't carry), and `pagespace mcp` — invoked
   // unattended by an MCP client — deliberately never rides a human's
   // per-machine activation (its config must name a credential itself).
   const activeKeyEligible = routedHandler !== null && !isAuthExempt && routedHandler !== mcpHandler;
 
-  let keyName = resolveKeyName({ key: parsed.flags.key }, { PAGESPACE_KEY: envKey.name });
-  let credential: HostCredential | null = null;
-  let activeKeyName: string | null = null;
-  if (!explicit && activeKeyEligible) {
-    const active = await activeKeyStore.getActiveKey(host);
-    if (active !== null) {
-      const activeCredential = await deps.credentialStore.get(host, active);
-      if (activeCredential !== null) {
-        keyName = active;
-        credential = activeCredential;
-        activeKeyName = active;
-      }
-    }
-  }
-  if (activeKeyName === null) {
-    credential = await deps.credentialStore.get(host, keyName);
-  }
-
-  const source = resolveAuth(
-    { token: parsed.flags.token },
-    { PAGESPACE_TOKEN: envToken.token },
-    credential ? { [host]: { [keyName]: credential } } : {},
+  const { source, activeKeyName, explicit } = await resolveCredentialSource({
+    flags: { token: parsed.flags.token, key: parsed.flags.key },
+    env: deps.env,
     host,
-    keyName,
-  );
+    credentialStore: deps.credentialStore,
+    activeKeyStore,
+    allowActiveKey: activeKeyEligible,
+  });
 
   const auth = buildAuthProvider(source, {
     discoverMetadata: createDiscoverMetadata(),

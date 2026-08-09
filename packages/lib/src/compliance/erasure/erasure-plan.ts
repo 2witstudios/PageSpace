@@ -16,6 +16,7 @@ export type ErasureStepId =
   | 'anonymize-activity-logs'
   | 'purge-ai-usage'
   | 'purge-monitoring'
+  | 'purge-stream-state'
   | 'revoke-integrations'
   | 'email-suppression'
   | 'ai-provider-erasure'
@@ -36,6 +37,11 @@ export const ERASURE_STEPS: readonly ErasureStepId[] = [
   // always empty and no ZDR/manual-review evidence is recorded).
   'ai-provider-erasure',
   'purge-ai-usage',
+  // Stream state (`ai_stream_sessions.parts` checkpoints, abort intents) is
+  // keyed by user_id and reachable by no cascade for a shared conversation the
+  // subject does not own. Must run before delete-user so the evidence lands
+  // while the subject row still exists.
+  'purge-stream-state',
   'security-audit',
   'delete-user',
   'stripe-customer',
@@ -65,6 +71,12 @@ const STEP_DEFS: ErasureStep[] = [
   // providers the user touched.
   { id: 'ai-provider-erasure', fatal: false, cloudOnly: true },
   { id: 'purge-ai-usage', fatal: false, cloudOnly: false },
+  // FATAL, and for the same reason purge-monitoring becomes fatal with CH in
+  // play: this step is the ONLY eraser those rows have. `ai_stream_sessions`
+  // has no TTL, no retention sweep and (for a conversation the subject does
+  // not own) no cascade, so a swallowed failure would report a completed
+  // erasure with the subject's checkpointed message content still on disk.
+  { id: 'purge-stream-state', fatal: true, cloudOnly: false },
   { id: 'security-audit', fatal: false, cloudOnly: false },
   // Deleting the user row is the irreversible core — must succeed.
   { id: 'delete-user', fatal: true, cloudOnly: false },

@@ -21,13 +21,13 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareTerminal' | 'SquareCheckBig';
+  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareCheckBig';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'machine';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
   experimental?: boolean;
 }
 
@@ -104,7 +104,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     apiValidation: {
       optionalFields: ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel'],
     },
-    uiComponent: 'AiChatView',
+    uiComponent: 'AgentPageView',
     layoutViewType: 'ai',
   },
   [PageType.CANVAS]: {
@@ -196,25 +196,6 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     defaultContent: () => '',
     uiComponent: 'CodePageView',
     layoutViewType: 'code',
-  },
-  [PageType.MACHINE]: {
-    type: PageType.MACHINE,
-    displayName: 'Machine',
-    description: 'A persistent sandboxed machine — clone repos, run code, and open terminals',
-    iconName: 'SquareTerminal',
-    emoji: '🖥️',
-    capabilities: {
-      canAcceptUploads: false,
-      canBeConverted: false,
-      supportsRealtime: true,
-      supportsVersioning: false,
-      supportsAI: false,
-      publishable: false,
-    },
-    defaultContent: () => JSON.stringify({ history: [] }),
-    uiComponent: 'MachineView',
-    layoutViewType: 'machine',
-    experimental: true,
   },
 };
 
@@ -311,8 +292,15 @@ export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
 }
 
-export function isMachinePage(type: PageType): boolean {
-  return type === PageType.MACHINE;
+/**
+ * Can this page type be opened as an agent-session PANE (as opposed to only
+ * the main content area)? Excludes `FOLDER` (a tree browser, not content to
+ * edit) and `AI_CHAT` (would nest a chat conversation inside a chat pane) —
+ * every other type has a real standalone editor/viewer that makes sense
+ * beside a conversation.
+ */
+export function isPaneablePageType(type: PageType): boolean {
+  return type !== PageType.FOLDER && type !== PageType.AI_CHAT;
 }
 
 export function getCreatablePageTypes(): PageType[] {

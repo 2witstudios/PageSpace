@@ -57,7 +57,7 @@ function baseHandlerDeps(store: CredentialStore) {
     waitMs: async () => {},
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
     now: () => Date.parse('2026-07-03T00:00:00.000Z'),
-    isInterrupted: () => false,
+    createIsInterrupted: () => () => false,
   };
 }
 
@@ -195,7 +195,7 @@ describe('createLoginDeviceHandler', () => {
       ['access_denied', { pollDeviceToken: async () => ({ kind: 'access_denied' }) }, /denied/i],
       ['expired_token', { pollDeviceToken: async () => ({ kind: 'expired_token' }) }, /expired|again/i],
       ['poll_failed', { pollDeviceToken: async () => ({ kind: 'request_failed', message: 'boom' }) }, /boom/],
-      ['interrupted', { isInterrupted: () => true }, /cancel/i],
+      ['interrupted', { createIsInterrupted: () => () => true }, /cancel/i],
     ];
 
     for (const [, overrides, message] of cases) {

@@ -101,6 +101,14 @@ export interface PublishCanvasPageInput {
    * `undefined` leaves the persisted value intact (defaults to indexable).
    */
   noindex?: boolean;
+  /**
+   * Canvas pages only: when false, the published artifact skips PageSpace's
+   * forced light/dark theme override so an author's intentionally
+   * single-theme design isn't fought by an injected `dark` class. Ignored for
+   * other publishable page types. `undefined` leaves the persisted value
+   * intact (defaults to `true`, matching prior always-on behavior).
+   */
+  themeBridgeEnabled?: boolean;
 }
 
 export interface PublishCanvasPageResult {
@@ -122,6 +130,7 @@ export interface PublishCanvasPageResult {
   description: string | null;
   ogImageUrl: string | null;
   noindex: boolean;
+  themeBridgeEnabled: boolean;
 }
 
 /** Final SEO/head fields threaded into whichever type-specific renderer `preparePublishContent` selects. */
@@ -136,6 +145,9 @@ interface PublishRenderArgs {
   description?: string;
   robots?: string;
   formActionOrigin?: string;
+  /** CANVAS only — see `PublishCanvasPageInput.themeBridgeEnabled`. Silently
+   *  unused by the other page types' renderers, same as `formActionOrigin`. */
+  injectThemeBridge?: boolean;
 }
 
 interface PreparedPublishContent {
@@ -317,6 +329,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       publishDescription: true,
       publishOgImageUrl: true,
       noindex: true,
+      themeBridgeEnabled: true,
     },
   });
 
@@ -327,6 +340,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const effectiveDescription = mergeOverride(input.description, existing?.publishDescription ?? null);
   const effectiveOgImageUrl = mergeOverride(input.ogImageUrl, existing?.publishOgImageUrl ?? null);
   const effectiveNoindex = input.noindex === undefined ? existing?.noindex ?? false : input.noindex;
+  const effectiveThemeBridgeEnabled =
+    input.themeBridgeEnabled === undefined ? existing?.themeBridgeEnabled ?? true : input.themeBridgeEnabled;
 
   // Resolve the drive's primary published host. When an active custom domain
   // exists it is the primary; otherwise we fall back to the subdomain. All
@@ -381,6 +396,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     description: resolvedMeta.description,
     robots: resolvedMeta.robots,
     formActionOrigin,
+    injectThemeBridge: effectiveThemeBridgeEnabled,
   });
   const key = buildPublishedKey(subdomain, path);
 
@@ -449,6 +465,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       publishDescription: effectiveDescription,
       publishOgImageUrl: effectiveOgImageUrl,
       noindex: effectiveNoindex,
+      themeBridgeEnabled: effectiveThemeBridgeEnabled,
       updatedAt: new Date(),
     })
     .where(eq(publishedPages.pageId, pageId));
@@ -494,6 +511,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     description: effectiveDescription,
     ogImageUrl: effectiveOgImageUrl,
     noindex: effectiveNoindex,
+    themeBridgeEnabled: effectiveThemeBridgeEnabled,
   };
 }
 
@@ -515,6 +533,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
 export async function republishDriveCanonical(driveId: string, userId: string): Promise<number> {
   if (!isPublishConfigured()) return 0;
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const published = await db.query.publishedPages.findMany({
     where: eq(publishedPages.driveId, driveId),
     columns: { pageId: true, path: true },
@@ -602,6 +621,7 @@ export async function changePublishSubdomain(
 
   try {
     // Re-render all published pages under the new subdomain prefix.
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const publishedRows = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true },
@@ -695,6 +715,15 @@ async function renderNotFoundPageHtml(params: {
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);
     const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
 
+    // A canvas page assigned as the 404 page keeps its own published
+    // theme-bridge preference here too — otherwise unknown URLs would force
+    // the theme override even though the author explicitly turned it off
+    // for this page's normal published artifact.
+    const publishedRow = await db.query.publishedPages.findFirst({
+      where: eq(publishedPages.pageId, pageId),
+      columns: { themeBridgeEnabled: true },
+    });
+
     return prepared.render({
       // Same precedence as a normal publish (resolvePublishedMeta): the
       // page's own code-authored meta wins over its internal page title.
@@ -706,6 +735,7 @@ async function renderNotFoundPageHtml(params: {
       description: meta.ogDescription || meta.description,
       robots: 'noindex',
       formActionOrigin,
+      injectThemeBridge: publishedRow?.themeBridgeEnabled ?? true,
     });
   } catch (err) {
     loggers.api.warn('Failed to render custom 404 page; falling back to generic 404', {
@@ -779,6 +809,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
     const primaryHost = resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains });
     const origin = `https://${primaryHost}`;
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const allPublished = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true, path: true, updatedAt: true, noindex: true },

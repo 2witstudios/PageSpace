@@ -285,8 +285,8 @@ export async function runAgentWithRetry(
   // content) or an after-content provider-error terminal. NOT for content-bearing
   // terminals (length / content-filter / step-budget / tool-calls-no-finish), which
   // already streamed a real (if truncated/incomplete) response, nor for user aborts.
-  // Phrasing avoids the client's isNetworkError patterns so useStreamRecovery does not
-  // re-run on top of us.
+  // Phrasing avoids implying a network failure — auto-retry on the client is a manual
+  // action now (useStreamRecovery deleted, epic leaf 6.1), so nothing reclassifies this.
   if (finalOutcome === 'exhausted' || terminalReason === 'provider-error') {
     safeWrite({
       type: 'error',

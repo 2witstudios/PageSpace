@@ -60,5 +60,3 @@ export function VoiceModeBorder({ className }: VoiceModeBorderProps) {
     </div>
   );
 }
-
-export default VoiceModeBorder;

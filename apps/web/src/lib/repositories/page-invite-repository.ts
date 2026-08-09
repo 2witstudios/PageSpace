@@ -350,5 +350,3 @@ export const pageInviteRepository = {
     return existing;
   },
 };
-
-export type PageInviteRepository = typeof pageInviteRepository;

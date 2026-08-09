@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT } from '../render-document';
+import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT, NAVIGATION_BRIDGE_SCRIPT, ESCAPE_BRIDGE_SCRIPT } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
@@ -196,6 +196,77 @@ describe('renderCanvasDocument — theme bridge', () => {
   // script" for the theme bridge specifically.
   it('given injectThemeBridge: true AND a nonce, should stamp the nonce onto the theme-bridge script too', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true, nonce: 'app-nonce==' });
+    expect(out).toContain('<script nonce="app-nonce==">(function(){');
+  });
+});
+
+describe('renderCanvasDocument — navigation bridge', () => {
+  it('given navigationBridge: true, should inject the bridge script inside <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(NAVIGATION_BRIDGE_SCRIPT);
+  });
+
+  it('given no navigationBridge, should NOT inject the bridge script (covers the published-page default)', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('pagespace-navigate');
+  });
+
+  it('given navigationBridge: true, the bridge should click-intercept dashboard page links and postMessage', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    expect(out).toContain("postMessage({type:'pagespace-navigate',href:href}");
+    expect(out).toContain('/^\\/dashboard\\/');
+  });
+
+  // Regression: a capture-phase listener runs BEFORE the clicked element's own
+  // onclick / bubbling ancestor handlers, so an author calling preventDefault()
+  // to cancel our routing would never have a chance to (we'd have already read
+  // e.defaultPrevented as false and posted the message). The listener must be
+  // bubble-phase (no `useCapture` / no trailing `,true` in addEventListener).
+  it('given navigationBridge: true, the click listener should be registered for the BUBBLE phase, not capture', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    expect(out).toContain("document.addEventListener('click',function(e){");
+    expect(out).not.toContain(',true);');
+    expect(NAVIGATION_BRIDGE_SCRIPT).not.toContain(',true);');
+  });
+
+  it('given navigationBridge: true AND a nonce, should stamp the nonce onto the navigation-bridge script too', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true, nonce: 'app-nonce==' });
+    // Both injected scripts (theme + navigation) would need the nonce if both
+    // were present; here only navigationBridge is set, so exactly one stamped
+    // inline script should carry it.
+    expect(out).toContain('<script nonce="app-nonce==">(function(){');
+  });
+});
+
+describe('renderCanvasDocument — escape bridge', () => {
+  it('given escapeBridge: true, should inject the bridge script inside <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', escapeBridge: true });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(ESCAPE_BRIDGE_SCRIPT);
+  });
+
+  it('given no escapeBridge, should NOT inject the bridge script (covers the published-page default and the plain in-app View tab)', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('pagespace-escape');
+  });
+
+  it('given escapeBridge: true, the bridge should listen for a bare Escape keydown and postMessage', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', escapeBridge: true });
+    expect(out).toContain("postMessage({type:'pagespace-escape'}");
+    expect(out).toContain("e.key!=='Escape'");
+  });
+
+  // Regression: a canvas author might bind their own modifier-key shortcut
+  // (e.g. Cmd+Escape) — the bridge must only forward a BARE Escape press, not
+  // steal every Escape-adjacent combination the author's own JS might want.
+  it('given escapeBridge: true, the bridge should ignore Escape with a modifier key held', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', escapeBridge: true });
+    expect(out).toContain('e.metaKey||e.ctrlKey||e.altKey');
+  });
+
+  it('given escapeBridge: true AND a nonce, should stamp the nonce onto the escape-bridge script too', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', escapeBridge: true, nonce: 'app-nonce==' });
     expect(out).toContain('<script nonce="app-nonce==">(function(){');
   });
 });

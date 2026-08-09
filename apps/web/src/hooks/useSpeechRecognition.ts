@@ -173,5 +173,3 @@ export function useSpeechRecognition({
     clearError,
   };
 }
-
-export default useSpeechRecognition;

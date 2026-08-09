@@ -1,8 +1,12 @@
 #!/usr/bin/env bun
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq } from '@pagespace/db/operators';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 const email = process.argv[2];
 

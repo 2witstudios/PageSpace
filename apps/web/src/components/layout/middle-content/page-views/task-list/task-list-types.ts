@@ -40,6 +40,7 @@ export interface TaskItem {
   title: string;
   status: string;
   priority: 'low' | 'medium' | 'high';
+  /** Mirror of the linked page's `pages.position` — the single ordering rail (#2143). */
   position: number;
   dueDate: string | null;
   metadata?: Record<string, unknown> | null;
@@ -89,10 +90,10 @@ export interface TaskListData {
   };
   tasks: TaskItem[];
   statusConfigs: TaskStatusConfig[];
+  hasMore: boolean;
 }
 
 export type TaskPriority = 'low' | 'medium' | 'high';
-export type ViewMode = 'table' | 'kanban';
 
 // Build a STATUS_CONFIG-compatible map from custom status configs
 export function buildStatusConfig(configs: TaskStatusConfig[]): Record<string, { label: string; color: string; group: TaskStatusGroup }> {
@@ -129,7 +130,6 @@ export const canExpandTask = (task: Pick<TaskItem, 'hasContent' | 'subTaskCount'
 
 // Backward-compatible aliases
 export type TaskStatus = string;
-export const STATUS_CONFIG = DEFAULT_STATUS_CONFIG;
 export const STATUS_ORDER: string[] = ['pending', 'in_progress', 'blocked', 'completed'];
 
 // Task handlers interface for shared components

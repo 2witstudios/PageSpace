@@ -2,7 +2,9 @@ import { sweepExpiredRevokedJTIs } from '@pagespace/lib/security/jti-revocation'
 import { sweepExpiredRateLimitBuckets } from '@pagespace/lib/security/distributed-rate-limit';
 import { sweepExpiredAuthHandoffTokens } from '@pagespace/lib/security/auth-handoff-sweep';
 import { sweepExpiredPendingAbortIntents } from '@/lib/ai/core/pending-abort-intents';
+import { sweepExpiredPendingUploads } from '@pagespace/lib/services/pending-uploads';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -14,6 +16,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * - `rate_limit_buckets` (finished sliding-window counter buckets)
  * - `auth_handoff_tokens` (PKCE, exchange-code, passkey-register handoff)
  * - `ai_pending_abort_intents` (pre-INSERT Stop intents never consumed by a later send)
+ * - `pending_uploads` (presign-reserved upload slots abandoned past their TTL, #2154)
  *
  * Each table is swept inside its own try/catch so a failure on one does not
  * block the others. `rowCount` (via the helpers) is used instead of
@@ -67,6 +70,14 @@ export async function GET(request: Request) {
     };
   }
 
+  try {
+    results.pendingUploads = await sweepExpiredPendingUploads();
+  } catch (error) {
+    results.pendingUploads = {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+
   const hadError = Object.values(results).some((v) => typeof v !== 'number');
 
   audit({
@@ -77,7 +88,7 @@ export async function GET(request: Request) {
   });
 
   if (hadError) {
-    console.error('[Cron] sweep-expired partial failure:', results);
+    loggers.system.error('[Cron] sweep-expired partial failure', undefined, { results });
     return NextResponse.json(
       { success: false, results, timestamp: new Date().toISOString() },
       { status: 500 },

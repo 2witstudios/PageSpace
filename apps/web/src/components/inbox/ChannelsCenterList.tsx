@@ -39,13 +39,13 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
     ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`
     : '/api/inbox?type=channel&limit=20';
 
-  useInboxSocket({ driveId, hasLoadedRef });
+  useInboxSocket({ cacheKey: apiUrl, scope: 'channel', driveId, hasLoadedRef });
 
   const { data, error, isLoading } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
     isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
   });
 
   // Reset state on driveId change BEFORE the data-sync effect so that an

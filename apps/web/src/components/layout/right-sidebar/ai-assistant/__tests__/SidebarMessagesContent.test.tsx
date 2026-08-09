@@ -42,14 +42,18 @@ vi.mock('@/components/ai/shared', async (importOriginal) => {
   };
 });
 
+const virtualizedMessageListSpy = vi.fn();
+
 vi.mock('@/components/ai/shared/chat', () => ({
-  VirtualizedMessageList: ({
-    messages,
-    renderMessage,
-  }: {
+  VirtualizedMessageList: (props: {
     messages: UIMessage[];
     renderMessage: (m: UIMessage) => React.ReactNode;
-  }) => <div>{messages.map(renderMessage)}</div>,
+    onScrollNearTop?: () => void;
+    isLoadingOlder?: boolean;
+  }) => {
+    virtualizedMessageListSpy(props);
+    return <div data-testid="virtualized-branch">{props.messages.map(props.renderMessage)}</div>;
+  },
   UndoAiChangesDialog: () => null,
 }));
 
@@ -183,5 +187,65 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
     expect(screen.getByTestId('message-msg-a').textContent).toBe('first');
     expect(screen.getByTestId('message-msg-b').textContent).toBe('second');
     expect(screen.getByTestId('message-msg-c').textContent).toBe('third');
+  });
+});
+
+// PR 6 review (CodeRabbit): the regular (non-virtualized) branch had no scroll listener at
+// all, so onScrollNearTop/isLoadingOlder were only ever reachable once a conversation
+// crossed SIDEBAR_VIRTUALIZATION_THRESHOLD (30) messages — "load older" was completely
+// unreachable below that, no matter how much older history existed server-side.
+describe('SidebarMessagesContent — virtualization forced by hasMoreOlder (PR 6 review)', () => {
+  it('given fewer messages than the virtualization threshold and hasMoreOlder=true, should still render via VirtualizedMessageList (which alone wires onScrollNearTop)', () => {
+    virtualizedMessageListSpy.mockClear();
+    const onScrollNearTop = vi.fn();
+
+    render(
+      <SidebarMessagesContent
+        {...baseProps}
+        messages={[userMessage('m1', 'hi'), assistantMessage('m2', 'hello')]}
+        remoteStreams={[]}
+        onScrollNearTop={onScrollNearTop}
+        isLoadingOlder={false}
+        hasMoreOlder={true}
+      />,
+    );
+
+    expect(screen.getByTestId('virtualized-branch')).toBeDefined();
+    expect(virtualizedMessageListSpy).toHaveBeenCalledTimes(1);
+    expect(virtualizedMessageListSpy.mock.calls[0][0].onScrollNearTop).toBe(onScrollNearTop);
+  });
+
+  it('given fewer messages than the virtualization threshold and hasMoreOlder=false, should use the regular (non-virtualized) branch', () => {
+    virtualizedMessageListSpy.mockClear();
+
+    render(
+      <SidebarMessagesContent
+        {...baseProps}
+        messages={[userMessage('m1', 'hi'), assistantMessage('m2', 'hello')]}
+        remoteStreams={[]}
+        onScrollNearTop={vi.fn()}
+        isLoadingOlder={false}
+        hasMoreOlder={false}
+      />,
+    );
+
+    expect(screen.queryByTestId('virtualized-branch')).toBeNull();
+    expect(virtualizedMessageListSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('message-m1')).toBeDefined();
+    expect(screen.getByTestId('message-m2')).toBeDefined();
+  });
+
+  it('given hasMoreOlder is undefined (not yet loaded), should default to the regular branch', () => {
+    virtualizedMessageListSpy.mockClear();
+
+    render(
+      <SidebarMessagesContent
+        {...baseProps}
+        messages={[userMessage('m1', 'hi')]}
+        remoteStreams={[]}
+      />,
+    );
+
+    expect(screen.queryByTestId('virtualized-branch')).toBeNull();
   });
 });

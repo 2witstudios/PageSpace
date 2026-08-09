@@ -7,6 +7,72 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Panes and sidebars no longer sit blank while the messages are right there in the database** —
+  every surface used to keep its own private copy of a conversation and its own theory of when to
+  refresh, so a message written from one surface could stay invisible in another until you
+  reloaded. Every surface is now a subscriber to one authoritative feed and can tell when it has
+  missed something, so it refetches instead of quietly showing you stale history.
+- **Workers you spawn appear immediately instead of up to 20 seconds later** — the sidebar polled
+  on a timer; it is now told.
+- **One chat history** — page chats and Global Assistant chats were stored in two different tables
+  with two different code paths, which is why a handful of features worked in one and not the
+  other. They are one now.
+- **A plan on a shared conversation is visible to the people it is shared with** — the plan chip
+  silently failed to load for anyone but the conversation's owner, so collaborators saw no plan on
+  a conversation whose agent was visibly working from one.
+- **Closing one pane no longer stops another from receiving live updates** — two views of the same
+  conversation (say the Global Assistant on your dashboard and a pane in the Agents console) shared
+  one subscription, so closing either one silently cut the other off until you reloaded.
+- **Layout changes no longer go missing on self-hosted deployments reached over plain HTTP** — in
+  that setup a reload could reuse ids from the previous page load, and a split or resize would be
+  mistaken for one already applied and quietly dropped.
+- **The Agents console's tab now shows "Agents" and remembers what was open when you switch away and back** —
+  the browser-style tab bar didn't recognize `/dashboard/agents` as a page at all, so its tab showed
+  "Drive" or "Untitled" instead of "Agents". Worse, the console keeps its selected session/conversation/panes
+  in the URL's query string (so clicking around never kills a live shell or streaming chat), but the tab bar
+  never carried that query string along — so switching to another tab and back always dropped the selection,
+  landing on "Select a session" even though the panes were still safely persisted underneath. Tabs now carry
+  their full address, the Agents route is registered with a proper title and icon, reactivating a different
+  tab pointing at the same Agents page now correctly re-reads its own selection, and the header's Back/Forward
+  buttons no longer get one step out of sync after the browser's own Back restores an earlier selection.
+- **Global Assistant is no longer unclickable right after splitting a pane in the Agents console** —
+  a short pane's empty-pane picker could crush its "Shell"/"Global Assistant" choices under the
+  "Agents" list below them, so the Global Assistant button visually collided with — and lost clicks
+  to — the section beneath it. The picker's sections no longer shrink below their own content.
+- **The Agents console's session list no longer shows a distracting scrollbar** — the sidebar's
+  left-hand session list now scrolls without ever painting a scrollbar, matching the rest of the
+  console's chrome-free feel.
+- **A Global Assistant conversation started from the global Agents dashboard now keeps the right
+  drive's context** — picking Global Assistant for a specific drive from `/dashboard/agents` (rather
+  than that drive's own Agents page) minted a session correctly scoped to that drive, but the
+  assistant itself had no way to know which drive it was in — it derived that from the current page,
+  and the Agents console never navigates as you click between sessions. It now reads the drive
+  straight from its own session instead.
+- **A database outage no longer takes the whole platform down with it** — when Postgres
+  became unreachable (as in the recent OOM stalls), the rate limiter denied every request
+  platform-wide, turning a database incident into a total outage. Production now degrades to
+  a conservative per-instance in-memory limit at half the configured threshold: legitimate
+  users keep working, attackers face a *stricter* limit than usual, and nothing ever fails
+  open. A 30-second circuit breaker stops requests from waiting on the stalled database
+  (a single probe rechecks it each cooldown), the fallback's memory is hard-capped so an
+  identifier flood can't exhaust the process, and distributed enforcement resumes
+  automatically the moment Postgres recovers.
+
+- **A machine-bound agent addressing its own project's default checkout as `branch: "main"`/`"master"` is no longer silently denied** —
+  a bound conversation's `target` only ever resolved against explicitly created branch worktrees, so a model reasoning in ordinary
+  git terms (where "main" means "my own checkout") got refused with a generic scope error even when addressing itself. The system
+  prompt now explains that "branch" here names a separately created worktree, not "whatever branch a project happens to be on," and
+  the denial message points at `list_sessions` to check real state instead of prescribing a specific retry.
+- **Permanently deleting a Terminal machine, its drive, or letting it age out of Trash no longer
+  leaves "Unknown machine" behind** — an agent or the global assistant's machine list kept a
+  reference to a Terminal after the machine page was gone for good, so it showed as "Unknown
+  machine" and any subsequent save of that config failed. Permanent delete, permanent drive
+  delete, and the daily trash-purge now clean up the stale reference; a machine that's merely in
+  Trash (not yet purged) is left alone since it can still be restored.
+- **Toast notifications now actually appear** — member management, role editing, drive AI
+  settings, drive deletion, invites, and version-history/activity rollback actions had been
+  silently logging success and error feedback to the browser console instead of showing a
+  toast, since December 2025. These flows now surface real toast notifications.
 - **Subscription renewals now set the correct billing period** — a renewal used to stamp your
   account with the billing cycle that had just *ended* (Stripe reports the old cycle on the invoice
   itself; the new one is on its line items), so every subscriber's period looked expired the moment
@@ -28,6 +94,58 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Your agent workspaces now follow you between devices, and agents can arrange their own** —
+  the pane grid in the Agents console used to live partly in your browser's local storage, so the
+  same workspace looked different on your laptop and your phone, and a collaborator watching a
+  shared workspace saw nothing you did. The layout is now server-held: open, close, move, resize
+  and rearrange panes converge live for everyone looking at that workspace, on every device.
+  Agents can arrange their own workspaces too, through the same verbs you use — an agent can open
+  the page it is about to edit next to the conversation you are having about it.
+- **`list_sessions` can now see workspaces shared with you** — an agent could always be *told* to
+  work in a colleague's workspace in a drive you both belong to, but had no way to discover one.
+  It now lists them, with other members' private thread titles shown as "(private thread)" so the
+  workspace is discoverable without its contents being readable.
+- **`/plan` ships as an editable starter skill** — an agent can bind a conversation to a plan
+  document and keep working against it across reloads and context summaries, with the plan shown
+  as a chip on the conversation.
+
+- **Agent sessions and the sandbox are open to everyone — the sandbox itself is a Pro+ feature** —
+  sessions, chat, and the Agents screen's panes (splitting between agent conversations, a terminal,
+  and any page) are now available to every authenticated user, not just admins. Real cloud compute —
+  an agent session's sandbox, where it actually runs code and gives you a terminal — requires Pro
+  tier or above, billed to the session's payer (the drive owner, or the session's own owner for a
+  driveless Global Assistant session), so a free-tier member with edit access in a Pro-owned drive still gets sandbox
+  access. Sessions whose resolved payer is on the free tier get the same session/panes UI, with the
+  terminal affordance disabled and an upgrade prompt where the sandbox would run. Scheduled/triggered Workflows now honor the same
+  per-agent sandbox switch and payer-tier gate as interactive chat, closing a gap where a workflow
+  could reach code-execution tools regardless of an agent's own sandbox setting.
+- **Start a session with Global Assistant directly from a drive** — clicking "+" on a drive in the
+  Agents console now offers Global Assistant alongside that drive's own agents and Shell, first in
+  the list. The new session is filed under that drive, same as any agent session, rather than only
+  being reachable as a driveless global session. Its default name now also reads "Global Assistant"
+  (was "Assistant") everywhere a session or conversation goes unnamed.
+- **Rotate a webhook secret in place** — the Incoming Webhooks dialog (and
+  `POST /api/pages/[pageId]/webhooks/[id]/rotate`) now mints a fresh signing secret for the **same
+  webhook URL**, so replacing a lost or leaked secret no longer means deleting the webhook and
+  re-wiring the external sender to a new URL. The old secret stops verifying the moment the
+  rotation lands; the new one is shown exactly once, just like at creation. Owner/admin only,
+  audited, and concurrent rotations are serialized — the losing request gets a conflict instead of
+  silently minting a secret nobody can use.
+- **Incoming Webhooks** — mint a signed, page-scoped URL (owner/admin only, from the webhook icon
+  on a Channel or AI Chat page) so an external system — CI, monitoring, a script — can push events
+  into PageSpace without a full drive-scoped credential. A signed delivery to a Channel webhook
+  posts its `content` verbatim as a message; binding one or more workflows to a webhook (via the
+  new `/api/pages/[pageId]/webhooks/[id]/triggers` API) makes the same delivery also fire those
+  workflows with the full payload as context — the two actions compose rather than being mutually
+  exclusive. See [the Incoming Webhooks docs](https://pagespace.ai/docs/integrations/incoming-webhooks)
+  for the HMAC signing scheme and a working curl example. This is distinct from the existing
+  outbound "Generic Webhook" AI tool provider, which lets an agent call out to an arbitrary URL —
+  Incoming Webhooks is the opposite direction.
+- **`pagespace drives update-context` and a full `pagespace roles` command family** — the CLI can
+  now set a drive's AI context prompt (`drives update-context <driveId> <drivePrompt>`) and
+  manage custom drive roles end-to-end (`roles list|get|create|update|delete`,
+  `set-page-permissions`, `set-drive-wide-permissions`, `remove-page-permissions`) — previously
+  these were only reachable via the full MCP tool registry, not the `pagespace` CLI directly.
 - **Approve a device's active key in the browser** — the `pagespace` CLI's new
   `pagespace keys use <name>` sets one of your access keys as a machine's ambient default, gated
   by the same browser consent screen that mints keys. The consent page now narrates this
@@ -90,9 +208,38 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OS user can read, credential store included — no CLI feature changes that. The actual isolation
   boundary is a dedicated OS user, container, or VM that receives only a scoped token via
   `PAGESPACE_TOKEN`.
+- **Machine page Files tab** — browse, open, and edit files directly on a Machine's own root
+  filesystem or any branch checkout, with a PageTree-matched file tree (lazy-loaded directories,
+  sorted directories-first) and an editable pane with Monaco language detection, binary-file
+  detection, and Cmd/Ctrl-S save. Right-click or the "+" palette to create files/folders, rename,
+  move, copy, delete, upload (10 MiB cap), or download (50 MiB cap) — every mutation requires edit
+  access and is audited. A machine that hasn't been started yet shows an explicit "not started"
+  state instead of an empty tree.
 
 ### Changed
 
+- **Agent settings are now a compact menu instead of one long scrolling form** — opening an
+  agent's settings (from the full agent page or from a pane) now shows a short list of categories
+  — Behavior, Access, Tools, and Integrations — instead of every option stacked on one
+  continuously scrolling page, and no longer shows an empty scrollable region when an agent has no
+  tools available. The full page and pane surfaces now share the same navigation, and
+  Integrations — previously only reachable from the full page — is available from panes too.
+  Unsaved edits are preserved when moving between the category menu and a configuration subpage,
+  and each pane tracks its own navigation state independently.
+- **Every Terminal agent session now runs in its own isolated sandbox** — previously only a
+  *branch* session got a separate Sprite, while machine- and project-scoped sessions shared the
+  owning Machine's single Sprite, so two agents spawned at the same location collapsed onto one
+  filesystem. Now each spawned session (machine, project, or branch scope) provisions and runs in
+  its **own** Sprite: two agents at the same location are two independent, isolated machines that
+  can never see or clobber each other's files, and each one's Claude Code login is copied in from
+  the Machine's own Sprite (where you run `claude login`). **Billing implication:** a Machine can
+  now hold several concurrent Sprites instead of one, so active runtime cost scales with how many
+  sessions you actually run at once; each session's persistent disk is metered per session and
+  billed to the owning Machine (a paused/hibernating session bills only for the bytes it has
+  stored, not RAM). Closing a session, deleting its project, or deleting the Machine tears down and
+  reclaims that session's Sprite, so nothing keeps billing once you're done with it. Sessions
+  spawned under a Machine that has already been moved to Trash are refused rather than silently
+  creating a hidden, unreclaimable sandbox.
 - **`pagespace login` is for you, personally; `pagespace keys create` (or the guided `pagespace
   keys`) is for an agent** — the README, `docs/agent-access.md`, and the Settings > MCP page now
   say this explicitly and point agent/MCP setups at `pagespace keys create --drive <id>
@@ -115,6 +262,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **`drizzle-orm` bumped past a SQL-identifier-escaping vulnerability (CVE-2026-39356 /
+  GHSA-gpj5-g38j-94v9, CVSS 7.5)** — versions through 0.45.1 quoted SQL identifiers produced by
+  `sql.identifier()`/`.as()` without doubling embedded double-quotes, so a hostile identifier
+  reaching one of those call sites could break out of the quoted identifier and inject SQL. An
+  audit of every `sql.identifier()` call site in the codebase found none reachable with
+  attacker-controlled input today, but `drizzle-orm` is now pinned to `^0.45.2` (and
+  `drizzle-kit` to `^0.31.10`) everywhere it's declared, with a regression test guarding both the
+  escaping behavior and the version floor against a future re-pin.
 - **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
   currently holding a grant on your account (including the `pagespace` CLI), with its scope in
   plain language and when it was connected, is now visible from a "Connected Apps" section.

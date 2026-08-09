@@ -34,12 +34,19 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('@/lib/onboarding/drive-setup', () => ({
   populateUserDrive: vi.fn(),
 }));
+// Same reason as drive-setup above: the installer's own DB access is covered by
+// its unit tests (packages/lib/.../starter-skill-installer.test.ts); here we only
+// care that provisioning calls it, on both branches.
+vi.mock('@pagespace/lib/commands/starter-skill-installer', () => ({
+  installStarterSkills: vi.fn().mockResolvedValue({ installed: [], skipped: [], alreadyInstalled: false }),
+}));
 
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
+import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer';
 import {
   provisionHomeDriveIfNeeded,
   type ProvisionHomeDriveResult,
@@ -181,11 +188,28 @@ describe('provisionHomeDriveIfNeeded', () => {
     const insertedDrive = valuesCall.values.mock.calls[0][0];
     expect(insertedDrive).toMatchObject({ kind: 'HOME', ownerId: 'user-existing' });
 
-    // No folder, no seed — existing user gets empty Home
+    // No folder, no tutorial seed — existing user gets an otherwise empty Home
     expect(populateUserDrive).not.toHaveBeenCalled();
+
+    // …but starter skills DO install here. They are the user's own editable
+    // workflow skills, not tutorial content, so an existing user reaching Home
+    // lazily should still get them.
+    expect(installStarterSkills).toHaveBeenCalledWith('user-existing', 'drive-new', tx);
 
     // created:false — must NOT hijack their normal post-login redirect
     expect(result).toEqual({ driveId: 'drive-new', created: false });
+  });
+
+  test('given new user, starter skills are installed into the new Home drive', async () => {
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    // Passed the SAME tx, so a failed install rolls the whole Home back rather
+    // than leaving a drive with half its starter content.
+    expect(installStarterSkills).toHaveBeenCalledWith('user-new', 'drive-new', tx);
   });
 
   test('given slug "home" taken, resolveUniqueSlug result is used as the drive slug', async () => {

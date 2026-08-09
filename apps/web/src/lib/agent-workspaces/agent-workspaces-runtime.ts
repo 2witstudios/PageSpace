@@ -1,0 +1,1057 @@
+/**
+ * Production wiring for the agent-workspace services (`@pagespace/lib`
+ * services/agent-workspaces) — DI of the DB-backed stores, the Sprites host, the
+ * squat-guarded conversation creators, and the permission/capability lookups.
+ *
+ * ZERO decision logic lives here, by mandate: every `if` below turns a null
+ * into another null (no page → no page permission to fetch; no drive → no
+ * drive-scoped authorization input). Anything that WEIGHS these facts lives in
+ * `packages/lib/src/agent-workspaces/` (the pure deciders/planners) and is
+ * executed by the services this module merely binds.
+ *
+ * Mirrors the `apps/web/src/lib/machines/*-runtime.ts` discipline: lazy
+ * memoized async singletons for the store and the Sprites host (the
+ * `@fly/sprites` SDK is ESM/Node-24-only and must never be statically
+ * imported), `build<Verb>Deps` functions that adapt store methods one-by-one so
+ * the deps surface stays the narrow `Pick<>` each service declared, and entry
+ * wrappers that return result unions — never throws — for the routes to map.
+ */
+
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { conversations } from '@pagespace/db/schema/conversations';
+import { users } from '@pagespace/db/schema/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
+import {
+  refreshSessionStorageMeasurement,
+  shouldRefreshMeasurement,
+  SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+} from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import type { SandboxHandle, SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import {
+  decideFullEgressEnablement,
+  isContainmentVerified,
+} from '@pagespace/lib/services/sandbox/containment';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
+import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
+import {
+  spawnAgentSession,
+  endAgentSession,
+  listAgentSessions,
+  toAgentSessionDTO,
+  type SpawnAgentSessionResult,
+  type EndAgentSessionResult,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspaces';
+import {
+  createDbAgentSessionStore,
+  type AgentSessionListFilter,
+  type AgentSessionRecord,
+  type AgentSessionStore,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import {
+  ensureAgentSessionSandbox,
+  type EnsureAgentSessionSandboxResult,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
+import {
+  checkAgentSessionAccess,
+  checkAgentSessionEndAccess,
+  type AgentSessionAccessCheck,
+  type AgentSessionAccessDeps,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
+import {
+  resolveSessionTenantId,
+  resolveDriveMembership,
+  canRunCodeForSession,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/contract';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
+import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
+import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
+import {
+  closeConversationInSessionWith,
+  type CloseConversationOutcome,
+} from '@/lib/agent-workspaces/close-conversation-in-workspace';
+import {
+  reopenConversationInSessionWith,
+  type ReopenConversationOutcome,
+} from '@/lib/agent-workspaces/reopen-conversation-in-workspace';
+import {
+  claimConversationInSessionWith,
+  type ClaimConversationOutcome,
+  type ClaimConversationInSessionDeps,
+} from '@/lib/agent-workspaces/claim-conversation-in-workspace';
+
+export { isCodeExecutionEnabled };
+
+/**
+ * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
+ * instant and free (no sandbox), which meant the live-sandbox concurrency
+ * quota never applied to it — an authorized caller could mint unbounded rows
+ * (review M6/F4). `spawnSession` below passes it as `spawnAgentSession`'s
+ * REQUIRED `maxActiveSessions` dep (review #2261/2), and the route imports it
+ * for its own advisory pre-check.
+ *
+ * A RE-EXPORT of the one contract constant, not a second number: the store's
+ * listing LIMIT is the same `MAX_ACTIVE_WORKSPACES_PER_OWNER`, which is what
+ * makes "a listing never truncates an owner's real set" structural rather
+ * than a two-constants-kept-equal-by-hand invariant (epic Phase 1, D7).
+ */
+export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-workspaces/contract';
+
+// ---------------------------------------------------------------------------
+// Lazy singletons — the store reconnects to one DB pool; the host is stateless.
+// Both are built on first use so importing this module does no DB or SDK work.
+// ---------------------------------------------------------------------------
+
+let sessionStorePromise: ReturnType<typeof createDbAgentSessionStore> | null = null;
+
+export function getAgentSessionStore(): Promise<AgentSessionStore> {
+  sessionStorePromise ??= createDbAgentSessionStore();
+  return sessionStorePromise;
+}
+
+// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
+// @fly/sprites is ESM-only and @pagespace/lib compiles to CJS (see
+// sandbox-tools-runtime.ts for the full rationale). Fail CLOSED with an
+// actionable message on a pre-Node-24 runtime, and never memoize a rejection.
+const MIN_SANDBOX_NODE_MAJOR = 24;
+
+function assertSandboxRuntime(): void {
+  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  if (Number.isNaN(major) || major < MIN_SANDBOX_NODE_MAJOR) {
+    throw new Error(
+      `Agent sessions require Node.js >= ${MIN_SANDBOX_NODE_MAJOR} ` +
+        `(the @fly/sprites SDK is Node ${MIN_SANDBOX_NODE_MAJOR}+ / ESM-only); ` +
+        `this process is Node ${process.versions.node}.`,
+    );
+  }
+}
+
+let machineHostPromise: Promise<SandboxHost> | null = null;
+
+export function getSandboxHost(): Promise<SandboxHost> {
+  machineHostPromise ??= (async () => {
+    assertSandboxRuntime();
+    const { createProductionSandboxHost } = await import('@/lib/sandbox/sprites-client');
+    return createProductionSandboxHost();
+  })().catch((error) => {
+    machineHostPromise = null;
+    throw error;
+  });
+  return machineHostPromise;
+}
+
+// ---------------------------------------------------------------------------
+// Row-fact lookups (null-plumbing only)
+// ---------------------------------------------------------------------------
+
+/** The owner's not-ended session count — the spawn ceiling's input (store.countActive). */
+export async function countActiveSessionsForOwner(ownerId: string): Promise<number> {
+  return (await getAgentSessionStore()).countActive(ownerId);
+}
+
+export async function findSessionRecord(workspaceId: string): Promise<AgentSessionRecord | null> {
+  return (await getAgentSessionStore()).findById(workspaceId);
+}
+
+// ---------------------------------------------------------------------------
+// Access
+// ---------------------------------------------------------------------------
+
+function buildAccessDeps(): AgentSessionAccessDeps {
+  return {
+    findSession: async (workspaceId) => {
+      const row = await findSessionRecord(workspaceId);
+      if (!row) return null;
+      return { ownerId: row.ownerId, driveId: row.driveId };
+    },
+    resolveDriveMembership,
+    canRunCode: canRunCodeForSession,
+  };
+}
+
+export async function checkSessionAccess(
+  requesterId: string,
+  workspaceId: string,
+): Promise<AgentSessionAccessCheck> {
+  return checkAgentSessionAccess({ requesterId, workspaceId, deps: buildAccessDeps() });
+}
+
+/**
+ * The same ONE pure decision, applied BEFORE a row exists — the spawn path's
+ * subject is the session about to be minted (`ownerId` = the requester,
+ * `driveId` = where it will live; there is no id yet, and the decision never
+ * needs one). This gathers the identical facts `buildAccessDeps` gathers and
+ * hands them to `decideAgentSessionAccess`; no extra rule exists here.
+ */
+export async function checkAccessForSubject(
+  requesterId: string,
+  subject: { ownerId: string; driveId: string | null },
+): Promise<AgentSessionAccessCheck> {
+  const deps = buildAccessDeps();
+  const driveMembership =
+    subject.driveId === null
+      ? null
+      : await deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId });
+  return decideAgentSessionAccess({
+    requesterId,
+    session: subject,
+    driveMembership,
+  });
+}
+
+export async function checkSessionEndAccess(
+  requesterId: string,
+  workspaceId: string,
+): Promise<AgentSessionAccessCheck> {
+  return checkAgentSessionEndAccess({
+    requesterId,
+    workspaceId,
+    deps: buildAccessDeps(),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+const SESSION_LISTING_LOCK_MAX_RETRIES = 5;
+const SESSION_LISTING_LOCK_RETRY_DELAY_MS = 200;
+
+function sessionListingLockKey(workspaceId: string): string {
+  return 'agent-session-conversations:' + workspaceId;
+}
+
+/** Every retry was met with `lock_busy` — the caller's remedy is a plain retry, not a silent unlocked write. */
+export class SessionListingLockBusyError extends Error {
+  constructor(workspaceId: string) {
+    super(`Could not acquire the session-listing lock for ${workspaceId} after ${SESSION_LISTING_LOCK_MAX_RETRIES} retries`);
+    this.name = 'SessionListingLockBusyError';
+  }
+}
+
+/**
+ * Serializes every operation that consumes or frees a session's open-listing
+ * slot — create, close, reopen, and (via this same export) the page-agent
+ * History delete route's own never-empty guard — via a session-level
+ * advisory lock on a DEDICATED connection (`getAdvisoryLockPool`), never
+ * `db.transaction`. A transaction would hold the MAIN pool's connection for
+ * `fn`'s whole duration; `fn` here always needs a SECOND connection from
+ * that same pool (every dependency — `conversationRepository.*`,
+ * `resolveOrCreateConversation` — uses the plain, unwrapped `db`), so a
+ * `DB_POOL_MAX=1` deployment, or a burst of calls equal to any pool size,
+ * would deadlock every caller waiting on a connection the held transaction
+ * was never going to release (review finding — chatgpt-codex-connector on
+ * PR #2296; this is exactly the hazard `db.ts`'s own doc comment on
+ * `getAdvisoryLockPool` warns a session-level lock holder must avoid). The
+ * dedicated lock pool sidesteps it entirely: the lock connection and `fn`'s
+ * own connection(s) are never drawn from the same pool.
+ *
+ * `withAdvisoryLock` TRIES the lock (fails fast on contention) rather than
+ * blocking the way `pg_advisory_xact_lock` did — retried a bounded few
+ * times here. Unlike `start-generation-exclusive.ts`'s BEST-EFFORT
+ * degrade-to-unlocked fallback for a duplicate-generation guard, exhausting
+ * retries here throws (`SessionListingLockBusyError`): an unlocked
+ * create/close/reopen/delete is exactly the cap-violating race this lock
+ * exists to prevent, so "proceed anyway" can never be this caller's answer.
+ */
+export async function withSessionListingLock<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+  const pool = getAdvisoryLockPool();
+  const lockKey = sessionListingLockKey(workspaceId);
+
+  let attemptsMade = 0;
+  for (;;) {
+    const attempt = await withAdvisoryLock(pool, lockKey, fn);
+
+    if (attempt.outcome === 'acquired') return attempt.result;
+
+    if (attempt.outcome === 'connection_error') {
+      throw attempt.error instanceof Error ? attempt.error : new Error(String(attempt.error));
+    }
+
+    attemptsMade += 1;
+    if (attemptsMade > SESSION_LISTING_LOCK_MAX_RETRIES) {
+      throw new SessionListingLockBusyError(workspaceId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, SESSION_LISTING_LOCK_RETRY_DELAY_MS));
+  }
+}
+
+/**
+ * The claim primitive's deps, shared verbatim by both wirings below —
+ * `createConversationInSession` needs the exact same row/agent/session/cap
+ * facts `claimConversationInSession` does (it composes on top of the same
+ * primitive), so this is built once rather than duplicated at both call
+ * sites (review finding — simplify pass: the two closures had drifted into
+ * an exact copy of each other).
+ */
+function buildClaimDeps(): ClaimConversationInSessionDeps {
+  return {
+    // Same "ACTIVE, open-listing" predicate create/close/reopen all share —
+    // `countOpenConversations` is just this dep under the name those pure
+    // modules use.
+    countActiveConversations: sessionListingReadDeps().countOpenConversations,
+    findConversation: async (conversationId) => {
+      const row = await conversationRepository.getConversation(conversationId);
+      if (!row) return null;
+      return {
+        userId: row.userId,
+        type: row.type,
+        contextId: row.contextId,
+        workspaceId: row.workspaceId,
+        isActive: row.isActive,
+      };
+    },
+    findAgentDriveId: async (agentPageId) => {
+      const agent = await conversationRepository.getAiAgent(agentPageId);
+      return agent?.driveId ?? null;
+    },
+    findSession: async (workspaceId) => {
+      const row = await findSessionRecord(workspaceId);
+      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+    },
+    claimConversation: async ({ conversationId, userId, workspaceId }) => {
+      const outcome = await conversationRepository.claimConversation(conversationId, userId, workspaceId);
+      // New work landing in an ENDED session reopens its listing — the ONE
+      // hook every claim path shares (worker spawns, the HTTP claim route,
+      // the global auto-bind), so a session can never hold fresh work while
+      // hidden from the sidebar (issue #2335). Best-effort by design: on a
+      // CAS miss OR a thrown error, the claim itself still stands (the
+      // binding already committed above) — the next provision revives the
+      // row through the ordinary ensure path regardless. A reopen failure
+      // must therefore never surface as a creation failure: the caller would
+      // treat an ALREADY-BOUND conversation as unavailable and retry into a
+      // SessionFullError or a squat-guard refusal on its own successful bind
+      // (review finding — coderabbitai, PR #2336).
+      if (outcome === 'claimed') {
+        await reopenEndedSessionListing(workspaceId).catch((error) => {
+          loggers.api.warn('Failed to reopen ended session listing after a successful claim', {
+            workspaceId,
+            conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return outcome;
+    },
+  };
+}
+
+/**
+ * Withdraw a session's end-intent (`planSessionReopen` — `endedAt` only, the
+ * confirmed-kill stamp stays; see its doc for why) when new work is claimed
+ * into it. CAS-guarded on the `endedAt` this read observed, so a concurrent
+ * re-end is never silently erased.
+ */
+async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
+  const store = await getAgentSessionStore();
+  const row = await store.findById(workspaceId);
+  if (!row || row.endedAt === null) return;
+  await store.applyStamps({
+    workspaceId,
+    stamps: planSessionReopen(),
+    cas: { endedAt: row.endedAt },
+  });
+}
+
+/**
+ * Claim a NEVER-BOUND conversation into a session — the wiring for
+ * `claim-conversation-in-workspace.ts`'s pure decision. Same
+ * `withSessionListingLock` key create/close/reopen use, so a claim can never
+ * race any of them for the session's last open-listing slot.
+ */
+export async function claimConversationInSession(input: {
+  conversationId: string;
+  userId: string;
+  workspaceId: string;
+}): Promise<ClaimConversationOutcome> {
+  return withSessionListingLock(input.workspaceId, () => claimConversationInSessionWith(buildClaimDeps(), input));
+}
+
+/**
+ * Create a conversation and land it in a session. Decision logic lives in the
+ * pure module (`create-conversation-in-workspace.ts`) — this is only its
+ * production wiring: the squat-guarded repository creator for page threads
+ * and the ownership-guarded resolver for global ones (both session-agnostic
+ * inserts), composed with `buildClaimDeps()` above so the binding itself
+ * goes through the exact same guarded UPDATE `claimConversationInSession`
+ * uses — the ONE place `conversations.workspaceId` is ever written.
+ *
+ * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
+ * when the id cannot be claimed WITH this binding — foreign owner, legacy
+ * message-owner conflict, or an existing row whose binding disagrees.
+ *
+ * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
+ * `reopenConversationInSession`/`claimConversationInSession` take — see
+ * `withSessionListingLock`'s own doc for why that's a dedicated-pool advisory
+ * lock, never `db.transaction`. Without this serialization at all, a create
+ * racing a reopen (or a claim) could both read the cap's count before either
+ * writes, and both succeed — two operations each individually under
+ * `MAX_SESSION_CONVERSATIONS`, together over it (caught in review — the lock
+ * previously only coordinated close/reopen against each other, not against
+ * create).
+ */
+export async function createConversationInSession(input: {
+  conversationId: string;
+  userId: string;
+  /** null = a global-assistant conversation. */
+  agentPageId: string | null;
+  workspaceId: string;
+  /** Display label written at birth (a spawned worker's name). */
+  title?: string | null;
+  /**
+   * The spawning conversation, when it shares this grid — never evicted by its
+   * own spawn. Only `spawn_session` has one.
+   */
+  excludeTargetId?: string;
+  /**
+   * Put the new thread in the workspace's grid.
+   *
+   * OPT-IN, and the opt-out is the important half. A caller that already has a
+   * pane in mind must NOT ask for this: the pane picker
+   * (`AgentPanes.handlePickAgent`) binds its pane to a LOADING scope
+   * (`{ kind: 'chat', targetId: null }`), POSTs the creation, then binds that
+   * same pane to the new conversation. A loading pane is not `isReplaceable`
+   * (`workspace-layout-verbs.ts:861` — `targetId !== null` fails), so a server
+   * placement resolves to `split` and opens a SECOND pane; the client's own
+   * bind then leaves one conversation displayed twice (review finding — codex
+   * P1).
+   *
+   * So this is for creators with no client pane to fill: `spawn_session`, where
+   * an agent mints a worker and nothing in a browser is waiting to place it.
+   *
+   * Not placing is safe. A thread's VISIBILITY no longer depends on having a
+   * pane — the listing carries unplaced threads and the sidebar renders them
+   * (issue #2373). Placement is about the grid, not about being findable.
+   */
+  placeInGrid?: boolean;
+}): Promise<void> {
+  await withSessionListingLock(input.workspaceId, () =>
+    createConversationInSessionWith(
+      {
+        ...buildClaimDeps(),
+        createPageConversation: ({ conversationId, userId, agentPageId, title }) =>
+          conversationRepository.createConversation(conversationId, userId, agentPageId, {
+            title: title ?? undefined,
+          }),
+        createGlobalConversation: async ({ conversationId, userId, title }) => {
+          await resolveOrCreateConversation(userId, conversationId, undefined, {
+            title: title ?? undefined,
+          });
+        },
+      },
+      input,
+    ),
+  );
+
+  if (!input.placeInGrid) return;
+
+  // The opId derives from the CONVERSATION id, not a caller-supplied
+  // `toolCallId`. The old gate in `spawn_session` was
+  // `if (deps.placeWorkerPane && toolCallId)`, which silently skipped placement
+  // whenever the SDK handed it no call id. A conversation-keyed op is always
+  // available and idempotent on the fact that matters: one pane per thread,
+  // however many times creation is retried.
+  //
+  // Best-effort, and AFTER the listing lock: a grid that cannot be written must
+  // not fail a conversation that already exists. Degrading is safe because the
+  // thread is listed either way now — unplaced rather than invisible.
+  try {
+    await placeWorkerPane({
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      name: input.title ?? 'New conversation',
+      agentPageId: input.agentPageId,
+      opId: `create_conversation:${input.conversationId}`,
+      ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
+    });
+  } catch (error) {
+    loggers.api.warn('conversation created but its pane could not be placed', {
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
+}
+
+/**
+ * The read half of the close/reopen deps — `findConversation` and
+ * `countOpenConversations` are IDENTICAL between the two (both weigh the same
+ * "is this row open" fact), and the cap's symmetry between close and reopen
+ * depends on them staying that way: one copy drifting from the other would
+ * silently unbalance which listings count toward `MAX_SESSION_CONVERSATIONS`.
+ * The count is the ONE shared `countOpenConversations`
+ * (`conversation-cap.ts`) every cap consumer uses — never a local re-write of
+ * its predicate (review finding — coderabbitai on PR #2296, generalized in
+ * epic Phase 1). Always the plain `db` — `withSessionListingLock`'s lock is
+ * on a separate dedicated connection, not a transaction these reads need to
+ * share.
+ */
+function sessionListingReadDeps() {
+  return {
+    findConversation: async (conversationId: string) => {
+      const [row] = await db
+        .select({
+          // Selected so the pure decisions can run their ownership gate: the
+          // session check their routes run is drive-membership-wide and does
+          // NOT answer "is this conversation the caller's".
+          userId: conversations.userId,
+          workspaceId: conversations.workspaceId,
+          closedInWorkspaceAt: conversations.closedInWorkspaceAt,
+          isActive: conversations.isActive,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      return row ?? null;
+    },
+    countOpenConversations: (workspaceId: string) => countOpenConversations(workspaceId),
+  };
+}
+
+/**
+ * Close a conversation OUT of its session's listing — the wiring for
+ * `close-conversation-in-workspace.ts`'s pure decision. `withSessionListingLock`
+ * serializes concurrent closes of THIS session's listings, so two racing
+ * closes of the last two open conversations cannot both read "more than one
+ * open" and both succeed — the second sees the first's write and gets
+ * `last_conversation`.
+ */
+export async function closeConversationInSession(input: {
+  conversationId: string;
+  /** The CALLER. The pure decision refuses a conversation this user does not own. */
+  userId: string;
+  workspaceId: string;
+}): Promise<CloseConversationOutcome> {
+  return withSessionListingLock(input.workspaceId, () =>
+    closeConversationInSessionWith(
+      {
+        ...sessionListingReadDeps(),
+        // Repository-owned write: bumps rev and emits `conversation:closed`
+        // (Agent-Session SSoT epic, Phase 2 — one writer, one emitter).
+        closeConversation: (conversationId) =>
+          conversationRepository.closeConversationListing(conversationId),
+      },
+      input,
+    ),
+  );
+}
+
+/**
+ * Reopen a conversation OUT of "closed" and back into its session's
+ * listing — the wiring for `reopen-conversation-in-workspace.ts`'s pure
+ * decision. Same `withSessionListingLock` key as `closeConversationInSession`,
+ * so a reopen can never race a close — or another reopen — of the same
+ * session's listings.
+ */
+export async function reopenConversationInSession(input: {
+  conversationId: string;
+  /** The CALLER. The pure decision refuses a conversation this user does not own. */
+  userId: string;
+  workspaceId: string;
+}): Promise<ReopenConversationOutcome> {
+  return withSessionListingLock(input.workspaceId, () =>
+    reopenConversationInSessionWith(
+      {
+        ...sessionListingReadDeps(),
+        // Repository-owned write: bumps rev and emits `conversation:reopened`.
+        reopenConversation: (conversationId) =>
+          conversationRepository.reopenConversationListing(conversationId),
+      },
+      input,
+    ),
+  );
+}
+
+/**
+ * A plain, lock-free, INFORMATIONAL read — not a guard. Ending a session is a
+ * genuinely unconditional act (the sidebar's own "End session" is reachable
+ * with any number of open conversations, by design), so this never blocks
+ * `endSession`; it exists only so the caller can warn the user when their
+ * confirm turned out to destroy more than the empty/near-empty session they
+ * thought they were looking at — e.g. a conversation minted in another pane
+ * or tab committed between an earlier `last_conversation` 409 and this
+ * confirm (caught in review: the advisory lock in `closeConversationInSession`
+ * only serializes against OTHER closes, and no lock held for milliseconds
+ * around either transaction can prevent a human confirming minutes later).
+ */
+export async function countOpenConversationsForSession(workspaceId: string): Promise<number> {
+  return countOpenConversations(workspaceId);
+}
+
+export async function spawnSession(input: {
+  userId: string;
+  driveId: string | null;
+  name?: string | null;
+}): Promise<SpawnAgentSessionResult> {
+  const store = await getAgentSessionStore();
+  return spawnAgentSession({
+    ownerId: input.userId,
+    driveId: input.driveId,
+    name: input.name,
+    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_WORKSPACES_PER_OWNER },
+  });
+}
+
+/** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
+export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
+  return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+/**
+ * Every one of these is racy or retryable by nature (a session cap another
+ * concurrent call may have just filled, a transient spawn fault, a lost
+ * claim) — never a deterministic "this conversation can never have a
+ * session." Callers that gate on this (billing) must treat the whole set
+ * the same way, not narrow to whichever specific reason the last bug was
+ * about (two separate reviewer findings on PR #2314 were each a caller
+ * treating one of these as safely equivalent to "no session, ever").
+ */
+export type EnsureGlobalSandboxSessionFailureReason = 'session_limit_reached' | 'spawn_failed' | 'no_session';
+
+export type EnsureGlobalSandboxSessionResult =
+  | { ok: true; session: AgentSessionRecord }
+  | { ok: false; reason: EnsureGlobalSandboxSessionFailureReason };
+
+/**
+ * Auto-provision a workspace for a Global Assistant conversation that has
+ * never had one — the exact same primitive a manual "New session → Global
+ * Assistant" spawn uses (spawn, then claim), just triggered from the first
+ * sandbox or session tool call instead of the command palette. The caller
+ * (`sandbox-tools-runtime.ts` / `session-tools-runtime.ts`) is the one that
+ * decides WHEN minting is appropriate and has checked the actor may spawn
+ * there; this function only knows how to mint and bind.
+ */
+export async function ensureGlobalSandboxSession(
+  conversationId: string,
+  userId: string,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  return ensureConversationSession(conversationId, userId, null);
+}
+
+/**
+ * The drive-scoped twin of `ensureGlobalSandboxSession` — same spawn+claim
+ * body, the session lives in `driveId` (a page agent's drive). Callers MUST
+ * have already authorized the mint (`checkAccessForSubject` on the drive plus
+ * the agent view check) — this is mechanism, not policy, exactly like the
+ * global variant.
+ */
+export async function ensureDriveSessionForConversation(
+  conversationId: string,
+  userId: string,
+  driveId: string,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  return ensureConversationSession(conversationId, userId, driveId);
+}
+
+async function ensureConversationSession(
+  conversationId: string,
+  userId: string,
+  driveId: string | null,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  const spawned = await spawnSession({ userId, driveId });
+  if (!spawned.ok) {
+    // `session_limit_reached` is a distinct, actionable denial ("end an
+    // existing session first") the caller already knows how to surface —
+    // collapsing it into the generic no_session message would tell an agent
+    // sitting at its owner's session cap to do something that can't help
+    // ("start a new conversation").
+    return { ok: false, reason: spawned.reason === 'session_limit_reached' ? 'session_limit_reached' : 'spawn_failed' };
+  }
+
+  // Cleanup shared by both the "claim lost" and "claim threw" paths below —
+  // the freshly spawned session would otherwise sit empty forever, which the
+  // session model treats as an invariant violation (mirrors the same cleanup
+  // the spawn route itself does when its own first-conversation creation
+  // fails). Fail-open (never lets a cleanup fault surface as THIS call's own
+  // error) but logged — a silently swallowed failure here would leave the
+  // scratch session live, counting against MAX_ACTIVE_SESSIONS_PER_OWNER and
+  // accruing cost, with no signal anywhere (review finding — CodeRabbit).
+  const endScratchSession = (cause: string) =>
+    endSession(spawned.session.id).catch((error) => {
+      loggers.api.warn(`Failed to end scratch session after ${cause}`, {
+        workspaceId: spawned.session.id,
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+  let claimed: ClaimConversationOutcome;
+  try {
+    claimed = await claimConversationInSession({
+      conversationId,
+      userId,
+      workspaceId: spawned.session.id,
+    });
+  } catch (error) {
+    // `claimConversationInSession` can THROW (the advisory lock exhausting
+    // its retries, a DB connection fault) rather than resolving a normal
+    // outcome — a path that skipped this cleanup entirely before, leaking
+    // the scratch session on every such failure (review finding —
+    // chatgpt-codex-connector).
+    //
+    // The thrown error is AMBIGUOUS in a way `claimed === 'not_found'` below
+    // never is: the guarded UPDATE may have actually COMMITTED server-side
+    // with the connection dropping before this call ever saw the
+    // acknowledgment. Ending our scratch session on that outcome would be
+    // catastrophic, not just wasteful — bindings are write-once, so a
+    // conversation left pointing at a session we just ENDED can never be
+    // re-claimed into a replacement, ever (review finding, second pass —
+    // chatgpt-codex-connector). Re-resolve BEFORE tearing anything down: if
+    // the conversation is now bound to the session we spawned, the claim
+    // genuinely succeeded despite the thrown error — treat it as one.
+    //
+    // A single autocommit UPDATE's commit is durable and immediately visible
+    // to any other connection the instant it completes server-side — there
+    // is no PostgreSQL window where a commit has finished but the write is
+    // not yet visible elsewhere, and a connection that drops before that
+    // point aborts the (never-committed) statement outright. So one re-read
+    // is already conclusive under normal Postgres semantics. The brief
+    // retry below is pure defense-in-depth against exactly that claim being
+    // wrong in some deployment-specific way (a pooler, a replica read) that
+    // isn't visible from this file alone — cheap insurance given how
+    // unrecoverable a wrong "unclaimed" verdict is here (review finding,
+    // third pass — chatgpt-codex-connector).
+    //
+    // These re-reads are themselves NOT exception-safe by default: the same
+    // DB/connection fault that made the claim throw is plausibly still in
+    // effect. Distinguish "verification SUCCEEDED and found nothing" (safe
+    // to end — we have a real, current answer) from "verification itself
+    // FAILED" (unknown — treating that the same as "confirmed unclaimed"
+    // would let a compound failure (claim commits + verification ALSO
+    // fails) still end a session the conversation is genuinely bound to,
+    // reopening the exact stranding this whole catch block exists to
+    // prevent). On a failed verification, this leaves the scratch session
+    // alone rather than gambling on it — a stray, un-ended, sandbox-less
+    // session is a cheap, fully recoverable cost (visible in the sidebar,
+    // endable by hand); permanently stranding a conversation on a dead one
+    // is not (review findings — CodeRabbit and chatgpt-codex-connector,
+    // both independently, then a further round from chatgpt-codex-connector
+    // on the compound-failure case).
+    let boundAfterThrow: AgentSessionRecord | null = null;
+    let verificationFailed = false;
+    try {
+      boundAfterThrow = await findSessionForConversation(conversationId);
+      if (!boundAfterThrow) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        boundAfterThrow = await findSessionForConversation(conversationId);
+      }
+    } catch (lookupError) {
+      verificationFailed = true;
+      loggers.api.warn('Failed to re-resolve conversation binding after a claim exception', {
+        workspaceId: spawned.session.id,
+        conversationId,
+        error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+      });
+    }
+    if (boundAfterThrow?.id === spawned.session.id) {
+      return { ok: true, session: spawned.session };
+    }
+    if (verificationFailed) {
+      throw error;
+    }
+    // Verification SUCCEEDED and confirmed we are NOT bound to it — either
+    // truly unclaimed, or a concurrent sibling's claim won in the meantime.
+    // Either way our scratch session is safe to tear down; adopt the
+    // sibling's session if one is there, otherwise this really is the infra
+    // fault it looked like — propagate it.
+    await endScratchSession('a claim exception');
+    if (boundAfterThrow) return { ok: true, session: boundAfterThrow };
+    throw error;
+  }
+  if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
+
+  // The claim lost a race — most likely a CONCURRENT call for the same
+  // conversation (two sandbox tool calls in one turn, two tabs) won first
+  // and bound it to the session IT spawned. That winner's session is
+  // exactly as valid as the one this call would have minted, so re-resolve
+  // through the conversation rather than failing outright — otherwise the
+  // losing call would spuriously deny a conversation that, by the time this
+  // line runs, genuinely has a session. Only a conversation deleted out
+  // from under both calls resolves to nothing here.
+  await endScratchSession('a lost conversation claim');
+  const winner = await findSessionForConversation(conversationId);
+  return winner ? { ok: true, session: winner } : { ok: false, reason: 'no_session' };
+}
+
+export interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
+  agentPageId: string | null;
+  lastMessageAt: Date | null;
+  /**
+   * The thread's own owner (`conversations.userId`) and deliberate-share flag
+   * (`conversations.isShared`) — the two facts the shared-workspace title
+   * redaction rule weighs (`redact-conversation-listing.ts` in
+   * `@pagespace/lib`; see this function's doc below). Derived at read from
+   * the same row, never a second copy.
+   */
+  ownerId: string;
+  isShared: boolean;
+}
+
+/**
+ * The conversations of MANY sessions in one query, grouped by session —
+ * the collection GET's shape, which previously ran one query per session
+ * (review M4: 1+2N per sidebar poll). Newest activity first per session,
+ * capped at {@link MAX_SESSION_CONVERSATIONS} — the same ceiling
+ * `planSpawnWorkerSession`/`createConversationInSessionWith` enforce, so a
+ * session's own listing cap and its create-time cap agree by construction.
+ *
+ * The cap is enforced IN SQL via a `ROW_NUMBER() OVER (PARTITION BY
+ * workspaceId ...)` filter (issue #2262 finding 4), not the JS `bucket.length`
+ * check the previous shape used: without a query-layer bound, a single
+ * session holding far more rows than its cap pulled its ENTIRE row set into
+ * app memory before the JS loop ever discarded the excess. The window
+ * function is what keeps the per-session fairness a flat `LIMIT` would lose
+ * — one hot session's rows cannot crowd another session's out of a shared cap
+ * ordered across all of them together.
+ *
+ * Metadata exposure (issue #2262 finding 6) — the rule, decided where the
+ * queries live: the SESSION'S OWNER sees every conversation's title in their
+ * own session (shared-workspace semantics — one shared sandbox by design).
+ * A viewer who does NOT own the session sees a title only for threads that
+ * are their own or deliberately shared (`conversations.isShared`); every
+ * other row survives with its agent and activity time but its title replaced
+ * by the fixed `(private thread)` marker. The mechanism is ONE pure function
+ * — `redactConversationTitleForViewer`
+ * (`@pagespace/lib/agent-workspaces/redact-conversation-listing`) — which every
+ * viewer-facing mapping of these rows must route titles through (today: the
+ * session-tool listings in `session-tools-runtime.ts`; the sidebar/API
+ * surfaces only ever enumerate the caller's OWN sessions, where the owner
+ * rule makes redaction a no-op). This entry therefore carries `ownerId` and
+ * `isShared` so mapping layers can apply the rule without a second query.
+ * TRANSCRIPT content is a separate, still owner-gated read
+ * (`checkSessionAccess` / `openOwnSession` in the tool layer) — this listing
+ * carries no message bodies.
+ */
+export async function listSessionConversationsBulk(
+  workspaceIds: string[],
+): Promise<Map<string, SessionConversationEntry[]>> {
+  const grouped = new Map<string, SessionConversationEntry[]>();
+  if (workspaceIds.length === 0) return grouped;
+
+  const rankedConversations = db
+    .select({
+      workspaceId: conversations.workspaceId,
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+      ownerId: conversations.userId,
+      isShared: conversations.isShared,
+      rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.workspaceId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
+        'row_number',
+      ),
+    })
+    .from(conversations)
+    .where(
+      and(
+        inArray(conversations.workspaceId, workspaceIds),
+        eq(conversations.isActive, true),
+        // Closed-from-the-session threads stay out of the listing — but their
+        // HISTORY is untouched (isActive alone still gates that), so a
+        // history-deleted thread stays excluded whichever column caused it.
+        isNull(conversations.closedInWorkspaceAt),
+      ),
+    )
+    .as('ranked_conversations');
+
+  const rows = await db
+    .select({
+      workspaceId: rankedConversations.workspaceId,
+      conversationId: rankedConversations.conversationId,
+      title: rankedConversations.title,
+      type: rankedConversations.type,
+      contextId: rankedConversations.contextId,
+      lastMessageAt: rankedConversations.lastMessageAt,
+      ownerId: rankedConversations.ownerId,
+      isShared: rankedConversations.isShared,
+    })
+    .from(rankedConversations)
+    .where(sql`${rankedConversations.rowNumber} <= ${MAX_SESSION_CONVERSATIONS}`);
+
+  for (const row of rows) {
+    if (row.workspaceId === null) continue;
+    const bucket = grouped.get(row.workspaceId) ?? [];
+    bucket.push({
+      conversationId: row.conversationId,
+      title: row.title,
+      agentPageId: conversationPageId(row),
+      lastMessageAt: row.lastMessageAt,
+      ownerId: row.ownerId,
+      isShared: row.isShared,
+    });
+    grouped.set(row.workspaceId, bucket);
+  }
+  return grouped;
+}
+
+/**
+ * Provision (or resume/adopt) a session row's sandbox — the ONE code path both
+ * the web app and the realtime bridge use, per `agent-workspace-sprite.ts`'s CAS
+ * doc. `requesterId` is who this provision authorizes as.
+ */
+export async function provisionSessionSandbox(
+  row: AgentSessionRecord,
+  requesterId: string,
+): Promise<EnsureAgentSessionSandboxResult> {
+  const [store, host, tenant] = await Promise.all([
+    getAgentSessionStore(),
+    getSandboxHost(),
+    resolveSessionTenantId(row),
+  ]);
+  // Fail CLOSED on a vanished drive — never fall back to the session owner.
+  // That fallback would fold the Sprite key under a DIFFERENT tenant than the
+  // one this session's key already folded under on a prior provision,
+  // splitting one session across two Sprite identities (audit #2265 finding 1).
+  if (!tenant.ok) {
+    return { ok: false, reason: 'provision_failed', detail: tenant.reason };
+  }
+
+  return ensureAgentSessionSandbox({
+    row: { ...row, workspaceId: row.id },
+    intent: 'ensure',
+    actor: { userId: requesterId, tenantId: tenant.tenantId },
+    deps: {
+      store,
+      host,
+      substrate: { kind: 'sprite' },
+      options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
+      secret: getSandboxSessionSecret(),
+      authorize: canRunCode,
+      checkFullEgressEnablement: async () =>
+        decideFullEgressEnablement({
+          adminGateEnabled: isCodeExecutionEnabled(),
+          containment: isContainmentVerified() ? { contained: true } : null,
+        }),
+      checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
+        // Tier of the PAYER — the drive's owner, already resolved as the
+        // session's tenant above (drive owner, else session owner) — not the
+        // session creator's own tier (review #2326): a free-tier member's
+        // session in a Pro-owned drive is paid for, and therefore
+        // tier-entitled, by the drive owner. The ceiling still COUNTS the
+        // session owner's live sessions (`ownerId`), keeping per-owner
+        // accounting separate from payer-based entitlement.
+        const payer = await db.query.users.findFirst({
+          where: eq(users.id, tenant.tenantId),
+          columns: { subscriptionTier: true },
+        });
+        return checkAgentSessionConcurrency({
+          ownerId,
+          tier: toSubscriptionTier(payer?.subscriptionTier),
+          countLiveAgentSessions: (id) => store.countLive(id),
+          alreadyProvisioned,
+        });
+      },
+      // Opportunistic storage measurement, captured while the Sprite is still
+      // awake right after provisioning — the one moment its bytes are free to
+      // read. Without this the reconcile has no writer for
+      // `storageMeasuredBytes` and prices every session at the never-measured
+      // 0 floor while still advancing its watermark, silently discarding the
+      // interval. Fire-and-forget inside the seam; throttled per session.
+      measureSessionStorage: async ({ workspaceId, handle }) => {
+        await refreshSessionStorageMeasurement({
+          handle,
+          workspaceId,
+          // The generation just minted — the CAS target for the write. Taken
+          // from the handle, not the row: this is the VM the `du` runs on.
+          spriteInstanceId: handle.spriteInstanceId ?? null,
+          // NULL, not the row's value: this callback only fires on the `create`
+          // arm, where the same operation resets the measurement columns (a new
+          // Sprite generation is an empty filesystem). Passing the pre-provision
+          // timestamp would let the throttle skip the baseline measurement of a
+          // session re-provisioned inside the window, leaving the row null with
+          // no other trigger to fix it.
+          lastMeasuredAt: null,
+          now: new Date(),
+          persist: (measurement) => store.recordStorageMeasurement(measurement),
+        });
+      },
+      now: () => new Date(),
+    },
+  });
+}
+
+/**
+ * Opportunistically measure a WARM session's storage.
+ *
+ * The provisioner's own `measureSessionStorage` only fires on `create`, against
+ * a filesystem that is empty by definition — so on its own it pins every session
+ * at the baseline forever while the reconcile keeps advancing the watermark. The
+ * figure that actually matters is the one taken while the agent is doing real
+ * work, which is what this is for: call it where a sandbox is already awake and
+ * a handle is cheap. Throttled per session (default 1h), so a burst of tool
+ * calls costs at most one `du`.
+ *
+ * Fire-and-forget by contract: a billing observation must never fail, delay, or
+ * be awaited by the work that triggered it.
+ */
+export async function measureWarmSessionStorage(input: {
+  workspaceId: string;
+  /**
+   * Returns the sandbox to measure AND its own generation id. Both, because the
+   * two can disagree: this path is fed by a sandbox the tool run ALREADY
+   * acquired, so by the time the row is read below the session may have been
+   * torn down and re-provisioned — the row would say B while the handle in hand
+   * is still A. CASing on the row's value would then let A's bytes land on B
+   * under a CAS that "succeeded", which is the bug the CAS exists to stop.
+   */
+  attach: () => Promise<{ exec: SandboxHandle['exec']; spriteInstanceId: string | null } | null>;
+}): Promise<void> {
+  try {
+    const store = await getAgentSessionStore();
+    const row = await store.findById(input.workspaceId);
+    // Only a live row is worth measuring, and only when the throttle has elapsed
+    // — checked BEFORE attaching so the common case costs one indexed read.
+    if (!row || row.sandboxId === null || row.spriteTornDownAt !== null) return;
+    if (!shouldRefreshMeasurement({
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      throttleMs: SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+    })) return;
+
+    const handle = await input.attach();
+    if (!handle) return;
+    await refreshSessionStorageMeasurement({
+      handle,
+      workspaceId: input.workspaceId,
+      // The MEASURED handle's own generation, never the row's. The row is read
+      // for the throttle; the CAS has to describe the disk the `du` actually
+      // walked, or a handle captured before a re-provision would persist the
+      // old generation's bytes under the new generation's id.
+      spriteInstanceId: handle.spriteInstanceId,
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      persist: (measurement) => store.recordStorageMeasurement(measurement),
+    });
+  } catch {
+    // Best-effort: never let a billing observation surface as a tool failure.
+  }
+}
+
+export async function endSession(workspaceId: string): Promise<EndAgentSessionResult> {
+  const [store, host] = await Promise.all([getAgentSessionStore(), getSandboxHost()]);
+  return endAgentSession({ workspaceId, deps: { store, host, now: () => new Date() } });
+}
+
+export async function listSessions(filter: AgentSessionListFilter): Promise<AgentSessionDTO[]> {
+  const store = await getAgentSessionStore();
+  return listAgentSessions({ filter, deps: { store } });
+}
+
+export { toAgentSessionDTO };
+export type { AgentSessionRecord, AgentSessionListFilter };

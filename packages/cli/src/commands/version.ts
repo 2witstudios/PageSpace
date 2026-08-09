@@ -7,7 +7,7 @@ import type { CommandHandler } from '../router/router.js';
  * guarded by `commands/__tests__/version.test.ts`, which reads package.json
  * directly, so bumping one without the other fails the suite.
  */
-export const CLI_VERSION = '1.6.1';
+export const CLI_VERSION = '1.7.0';
 
 export const versionHandler: CommandHandler = async (ctx, intent) => {
   if (intent.flags.json) {

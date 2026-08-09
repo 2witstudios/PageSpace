@@ -19,6 +19,9 @@ const {
   mockHasConflictingMessageOwner,
   mockTakeOverConversationStreams,
   mockCreateConversation,
+  mockAutoTitleConversation,
+  mockRespondWithHelpAnswer,
+  mockCanConsumeAI,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
@@ -29,6 +32,9 @@ const {
   mockHasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
   mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
   mockCreateConversation: vi.fn().mockResolvedValue(undefined),
+  mockAutoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  mockRespondWithHelpAnswer: vi.fn().mockResolvedValue(new Response('', { status: 200 })),
+  mockCanConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
 interface MockUIStreamOptions {
@@ -98,8 +104,31 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+// Read dynamically (not closure-captured) by the `for('update').limit()` mock
+// below, so a test can simulate a concurrent History-delete committing
+// between the route's early ownership check and its late, lock-guarded
+// re-check — flip false, call POST, flip back in the next test's beforeEach.
+const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
+// Separate from the flag above: false simulates NO row at all (the eager
+// createConversation() call for a brand-new conversation failed, tolerated
+// as best-effort) rather than a row that exists and is explicitly inactive
+// — the two must be told apart (round 10 review finding).
+const mockConversationRowExistsAtLockTime = vi.hoisted(() => ({ current: true }));
+// The round-12 in-transaction claim insert (`.insert(conversations).values(...)
+// .onConflictDoNothing().returning(...)`), reached only when the flag above is
+// false. Defaults to "this insert won, row is active" so the round-10/11
+// no-row tests keep proceeding normally; a test simulating a concurrent
+// winner sets this to `[]` (conflict — nothing returned) and relies on the
+// `for('update').limit()` mock above for the follow-up winner re-select.
+const mockConversationClaimInsertRows = vi.hoisted(() => ({ current: [{ isActive: true }] as Array<{ isActive: boolean }> }));
+
+vi.mock('@pagespace/db/db', () => {
+  // Reused inside `transaction()`'s callback too — `tx` needs the identical
+  // shape as `db` since `saveMessageToDatabase`'s `dbClient` override (and
+  // the route's own locked active-conversation SELECT, run immediately
+  // before the first message's persist) run against whichever one the
+  // caller passed in.
+  const makeDbLike = () => ({
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -109,29 +138,151 @@ vi.mock('@pagespace/db/db', () => ({
           ) => Promise.resolve([mockDbRow]).then(resolve, reject),
           orderBy: vi.fn().mockResolvedValue([]),
           limit: vi.fn().mockResolvedValue([{ displayName: 'Profile User', drivePrompt: null }]),
+          // The route's atomic active-conversation re-check — active by
+          // default so the happy-path tests below don't each need their
+          // own override.
+          for: vi.fn(() => ({
+            limit: vi.fn(() =>
+              Promise.resolve(
+                mockConversationRowExistsAtLockTime.current
+                  ? [{ isActive: mockConversationActiveAtLockTime.current }]
+                  : [],
+              ),
+            ),
+          })),
         })),
       })),
     })),
-    // Server Stream Durability epic PR 2: assistant placeholder row insert at stream start.
-    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
-  },
-  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
-  // exactly as before. Its own retry/degrade behavior is covered by
-  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
-  getAdvisoryLockPool: vi.fn(() => ({
-    connect: vi.fn(async () => ({
-      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
-      release: vi.fn(),
+    // Server Stream Durability epic PR 2: assistant placeholder row insert at
+    // stream start (a plain, directly-awaited insert). Round 12's in-
+    // transaction claim insert for a missing conversations row additionally
+    // chains `.onConflictDoNothing().returning(...)` off the same `values()`
+    // call — the returned object supports both: awaiting it directly
+    // resolves like the plain insert, and it also exposes the chain.
+    insert: vi.fn(() => ({
+      values: vi.fn(() => {
+        const chain = {
+          then: <T>(
+            resolve?: ((value: undefined) => T | PromiseLike<T>) | null,
+            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+          ) => Promise.resolve(undefined).then(resolve, reject),
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(() => {
+              const rows = mockConversationClaimInsertRows.current;
+              // An empty result means a CONCURRENT insert won the conflict —
+              // which by definition means a row exists now, for the
+              // production code's own follow-up winner re-select (via the
+              // same for('update').limit() mock above) to find.
+              if (rows.length === 0) mockConversationRowExistsAtLockTime.current = true;
+              return Promise.resolve(rows);
+            }),
+          })),
+        };
+        return chain;
+      }),
     })),
-  })),
+  });
+
+  const dbLike = makeDbLike();
+  // A transaction runs its callback against a FRESH db-like object, same as
+  // a real transaction's `tx` is a distinct client from `db`.
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
+
+  return {
+    db: { ...dbLike, transaction },
+    // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+    // exactly as before. Its own retry/degrade behavior is covered by
+    // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+    getAdvisoryLockPool: vi.fn(() => ({
+      connect: vi.fn(async () => ({
+        query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+        release: vi.fn(),
+      })),
+    })),
+  };
+});
+
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  ne: vi.fn(),
+  and: vi.fn(),
+  // Pulled in transitively by the message-repository module graph
+  // (global-conversation-repository's module-level hasMessages, conversation-rev's sql).
+  sql: vi.fn(),
+  exists: vi.fn(),
+  desc: vi.fn(),
+  lt: vi.fn(),
+  gt: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
 }));
 
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), and: vi.fn() }));
+// The repository choke point (SSoT Phase 2), shimmed to preserve this file's
+// assertion surface: beforeSave runs against the mocked db's transaction
+// (exactly like the real repository), and the raw write forwards to
+// mockSaveMessageToDatabase — the same spy the route used to call directly.
+vi.mock('@/lib/repositories/message-repository', async () => {
+  const { db } = await import('@pagespace/db/db');
+  type Tx = {
+    select: (...a: unknown[]) => {
+      from: (...a: unknown[]) => {
+        where: (...a: unknown[]) => { for: (...a: unknown[]) => { limit: (n: number) => Promise<Array<{ isActive: boolean }>> } };
+      };
+    };
+    insert: (...a: unknown[]) => { values: (...a: unknown[]) => PromiseLike<unknown> };
+  };
+  type SaveArgs = Record<string, unknown> & {
+    beforeSave?: (tx: Tx) => Promise<unknown>;
+  };
+  return {
+    messageRepository: {
+      savePageMessage: vi.fn(async (args: SaveArgs) => {
+        const saved = await (db as unknown as { transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean> }).transaction(
+          async (tx) => {
+            if (args.beforeSave) {
+              const r = await args.beforeSave(tx);
+              if (r === false) return false;
+              if (r && typeof r === 'object' && (r as { proceed?: boolean }).proceed === false) return false;
+            }
+            const { beforeSave: _b, triggeredBy: _t, ...rest } = args;
+            await mockSaveMessageToDatabase({ ...rest, dbClient: tx });
+            return true;
+          },
+        );
+        return { saved, rev: 1 };
+      }),
+      insertPageStreamingPlaceholder: vi.fn(async (args: { messageId: string; pageId: string; conversationId: string }) => {
+        const inserted = await (db as unknown as { transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean> }).transaction(
+          async (tx) => {
+            const [row] = await tx.select({}).from({}).where({}).for('update').limit(1);
+            if (row && !row.isActive) return false;
+            await tx.insert({}).values({ id: args.messageId, status: 'streaming' });
+            return true;
+          },
+        );
+        return { inserted };
+      }),
+      // The route's history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12): the raw `chat_messages` SELECT became
+      // `getPageConversationMessages` against the unified `messages` table.
+      getPageConversationMessages: vi.fn().mockResolvedValue([]),
+    },
+  };
+});
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', isActive: 'isActive', type: 'type', contextId: 'contextId' },
+  // Pulled in transitively by `unified-message-scope.ts` since the reader
+  // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12).
+  messages: { id: 'id', conversationId: 'conversationId', isActive: 'isActive', pageId: 'pageId', status: 'status', createdAt: 'createdAt' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { userId: 'userId', displayName: 'displayName' },
@@ -144,7 +295,11 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
-  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@/lib/ai/core/help-responder', () => ({
+  respondWithHelpAnswer: mockRespondWithHelpAnswer,
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
@@ -176,6 +331,10 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
@@ -192,7 +351,6 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-
 vi.mock('ai', () => ({
   streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
     captured.streamTextOptions = options;
@@ -230,6 +388,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     getConversation: mockGetConversation,
     hasConflictingMessageOwner: mockHasConflictingMessageOwner,
     createConversation: mockCreateConversation,
+    autoTitleConversation: mockAutoTitleConversation,
   },
 }));
 
@@ -263,7 +422,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
@@ -297,10 +456,12 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 import { POST } from '../route';
+import { extractMessageContent } from '@/lib/ai/core/message-utils';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -382,6 +543,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockGetConversation.mockResolvedValue(null);
     mockHasConflictingMessageOwner.mockResolvedValue(false);
     mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
+    mockConversationActiveAtLockTime.current = true;
+    mockConversationRowExistsAtLockTime.current = true;
+    mockConversationClaimInsertRows.current = [{ isActive: true }];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -433,7 +597,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     // client now loads them, and it will keep POSTing that id. A bare isCuid reject
     // would lock those users out of the conversation we just gave them back.
     it('given a legacy non-cuid conversationId that DOES exist, should accept it and stream normally', async () => {
-      mockGetConversation.mockResolvedValue({ id: 'page-1-default', userId: 'user-1', isShared: false, contextId: 'page-1' });
+      mockGetConversation.mockResolvedValue({ type: 'page', id: 'page-1-default', userId: 'user-1', isShared: false, contextId: 'page-1' });
 
       const response = await POST(makeRequest({ conversationId: 'page-1-default' }));
 
@@ -462,6 +626,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   describe('conversationId authorization', () => {
     it('given an existing conversation owned by ANOTHER user and not shared, should 403', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: 'page-1-default', userId: 'someone-else', isShared: false, contextId: 'page-1',
       });
 
@@ -473,6 +638,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given an existing conversation owned by another user but explicitly SHARED, should allow it AND propagate isShared', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'someone-else', isShared: true, contextId: 'page-1',
       });
 
@@ -491,6 +657,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given an existing conversation belonging to a DIFFERENT page, should 403', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'some-other-page',
       });
 
@@ -515,10 +682,16 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
 
-    // contextId is nullable in the schema (null for global conversations). An owner must
-    // never be locked out of their own row by a historically-unset column.
+    // A `type='page'` row may carry a NULL contextId only because
+    // `conversations_page_context_present_chk` shipped NOT VALID, grandfathering
+    // pre-existing rows — and an owner must never be locked out of their own row by a
+    // historically-unset column. That tolerance is now scoped to `type='page'` AND to
+    // the owner; the un-scoped version was the defect, because a `type='global'` row
+    // has a NULL contextId BY CHECK and so belonged to every page. See
+    // `conversation-page-binding.test.ts` for the whole type matrix.
     it('given the caller OWNS a conversation whose contextId is null, should allow it', async () => {
       mockGetConversation.mockResolvedValue({
+        type: 'page',
         id: CONV_ID, userId: 'user-1', isShared: false, contextId: null,
       });
 
@@ -526,6 +699,177 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
       expect(response.status).not.toBe(403);
       expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    // A conversation whose CANONICAL row is history-deleted (isActive: false) must never
+    // accept a new message: the send would appear to succeed while the row stays excluded
+    // from every open/closed session listing, leaving the new transcript unreachable once
+    // the stale pane refreshes (review finding — chatgpt-codex-connector on PR #2296, filed
+    // after History-delete was changed to deactivate the canonical row, not just its
+    // messages).
+    it('given an existing conversation row that is isActive: false (history-deleted), should 404 and never invoke the lifecycle', async () => {
+      mockGetConversation.mockResolvedValue({
+        type: 'page',
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: false,
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an existing conversation row that is isActive: true, should NOT be rejected on that basis', async () => {
+      mockGetConversation.mockResolvedValue({
+        type: 'page',
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    // The race the isActive: false check above cannot catch on its own: the
+    // conversation looks active at the EARLY ownership check (this test's
+    // mockGetConversation), but a concurrent History-delete commits sometime
+    // in the credit-gate/mention/command-resolution work that follows —
+    // before saveMessageToDatabase runs. The atomic, lock-guarded re-check
+    // immediately adjacent to that write (not the early snapshot) is what
+    // must catch this (review finding — chatgpt-codex-connector and
+    // coderabbitai on PR #2299).
+    it('given the conversation looked active at the early check but a concurrent History-delete committed before the message write, should 404 and never invoke the lifecycle', async () => {
+      mockGetConversation.mockResolvedValue({
+        type: 'page',
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+      mockConversationActiveAtLockTime.current = false;
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // round 11 review finding — chatgpt-codex-connector on PR #2299: a LEGACY
+    // conversation (messages exist, but no `conversations` row — the early
+    // ownership check's mockGetConversation resolves null, same as a
+    // genuinely brand-new one) has its row created by the EAGER, best-effort
+    // createConversation() call a few lines below that check. The guard used
+    // to be gated on the early null snapshot and skip the lock entirely for
+    // this case — missing the window between that eager create succeeding
+    // and this write, where a concurrent History-delete could land with
+    // nothing to catch it. The guard now always runs; a row that exists NOW
+    // (even though the early snapshot found none) and is inactive must still
+    // 404.
+    it('given a legacy conversation whose row the eager createConversation() call just produced, but a concurrent History-delete then deactivated it before this write, should 404', async () => {
+      mockGetConversation.mockResolvedValue(null); // legacy: no row at the early check
+      mockConversationRowExistsAtLockTime.current = true; // ...but the eager create found/made one
+      mockConversationActiveAtLockTime.current = false; // ...and it's now inactive
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // round 12 review finding — chatgpt-codex-connector on PR #2299: `FOR
+    // UPDATE` on a SELECT that returns zero rows locks nothing at all — the
+    // round 10/11 "no row → proceed" tolerance closed the wrong-rejection
+    // bug but reopened a DIFFERENT one: with nothing locked, a concurrent
+    // create-then-delete for the same conversationId had no serialization
+    // to catch it. The write must now claim/create the row INSIDE this same
+    // transaction so something is actually locked before proceeding.
+    it('given no row exists and this transaction wins the claim-insert, should proceed (not reject)', async () => {
+      mockGetConversation.mockResolvedValue(null);
+      mockConversationRowExistsAtLockTime.current = false;
+      mockConversationClaimInsertRows.current = [{ isActive: true }]; // this insert wins
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    it('given no row exists and a CONCURRENT insert wins the claim race, should re-check the winner and 404 if it is inactive', async () => {
+      mockGetConversation.mockResolvedValue(null);
+      mockConversationRowExistsAtLockTime.current = false; // no row at the FIRST select
+      mockConversationClaimInsertRows.current = []; // conflict — someone else's insert won
+      mockConversationActiveAtLockTime.current = false; // ...and the winner's row is inactive
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+  });
+
+  // The user-message write's atomic re-check above only covers that ONE write. The
+  // 'streaming' placeholder row inserted right after createStreamLifecycle resolves is a
+  // SEPARATE, later write, with its own window for a concurrent History-delete to land in
+  // between (review finding — chatgpt-codex-connector on PR #2299, round 7).
+  describe('assistant placeholder row (stream start) — atomic re-check', () => {
+    it('given the conversation looked active through the message write but a concurrent History-delete commits before the placeholder insert, should skip the insert without failing the request', async () => {
+      mockGetConversation.mockResolvedValue({
+        type: 'page',
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+      mockCreateStreamLifecycle.mockImplementationOnce(async () => {
+        // The user-message write above already ran (and saw isActive: true) by this
+        // point — flipping here simulates the delete committing in the window between
+        // that write and this stream-start placeholder insert.
+        mockConversationActiveAtLockTime.current = false;
+        return {
+          pushPart: mockLifecyclePushPart,
+          finish: mockLifecycleFinish,
+          getBufferedParts: vi.fn().mockReturnValue([]),
+        };
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      // Best-effort, same as an insert failure: the generation still proceeds.
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+      expect(loggers.ai.warn).toHaveBeenCalledWith(
+        'AI Chat API: skipped placeholder assistant row, conversation no longer active',
+        expect.objectContaining({ conversationId: CONV_ID }),
+      );
+    });
+
+    it('given the conversation is still active at placeholder-insert time, should NOT skip (no false-positive warning)', async () => {
+      mockGetConversation.mockResolvedValue({
+        type: 'page',
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(loggers.ai.warn).not.toHaveBeenCalledWith(
+        'AI Chat API: skipped placeholder assistant row, conversation no longer active',
+        expect.anything(),
+      );
+    });
+
+    // round 10 review finding — chatgpt-codex-connector on PR #2299: a
+    // brand-new conversation's eager createConversation() call (tolerated
+    // best-effort) can fail, leaving NO row in `conversations` at all —
+    // distinct from a row that exists and was explicitly deactivated by a
+    // History delete. Treating "no row" the same as "inactive" here would
+    // silently drop the assistant's reply while the user's own message
+    // (saved via the unguarded new-conversation path) still persists.
+    it('given a brand-new conversation whose eager createConversation() call failed (no row exists), should NOT skip the placeholder insert', async () => {
+      mockGetConversation.mockResolvedValue(null); // brand-new — no existing row
+      mockConversationRowExistsAtLockTime.current = false;
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
+      expect(loggers.ai.warn).not.toHaveBeenCalledWith(
+        'AI Chat API: skipped placeholder assistant row, conversation no longer active',
+        expect.anything(),
+      );
     });
   });
 
@@ -589,7 +933,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
   describe('user-message broadcast', () => {
     it('given a POST with a user message, should broadcast chat:user_message after the DB save resolves with the saved message and full envelope', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: true });
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: true });
       await POST(makeRequest({ browserSessionId: 'session-7' }));
 
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
@@ -628,6 +972,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should broadcast when conversation isShared is true', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'other-user', isShared: true,
       });
 
@@ -638,6 +983,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should suppress broadcast when user owns a private conversation', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -648,6 +994,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should suppress broadcast when private conversation is owned by someone else', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'other-user', isShared: false,
       });
 
@@ -658,6 +1005,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should omit mentionNotify from saveMessageToDatabase when isShared=false', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -671,6 +1019,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should include mentionNotify in saveMessageToDatabase when isShared=true', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: true,
       });
 
@@ -680,6 +1029,123 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const saveCalls = mockSaveMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave?.[0]?.mentionNotify).toBeDefined();
+    });
+  });
+
+  describe('conversation auto-titling on first message', () => {
+    it('given a session conversation and non-empty extracted content, calls autoTitleConversation with the derived title', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      // extractMessageContent is fixture-mocked (always 'test content' by default —
+      // see the module mock above); deriveConversationTitle is the real function.
+      expect(mockAutoTitleConversation).toHaveBeenCalledWith(CONV_ID, 'test content');
+    });
+
+    // Codex review finding on PR #2284: a file/image-only first message extracts as ''
+    // (extractMessageContent has no text part to read). autoTitleConversation only fills
+    // rows where title IS NULL, so persisting '' would permanently block a later textual
+    // message from ever titling the conversation — the route must skip the write instead.
+    it('given a session conversation and empty extracted content (e.g. a file-only message), does NOT call autoTitleConversation', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce('');
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockAutoTitleConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('solo /help short-circuit', () => {
+    const HELP_CHIP = '/[help](builtin:help:command)';
+
+    it('answers via respondWithHelpAnswer and skips the credit gate entirely', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ senderId: 'user-1', driveId: 'drive-1' })
+      );
+    });
+
+    it('/help combined with other text is NOT a solo request — the credit gate and normal flow still run', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(`${HELP_CHIP} how do I use spreadsheets`);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockRespondWithHelpAnswer).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).toHaveBeenCalled();
+    });
+
+    it('still takes over any in-flight generation on the conversation before answering', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: CONV_ID, channelId: 'page-1' })
+      );
+    });
+
+    it('broadcasts the user message when the conversation is shared, not when private', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: true });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+
+      mockBroadcastChatUserMessage.mockClear();
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('the injected persist closure writes an assistant message via saveMessageToDatabase with userId null', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveMessageToDatabase.mockClear();
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveMessageToDatabase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'help-msg-1',
+          pageId: 'page-1',
+          conversationId: CONV_ID,
+          userId: null,
+          role: 'assistant',
+          status: 'complete',
+          content: 'help text',
+        })
+      );
+    });
+
+    it('the injected persist closure skips the write when the conversation went inactive in the gap', async () => {
+      mockGetConversation.mockResolvedValueOnce({ type: 'page', contextId: 'page-1', id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveMessageToDatabase.mockClear();
+      // Simulate a History-delete landing between the user's /help save (already
+      // committed above, while the conversation was still active) and this
+      // terminal write — the same race saveTerminalAssistantMessage guards
+      // against for every other assistant write.
+      mockConversationActiveAtLockTime.current = false;
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveMessageToDatabase).not.toHaveBeenCalled();
     });
   });
 
@@ -694,6 +1160,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   describe('mention notification exactly-once across terminal writes', () => {
     const sharedConversation = () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: true,
       });
     };
@@ -748,6 +1215,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given a private conversation, NO terminal write carries mentionNotify', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
@@ -780,6 +1248,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given the outer-catch cleanup fires for a private conversation, it does NOT carry mentionNotify', async () => {
       mockGetConversation.mockResolvedValueOnce({
+        type: 'page', contextId: 'page-1',
         id: CONV_ID, userId: 'user-1', isShared: false,
       });
       const { createUIMessageStream } = await import('ai');
@@ -901,6 +1370,31 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         userId: null,
         role: 'assistant',
       });
+    });
+
+    // round 10 review finding — chatgpt-codex-connector on PR #2299: a
+    // brand-new conversation's eager createConversation() call is tolerated
+    // best-effort (see that call site) — if it fails, NO row exists in
+    // `conversations` at all, distinct from a row that exists and was
+    // explicitly deactivated. saveTerminalAssistantMessage's own atomic
+    // re-check must not treat the two the same, or the assistant's reply
+    // silently vanishes (streamed to the user, gone on refresh) while their
+    // own message — saved via the unguarded new-conversation path — sticks.
+    it('given no conversations row exists at execute-end time (brand-new conversation, failed eager create), should still persist the assistant reply', async () => {
+      mockGetConversation.mockResolvedValue(null); // brand-new — no existing row
+      mockConversationRowExistsAtLockTime.current = false;
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeDefined();
     });
 
     // CodeRabbit review: this used to be a "should NOT persist" test — but skipping the

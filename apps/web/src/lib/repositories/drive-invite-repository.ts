@@ -551,5 +551,3 @@ export const driveInviteRepository = {
     }
   },
 };
-
-export type DriveInviteRepository = typeof driveInviteRepository;

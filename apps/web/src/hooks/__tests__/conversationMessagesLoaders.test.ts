@@ -21,6 +21,8 @@ import { useConversationMessagesStore } from '@/stores/useConversationMessagesSt
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
+  loadOlderGlobalConversationMessages,
+  loadOlderAgentConversationMessages,
 } from '../conversationMessagesLoaders';
 
 const mockedFetch = vi.mocked(fetchWithAuth);
@@ -169,5 +171,99 @@ describe('conversationMessagesLoaders', () => {
     await first;
 
     expect(useConversationMessagesStore.getState().getEntry('c1').loadStatus).toBe('loaded');
+  });
+
+  // Epic leaf 6.6: the pagination envelope was silently dropped before this PR.
+  describe('pagination envelope capture', () => {
+    it('given an initial global load with a pagination envelope, should capture hasMoreOlder/olderCursor', async () => {
+      mockedFetch.mockResolvedValue(
+        okResponse({ messages: [msg('m1')], pagination: { hasMore: true, nextCursor: 'm1', prevCursor: null, limit: 50, direction: 'before' } }),
+      );
+      await loadGlobalConversationMessages('c1');
+      const entry = useConversationMessagesStore.getState().getEntry('c1');
+      expect(entry.hasMoreOlder).toBe(true);
+      expect(entry.olderCursor).toBe('m1');
+    });
+
+    it('given a bare-array (legacy) global response, should default hasMoreOlder=false rather than throw', async () => {
+      mockedFetch.mockResolvedValue(okResponse([msg('m1')]));
+      await loadGlobalConversationMessages('c1');
+      expect(useConversationMessagesStore.getState().getEntry('c1').hasMoreOlder).toBe(false);
+    });
+  });
+
+  describe('loadOlderGlobalConversationMessages', () => {
+    const seedLoaded = async (hasMore: boolean, cursor: string | null) => {
+      mockedFetch.mockResolvedValue(
+        okResponse({ messages: [msg('m1')], pagination: { hasMore, nextCursor: cursor, prevCursor: null, limit: 50, direction: 'before' } }),
+      );
+      await loadGlobalConversationMessages('c1');
+    };
+
+    it('given hasMoreOlder=false, should never fetch', async () => {
+      await seedLoaded(false, null);
+      mockedFetch.mockClear();
+      await loadOlderGlobalConversationMessages('c1');
+      expect(mockedFetch).not.toHaveBeenCalled();
+    });
+
+    it('given isLoadingOlder already true, should not fetch again (double-trigger guard)', async () => {
+      await seedLoaded(true, 'm1');
+      useConversationMessagesStore.getState().startLoadingOlder('c1');
+      mockedFetch.mockClear();
+      await loadOlderGlobalConversationMessages('c1');
+      expect(mockedFetch).not.toHaveBeenCalled();
+    });
+
+    it('given hasMoreOlder=true, should fetch with the cursor and prepend the older page', async () => {
+      await seedLoaded(true, 'm1');
+      mockedFetch.mockResolvedValue(
+        okResponse({ messages: [msg('older1')], pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 50, direction: 'before' } }),
+      );
+      await loadOlderGlobalConversationMessages('c1');
+
+      const url = mockedFetch.mock.calls[mockedFetch.mock.calls.length - 1][0] as string;
+      expect(url).toContain('cursor=m1');
+      expect(url).toContain('direction=before');
+
+      const entry = useConversationMessagesStore.getState().getEntry('c1');
+      expect(entry.messages).toEqual([msg('older1'), msg('m1')]);
+      expect(entry.hasMoreOlder).toBe(false);
+      expect(entry.olderCursor).toBeNull();
+      expect(entry.isLoadingOlder).toBe(false);
+    });
+
+    it('given the older-page fetch fails, should clear isLoadingOlder and leave messages intact', async () => {
+      await seedLoaded(true, 'm1');
+      mockedFetch.mockResolvedValue(errorResponse(500));
+      await loadOlderGlobalConversationMessages('c1');
+
+      const entry = useConversationMessagesStore.getState().getEntry('c1');
+      expect(entry.isLoadingOlder).toBe(false);
+      expect(entry.messages).toEqual([msg('m1')]);
+      // loadStatus untouched — this is an inline indicator failure, not a full-load error.
+      expect(entry.loadStatus).toBe('loaded');
+    });
+  });
+
+  describe('loadOlderAgentConversationMessages', () => {
+    it('given hasMoreOlder=true, should fetch with the cursor and prepend the older page', async () => {
+      mockedFetch.mockResolvedValue(
+        okResponse({ messages: [msg('a1')], pagination: { hasMore: true, nextCursor: 'a1', prevCursor: null, limit: 50, direction: 'before' } }),
+      );
+      await loadAgentConversationMessages('agent-1', 'c1');
+
+      mockedFetch.mockResolvedValue(
+        okResponse({ messages: [msg('older-a')], pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 50, direction: 'before' } }),
+      );
+      await loadOlderAgentConversationMessages('agent-1', 'c1');
+
+      const url = mockedFetch.mock.calls[mockedFetch.mock.calls.length - 1][0] as string;
+      expect(url).toContain('cursor=a1');
+      expect(url).toContain('direction=before');
+
+      const entry = useConversationMessagesStore.getState().getEntry('c1');
+      expect(entry.messages).toEqual([msg('older-a'), msg('a1')]);
+    });
   });
 });

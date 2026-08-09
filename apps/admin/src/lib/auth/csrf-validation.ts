@@ -132,10 +132,3 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
 
   return null;
 }
-
-/**
- * Checks if a request requires CSRF protection
- */
-export function requiresCSRFProtection(request: Request): boolean {
-  return !SAFE_METHODS.has(request.method);
-}

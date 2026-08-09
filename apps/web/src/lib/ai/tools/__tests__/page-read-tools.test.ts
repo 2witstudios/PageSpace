@@ -17,7 +17,6 @@ vi.mock('@pagespace/db/db', () => ({
       taskItems: { findFirst: vi.fn() },
       taskLists: { findFirst: vi.fn() },
       taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
-      chatMessages: { findFirst: vi.fn() },
       channelMessages: { findMany: vi.fn() },
     },
   },
@@ -36,19 +35,23 @@ vi.mock('@pagespace/db/operators', () => ({
   max: vi.fn(),
   min: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
-  drives: { id: 'id' },
-  chatMessages: {
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', type: 'type', contextId: 'contextId' },
+  messages: {
     id: 'id',
-    pageId: 'pageId',
     conversationId: 'conversationId',
     isActive: 'isActive',
     createdAt: 'createdAt',
     content: 'content',
     role: 'role',
     userId: 'userId',
+    status: 'status',
+    sourceAgentId: 'sourceAgentId',
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { pageId: 'pageId', position: 'position' },
@@ -149,6 +152,27 @@ const createMockAccessLevel = (level: 'viewer' | 'editor' | 'admin') => ({
   canDelete: level === 'admin',
 });
 
+
+/**
+ * Chainable drizzle SELECT stub.
+ *
+ * The unified-message readers join `conversations` to derive the page from
+ * `contextId` (epic "Agent-Session Single Source of Truth", Phase 4 / D6 —
+ * reader cutover), so a mocked chain must tolerate `.innerJoin(...)` between
+ * `.from(...)` and `.where(...)`. Non-terminal steps return the chain; the
+ * terminals a given test needs are supplied by name.
+ */
+function mockSelectChain(terminals: Record<string, unknown>) {
+  const chain: Record<string, unknown> = {};
+  for (const step of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy', 'groupBy', 'limit']) {
+    chain[step] = vi.fn(() => chain);
+  }
+  for (const [name, value] of Object.entries(terminals)) {
+    chain[name] = vi.fn().mockResolvedValue(value);
+  }
+  return chain;
+}
+
 describe('page-read-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -181,6 +205,78 @@ describe('page-read-tools', () => {
         context
       );
       expect(result).toMatchObject({ success: false });
+    });
+
+    // driveId used to be required, which pushed the model into guessing a
+    // workspace whenever it didn't have one in its arguments.
+    describe('resolving an omitted driveId', () => {
+      const contextInDrive = (driveId: string) => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
+        } as ToolExecutionContext,
+      });
+
+      const allowDrive = () => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue([] as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+      };
+
+      // The echo matters: a defaulted scope that looked in the wrong workspace
+      // returns an empty list, and an empty list reads as "it doesn't exist"
+      // unless the model can see where we actually looked.
+      it('lists the workspace in view and echoes the scope it used', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          success: true,
+          driveId: 'drive-loc',
+          scopeSource: 'current_location',
+        });
+      });
+
+      it('marks an explicitly supplied driveId as an explicit scope', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId: 'drive-explicit' },
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({ driveId: 'drive-explicit', scopeSource: 'explicit' });
+      });
+
+      it('asks rather than guessing when no workspace is in view', async () => {
+        allowDrive();
+
+        await expect(
+          pageReadTools.list_pages.execute!({}, createAuthContext())
+        ).rejects.toThrow('no workspace is currently in view');
+      });
+
+      // Defaulting must not widen reach.
+      it('still denies a defaulted drive the actor cannot access', async () => {
+        mockGetUserDriveAccess.mockResolvedValue(false as unknown as never);
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-forbidden')
+        ) as Record<string, unknown>;
+
+        expect(result.success).toBe(false);
+        // driveSlug is absent on a defaulted scope — the message must not say "undefined".
+        expect(result.error).toContain('drive-forbidden');
+      });
     });
 
     describe('ls-mode navigation (new behavior)', () => {
@@ -227,6 +323,49 @@ describe('page-read-tools', () => {
           given: 'list_pages with no parentId',
           should: 'not include nested child page',
           actual: pages.some(p => p.id === 'child-1'),
+          expected: false,
+        });
+      });
+
+      it('treats parentId: "" the same as omitting parentId at drive root', async () => {
+        setupDriveAccess();
+        const omittedResult = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+        const emptyStringResult = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: '' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return success',
+          actual: emptyStringResult.success,
+          expected: true,
+        });
+
+        const omittedPageIds = (omittedResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+        const emptyStringPageIds = (emptyStringResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same pages as omitting parentId',
+          actual: emptyStringPageIds,
+          expected: omittedPageIds,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same location as omitting parentId',
+          actual: emptyStringResult.location,
+          expected: omittedResult.location,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'not include the nested child page',
+          actual: emptyStringPageIds.includes('child-1'),
           expected: false,
         });
       });
@@ -757,13 +896,9 @@ describe('page-read-tools', () => {
 
     it('allows the drive owner to list trash', async () => {
       mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
 
       const context = {
         toolCallId: '1', messages: [],
@@ -1499,13 +1634,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty conversations query
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ groupBy: [] }),
+      );
 
       const result = await pageReadTools.list_conversations.execute!(
         { pageId: 'page-1', title: 'Test Agent' },
@@ -1531,34 +1662,27 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
 
-      // Mock the main select for conversation aggregation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([
-              {
-                conversationId: 'conv-1',
-                messageCount: 5,
-                lastActivity: new Date('2025-01-15'),
-              },
-              {
-                conversationId: 'conv-2',
-                messageCount: 10,
-                lastActivity: new Date('2025-01-20'),
-              },
-            ]),
-          }),
+      // Both selects in this tool share one chain stub: the aggregation
+      // terminates on `.groupBy(...)`, the first-message preview on
+      // `.limit(1)` (a plain SELECT since the cutover, where it used to be
+      // `db.query.chatMessages.findFirst`).
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({
+          groupBy: [
+            {
+              conversationId: 'conv-1',
+              messageCount: 5,
+              lastActivity: new Date('2025-01-15'),
+            },
+            {
+              conversationId: 'conv-2',
+              messageCount: 10,
+              lastActivity: new Date('2025-01-20'),
+            },
+          ],
+          limit: [{ content: 'Hello, how can I help?', role: 'user', userId: 'user-1' }],
         }),
-      });
-
-      // Mock the chatMessages.findFirst for getting first message preview
-      mockDb.query.chatMessages = {
-        findFirst: vi.fn().mockResolvedValue({
-          content: 'Hello, how can I help?',
-          role: 'user',
-          userId: 'user-1',
-        }),
-      } as unknown as typeof mockDb.query.chatMessages;
+      );
 
       // Mock selectDistinct for participants
       (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -1655,13 +1779,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty messages for this conversation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
 
       const result = await pageReadTools.read_conversation.execute!(
         { pageId: 'page-1', conversationId: 'non-existent', title: 'Test Agent' },
@@ -1697,13 +1817,9 @@ describe('page-read-tools', () => {
         mockDb.query.pages.findMany = vi.fn()
           .mockResolvedValue([{ id: 'global-assistant-id', title: 'Global Assistant' }]);
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(mockMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: mockMessages }),
+        );
       });
 
       it('returns all messages when no line params', async () => {
@@ -1775,13 +1891,9 @@ describe('page-read-tools', () => {
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(fiveMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: fiveMessages }),
+        );
       });
 
       it('returns only messages in range when lineStart and lineEnd provided', async () => {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
-import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { kickForPagePermissionRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
@@ -191,10 +192,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
           ));
 
         await Promise.all(
-          membersLosingAccess.flatMap(({ userId: memberId }) => [
-            kickUserFromPage(pageId, memberId, 'page_private'),
-            kickUserFromPageActivity(pageId, memberId, 'page_private'),
-          ])
+          membersLosingAccess.map(({ userId: memberId }) =>
+            kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
+          )
         );
       }
     }

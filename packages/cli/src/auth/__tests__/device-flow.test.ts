@@ -220,9 +220,13 @@ describe('runDeviceLogin — happy path', () => {
     expect(credentialSecret(store.get('https://pagespace.ai')!)).toBe(TOKENS.refreshToken);
   });
 
-  it('treats an mcp-kind token result as poll_failed rather than mis-persisting it as an oauth credential — device flow only ever requests manage_keys scope, so this is a defensive, not a real, path', async () => {
+  // The device flow legitimately mints keys now (`keys create --device`), but
+  // ONLY when this flow asked for one — a mint is always requested with a
+  // `name:` scope token.
+  it('treats a surprise mint as poll_failed when the requested scope never asked for one (login --device)', async () => {
     let setCalls = 0;
     const { deps } = baseDeps({
+      scope: 'manage_keys offline_access',
       pollDeviceToken: async () => ({ kind: 'success', tokens: { kind: 'mcp', token: 'mcp_unexpected', scope: 'drive:d1:member' } }),
       credentialStore: {
         set: async () => {
@@ -233,7 +237,156 @@ describe('runDeviceLogin — happy path', () => {
 
     const result = await runDeviceLogin(deps);
 
-    expect(result).toEqual({ outcome: 'poll_failed', message: 'Unexpected token type from device grant: mcp' });
+    expect(result.outcome).toBe('poll_failed');
+    expect(setCalls).toBe(0);
+  });
+
+  it('persists a minted mcp_* key as a static credential when the request DID ask for a mint (keys create --device)', async () => {
+    const { deps, store } = baseDeps({
+      scope: 'drive:d1:member name:remote-key offline_access',
+      profile: 'remote-key',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp', token: 'mcp_minted', scope: 'drive:d1:member name:remote-key offline_access' },
+      }),
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    const stored = store.get('https://pagespace.ai');
+    expect(stored).toEqual({
+      kind: 'static',
+      token: 'mcp_minted',
+      scopes: ['drive:d1:member', 'name:remote-key', 'offline_access'],
+      createdAt: new Date(NOW).toISOString(),
+    });
+  });
+
+  it('surfaces a minted token through onMintedStaticToken for --show-token, and never for an oauth grant', async () => {
+    const surfaced: string[] = [];
+    const { deps } = baseDeps({
+      scope: 'drive:d1:member name:k offline_access',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp', token: 'mcp_minted', scope: 'drive:d1:member name:k' },
+      }),
+      onMintedStaticToken: (token) => surfaced.push(token),
+    });
+    await runDeviceLogin(deps);
+    expect(surfaced).toEqual(['mcp_minted']);
+
+    const oauth = baseDeps({ onMintedStaticToken: (token) => surfaced.push(token) });
+    await runDeviceLogin(oauth.deps);
+    expect(surfaced).toEqual(['mcp_minted']);
+  });
+
+  // `/api/auth/me` refuses `mcp_*` tokens by design, so asking on behalf of a
+  // freshly minted key could only 401 — a guaranteed-doomed round trip, billed
+  // at the confirm-identity timeout, on every `keys create --device`.
+  it('never asks /api/auth/me to identify a freshly minted mcp_* key', async () => {
+    let confirmCalls = 0;
+    const { deps } = baseDeps({
+      scope: 'drive:d1:member name:k offline_access',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp', token: 'mcp_minted', scope: 'drive:d1:member name:k' },
+      }),
+      confirmIdentity: async () => {
+        confirmCalls += 1;
+        return IDENTITY;
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.identity).toBeNull();
+    expect(confirmCalls).toBe(0);
+  });
+
+  it('still confirms identity for an oauth grant, which /api/auth/me does answer for', async () => {
+    let confirmCalls = 0;
+    const { deps } = baseDeps({
+      confirmIdentity: async () => {
+        confirmCalls += 1;
+        return IDENTITY;
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.identity).toEqual(IDENTITY);
+    expect(confirmCalls).toBe(1);
+  });
+
+  it('persists NOTHING and reports the re-scoped key id for an mcp_update redemption', async () => {
+    let setCalls = 0;
+    const { deps } = baseDeps({
+      scope: 'update_key:tok123 drive:d1:member',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp_update', tokenId: 'tok123', scope: 'update_key:tok123 drive:d1:member' },
+      }),
+      credentialStore: {
+        set: async () => {
+          setCalls += 1;
+        },
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.updatedTokenId).toBe('tok123');
+    expect(setCalls).toBe(0);
+  });
+
+  it('persists NOTHING and reports the approved key id for an mcp_activate redemption', async () => {
+    let setCalls = 0;
+    const { deps } = baseDeps({
+      scope: 'activate_key:tok123',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp_activate', tokenId: 'tok123', scope: 'activate_key:tok123' },
+      }),
+      credentialStore: {
+        set: async () => {
+          setCalls += 1;
+        },
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.activatedTokenId).toBe('tok123');
+    expect(setCalls).toBe(0);
+  });
+
+  it('fails closed when an update/activate request is answered with a real mint — nothing is stored', async () => {
+    let setCalls = 0;
+    const { deps } = baseDeps({
+      scope: 'activate_key:tok123',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp', token: 'mcp_surprise', scope: 'drive:d1:member name:sneaky' },
+      }),
+      credentialStore: {
+        set: async () => {
+          setCalls += 1;
+        },
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('poll_failed');
     expect(setCalls).toBe(0);
   });
 });

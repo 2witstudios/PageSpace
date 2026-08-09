@@ -22,7 +22,8 @@ processor worker (account-erasure, retry+backoff) ◄─────────
    runs the erasure plan, recording each step on the DSR row:
    drive-disposition → delete-avatar → log → anonymize-activity-logs →
    purge-ai-usage → purge-monitoring → revoke-integrations →
-   email-suppression (#913) → ai-provider-erasure (#912) → security-audit → delete-user
+   email-suppression (#913) → ai-provider-erasure (#912) → purge-stream-state →
+   security-audit → delete-user
    → status = completed | blocked | failed
 ```
 
@@ -91,6 +92,23 @@ evidence row is retained.
   providers the user actually invoked. Gateway-routed cloud providers are
   recorded as ZDR-reliant; local providers are skipped; unrecognised providers
   are flagged `manual_review` in the step evidence — follow up manually.
+
+## AI stream state (`purge-stream-state`)
+
+`ai_stream_sessions` rows hold `parts` — a checkpoint of the generated message
+buffer, i.e. message CONTENT — plus the streamer's id and display name.
+Migration 0250 gave the table an `ON DELETE CASCADE` to `conversations`, so
+erasing a user now takes the stream state inside THEIR OWN conversations with
+them. This step covers what that cascade cannot reach: a **shared** conversation
+accepts streams from any member with access, so rows carrying the subject's
+`user_id` inside SOMEONE ELSE's conversation survive the cascade, as do all
+`ai_pending_abort_intents` rows (that table has no foreign keys at all) and any
+row left dangling before 0250's `NOT VALID` constraint landed.
+
+The step is **fatal**: it is the only eraser these rows have — no TTL, no
+retention sweep — so a swallowed failure would report a completed erasure with
+the subject's checkpointed content still on disk. `stepResults` records
+`streamSessions=<n> abortIntents=<n>`.
 
 ## Audit-table pseudonymization
 

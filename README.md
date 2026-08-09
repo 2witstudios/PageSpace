@@ -179,7 +179,7 @@ in favor of `pagespace mcp`, part of `@pagespace/cli`; see the
 ## Core Features
 
 ### AI Agent Infrastructure
-- **76 workspace tools** for AI to manipulate content directly. The same operation registry
+- **79 workspace tools** for AI to manipulate content directly. The same operation registry
   generates every `pagespace` CLI verb, SDK method, and MCP tool, so none of the three can drift
 - **Tool permissions**: Control what each AI can do in your workspace
 - **MCP protocol support**: Connect external AI tools like Claude Desktop, Cursor, and Claude Code

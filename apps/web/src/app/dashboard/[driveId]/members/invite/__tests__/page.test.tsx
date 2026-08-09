@@ -9,8 +9,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const mockToast = vi.fn();
-vi.mock('@/hooks/useToast', () => ({ useToast: () => ({ toast: mockToast }) }));
+const mocks = vi.hoisted(() => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: { error: mocks.toastError, success: mocks.toastSuccess },
+}));
 
 const mockPost = vi.fn();
 const mockFetchWithAuth = vi.fn();
@@ -80,9 +82,7 @@ describe('InviteMemberPage', () => {
     await triggerEmailInvite('a@b.com');
 
     await waitFor(() =>
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ description: 'Invitation sent to a@b.com' })
-      )
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Invitation sent to a@b.com')
     );
   });
 
@@ -92,9 +92,7 @@ describe('InviteMemberPage', () => {
     await triggerEmailInvite('existing@example.com');
 
     await waitFor(() =>
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ description: 'Member invited successfully' })
-      )
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Member invited successfully')
     );
   });
 
@@ -104,11 +102,8 @@ describe('InviteMemberPage', () => {
     await triggerEmailInvite('newuser@example.com');
 
     await waitFor(() =>
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({
-          description: 'An invitation is already pending for this email.',
-          variant: 'destructive',
-        })
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'An invitation is already pending for this email.'
       )
     );
   });
@@ -123,9 +118,7 @@ describe('InviteMemberPage', () => {
     resolvePost({ kind: 'invited' });
 
     await waitFor(() =>
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ description: 'Invitation sent to snapshot@example.com' })
-      )
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Invitation sent to snapshot@example.com')
     );
   });
 });

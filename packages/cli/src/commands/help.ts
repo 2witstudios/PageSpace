@@ -20,6 +20,7 @@ const GLOBAL_FLAG_LINES = [
   '  --host <url>    Override the API host',
   '  --token <tok>   Override the credential',
   `  --key <name>    Use a stored key by name (env: ${KEY_ENV_VAR_NAME})`,
+  '  --device        Approve on another device via a code, without a local browser',
   '  --yes           Assume yes to confirmation prompts',
   '  --all           Apply to every stored credential (logout)',
   '  --force         Proceed despite a non-fatal failure (logout)',
@@ -42,7 +43,7 @@ interface GroupDefinition {
  */
 const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
   { key: 'auth', title: 'Auth', example: 'pagespace login', resources: ['login', 'logout', 'whoami'] },
-  { key: 'drives', title: 'Drives', example: 'pagespace drives list', resources: ['drives', 'trash'] },
+  { key: 'drives', title: 'Drives', example: 'pagespace drives list', resources: ['drives', 'trash', 'roles'] },
   { key: 'pages', title: 'Pages', example: 'pagespace pages read <pageId>', resources: ['pages', 'sheets'] },
   { key: 'search', title: 'Search', example: 'pagespace search text <query> --drive <id>', resources: ['search'] },
   { key: 'tasks', title: 'Tasks', example: 'pagespace tasks create <pageId> --title <title>', resources: ['tasks'] },

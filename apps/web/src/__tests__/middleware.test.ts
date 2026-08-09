@@ -5,6 +5,7 @@ const mockValidateOriginForMiddleware = vi.hoisted(() => vi.fn());
 const mockIsOriginValidationBlocking = vi.hoisted(() => vi.fn());
 const mockGetSessionFromCookies = vi.hoisted(() => vi.fn());
 const mockLogSecurityEvent = vi.hoisted(() => vi.fn());
+const mockCreateSecureResponse = vi.hoisted(() => vi.fn());
 
 vi.mock('@/middleware/monitoring', () => ({
   monitoringMiddleware: (_req: unknown, handler: () => unknown) => handler(),
@@ -18,7 +19,7 @@ const MOCK_API_CORS_HEADERS: Record<string, string> = {
 };
 
 vi.mock('@/middleware/security-headers', () => ({
-  createSecureResponse: () => ({ response: NextResponse.json({ ok: true }, { status: 200 }) }),
+  createSecureResponse: mockCreateSecureResponse,
   // Kept faithful to the real implementation's rewrite: the whole point of the
   // /dashboard branch is that Next emits an x-middleware-rewrite header instead
   // of a 307, so a stub that dropped it would assert nothing.
@@ -27,6 +28,11 @@ vi.mock('@/middleware/security-headers', () => ({
     nonce: 'test-nonce',
   }),
   createSecureErrorResponse: (body: unknown, status: number) => NextResponse.json(body, { status }),
+  // Real predicate logic — middleware passes its result as `skipCSP` so the
+  // handoff-bridge OAuth callbacks don't get a middleware CSP layered on top of
+  // their own (see the isHandoffBridgeRoute describe block below).
+  isHandoffBridgeRoute: (pathname: string) =>
+    pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback',
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
   isSecureRequest: () => true,
@@ -66,6 +72,12 @@ vi.mock('@/lib/well-known/rewrites', () => ({
 }));
 
 import { middleware } from '../middleware';
+
+// clearAllMocks() (used in every beforeEach) resets calls but keeps this
+// implementation, so a single default set here survives the whole suite.
+mockCreateSecureResponse.mockImplementation(() => ({
+  response: NextResponse.json({ ok: true }, { status: 200 }),
+}));
 
 const buildRequest = (pathname: string, headers: Record<string, string> = {}, method = 'GET') =>
   new NextRequest(new URL(`http://localhost${pathname}`), { headers, method });
@@ -332,5 +344,152 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
 
     expect(response.status).toBe(401);
     expect(rewriteTarget(response)).toBeNull();
+  });
+});
+
+// The Electron desktop shell navigates with COOKIES, not its Bearer token —
+// the renderer's real credential lives in the main process and is attached per
+// API call by authFetch. When the session cookie is missing or stale, the
+// middleware's page-navigation gate used to bounce the shell to the signin
+// form ("randomly logged out") even though the Bearer was perfectly valid.
+// For the Electron shell the gate must let the page load and let the client
+// recover via its Bearer; this relaxes only the navigation UX gate, never an
+// auth boundary — every API route still validates normally.
+describe('middleware — Electron shell page navigations are never bounced to signin', () => {
+  const ELECTRON_UA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) PageSpace/1.0.23 Chrome/130.0.6723.137 Electron/33.3.1 Safari/537.36';
+  const BROWSER_UA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.137 Safari/537.36';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz']])(
+    'lets the Electron shell load %s with no session cookie — no redirect, no signin rewrite',
+    async (pathname) => {
+      const response = await middleware(buildRequest(pathname, { 'user-agent': ELECTRON_UA }));
+
+      // Neither bounce mechanism may fire: not the 307 redirect, not the
+      // /dashboard signin rewrite (which renders the signin form in place —
+      // the exact "logged out" the desktop user reports).
+      expect(response.status).not.toBe(307);
+      expect(response.headers.get('location')).toBeNull();
+      expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+    },
+  );
+
+  it('lets the Electron shell load a non-dashboard page with no session cookie', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD', { 'user-agent': ELECTRON_UA }));
+
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+
+  it('still redirects a BROWSER page navigation with no session cookie to signin, exactly as before', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH', { 'user-agent': BROWSER_UA }));
+
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/auth/signin');
+    expect(location.searchParams.get('next')).toBe('/activate?user_code=ABCD-EFGH');
+  });
+
+  it('leaves the iOS/Capacitor /dashboard signin REWRITE untouched for non-Electron UAs', async () => {
+    // The iOS shell is a WKWebView with no Electron/ token — it must keep the
+    // rewrite-in-place behavior (redirecting it black-screens the shell).
+    const response = await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': BROWSER_UA }));
+
+    const target = response.headers.get('x-middleware-rewrite');
+    expect(target).not.toBeNull();
+    expect(new URL(target as string).pathname).toBe('/auth/signin');
+    expect(response.status).not.toBe(307);
+  });
+
+  it.each([
+    ['Electron shell', 'Mozilla/5.0 PageSpace/1.0.23 Electron/33.3.1 Safari/537.36'],
+    ['browser', 'Mozilla/5.0 Chrome/130.0.6723.137 Safari/537.36'],
+  ])('keeps API routes fully gated for a %s request with no credentials — still 401', async (_kind, ua) => {
+    const response = await middleware(buildRequest('/api/ai/chat/active-streams', { 'user-agent': ua }));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+
+  it('does NOT log a security "unauthorized" event for an accepted Electron shell page navigation', async () => {
+    // The navigation is deliberately accepted — logging it as unauthorized
+    // would flood the security drain on every client-side route change of a
+    // cookie-less desktop session and obscure real failures.
+    await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': ELECTRON_UA }));
+
+    expect(mockLogSecurityEvent).not.toHaveBeenCalled();
+  });
+
+  it('still logs the unauthorized event for an Electron API request with no credentials', async () => {
+    await middleware(buildRequest('/api/ai/chat/active-streams', { 'user-agent': ELECTRON_UA }));
+
+    expect(mockLogSecurityEvent).toHaveBeenCalledWith(
+      'unauthorized',
+      expect.objectContaining({ reason: 'No session token' }),
+    );
+  });
+
+  it('still logs the unauthorized event for a browser page navigation with no session cookie', async () => {
+    await middleware(buildRequest('/activate', { 'user-agent': BROWSER_UA }));
+
+    expect(mockLogSecurityEvent).toHaveBeenCalledWith(
+      'unauthorized',
+      expect.objectContaining({ reason: 'No session token' }),
+    );
+  });
+
+  it('changes nothing for the Electron shell when a session cookie IS present (pass-through, as for everyone)', async () => {
+    mockGetSessionFromCookies.mockReturnValue('ps_sess_valid');
+
+    const response = await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': ELECTRON_UA }));
+
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+});
+
+// The desktop/native OAuth callbacks return their own styled HTML "handoff
+// bridge" with a bespoke CSP that allows an inline <style> block. Middleware
+// must tell createSecureResponse to skip its own CSP for these paths, so the two
+// policies don't intersect and fall style-src back to default-src 'none'
+// (which blocked the bridge's inline styles — the reported regression).
+describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: '' });
+    mockIsOriginValidationBlocking.mockReturnValue(false);
+  });
+
+  it.each(['/api/auth/google/callback', '/api/auth/apple/callback'])(
+    'calls createSecureResponse with skipCSP: true for %s',
+    async (pathname) => {
+      await middleware(buildRequest(pathname));
+
+      expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+        expect.any(Boolean),
+        expect.anything(),
+        expect.objectContaining({ skipCSP: true }),
+      );
+    },
+  );
+
+  it('does NOT skip the CSP for a normal public API route (control)', async () => {
+    await middleware(buildRequest('/api/auth/csrf'));
+
+    expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+      expect.any(Boolean),
+      expect.anything(),
+      expect.objectContaining({ skipCSP: false }),
+    );
   });
 });

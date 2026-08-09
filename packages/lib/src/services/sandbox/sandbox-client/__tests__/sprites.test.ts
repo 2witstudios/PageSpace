@@ -64,6 +64,13 @@ interface FakeCommandSpec {
    * runs, and "never opened" for one that only errors (the cold-start drop).
    */
   opened?: boolean;
+  /**
+   * Delay (ms) between `spawn` opening and `exit` firing — for a Sprite that's
+   * merely SLOW to become ready (not broken), as opposed to `hang: true`'s
+   * permanently-stuck command. Defaults to 0 (exits on the same macrotask as
+   * `spawn`/`data`).
+   */
+  exitDelayMs?: number;
 }
 
 function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: string[] } {
@@ -82,6 +89,10 @@ function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: 
       return;
     }
     if (spec.hang) return;
+    if (spec.exitDelayMs) {
+      setTimeout(() => events.emit('exit', spec.exitCode ?? 0), spec.exitDelayMs);
+      return;
+    }
     events.emit('exit', spec.exitCode ?? 0);
   }, 0);
 
@@ -554,6 +565,103 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     // destroyed so the next acquire provisions a clean replacement.
     expect(policyCalls).toBe(3);
     expect(destroyed).toBe('k');
+  });
+
+  // Regression test for the egress-lockdown retry-compounding latency bug: a
+  // freshly-created Sprite whose mkdir exec HANGS (never emits exit/error —
+  // the "not ready yet" case, distinct from the fast pre-open drop covered
+  // above) used to burn the full 30s per outer attempt, since a timeout is
+  // deliberately NOT retried by the inner wake-retry (`isPreOpenWakeError`
+  // excludes it). ONLY the first attempt is capped at LOCKDOWN_EXEC_TIMEOUT_MS
+  // — every attempt after it keeps the full 30s (see applyEgressLockdown's
+  // doc for why only the first, not every-but-last, is shortened).
+  it('given a FRESH create whose mkdir HANGS (never resolves) on every attempt, should fast-fail only the first attempt and bound total retry time well under the old per-attempt-30s worst case, then destroy', async () => {
+    vi.useFakeTimers();
+    try {
+      let destroyed: string | null = null;
+      let mkdirAttempts = 0;
+      const sprite = fakeSprite({
+        name: 'k',
+        spawn: () => {
+          mkdirAttempts += 1;
+          // opened (spawn fires) but never exits: a Sprite whose exec surface
+          // accepted the connection but isn't ready to run commands yet.
+          return fakeCommand({ hang: true });
+        },
+      });
+      const sdk: SpritesSdk = {
+        getSprite: async () => {
+          throw new Error('not found');
+        },
+        createSprite: async () => sprite,
+        deleteSprite: async (name) => {
+          destroyed = name;
+        },
+      };
+      const client = createSpritesSandboxClient({ sdk });
+      const result = client.getOrCreate({ name: 'k', options });
+      const assertion = expect(result).rejects.toBeInstanceOf(SandboxProvisionError);
+
+      // Worst case: LOCKDOWN_EXEC_TIMEOUT_MS (5s, attempt 1 only) +
+      // 2 × FS_OP_TIMEOUT_MS (30s, attempts 2 and 3) + linear backoff
+      // (500ms + 1000ms) ≈ 66.5s — down from the ~91.5s this loop actually
+      // produced before this fix (3 × 30s, since a hang-to-timeout never
+      // triggers the inner wake-retry), while keeping TWO full 30s
+      // fresh-spawn chances (not just one) for a merely-slow boot — see the
+      // next test.
+      await vi.advanceTimersByTimeAsync(67_000);
+      await assertion;
+
+      expect(mkdirAttempts).toBe(3);
+      expect(destroyed).toBe('k');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Direct regression test for the P2 finding on an earlier version of this
+  // fix (PR #2113): a Sprite that's merely SLOW — not broken — must still get
+  // a full, genuine 30s window on attempts after the first, not be raced past
+  // by an undersized timeout. `exitDelayMs: 25_000` exits 25s into attempt 2's
+  // window (deep inside its 30s budget, not near-instantly), which an
+  // undersized per-attempt timeout would have missed entirely.
+  it('given a FRESH create whose mkdir HANGS on attempt 1 but succeeds 25s into attempt 2 (deep inside its full 30s window), should retain and succeed — a merely-slow boot is never shortchanged', async () => {
+    vi.useFakeTimers();
+    try {
+      let destroyed: string | null = null;
+      let mkdirAttempts = 0;
+      const sprite = fakeSprite({
+        name: 'k',
+        spawn: () => {
+          mkdirAttempts += 1;
+          return mkdirAttempts === 1 ? fakeCommand({ hang: true }) : fakeCommand({ exitDelayMs: 25_000 });
+        },
+      });
+      const sdk: SpritesSdk = {
+        getSprite: async () => {
+          throw new Error('not found');
+        },
+        createSprite: async () => sprite,
+        deleteSprite: async (name) => {
+          destroyed = name;
+        },
+      };
+      const client = createSpritesSandboxClient({ sdk });
+      const result = client.getOrCreate({ name: 'k', options });
+
+      // Attempt 1 fails at 5s + 500ms backoff; attempt 2 starts at ~5.5s and
+      // succeeds at ~30.5s (25s into ITS window) — well past the 5s an
+      // undersized non-final timeout would have allowed, but comfortably
+      // inside the full 30s FS_OP_TIMEOUT_MS this attempt actually gets.
+      await vi.advanceTimersByTimeAsync(35_000);
+      const handle = await result;
+
+      expect(handle.sandboxId).toBe('k');
+      expect(mkdirAttempts).toBe(2);
+      expect(destroyed).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('given a fresh Sprite destroyed after exhausting its retry budget, the next acquire under the same name should provision a clean replacement and succeed', async () => {

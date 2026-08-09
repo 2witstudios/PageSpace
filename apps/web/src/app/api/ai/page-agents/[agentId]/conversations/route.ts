@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
+import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  AgentNotInSessionDriveError,
+  ConversationUnavailableError,
+  SessionFullError,
+} from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -27,7 +35,7 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
 
@@ -98,6 +106,9 @@ export async function GET(
         messageCount: Number(conv.messageCount),
         isShared,
         isOwner,
+        // The workspace the thread was born into (null = plain page chat) —
+        // what lets the page's Chat tab render the pane grid for it.
+        sessionId: conv.workspaceId ?? null,
         lastMessage: {
           role: conv.lastMessageRole,
           timestamp: conv.lastMessageTime,
@@ -145,7 +156,7 @@ export async function POST(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
 
@@ -191,9 +202,58 @@ export async function POST(
         ? body.conversationId
         : createId();
 
+    // Optional session binding — the thread is BORN into its working context
+    // (contract invariant 1: write-once, either here at creation or later via
+    // a claim of the caller's own still-unbound row; a session hosts many
+    // conversations and owns the one sandbox they share). Gated on the
+    // session access check so a caller cannot bind a thread into a workspace
+    // they cannot reach.
+    // Accepts BOTH spellings for one release: `workspaceId` is the name after
+    // the agent_sessions → agent_workspaces rename, `sessionId` is what a
+    // pre-rename client bundle still sends during the rolling-deploy window.
+    // The contract PR drops the legacy key.
+    const workspaceIdFromBody = typeof body.workspaceId === 'string' && body.workspaceId.length > 0 ? body.workspaceId : null;
+    const sessionId: string | null =
+      workspaceIdFromBody ?? (typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null);
+    if (sessionId !== null) {
+      const sessionAccess = await checkSessionAccess(auth.userId, sessionId);
+      if (!sessionAccess.allowed) {
+        // Not found and denied answer THE SAME 404 — the [workspaceId] family's
+        // policy (review #2261/5), applied here too since this route gates on
+        // the identical checkSessionAccess call: a 403-vs-404 split would let
+        // a caller learn whether a session id is real even when they can
+        // never touch it.
+        return workspaceNotFoundOrDenied(request, auth.userId, sessionId, sessionAccess.reason, 'page-agents/conversations');
+      }
+    }
+
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
-    await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+    if (sessionId !== null) {
+      try {
+        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, workspaceId: sessionId });
+      } catch (error) {
+        if (error instanceof SessionFullError) {
+          return sessionConversationLimitExceeded(request, auth.userId, sessionId, 'page-agents/conversations');
+        }
+        if (error instanceof ConversationUnavailableError) {
+          // The id cannot be claimed WITH this binding (someone else's row, a
+          // legacy conflict, or a different session's thread) — a state
+          // conflict, not a service failure, and one answer for every cause.
+          auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'conversation_unavailable', method: 'POST', agentId, sessionId }, riskScore: 0.5 });
+          return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+        }
+        if (error instanceof AgentNotInSessionDriveError) {
+          // A caller mistake (this agent belongs to a different drive than
+          // the session), not a service failure (review #2261/6) — was
+          // falling through to the outer catch's generic 500.
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        throw error;
+      }
+    } else {
+      await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+    }
 
     const response = {
       conversationId,

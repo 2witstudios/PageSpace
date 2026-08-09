@@ -26,7 +26,19 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'id', isShared: 'isShared' },
+  conversations: { id: 'id', userId: 'userId', isShared: 'isShared', type: 'type', contextId: 'contextId' },
+}));
+
+// The ONE conversation-subscription predicate (SSoT Phase 2) — mocked so this
+// file pins the DELEGATION (all three enforcement points share it; its own
+// rule matrix is pinned in packages/lib's conversation-access.test.ts).
+const { mockCanAccessConversation } = vi.hoisted(() => ({
+  mockCanAccessConversation: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
+  canAccessConversation: mockCanAccessConversation,
+  decideConversationAccess: ({ isOwner, isShared, hasPageAccess }: { isOwner: boolean; isShared: boolean; hasPageAccess: boolean }) =>
+    isOwner || (isShared && hasPageAccess),
 }));
 
 import { canSubscribeToStream, filterSubscribableStreams } from '../stream-subscription-authz';
@@ -54,7 +66,9 @@ describe('canSubscribeToStream', () => {
   });
 
   it("given another user's stream in a PRIVATE conversation, should deny", async () => {
-    mockLimit.mockResolvedValue([{ isShared: false }]);
+    const row = { userId: 'user-a', isShared: false, type: 'page', contextId: 'page-1' };
+    mockLimit.mockResolvedValue([row]);
+    mockCanAccessConversation.mockResolvedValue(false);
 
     const allowed = await canSubscribeToStream({
       userId: 'user-b',
@@ -63,10 +77,13 @@ describe('canSubscribeToStream', () => {
     });
 
     expect(allowed).toBe(false);
+    expect(mockCanAccessConversation).toHaveBeenCalledWith('user-b', row);
   });
 
-  it("given another user's stream in an explicitly SHARED conversation, should allow", async () => {
-    mockLimit.mockResolvedValue([{ isShared: true }]);
+  it("given another user's stream in an explicitly SHARED conversation the caller can access, should allow", async () => {
+    const row = { userId: 'user-a', isShared: true, type: 'page', contextId: 'page-1' };
+    mockLimit.mockResolvedValue([row]);
+    mockCanAccessConversation.mockResolvedValue(true);
 
     const allowed = await canSubscribeToStream({
       userId: 'user-b',
@@ -75,6 +92,7 @@ describe('canSubscribeToStream', () => {
     });
 
     expect(allowed).toBe(true);
+    expect(mockCanAccessConversation).toHaveBeenCalledWith('user-b', row);
   });
 
   // Fail closed: an unknown conversation is not a shared one.
@@ -88,6 +106,7 @@ describe('canSubscribeToStream', () => {
     });
 
     expect(allowed).toBe(false);
+    expect(mockCanAccessConversation).not.toHaveBeenCalled();
   });
 });
 

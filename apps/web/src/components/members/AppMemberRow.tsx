@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { getRoleColorClasses } from '@/lib/utils';
 import { patch, del } from '@/lib/auth/auth-fetch';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 
 export interface AppMember {
   id: string;
@@ -77,7 +77,6 @@ export function AppMemberRow({
   onRoleChange,
   onRemove,
 }: AppMemberRowProps) {
-  const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = app.name ?? 'Unnamed App';
@@ -105,7 +104,7 @@ export function AppMemberRow({
         customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
       });
     } catch {
-      toast({ title: 'Error', description: 'Failed to update app role', variant: 'destructive' });
+      toast.error('Failed to update app role');
     } finally {
       setSaving(false);
     }
@@ -117,7 +116,7 @@ export function AppMemberRow({
       await del(`/api/drives/${driveId}/apps/${app.tokenId}`);
       onRemove(app.tokenId);
     } catch {
-      toast({ title: 'Error', description: 'Failed to remove app member', variant: 'destructive' });
+      toast.error('Failed to remove app member');
     }
   };
 

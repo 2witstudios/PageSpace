@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { cn } from '@/lib/utils';
 import { RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,12 +9,8 @@ import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { TodoListMessage } from './TodoListMessage';
-import { useSocket } from '@/hooks/useSocket';
-import { useAuth } from '@/hooks/useAuth';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useGroupedParts } from './useGroupedParts';
-import { useToolCallOpenState } from './useToolCallOpenState';
+import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
@@ -129,6 +125,11 @@ interface MessageRendererProps {
   isLastUserMessage?: boolean;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /**
+   * Find-in-conversation search highlight. Only the full renderer supports this —
+   * the sidebar's compact renderer has no find-in-conversation feature, so
+   * CompactMessageRenderer intentionally has no equivalent props.
+   */
   isHighlighted?: boolean;
   isCurrentMatch?: boolean;
 }
@@ -151,157 +152,38 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   isHighlighted = false,
   isCurrentMatch = false,
 }) => {
-  const { user } = useAuth();
-  const [isEditing, setIsEditing] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const canRetry = Boolean(onRetry) && (isLastAssistantMessage || isLastUserMessage);
-
-  // ============================================
-  // Todo List State & Socket (only for todo_list messages)
-  // ============================================
-  const [tasks, setTasks] = useState<Array<{
-    id: string;
-    title: string;
-    status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-    priority: 'low' | 'medium' | 'high';
-    position: number;
-    updatedAt?: Date;
-  }>>([]);
-  const [taskList, setTaskList] = useState<{
-    id: string;
-    title: string;
-    description?: string;
-    status: string;
-    createdAt?: Date;
-    updatedAt?: Date;
-  } | null>(null);
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
-
-  // Socket connection (singleton pattern) - only used for todo_list messages
-  const socket = useSocket();
-
-  const loadTasksForMessage = async (messageId: string) => {
-    setIsLoadingTasks(true);
-    try {
-      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setTasks(data.tasks || []);
-        setTaskList(data.taskList);
-      } else {
-        console.error('Failed to load tasks for message:', messageId);
-      }
-    } catch (error) {
-      console.error('Error loading tasks:', error);
-    } finally {
-      setIsLoadingTasks(false);
-    }
-  };
-
-  // Load tasks for todo_list messages
-  useEffect(() => {
-    if (message.messageType === 'todo_list' && message.id) {
-      loadTasksForMessage(message.id);
-    }
-  }, [message.messageType, message.id]);
-
-  // Listen for real-time task updates
-  useEffect(() => {
-    if (!socket || message.messageType !== 'todo_list') return;
-
-    const handleTaskUpdate = (payload: {
-      taskId: string;
-      data: { newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked' };
-    }) => {
-      const taskInOurMessage = tasks.find(task => task.id === payload.taskId);
-      if (taskInOurMessage) {
-        setTasks(prevTasks =>
-          prevTasks.map(task =>
-            task.id === payload.taskId
-              ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
-              : task
-          )
-        );
-      }
-    };
-
-    const handleTaskListUpdate = (payload: { taskListId: string }) => {
-      if (taskList && payload.taskListId === taskList.id) {
-        loadTasksForMessage(message.id);
-      }
-    };
-
-    socket.on('task:task_updated', handleTaskUpdate);
-    socket.on('task:task_list_created', handleTaskListUpdate);
-
-    return () => {
-      socket.off('task:task_updated', handleTaskUpdate);
-      socket.off('task:task_list_created', handleTaskListUpdate);
-    };
-  }, [socket, message.messageType, message.id, tasks, taskList]);
-
-  const handleTaskStatusUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
-    try {
-      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
-      setTasks(prevTasks =>
-        prevTasks.map(task =>
-          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
-        )
-      );
-      onTaskUpdate?.(taskId, newStatus);
-    } catch (error) {
-      console.error('Error updating task:', error);
-    }
-  };
-
-  // ============================================
-  // Standard Message Rendering
-  // ============================================
-  const groupedParts = useGroupedParts(message.parts);
-  const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
-
-  // Check if this message has tool calls (for showing undo button on assistant messages)
-  const hasToolCalls = message.role === 'assistant' && groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
-
-  const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
-  // TextBlock already renders its own retry button in its footer whenever it has non-empty
-  // content — the message-level retry button below exists ONLY for the case TextBlock can't
-  // cover (empty or tool-only content, where no TextBlock ever renders). Without this check, a
-  // normal interrupted message with real text would show two retry buttons.
-  const hasNonEmptyTextBlock = groupedParts.some(
-    (g) => isTextGroupPart(g) && g.parts.map((p) => p.text).join('').trim() !== '',
-  );
-
-  const createdAt = message.createdAt;
-  const editedAt = message.editedAt;
-
-  const handleSaveEdit = async (newContent: string) => {
-    if (onEdit) {
-      await onEdit(message.id, newContent);
-      setIsEditing(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (onDelete) {
-      setIsDeleting(true);
-      try {
-        await onDelete(message.id);
-        setShowDeleteDialog(false);
-      } catch (error) {
-        console.error('Failed to delete message:', error);
-      } finally {
-        setIsDeleting(false);
-      }
-    }
-  };
-
-  const handleRetry = () => {
-    if (onRetry && canRetry) {
-      onRetry(message.id);
-    }
-  };
+  const {
+    user,
+    isEditing,
+    setIsEditing,
+    showDeleteDialog,
+    setShowDeleteDialog,
+    isDeleting,
+    canRetry,
+    tasks,
+    taskList,
+    isLoadingTasks,
+    handleTaskStatusUpdate,
+    groupedParts,
+    getToolCallOpen,
+    setToolCallOpen,
+    hasToolCalls,
+    isInterrupted,
+    hasNonEmptyTextBlock,
+    createdAt,
+    editedAt,
+    handleSaveEdit,
+    handleDelete,
+    handleRetry,
+  } = useMessageRendererState({
+    message,
+    onEdit,
+    onDelete,
+    onRetry,
+    onTaskUpdate,
+    isLastAssistantMessage,
+    isLastUserMessage,
+  });
 
   // ============================================
   // Render todo_list messages

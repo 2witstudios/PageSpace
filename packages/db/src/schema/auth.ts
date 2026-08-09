@@ -1,7 +1,6 @@
-import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
@@ -28,18 +27,47 @@ export const users = pgTable('users', {
   role: userRole('role').default('user').notNull(),
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
   currentAiProvider: text('currentAiProvider').default('openai').notNull(),
-  currentAiModel: text('currentAiModel').default('openai/gpt-5.3-chat').notNull(),
+  currentAiModel: text('currentAiModel').default('openai/gpt-5.6-luna').notNull(),
   // Chosen OpenRouter image-generation model (null = none configured → tool uses the
   // system default). Deliberately separate from currentAiModel: image generation is a
   // tool, not the chat model, and is never shown in the model selector.
   imageGenerationModel: text('imageGenerationModel'),
-  // Storage tracking fields (quota/tier now computed from subscriptionTier)
-  storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
+  // Storage tracking fields (quota/tier now computed from subscriptionTier).
+  // storageUsedBytes is a CACHE, not a source of truth: the authoritative value
+  // is SUM(files.sizeBytes) over files.createdBy = this user (the charge basis).
+  // It exists so quota checks don't pay an aggregate per upload, and it is kept
+  // honest by the scheduled reconcile (api/cron/reconcile-storage →
+  // reconcileAllStorageUsage), which rewrites it from the files rows when it
+  // drifts. Never treat a read of this column as exact (#2155).
+  //
+  // bigint/mode:'number', NOT real (#2225 review): `real` is IEEE-754 single
+  // precision, exact only up to 2^24 (~16 MiB) — past that, storing an exact
+  // byte count can round to an adjacent representable float, permanently
+  // differing from the BIGINT-exact `files.sizeBytes` sum by more than the
+  // reconcile's 1-byte tolerance. That made every correction round straight
+  // back to the same (still-wrong) value, so any user over ~16 MiB would
+  // re-flag as drifted and get "corrected" every single cron tick forever,
+  // never converging. Mirrors `files.sizeBytes`'s bigint/number pattern below.
+  storageUsedBytes: bigint('storageUsedBytes', { mode: 'number' }).default(0).notNull(),
+  // @deprecated (#2154) — superseded by the TTL'd `pending_uploads` table
+  // (packages/db/src/schema/storage.ts); no application code reads or writes
+  // this column anymore. Kept in the schema (not dropped) because deploys run
+  // migrations BEFORE the new app image takes traffic
+  // (.github/workflows/docker-images.yml: "Run migrations" precedes "Deploy
+  // web"), so dropping it in the SAME migration as this cutover would 500
+  // every upload presign/complete/cancel request served by the still-running
+  // OLD image during the rollout window. Drop in a follow-up migration once
+  // this deploy has fully rolled out and no old image can still write it.
   activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),
-  subscriptionTier: text('subscriptionTier').default('free').notNull(), // 'free' | 'pro' | 'founder' | 'business'
+  // Untyped text; the canonical vocabulary is SubscriptionTier in
+  // @pagespace/lib/billing/subscription-tiers (TIERS). This is a denormalized
+  // CACHE of the subscriptions table — see subscription-tier-sync.ts for the
+  // single write-through derivation and subscription-tier-reconcile.ts for the
+  // periodic drift repair. Read call sites must coerce with toSubscriptionTier().
+  subscriptionTier: text('subscriptionTier').default('free').notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
   failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),
@@ -49,6 +77,16 @@ export const users = pgTable('users', {
   suspendedReason: text('suspendedReason'),
   // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
   timezone: text('timezone'),
+  /**
+   * Stamped once the starter skills (see packages/lib/src/commands/starter-skills.ts)
+   * have been installed into this user's Home drive. NULL = never installed.
+   *
+   * This is a high-water mark, not a mirror of the commands table: the installer
+   * must never resurrect a starter the user deliberately deleted, and the
+   * backfill script must be safely re-runnable after a partial failure. Checking
+   * "does a command with this trigger exist?" alone would fail both.
+   */
+  starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -173,7 +211,6 @@ import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   deviceTokens: many(deviceTokens),
-  chatMessages: many(chatMessages),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   socketTokens: many(socketTokens),

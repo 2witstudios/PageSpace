@@ -1,7 +1,7 @@
 /**
  * Authorization gate for agent code execution.
  *
- * Code execution is the highest-risk surface in the product: the Vercel
+ * Code execution is the highest-risk surface in the product: the Fly Sprite
  * microVM contains the risk of *escape*, but authorization, kill-switch, and
  * quota gating are entirely ours. `canRunCode` composes the existing
  * drive-permission helpers and is the single chokepoint every invocation must pass.
@@ -15,25 +15,32 @@
  * do not serve on-prem (a local execution path is future work, not wired here),
  * so gating on DEPLOYMENT_MODE / isOnPrem would only add a dead branch.
  *
- * Production rollout gate: while Fly Sprites code execution is being tested in
- * prod, the global kill-switch may be on, but only app admins may pass this
- * chokepoint. Non-production keeps the drive owner/admin gate so local and
- * staging workflows remain useful.
+ * Tier gate, not admin gate: the sandbox is a paid feature (Pro tier and
+ * above) — session/chat/panes/GitHub-tool access is open to every
+ * authenticated user, but running code costs real compute, so this chokepoint
+ * checks the session's PAYER's subscription tier (drive owner, or the
+ * session's own owner when driveless), not the acting user's own tier —
+ * see `resolveSandboxPayerTier`. A free-tier member of a Pro-owned drive is
+ * still eligible, billed to the drive's owner, matching how billing/quota
+ * already resolve tier.
  *
- * The actor user always clears the owner/admin drive-role gate, regardless of
- * origin. Agent-origin runs additionally require the agent page to hold drive
- * edit access (defence in depth): both the human who triggered the run and the
- * agent acting on their behalf must be entitled, so a plain member can't
- * escalate through an agent that happens to have edit access.
+ * The actor user always clears the drive edit-access gate (owner, admin, or
+ * MEMBER-role collaborator — a VIEWER cannot spend the payer's compute),
+ * regardless of origin. Agent-origin runs additionally require the agent page
+ * to hold drive edit access (defence in depth): both the human who triggered
+ * the run and the agent acting on their behalf must be entitled, so a viewer
+ * can't escalate through an agent that happens to have edit access.
  *
  * `enabledTools` (agent config) is NOT a security boundary — this is.
  */
 
 import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/permissions';
+import { resolveSandboxPayerTier, isSandboxAvailable } from '../../billing/sandbox-eligibility';
+import type { SubscriptionTier } from '../../billing/subscription-tiers';
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
-  | 'app_admin_required'
+  | 'tier_ineligible'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -52,13 +59,13 @@ export interface CanRunCodeDeps {
     userId: string,
     driveId: string,
   ) => Promise<DrivePermissionLevel | null>;
-  getUserRole: (userId: string) => Promise<'user' | 'admin' | null>;
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
   getAgentAccessLevel: (
     agentPageId: string,
     targetPageId: string,
   ) => Promise<PermissionLevel | null>;
   isCodeExecutionEnabled: () => boolean;
-  getNodeEnv: () => string | undefined;
 }
 
 export interface CanRunCodeInput {
@@ -66,6 +73,11 @@ export interface CanRunCodeInput {
   /** Absent for global (non-drive) contexts; drive-scoped checks are skipped when
    *  driveId is not provided. */
   driveId?: string;
+  /** The session's own owner — distinct from `userId` (the actor) — used to
+   *  resolve the PAYER for the tier-eligibility gate. Falls back to `userId`
+   *  when a call site hasn't threaded it yet (denies more strictly, never
+   *  grants incorrectly). */
+  ownerId?: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
   deps?: CanRunCodeDeps;
@@ -93,24 +105,26 @@ const defaultDeps: CanRunCodeDeps = {
     import('../../permissions/permissions').then((m) =>
       m.getUserDrivePermissions(userId, driveId),
     ),
-  getUserRole: async (userId) => {
-    const [{ db }, { eq }, { users }] = await Promise.all([
+  lookupDriveOwnerId: (driveId) =>
+    import('../../billing/sandbox-payer').then((m) => m.lookupDriveOwnerId(driveId)),
+  getUserSubscriptionTier: async (userId) => {
+    const [{ db }, { eq }, { users }, { toSubscriptionTier }] = await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
       import('@pagespace/db/schema/auth'),
+      import('../../billing/subscription-tiers'),
     ]);
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { role: true },
+      columns: { subscriptionTier: true },
     });
-    return user?.role ?? null;
+    return toSubscriptionTier(user?.subscriptionTier);
   },
   getAgentAccessLevel: (agentPageId, targetPageId) =>
     import('../../permissions/agent-permissions').then((m) =>
       m.getAgentAccessLevel(agentPageId, targetPageId),
     ),
   isCodeExecutionEnabled,
-  getNodeEnv: () => process.env.NODE_ENV,
 };
 
 const deny = (reason: CodeExecutionDenialReason): CanRunCodeResult => ({
@@ -139,22 +153,33 @@ async function authorizeUser(
 ): Promise<CanRunCodeResult> {
   const perms = await deps.getUserDrivePermissions(userId, driveId);
   if (!perms?.hasAccess) return deny('no_drive_access');
-  if (!perms.isOwner && !perms.isAdmin) return deny('insufficient_role');
+  // Edit access, not owner/admin (review #2326): the owner/admin gate was a
+  // rollout-era restriction from when the whole surface was admin-only. Under
+  // the open model the advertised entitlement is "every member of a paid
+  // drive gets the sandbox" — MEMBER-role collaborators have canEdit and
+  // pass; VIEWER-role members don't get to spend the payer's compute or
+  // write in the shared workspace, exactly as they can't edit its pages.
+  if (!perms.canEdit) return deny('insufficient_role');
   return { ok: true };
 }
 
-async function authorizeProductionAdmin(
+async function authorizeSandboxTierEligibility(
   userId: string,
+  driveId: string | undefined,
+  ownerId: string | undefined,
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
-  if (deps.getNodeEnv() !== 'production') return { ok: true };
-  const role = await deps.getUserRole(userId);
-  return role === 'admin' ? { ok: true } : deny('app_admin_required');
+  const tier = await resolveSandboxPayerTier(
+    { driveId: driveId ?? null, ownerId: ownerId ?? userId },
+    { lookupDriveOwnerId: deps.lookupDriveOwnerId, getUserSubscriptionTier: deps.getUserSubscriptionTier },
+  );
+  return isSandboxAvailable(tier) ? { ok: true } : deny('tier_ineligible');
 }
 
 export async function canRunCode({
   userId,
   driveId,
+  ownerId,
   requestOrigin = 'user',
   agentPageId,
   deps = defaultDeps,
@@ -162,8 +187,8 @@ export async function canRunCode({
   try {
     if (!deps.isCodeExecutionEnabled()) return deny('kill_switch_off');
 
-    const productionAdminResult = await authorizeProductionAdmin(userId, deps);
-    if (!productionAdminResult.ok) return productionAdminResult;
+    const tierResult = await authorizeSandboxTierEligibility(userId, driveId, ownerId, deps);
+    if (!tierResult.ok) return tierResult;
 
     // Drive-scoped checks are intentionally skipped when no driveId is present
     // (global context): the absence of a drive is a valid, expected state for the
@@ -180,9 +205,9 @@ export async function canRunCode({
       return { ok: true };
     }
 
-    // The actor user must always clear the owner/admin drive-role gate. For
-    // agent-origin runs this is the rung that stops a plain member escalating
-    // through an agent that holds drive edit access.
+    // The actor user must always clear the drive edit-access gate. For
+    // agent-origin runs this is the rung that stops a view-only member
+    // escalating through an agent that holds drive edit access.
     const userResult = await authorizeUser(userId, driveId, deps);
     if (!userResult.ok) return userResult;
 

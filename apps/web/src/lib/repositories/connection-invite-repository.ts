@@ -256,5 +256,3 @@ export const connectionInviteRepository = {
     return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
   },
 };
-
-export type ConnectionInviteRepository = typeof connectionInviteRepository;

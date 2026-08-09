@@ -38,6 +38,7 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_LIGHT_PROVIDER: 'anthropic',
   BACKGROUND_LIGHT_MODEL: 'anthropic/claude-test',
 }));
 
@@ -125,7 +126,6 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', title: 'title', content: 'content' },
   drives: { id: 'id', name: 'name', drivePrompt: 'drivePrompt', isTrashed: 'isTrashed', ownerId: 'ownerId' },
   userMentions: { targetUserId: 'targetUserId', createdAt: 'createdAt', mentionedByUserId: 'mentionedByUserId', sourcePageId: 'sourcePageId' },
-  chatMessages: { pageId: 'pageId', role: 'role', isActive: 'isActive', createdAt: 'createdAt', userId: 'userId', content: 'content' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {

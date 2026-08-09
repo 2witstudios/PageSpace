@@ -5,6 +5,14 @@
  */
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-5.6 Models
+  'gpt-5.6-sol-pro': true,
+  'gpt-5.6-sol': true,
+  'gpt-5.6-terra-pro': true,
+  'gpt-5.6-terra': true,
+  'gpt-5.6-luna-pro': true,
+  'gpt-5.6-luna': true,
+
   // OpenAI GPT-5.4 Models (all have vision)
   'gpt-5.4-pro': true,
   'gpt-5.4': true,
@@ -43,6 +51,10 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-4': true,
 
   // Anthropic Claude 3+ (all have vision)
+  'claude-opus-5': true,
+  'claude-opus-5-fast': true,
+  'claude-sonnet-5': true,
+  'claude-fable-5': true,
   'claude-opus-4.7': true,
   'claude-opus-4.7-fast-20260512': true,
   'claude-opus-4-6-20260204': true,
@@ -67,6 +79,11 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'claude-3-haiku-20240307': true,
 
   // Google Gemini (all versions support vision)
+  'gemini-3.6-flash': true,
+  'gemini-3.5-flash-lite': true,
+  'gemini-3.1-flash-lite-image': true,
+  'gemini-3.1-flash-image': true,
+  'gemini-3-pro-image': true,
   'gemini-3.1-pro-preview': true,
   'gemini-3.1-pro-preview-customtools': true,
   'gemini-3.1-flash-lite-preview': true,
@@ -83,6 +100,10 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gemini-3.5-flash': true,
 
   // xAI Grok Vision models
+  'grok-4.5': true,
+  'grok-4.3': true,
+  'grok-4.20': true,
+  'grok-4.20-multi-agent': true,
   'grok-4': true,
   'grok-4-fast': true,
   'grok-4-fast-reasoning': true,
@@ -94,6 +115,11 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'grok-vision-beta': true,
 
   // Qwen3.5 Vision-Language Models
+  'qwen3.7-plus': true,
+  'qwen3.6-plus': true,
+  'qwen3.6-flash': true,
+  'qwen3.6-35b-a3b': true,
+  'qwen3.6-27b': true,
   'qwen3.5-397b-a17b': true,
   'qwen3.5-plus-2026-02-15': true,
   'qwen3.5-flash': true,
@@ -103,8 +129,19 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'qwen3-max-thinking': true,
 
   // MiniMax Vision Models
+  'minimax-m3': true,
   'MiniMax-M2.5': true,
   'minimax-m2.5': true,
+
+  // Other multimodal OpenRouter models
+  'kimi-k3': true,
+  'kimi-k2.7-code': true,
+  'kimi-k2.6': true,
+  'muse-spark-1.1': true,
+  'llama-4-maverick': true,
+  'llama-4-scout': true,
+  'seed-2.0-lite': true,
+  'seed-2.0-mini': true,
 
   // Special handling for o1 models - they DON'T support vision
   'o1': false,
@@ -150,6 +187,7 @@ export function hasVisionCapability(model: string): boolean {
   }
 
   if (lowerModel.includes('claude-3') || lowerModel.includes('claude-4') ||
+      lowerModel.includes('claude-5') ||
       lowerModel.includes('claude-opus-4') || lowerModel.includes('claude-sonnet-4') ||
       lowerModel.includes('claude-haiku-4')) {
     return true;

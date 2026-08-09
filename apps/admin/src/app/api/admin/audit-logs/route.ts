@@ -5,6 +5,7 @@ import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -68,11 +69,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
     if (search) {
       // Escape LIKE pattern special characters to prevent pattern injection
-      const escapedSearch = search
-        .replace(/\\/g, '\\\\')
-        .replace(/%/g, '\\%')
-        .replace(/_/g, '\\_');
-      const searchPattern = `%${escapedSearch}%`;
+      const searchPattern = `%${escapeLikePattern(search)}%`;
 
       // Use Drizzle's ilike function for proper parameterization
       conditions.push(

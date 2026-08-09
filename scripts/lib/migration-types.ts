@@ -11,15 +11,15 @@ export interface ManifestTableCounts {
   driveRoles: number;
   driveMembers: number;
   pages: number;
-  chatMessages: number;
   channelMessages: number;
   channelMessageReactions: number;
   channelReadStatus: number;
+  agentWorkspaces: number;
+  agentWorkspaceShells: number;
   conversations: number;
   messages: number;
   files: number;
   filePages: number;
-  permissions: number;
   pagePermissions: number;
   tags: number;
   pageTags: number;
@@ -98,7 +98,24 @@ export interface ValidationResult {
   extraIds: string[];
 }
 
-/** The ordered list of tables for import (FK dependency order) */
+/**
+ * THE SET OF TABLES A TENANT BUNDLE CARRIES.
+ *
+ * Despite the name, this is consumed as a SET, not as a sequence: the column
+ * registry (`tenant-export-columns.ts`) keys off it, the drift guard enumerates
+ * it, and `tenant-validate` iterates it to decide what to compare. Nothing
+ * emits SQL in this order.
+ *
+ * THE ACTUAL INSERT ORDER IS `tenant-export.ts`'s sequence of `buildInsert`
+ * calls, and it differs: the exporter emits `agent_workspaces` →
+ * `agent_workspace_shells` → `conversations` → `messages` BEFORE the
+ * `channel_*` tables, while this list has the channel tables first. Both orders
+ * satisfy the FKs, so nothing is broken today — but the ordering comments below
+ * describe FK dependencies rather than the emitted sequence, and a future
+ * reader who trusts this list as insert order will be wrong. Change the
+ * exporter to change insert order; changing this list changes only what is
+ * carried and checked.
+ */
 export const TABLE_IMPORT_ORDER = [
   'users',
   'user_profiles',
@@ -108,15 +125,22 @@ export const TABLE_IMPORT_ORDER = [
   'pages',
   'tags',
   'page_tags',
-  'chat_messages',
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',
+  // Before `conversations`: `conversations.workspaceId` FKs here, so the
+  // session rows have to exist before a bound thread can be inserted.
+  'agent_workspaces',
+  // Immediately after its parent: `agent_workspace_shells.workspaceId` FKs
+  // `agent_workspaces` and `ownerId` FKs `users`, both already inserted. The
+  // shells carry a session's TERMINAL work — the tab names, the per-shell
+  // command, and `coldTail`, the scrollback of the last dead incarnation —
+  // which is user content with no other home in the bundle.
+  'agent_workspace_shells',
   'conversations',
   'messages',
   'files',
   'file_pages',
-  'permissions',
   'page_permissions',
   'mentions',
   'user_mentions',

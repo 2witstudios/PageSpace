@@ -20,6 +20,19 @@ import { resolvePathWithinSync } from '../../security/path-validator';
 export const SANDBOX_ROOT = '/workspace';
 
 /**
+ * The directory a node's OWN Sprite clones its repo into. Byte-identical for
+ * branches and promoted projects on purpose — every node that owns a Sprite
+ * puts its repo in the same place, so `cwd` is a property of "has its own
+ * Sprite", not of which tier the node happens to be. Defined HERE (beside
+ * SANDBOX_ROOT) so consumers that need only the string — handle derivation,
+ * route validators — don't drag the branch/promotion service graphs (git
+ * runners, sandbox client, machine host) into their module graph for one
+ * constant.
+ */
+export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
+export const PROJECT_REPO_PATH = `${SANDBOX_ROOT}/repo`;
+
+/**
  * Strip a literal, undecoded `/workspace` prefix from `userPath`, tolerating
  * any number of separating slashes (e.g. a doubled `/workspace//x`), and
  * return the root-relative remainder. Returns `userPath` unchanged if it

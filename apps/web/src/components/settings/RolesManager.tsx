@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Trash2, GripVertical, Star, Shield, Users, Eye } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import type { DriveEventPayload } from '@/lib/websocket';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
@@ -43,7 +43,6 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
-  const { toast } = useToast();
   const socket = useSocket();
 
   const fetchRoles = async () => {
@@ -54,11 +53,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
       setRoles(data.roles || []);
     } catch (error) {
       console.error('Error fetching roles:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load roles',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load roles');
     } finally {
       setLoading(false);
     }
@@ -87,18 +82,11 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   const handleDeleteRole = async (roleId: string) => {
     try {
       await del(`/api/drives/${driveId}/roles/${roleId}`);
-      toast({
-        title: 'Success',
-        description: 'Role deleted successfully',
-      });
+      toast.success('Role deleted successfully');
       fetchRoles();
     } catch (error) {
       console.error('Error deleting role:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to delete role',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete role');
     } finally {
       setDeletingRoleId(null);
     }

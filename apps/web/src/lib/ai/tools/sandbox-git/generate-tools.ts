@@ -11,10 +11,9 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { GitToolRow } from './tools/types';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export type OpenResult =
-  | { ok: true; userId: string; ctx: SandboxActorContext & { activeMachine: MachineRef } }
+  | { ok: true; userId: string; ctx: SandboxActorContext }
   | { ok: false; error: { success: false; error: string } };
 
 /**
@@ -78,13 +77,16 @@ export function generateSandboxGitTools(
           : { success: false as const, error: built.error };
       }
       // 3. Effect seam, chosen by exec kind. cmd is the row's literal; args string[].
-      const cwd = cwdOf(input);
+      //    An explicit `cwd` still wins; absent one, the command runs at the
+      //    sandbox root.
       if (row.exec === 'local') {
         const opened = await seams.open(options);
         if (!opened.ok) return opened.error;
-        return seams.git(row.cmd, built.args, opened.ctx, cwd);
+        return seams.git(row.cmd, built.args, opened.ctx, cwdOf(input));
       }
-      return seams.withToken(options, (ctx, token) => seams.gitR(row.cmd, built.args, ctx, token, cwd));
+      return seams.withToken(options, (ctx, token) =>
+        seams.gitR(row.cmd, built.args, ctx, token, cwdOf(input)),
+      );
     };
 
     out[row.key] = tool({

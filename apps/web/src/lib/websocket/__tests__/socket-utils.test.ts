@@ -53,8 +53,8 @@ import {
   broadcastAiMessageDeleted,
   broadcastAiUndoApplied,
   broadcastAiConversationAdded,
-  notifyTerminalAgentActivity,
-  type TerminalActivityEventPayload,
+  notifyShellAgentActivity,
+  type ShellActivityEventPayload,
   type ChatUserMessagePayload,
   type ChatMessageEditedPayload,
   type ChatMessageDeletedPayload,
@@ -64,7 +64,6 @@ import {
   createPageEventPayload,
   createDriveEventPayload,
   createDriveMemberEventPayload,
-  kickUserFromRooms,
   type PageEventPayload,
   type DriveEventPayload,
   type DriveMemberEventPayload,
@@ -72,8 +71,8 @@ import {
   type CreditsEventPayload,
   type AiStreamStartPayload,
   type AiStreamCompletePayload,
-  type KickPayload,
 } from '../socket-utils';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {
@@ -167,76 +166,9 @@ describe('socket-utils', () => {
     });
   });
 
-  describe('kickUserFromRooms', () => {
-    const payload: KickPayload = {
-      userId: 'user-123',
-      roomPattern: 'page-456',
-      reason: 'page_private',
-      metadata: { pageId: 'page-456' },
-    };
-
-    it('given a successful kick, should return the result and log info', async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ success: true, kickedCount: 2, rooms: ['page-456'] }),
-      });
-
-      const result = await kickUserFromRooms(payload);
-
-      expect(result).toEqual({ success: true, kickedCount: 2, rooms: ['page-456'] });
-      expect(loggerSpies.realtimeLogger.info).toHaveBeenCalledWith(
-        'User kicked from rooms',
-        expect.objectContaining({ reason: 'page_private', kickedCount: 2 })
-      );
-    });
-
-    it('given the realtime server rejects the request (e.g. unrecognized reason), should log the status/body and return a failure result without throwing', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 400,
-        text: () => Promise.resolve(JSON.stringify({ error: 'Missing or invalid reason' })),
-      });
-
-      const result = await kickUserFromRooms(payload);
-
-      expect(result).toEqual({
-        success: false,
-        kickedCount: 0,
-        rooms: [],
-        error: 'Kick request failed with status 400',
-      });
-      expect(loggerSpies.realtimeLogger.error).toHaveBeenCalledWith(
-        'Kick request rejected by realtime server',
-        undefined,
-        expect.objectContaining({
-          reason: 'page_private',
-          status: 400,
-          errorBody: JSON.stringify({ error: 'Missing or invalid reason' }),
-        })
-      );
-      expect(loggerSpies.realtimeLogger.info).not.toHaveBeenCalled();
-    });
-
-    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
-      process.env.INTERNAL_REALTIME_URL = '';
-
-      const result = await kickUserFromRooms(payload);
-
-      expect(mockFetch).not.toHaveBeenCalled();
-      expect(result.success).toBe(false);
-    });
-
-    it('given fetch throws, should not throw and should return a failure result', async () => {
-      mockFetch.mockRejectedValue(new Error('Network error'));
-
-      await expect(kickUserFromRooms(payload)).resolves.toEqual({
-        success: false,
-        kickedCount: 0,
-        rooms: [],
-        error: 'Network error',
-      });
-    });
-  });
+  // kickUserFromRooms moved to @pagespace/lib/realtime/kick-client (#2158);
+  // its coverage now lives in
+  // packages/lib/src/realtime/__tests__/kick-client.test.ts.
 
   describe('broadcastDriveEvent', () => {
     it('given drive event with recipients, should route to each user channel', async () => {
@@ -689,30 +621,32 @@ describe('socket-utils', () => {
     });
   });
 
-  describe('notifyTerminalAgentActivity', () => {
-    const payload: TerminalActivityEventPayload = {
-      tenantId: 'tenant-1',
-      driveId: 'drive-1',
-      pageId: 'terminal-page-1',
+  describe('notifyShellAgentActivity', () => {
+    const payload: ShellActivityEventPayload = {
+      sessionId: 'conv-1',
       command: 'echo hi',
       output: 'hi',
       exitCode: 0,
       agentLabel: 'Agent Bob',
     };
 
-    it('given a valid payload, should POST it to /api/terminal-activity (not the broadcast endpoint)', async () => {
-      await notifyTerminalAgentActivity(payload);
+    it('given a valid payload, should POST it to the route the realtime server serves', async () => {
+      // Pinned against the shared constant rather than a literal: this caller
+      // spent the whole rebuild posting to `/api/terminal-activity`, a route
+      // that stopped existing when the bridge was re-keyed.
+      await notifyShellAgentActivity(payload);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe('http://localhost:3001/api/terminal-activity');
+      expect(url).toBe(`http://localhost:3001${SHELL_BRIDGE_ROUTES.activity}`);
+      expect(SHELL_BRIDGE_ROUTES.activity).toBe('/api/shell-activity');
       expect(JSON.parse(init.body)).toEqual(payload);
     });
 
     it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
       process.env.INTERNAL_REALTIME_URL = '';
 
-      await notifyTerminalAgentActivity(payload);
+      await notifyShellAgentActivity(payload);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -720,7 +654,7 @@ describe('socket-utils', () => {
     it('given fetch throws, should not throw (best-effort)', async () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
-      await expect(notifyTerminalAgentActivity(payload)).resolves.not.toThrow();
+      await expect(notifyShellAgentActivity(payload)).resolves.not.toThrow();
     });
   });
 

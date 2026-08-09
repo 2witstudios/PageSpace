@@ -5,7 +5,7 @@ import {
   GH_CONFIG_DIR,
   type GitSandboxRunDeps,
 } from '../git-tool-runners';
-import type { SandboxActorContext } from '../tool-runners';
+import type { SandboxActorContext, SandboxRunDeps } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import { assert } from './riteway';
@@ -49,7 +49,7 @@ function makeDeps(over: Partial<GitSandboxRunDeps> = {}, token: string | null = 
   const { sandbox, runCommandCalls } = makeSandbox(over.reconnect ? undefined : undefined);
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -81,7 +81,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
   const slots = { acquired: 0, released: 0 };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -104,22 +104,22 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].args).toEqual(['status']);
   });
 
-  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+  it('given a ctx, should thread agentPageId/conversationId onto the acquireSandbox request', async () => {
     const seen: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
       },
     });
     await runGitInSandbox({
       cmd: 'git',
       args: ['status'],
-      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-1', conversationId: 'c1' }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      expect.objectContaining({ agentPageId: 'agent-1', conversationId: 'c1' }),
     ]);
   });
 
@@ -362,5 +362,216 @@ describe('buildGitToolEnv (pure)', () => {
       },
       expected: { NODE_ENV: 'test', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
     });
+  });
+});
+
+describe('opportunistic storage measurement', () => {
+  it('should measure the session AFTER the git command — clone is the biggest writer here', async () => {
+    // A session that only ever ran git tools was never measured at all: the bash
+    // path fires this seam from its `release`, and the git path has its own
+    // acquire/release which did not. So an agent that cloned a large repo and
+    // did nothing else billed its empty-disk baseline while the reconcile
+    // advanced the watermark over gigabytes of checkout.
+    //
+    // Ordering asserted, not just the call: measuring before the command records
+    // the pre-write footprint and then lets the per-session throttle suppress
+    // the real one.
+    const order: string[] = [];
+    const { deps } = makeDeps({
+      reconnect: async () => ({
+        sandboxId: 'sbx-1',
+        spriteInstanceId: null,
+        runCommand: async (): Promise<SandboxRunResult> => {
+          order.push('command');
+          return { exitCode: 0, stdout: 'ok', stderr: '' };
+        },
+        writeFiles: async () => {},
+        readFileToBuffer: async () => Buffer.from(''),
+        createCheckpoint: async () => {},
+      }),
+      measureStorage: async ({ workspaceId }) => {
+        order.push(`measure:${workspaceId}`);
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: 'c1' }), deps });
+    await Promise.resolve();
+
+    expect(order).toEqual(['command', 'measure:ws-1']);
+  });
+
+  it('given a THROWING measurement, should log it rather than swallow it silently', async () => {
+    // "Best-effort" must not mean invisible. If this throws on every git call —
+    // a bad exec adapter, a missing `du` — the largest writer in the system
+    // stops being measured with no symptom whatsoever, which is exactly the bug
+    // the seam was wired to fix, back again and now undetectable.
+    const warnings: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const { deps } = makeDeps({
+      measureStorage: async () => {
+        throw new Error('du: command not found');
+      },
+      logger: {
+        warn: (message: string, meta?: Record<string, unknown>) => {
+          warnings.push({ message, meta });
+        },
+        error: () => {},
+      },
+    });
+
+    const result = await runGitInSandbox({
+      cmd: 'git',
+      args: ['status'],
+      ctx: makeCtx({ conversationId: 'c1' }),
+      deps,
+    });
+
+    // The tool result is untouched — a billing observation never fails the op.
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].meta).toMatchObject({ workspaceId: 'ws-1' });
+  });
+
+  it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
+    // The old gate keyed on the conversation and silently skipped measurement
+    // whenever the two ids diverged (codex review, P1: underbilling). The
+    // session id comes from the acquire itself, so it is always present on a
+    // successful run.
+    const measured: Array<{ workspaceId: string }> = [];
+    const { deps } = makeDeps({
+      measureStorage: async (input) => {
+        measured.push(input as { workspaceId: string });
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: undefined }), deps });
+    await Promise.resolve();
+
+    expect(measured).toMatchObject([{ workspaceId: 'ws-1' }]);
+  });
+});
+
+/**
+ * Mirrors `tool-runners.test.ts`'s `makeBilling` — the same fake `billing`
+ * deps every other sandbox-op runner's billing tests use.
+ */
+function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {}): {
+  billing: NonNullable<SandboxRunDeps['billing']>;
+  resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }>;
+  gateCalls: Array<{ payerId: string }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }>;
+  releaseHoldCalls: string[];
+} {
+  const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+  const gateCalls: Array<{ payerId: string }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }> = [];
+  const releaseHoldCalls: string[] = [];
+  const billing: NonNullable<SandboxRunDeps['billing']> = {
+    resolvePayerId: async (input) => {
+      resolvePayerIdCalls.push(input);
+      return input.ownerId;
+    },
+    gate: async (input) => {
+      gateCalls.push(input);
+      return { allowed: true, holdId: 'hold-1' };
+    },
+    trackUsage: async (input) => {
+      trackUsageCalls.push(input);
+    },
+    releaseHold: async (holdId) => {
+      releaseHoldCalls.push(holdId);
+    },
+    ...over,
+  };
+  return { billing, resolvePayerIdCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
+}
+
+/** Mirrors `tool-runners.test.ts`'s `makeBillingSession` fake. */
+function makeBillingSession(
+  over: Partial<{ workspaceId: string; driveId: string | null; ownerId: string }> = {},
+): NonNullable<SandboxRunDeps['resolveBillingSession']> {
+  return async (ctx) => ({
+    workspaceId: over.workspaceId ?? 'ws-1',
+    driveId: over.driveId !== undefined ? over.driveId : (ctx.driveId ?? null),
+    ownerId: over.ownerId ?? ctx.tenantId,
+  });
+}
+
+describe('runGitInSandbox — machine billing (issue #2315: git/gh tools were never gated)', () => {
+  it('places a hold BEFORE the sandbox is acquired, keyed to the payer resolved from the SESSION', async () => {
+    const { deps, slots } = makeDepsWithSpy();
+    const { billing, gateCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42' });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
+
+    expect(gateCalls).toEqual([{ payerId: 'owner-42' }]);
+    // The gate ran before acquisition — proven by acquisition having happened
+    // at all (a denied gate, tested below, never reaches it).
+    expect(slots.acquired).toBe(1);
+  });
+
+  it('on a successful git run, settles EXACTLY one usage row via trackUsage with the real active-window seconds', async () => {
+    let now = NOW.getTime();
+    const { sandbox } = makeSandbox({
+      runCommand: async () => {
+        now += 3000; // the sandbox was "active" for 3s running this git command
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox, now: () => new Date(now) });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' });
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['clone', 'https://github.com/a/b'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: true });
+    expect(trackUsageCalls).toEqual([
+      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
+    ]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given the gate denies (insufficient credits), fails credit_exhausted, NEVER acquires a sandbox slot, and NEVER runs the git command — this is the exact gap issue #2315 closes', async () => {
+    const { deps, slots, runCommandCalls } = makeDepsWithSpy();
+    const { billing } = makeBilling({
+      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
+    });
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession();
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['clone', 'https://github.com/a/b'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
+    expect(slots.acquired).toBe(0);
+    expect(runCommandCalls).toHaveLength(0);
+  });
+
+  it('given a forced execution error, releases the hold and records NO usage row', async () => {
+    const { sandbox } = makeSandbox({
+      runCommand: async () => {
+        throw new Error('sandbox crashed');
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession();
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['fetch'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(trackUsageCalls).toEqual([]);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given NO billing deps at all, runs unmetered exactly as before — an unmetered deployment is unaffected by this wiring', async () => {
+    const { deps, runCommandCalls } = makeDepsWithSpy();
+    const result = await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(runCommandCalls).toHaveLength(1);
   });
 });

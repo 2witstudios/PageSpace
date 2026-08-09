@@ -11,6 +11,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 
 interface SearchResult {
   id: string;
@@ -23,16 +24,6 @@ interface SearchResult {
   avatarUrl?: string | null;
   matchLocation?: 'title' | 'content' | 'both';
   relevanceScore?: number;
-}
-
-/**
- * Escape LIKE pattern metacharacters to prevent injection
- */
-function escapeLikePattern(input: string): string {
-  return input
-    .replace(/\\/g, '\\\\')
-    .replace(/%/g, '\\%')
-    .replace(/_/g, '\\_');
 }
 
 /**

@@ -18,7 +18,9 @@
  * (a large `limit` keeps the seeded users in the result regardless of other data).
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
@@ -29,6 +31,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { getBalanceDriftAlerts, getNegativeMarginAccounts } from '../monitoring-queries';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 // Large enough that the seeded users always survive the queries' ORDER BY ... LIMIT even
 // if the target DB already holds unrelated billing rows.
@@ -65,7 +68,8 @@ describe('account-alerts monitoring queries (Postgres)', () => {
     try {
       await db.select().from(creditBalances).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('account-alerts-queries.integration.test.ts', error);
       dbAvailable = false;
     }
   });

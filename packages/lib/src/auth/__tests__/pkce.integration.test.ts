@@ -16,6 +16,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import { generatePKCE, consumePKCEVerifier } from '../pkce';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 const originalNodeEnv = process.env.NODE_ENV;
 let dbAvailable = false;
@@ -33,7 +34,8 @@ describe('PKCE (Postgres-backed auth_handoff_tokens, kind=pkce)', () => {
     try {
       await db.select().from(authHandoffTokens).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('pkce.integration.test.ts', error);
       dbAvailable = false;
     }
   });

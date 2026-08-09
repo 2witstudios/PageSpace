@@ -1,6 +1,8 @@
 import type { UIMessage } from 'ai';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
+import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 /**
  * Facade — the sanctioned way for a component to WRITE to
@@ -18,16 +20,59 @@ export const conversationMessagesActions = {
   /** True while `generation` is still the newest `startLoad` result for `conversationId` — false once a newer load has superseded it. */
   isLoadCurrent: (conversationId: string, generation: number): boolean =>
     useConversationMessagesStore.getState().isLoadCurrent(conversationId, generation),
-  applyLoad: (conversationId: string, generation: number, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages),
+  applyLoad: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+    rev?: number | null,
+  ): void =>
+    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages, pagination, rev),
   failLoad: (conversationId: string, generation: number): void =>
     useConversationMessagesStore.getState().failLoad(conversationId, generation),
+  /** The conversation's rev watermark (Agent-Session SSoT epic, Phase 2), or null when no load has established one. */
+  getRev: (conversationId: string): number | null =>
+    useConversationMessagesStore.getState().getRev(conversationId),
+  /** Advance the watermark after an event's payload was applied — monotonic; no-op for an uncached conversation. */
+  advanceRev: (conversationId: string, rev: number): void =>
+    useConversationMessagesStore.getState().advanceRev(conversationId, rev),
+  /** Imperative snapshot read of a conversation's cache entry (defaults when never seen). */
+  getEntry: (conversationId: string): ConversationCacheEntry =>
+    useConversationMessagesStore.getState().getEntry(conversationId),
+  /** True when the conversation has a REAL cache entry (loaded/seeded/sent this session) — see the store docblock. */
+  hasEntry: (conversationId: string): boolean =>
+    useConversationMessagesStore.getState().hasEntry(conversationId),
+  /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
+  startLoadingOlder: (conversationId: string): void =>
+    useConversationMessagesStore.getState().startLoadingOlder(conversationId),
+  /** Prepends a dedup'd older page and advances olderCursor/hasMoreOlder; generation-gated. */
+  applyOlderPage: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    hasMoreOlder: boolean,
+    nextCursor: string | null,
+  ): void =>
+    useConversationMessagesStore.getState().applyOlderPage(conversationId, generation, messages, hasMoreOlder, nextCursor),
+  /** Clears isLoadingOlder on a failed "load older" fetch; leaves the cache otherwise intact. */
+  failLoadingOlder: (conversationId: string, generation: number): void =>
+    useConversationMessagesStore.getState().failLoadingOlder(conversationId, generation),
   addOptimisticSend: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().addOptimisticSend(conversationId, message),
+  /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9). */
+  removeOptimisticSendOnFailure: (conversationId: string, messageId: string): void =>
+    useConversationMessagesStore.getState().removeOptimisticSendOnFailure(conversationId, messageId),
   applyEdit: (conversationId: string, payload: MessageEditPayload): void =>
     useConversationMessagesStore.getState().applyEdit(conversationId, payload),
-  applyDelete: (conversationId: string, messageId: string): void =>
-    useConversationMessagesStore.getState().applyDelete(conversationId, messageId),
+  /** `rev`: the deleting event's post-write rev, when it carried one — see PendingMutation. */
+  applyDelete: (conversationId: string, messageId: string, rev?: number): void =>
+    useConversationMessagesStore.getState().applyDelete(conversationId, messageId, rev),
+  /** Optimistic ask_user answer patch — the resume POST's own commit reconciles it once persisted. */
+  applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload): void =>
+    useConversationMessagesStore.getState().applyAskUserAnswer(conversationId, payload),
+  /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
+  revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload): void =>
+    useConversationMessagesStore.getState().revertAskUserAnswer(conversationId, payload),
   /**
    * Appends a broadcast user message, reconciling it out of `optimisticSends` if
    * present. No-ops if the id is already confirmed — correct for a user message,
@@ -43,8 +88,8 @@ export const conversationMessagesActions = {
    * cross-instance recovery), where an existing row under this id may be a
    * stale/half-streamed snapshot that must be overwritten, not skipped.
    */
-  applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
-    useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
+  applyConfirmedMessage: (conversationId: string, message: UIMessage, rev?: number): void =>
+    useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message, rev),
   /**
    * Promote optimistic sends into confirmed messages. Call on THIS TAB'S OWN
    * stream commit only — an own reply proves the user rows that triggered it
@@ -55,9 +100,15 @@ export const conversationMessagesActions = {
   /** Capture the token a background snapshot must present at commit — call BEFORE the fetch. */
   beginServerSnapshot: (conversationId: string): number =>
     useConversationMessagesStore.getState().beginServerSnapshot(conversationId),
-  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. */
-  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages),
+  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. Merges onto older loaded pages — see mergeSnapshotTail. */
+  applyServerSnapshot: (
+    conversationId: string,
+    generationToken: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+    rev?: number | null,
+  ): void =>
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages, pagination, rev),
   /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
   seedConversation: (conversationId: string): void =>
     useConversationMessagesStore.getState().seedConversation(conversationId),

@@ -85,6 +85,7 @@ export async function GET(request: Request) {
     }
 
     if (dbIds.length > 0) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const rows = await db.query.commands.findMany({
         where: inArray(commands.id, dbIds),
         with: { entryPage: { columns: { id: true, isTrashed: true } } },

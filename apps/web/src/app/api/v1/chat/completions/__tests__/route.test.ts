@@ -31,7 +31,6 @@ vi.mock('@pagespace/db/db', () => ({
     }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
     query: {
-      chatMessages: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
 }));
@@ -58,7 +57,6 @@ vi.mock('@pagespace/db/operators', () => ({
 
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', type: 'pages.type' },
-  chatMessages: {},
   drives: {},
 }));
 
@@ -92,9 +90,19 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
 vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
 }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    // Absorbed from `chat-message-repository` by the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — one
+    // module now serves both the history reads and the durable writes.
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
+}));
 vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
     const msg = m as { id: string; role: string; content: string };
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
@@ -117,6 +125,10 @@ vi.mock('@/lib/ai/core/ai-tools', async () => {
   };
 });
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
   filterToolsForImageGen: vi.fn((tools: unknown) => tools),
@@ -142,14 +154,6 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
-}));
-
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
-    getMessagesForPage: vi.fn().mockResolvedValue([]),
-    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
-    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -194,8 +198,9 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+
+import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -248,7 +253,7 @@ describe('POST /api/v1/chat/completions', () => {
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
     } as unknown as ReturnType<typeof db.select>);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
     vi.mocked(hasFileParts).mockReturnValue(false);
     vi.mocked(hasVisionCapability).mockReturnValue(true);
@@ -632,9 +637,9 @@ describe('POST /api/v1/chat/completions', () => {
       { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
       { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
-    const calls = vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls;
+    const calls = vi.mocked(messageRepository.getMessagesForPage).mock.calls;
     assert({
       given: 'a request with a valid conversation_id',
       should: 'call getMessagesForPage with the pageId and conversationId and return 200',
@@ -652,7 +657,7 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('thread mode: empty history is allowed (first message in thread)', async () => {
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce([]);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-new' }));
     assert({
       given: 'a thread mode request where no prior messages exist',
@@ -667,7 +672,7 @@ describe('POST /api/v1/chat/completions', () => {
       { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
       { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     const sanitizeCalls = vi.mocked(sanitizeMessagesForModel).mock.calls;
     assert({
@@ -707,7 +712,7 @@ describe('POST /api/v1/chat/completions', () => {
     assert({
       given: 'a request without a conversation_id',
       should: 'not call getMessagesForPage',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });
@@ -717,7 +722,7 @@ describe('POST /api/v1/chat/completions', () => {
     assert({
       given: 'a conversation_id containing only whitespace',
       should: 'not call getMessagesForPage',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });
@@ -833,6 +838,9 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'client',
       lastMessageAt: null,
     });
@@ -869,6 +877,9 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -915,6 +926,9 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -937,8 +951,8 @@ describe('POST /api/v1/chat/completions', () => {
     });
     assert({
       given: 'client_manages_history=true',
-      should: 'not call chatMessageRepository.getMessagesForPage (no DB history load)',
-      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      should: 'not call messageRepository.getMessagesForPage (no DB history load)',
+      actual: vi.mocked(messageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
     });
   });
@@ -953,6 +967,9 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -979,6 +996,9 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1009,6 +1029,9 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1044,7 +1067,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest(validBody));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with a step containing tool calls and results',
@@ -1112,7 +1135,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest(validBody));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with steps but no tool calls',
@@ -1144,7 +1167,7 @@ describe('POST /api/v1/chat/completions', () => {
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a tool-only turn with no text output but steps containing tool calls',
@@ -1163,7 +1186,7 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });
     // Persisting the user message is the last awaited setup step before streamText. A failure
     // here must NOT strand the gate's hold + in-flight slot until TTL.
-    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
 
     const response = await POST(makeRequest(validBody));
 
@@ -1310,7 +1333,7 @@ describe('POST /api/v1/chat/completions', () => {
     // resolving releaseHold only after a deferred tick and asserting it has settled by the
     // time POST resolves.
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-awaited' });
-    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
     let released = false;
     vi.mocked(releaseHold).mockImplementationOnce(
       () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
@@ -1336,13 +1359,16 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-private' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'an assistant message in a private conversation (isShared=false)',
@@ -1362,13 +1388,16 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: true,
+  workspaceId: null,
+  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-shared' }));
     await response.text();
 
-    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'an assistant message in a shared conversation (isShared=true)',

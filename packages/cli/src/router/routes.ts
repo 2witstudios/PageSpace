@@ -28,6 +28,7 @@ import {
   drivesRestoreHandler,
   drivesSetHomePageHandler,
   drivesTrashHandler,
+  drivesUpdateContextHandler,
 } from '../commands/drives.js';
 import { pagesReadHandler, pagesReplaceLinesHandler } from '../commands/content.js';
 import { pagesExportHandler } from '../commands/export.js';
@@ -35,6 +36,16 @@ import { createHelpHandler } from '../commands/help.js';
 import { loginHandler } from '../commands/login.js';
 import { logoutHandler } from '../commands/logout.js';
 import { mcpHandler } from '../commands/mcp.js';
+import {
+  rolesCreateHandler,
+  rolesDeleteHandler,
+  rolesGetHandler,
+  rolesListHandler,
+  rolesRemovePagePermissionsHandler,
+  rolesSetDriveWidePermissionsHandler,
+  rolesSetPagePermissionsHandler,
+  rolesUpdateHandler,
+} from '../commands/roles.js';
 import { searchGlobHandler, searchRegexHandler, searchTextHandler } from '../commands/search.js';
 import {
   pagesCreateHandler,
@@ -71,7 +82,7 @@ export interface RouteEntry extends Route {
 }
 
 const OTHER_ROUTES: readonly RouteEntry[] = [
-  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser (loopback + PKCE)' },
+  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser, or --device for a headless machine' },
   { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
   { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
   // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole
@@ -83,17 +94,34 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   // `keys edit`/`update` flag subcommand — per this phase's plan,
   // scope-editing is wizard-only.
   { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
-  { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key' },
+  { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key (--device for a headless machine)' },
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
-  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (browser approval)" },
+  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
   { path: ['drives', 'rename'], handler: drivesRenameHandler, summary: 'Rename a drive' },
+  { path: ['drives', 'update-context'], handler: drivesUpdateContextHandler, summary: "Update a drive's AI context prompt" },
   { path: ['drives', 'set-home-page'], handler: drivesSetHomePageHandler, summary: "Set (or --clear) a drive's landing page" },
   { path: ['drives', 'trash'], handler: drivesTrashHandler, summary: 'Trash a drive' },
   { path: ['drives', 'restore'], handler: drivesRestoreHandler, summary: 'Restore a trashed drive' },
+  { path: ['roles', 'list'], handler: rolesListHandler, summary: 'List custom roles in a drive' },
+  { path: ['roles', 'get'], handler: rolesGetHandler, summary: 'Get a role and its permissions' },
+  { path: ['roles', 'create'], handler: rolesCreateHandler, summary: 'Create a custom role' },
+  { path: ['roles', 'update'], handler: rolesUpdateHandler, summary: "Update a role's fields and drive-wide permissions" },
+  { path: ['roles', 'delete'], handler: rolesDeleteHandler, summary: 'Delete a role' },
+  { path: ['roles', 'set-page-permissions'], handler: rolesSetPagePermissionsHandler, summary: "Grant a role's permissions on a page" },
+  {
+    path: ['roles', 'set-drive-wide-permissions'],
+    handler: rolesSetDriveWidePermissionsHandler,
+    summary: "Set a role's drive-wide baseline permissions",
+  },
+  {
+    path: ['roles', 'remove-page-permissions'],
+    handler: rolesRemovePagePermissionsHandler,
+    summary: "Remove a role's per-page permission override",
+  },
   { path: ['pages', 'list'], handler: pagesListHandler, summary: 'List pages in a drive' },
   { path: ['pages', 'tree'], handler: pagesTreeHandler, summary: 'Show a page subtree' },
   { path: ['pages', 'read-details'], handler: pagesReadDetailsHandler, summary: 'Read page metadata' },

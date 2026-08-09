@@ -36,25 +36,32 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    ai: {
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  // Declared INSIDE the factory: `vi.mock` is hoisted above every top-level
+  // binding, so a shared helper declared outside is still uninitialized here.
+  const stub = () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    child: vi.fn(() => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
-      child: vi.fn(() => ({
-        info: vi.fn(),
-        error: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-        trace: vi.fn(),
-      })),
-    },
-  },
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-}));
+    })),
+  });
+  // `api` as well as `ai`: the conversation repository and the lifecycle
+  // emitter log there, and both are now reached — `createConversation` used to
+  // bail before either. A missing channel surfaces as an unhandled rejection
+  // inside a fire-and-forget block, which passes the suite and fails the run.
+  return {
+    loggers: { ai: stub(), api: stub(), db: stub() },
+    logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
@@ -72,33 +79,71 @@ vi.mock('@pagespace/db/db', () => {
     includeDrivePrompt: false,
     includePageTree: false,
     pageTreeScope: null,
+    // This suite is ABOUT the sandbox git toolkit reaching the integration
+    // resolver — the per-agent switch must be on for the tools to exist at all.
+    sandboxEnabled: true,
     revision: 0,
+  };
+  const dbLike = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => {
+          const result = Promise.resolve([pageRow]);
+          return Object.assign(result, {
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue([]),
+            // The route's atomic active-conversation re-check
+            // (`.where(...).for('update').limit(1)`) — active by default,
+            // this suite isn't about that race.
+            for: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ isActive: true }]) })),
+          });
+        }),
+      })),
+    })),
   };
   return {
     db: {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => {
-            const result = Promise.resolve([pageRow]);
-            return Object.assign(result, {
-              orderBy: vi.fn().mockResolvedValue([]),
-              limit: vi.fn().mockResolvedValue([]),
-            });
-          }),
+      ...dbLike,
+      // `createConversation` reaches this now. It used to short-circuit before
+      // the insert because the owner-conflict probe read THIS page fixture as a
+      // conflicting message row (it selected `userId`, the page row has none,
+      // and `undefined !== null` passed the JS filter). That probe is a scoped
+      // existence check in SQL now, so it correctly finds nothing and the
+      // creation proceeds — which is the path that needs an insert.
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: 'conv_new', rev: 1 }]),
+          })),
+          returning: vi.fn().mockResolvedValue([{ id: 'conv_new', rev: 1 }]),
         })),
       })),
+      // A transaction runs its callback against the same db-like shape.
+      transaction: vi.fn(async (callback: (tx: typeof dbLike) => Promise<unknown>) => callback(dbLike)),
     },
   };
 });
+// exists/sql: globalConversationRepository's module-scope `hasMessages` query
+// (now reachable transitively via stream-takeover -> materialize-interrupted-stream
+// -> global-conversation-repository, #2153) needs both or the module throws on import.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  exists: vi.fn(),
+  sql: vi.fn(),
+  // The rest of the operator surface the repositories reach for. A partial
+  // mock here does not fail loudly: the missing export is `undefined`, so the
+  // first call throws mid-turn and the assertion below just sees zero calls.
+  ne: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+  isDistinctFrom: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
@@ -136,11 +181,19 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     list_pages: { description: 'list_pages' },
   },
 }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    saveGlobalMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    insertPageStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+  },
+}));
+
 vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
-  saveMessageToDatabase: vi.fn(),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertDbMessageToUIMessage: vi.fn(),
 }));
@@ -167,7 +220,6 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-
 vi.mock('ai', () => ({
   streamText: vi.fn(),
   convertToModelMessages: vi.fn().mockReturnValue([]),
@@ -223,6 +275,15 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn(),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
+
+// This suite is about GitHub-suppression given the sandbox toolkit IS
+// present — a real DB-backed payer-tier lookup is out of scope here (and
+// the `db` mock above has no `.query` shape for it), so the payer is always
+// eligible.
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
 }));
 
 // The resolver itself (and its suppression logic) is unit-tested in

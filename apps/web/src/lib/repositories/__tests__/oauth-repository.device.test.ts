@@ -23,6 +23,7 @@ const H = vi.hoisted(() => ({
     expiresAt: 'device_codes.expiresAt',
     approvedAt: 'device_codes.approvedAt',
     deniedAt: 'device_codes.deniedAt',
+    redeemedAt: 'device_codes.redeemedAt',
     lastPolledAt: 'device_codes.lastPolledAt',
     pollIntervalSeconds: 'device_codes.pollIntervalSeconds',
   } as Record<string, unknown>,
@@ -48,6 +49,19 @@ vi.mock('@pagespace/db/schema/oauth', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: H.usersTable,
 }));
+// `applyKeyGrant` (shared with the authorization-code exchange) delegates the
+// actual mcp_tokens writes to sessionRepository, which has its own dedicated
+// coverage — mocked here rather than extending this harness to model those
+// tables too.
+vi.mock('../session-repository', () => ({
+  sessionRepository: {
+    createMcpTokenWithDriveScopes: vi.fn(),
+    updateMcpTokenDriveScopes: vi.fn(),
+    findActiveMcpTokenByIdAndUser: vi.fn(),
+    findUserMcpTokensWithDrives: vi.fn(),
+  },
+}));
+
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _eq: [a, b] })),
   and: vi.fn((...args: unknown[]) => ({ _and: args })),
@@ -77,6 +91,7 @@ interface DeviceRow {
   expiresAt: Date;
   approvedAt: Date | null;
   deniedAt: Date | null;
+  redeemedAt: Date | null;
   lastPolledAt: Date | null;
   pollIntervalSeconds: number;
 }
@@ -185,6 +200,7 @@ import {
   verifyDeviceUserCode,
   recordDeviceApproval,
 } from '../oauth-repository';
+import { sessionRepository } from '../session-repository';
 
 const DEVICE_CODE = 'raw-device-code-value';
 const USER_CODE = 'ABCDEFGH';
@@ -202,6 +218,7 @@ function seedDeviceRow(overrides: Partial<DeviceRow> = {}): void {
     expiresAt: new Date(Date.now() + 1800_000),
     approvedAt: null,
     deniedAt: null,
+    redeemedAt: null,
     lastPolledAt: null,
     pollIntervalSeconds: 5,
     ...overrides,
@@ -341,6 +358,149 @@ describe('pollDeviceToken', () => {
     expect(result).toEqual({ outcome: 'user_suspended' });
     expect(refreshRows).toHaveLength(0);
     expect(accessRows).toHaveLength(0);
+  });
+
+  describe('single-use redemption (RFC 8628 §3.5)', () => {
+    it('marks the device code redeemed when it issues a token pair', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
+      const now = new Date();
+
+      await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+
+      expect(deviceRow?.redeemedAt).toEqual(now);
+    });
+
+    // Without this, an approved device code keeps issuing on every poll until
+    // it expires — and once the device flow can mint keys, every extra poll
+    // would mint another mcp_* key.
+    it('refuses a second poll of an already-redeemed code and issues nothing more', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
+
+      const first = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      expect(first.outcome).toBe('ok');
+      expect(accessRows).toHaveLength(1);
+
+      const second = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      expect(second).toEqual({ outcome: 'already_redeemed' });
+      expect(accessRows).toHaveLength(1);
+      expect(refreshRows).toHaveLength(1);
+    });
+
+    it('reports already_redeemed rather than expired_token once a redeemed code passes its TTL', async () => {
+      seedDeviceRow({
+        approvedAt: new Date(),
+        userId: USER_ID,
+        redeemedAt: new Date(Date.now() - 2000),
+        expiresAt: new Date(Date.now() - 1000),
+      });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      expect(result).toEqual({ outcome: 'already_redeemed' });
+    });
+  });
+
+  describe('key-shaped grants (keys create/edit/use --device)', () => {
+    it('mints an mcp_* key for a named drive grant instead of an OAuth token pair', async () => {
+      seedDeviceRow({
+        approvedAt: new Date(),
+        userId: USER_ID,
+        scopes: ['drive:drv1:member', 'name:remote-key', 'offline_access'],
+      });
+      const now = new Date();
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+
+      expect(result.outcome).toBe('ok_mcp_token');
+      if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
+      expect(result.mcpToken).toMatch(/^mcp_/);
+      expect(result.userId).toBe(USER_ID);
+      // A key grant produces NO OAuth pair at all.
+      expect(accessRows).toHaveLength(0);
+      expect(refreshRows).toHaveLength(0);
+      expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: USER_ID,
+          name: 'remote-key',
+          isScoped: true,
+          drives: [expect.objectContaining({ id: 'drv1', role: 'MEMBER' })],
+        }),
+        expect.anything(),
+      );
+      expect(deviceRow?.redeemedAt).toEqual(now);
+    });
+
+    it('re-scopes an existing key in place for an update_key grant, minting nothing', async () => {
+      vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue({ id: 'tok123' } as never);
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['update_key:tok123', 'drive:drv1:member'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result.outcome).toBe('ok_mcp_update');
+      if (result.outcome !== 'ok_mcp_update') throw new Error('unreachable');
+      expect(result.tokenId).toBe('tok123');
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(0);
+    });
+
+    it('approves an activate_key grant without minting or changing anything', async () => {
+      vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue({
+        id: 'tok123',
+        name: 'work',
+      } as never);
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['activate_key:tok123'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result.outcome).toBe('ok_mcp_activate');
+      if (result.outcome !== 'ok_mcp_activate') throw new Error('unreachable');
+      expect(result.tokenId).toBe('tok123');
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(0);
+    });
+
+    it('burns the code when the update target was revoked between consent and redemption (fail closed)', async () => {
+      vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue(null as never);
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['update_key:tok123', 'drive:drv1:member'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result).toEqual({ outcome: 'update_target_gone' });
+      expect(deviceRow?.redeemedAt).not.toBeNull();
+    });
+
+    it('burns the code when the activate target was revoked between consent and redemption (fail closed)', async () => {
+      vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue(null as never);
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['activate_key:tok123'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result).toEqual({ outcome: 'activate_target_gone' });
+      expect(deviceRow?.redeemedAt).not.toBeNull();
+    });
+
+    // The device_authorization door already refuses all_drives; this is the
+    // redemption-time backstop for a row that somehow carries it anyway.
+    it('refuses to redeem an all_drives grant even if one reaches redemption, and mints nothing', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['all_drives', 'offline_access'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result).toEqual({ outcome: 'all_drives_unsupported' });
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(0);
+      expect(deviceRow?.redeemedAt).not.toBeNull();
+    });
+
+    it('still mints a plain OAuth pair for an ordinary manage_keys login grant', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['manage_keys', 'offline_access'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result.outcome).toBe('ok');
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(1);
+    });
   });
 
   describe('F1 — refresh token gated on offline_access', () => {

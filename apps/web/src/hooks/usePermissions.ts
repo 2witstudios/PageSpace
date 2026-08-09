@@ -90,16 +90,6 @@ export function useCanEdit(pageId?: string | null, driveOwnerId?: string): boole
   return permissions?.canEdit || false;
 }
 
-export function useCanShare(pageId?: string | null, driveOwnerId?: string): boolean {
-  const { permissions } = usePermissions(pageId, driveOwnerId);
-  return permissions?.canShare || false;
-}
-
-export function useCanDelete(pageId?: string | null, driveOwnerId?: string): boolean {
-  const { permissions } = usePermissions(pageId, driveOwnerId);
-  return permissions?.canDelete || false;
-}
-
 /**
  * Get permission error message
  */

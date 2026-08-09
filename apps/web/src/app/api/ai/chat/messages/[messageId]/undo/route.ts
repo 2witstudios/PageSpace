@@ -7,10 +7,19 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { broadcastAiUndoApplied } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { canAccessConversation, type ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
+
+/**
+ * The fail-closed stand-in when a message has no conversation row. The
+ * predicate is `owner OR (isShared AND page access)`, so an empty owner matches
+ * nobody and `isShared: false` stops there — "no row" denies, which is the rule
+ * `conversation-access.ts` states for exactly this case.
+ */
+const NO_CONVERSATION: ConversationAccessRow = { userId: '', isShared: false, type: 'page', contextId: null };
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -34,8 +43,54 @@ async function checkUndoPermissions(
   operationType: 'preview' | 'execution'
 ): Promise<NextResponse | null> {
   if (preview.source === 'page_chat') {
+    // THE CONVERSATION DECIDES FIRST (review finding — MAJOR).
+    //
+    // This branch used to run `canPrincipalEditPage` and nothing else, while
+    // the sweep in `ai-undo-service` is scoped by `conversationId` alone. So
+    // any drive member with EDIT on a shared agent page could undo another
+    // member's PRIVATE conversation on that page — soft-deleting a range of
+    // their messages and rolling back the activities behind them. The GLOBAL
+    // branch below always checked ownership, so the weaker gate sat on the
+    // shared surface, not the private one.
+    //
+    // `conversation-access.ts` — added by this same epic — says it outright:
+    // "authorizing on 'can this user view the page' would hand one member's
+    // private conversation to every other member." That is this, with edit
+    // instead of view, on a DESTRUCTIVE verb. Every conversation-scoped READ
+    // was routed through the shared predicate; this was the one WRITE left on
+    // the old gate.
+    //
+    // Both gates now apply, and the composition is deliberate: the CONVERSATION
+    // decides who may touch this thread (owner, or a shared thread whose page
+    // they can see), and the PAGE decides whether they may mutate page state,
+    // which undo does when it rolls activities back. Strictly narrower than
+    // before — nothing that was allowed and legitimate becomes denied.
+    if (!(await canAccessConversation(userId, preview.conversationAccess ?? NO_CONVERSATION))) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_accessible', operationType, conversationId: preview.conversationId }, riskScore: 0.6 });
+      return NextResponse.json(
+        { error: 'You do not have permission to undo messages in this chat' },
+        { status: 403 }
+      );
+    }
+
     if (!preview.pageId) {
-      return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
+      // A conversation that names no page — `type='drive'`, or a row whose
+      // conversation is gone. It reached this branch because `source` is
+      // "anything that is not global", and there is no page permission to ask
+      // about (review finding — MINOR: this used to be a 500, which reads as a
+      // server fault for what is really "this verb does not apply here").
+      //
+      // 404, not 403: the caller has already passed the conversation gate, so
+      // this says nothing about a resource they cannot see, and matches how
+      // the page-scoped routes answer a message whose derived page is NULL.
+      loggers.api.warn(`Undo ${operationType} on a conversation that names no page`, {
+        messageId: maskIdentifier(messageId),
+        conversationId: maskIdentifier(preview.conversationId),
+      });
+      return NextResponse.json(
+        { error: 'This conversation does not support undo' },
+        { status: 404 }
+      );
     }
 
     // Check MCP page scope
@@ -89,7 +144,7 @@ export async function GET(
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'preview', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'preview', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -154,7 +209,7 @@ export async function POST(
     // Authenticate with CSRF
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'execute', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'execute', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -221,33 +276,42 @@ export async function POST(
       );
     }
 
-    // Broadcast chat:undo_applied so remote viewers refresh their conversation.
-    // Page-event broadcasts below cover the page-domain side; this one covers the
-    // chat-domain side (conversation history). Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        const broadcastPageId = preview.source === 'page_chat' && preview.pageId
-          ? preview.pageId
-          : globalChannelId(userId);
-        const messageIdsFromActivities = preview.activitiesAffected
-          .filter((a) => a.resourceType === 'message')
-          .map((a) => a.resourceId);
-        const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
-        await broadcastAiUndoApplied({
-          conversationId: preview.conversationId,
-          pageId: broadcastPageId,
-          mode,
-          affectedMessageIds,
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast chat undo-applied', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(preview.conversationId),
-        });
-      }
-    })();
+    // ANNOUNCE the undo. The rev bump already happened, inside the write
+    // transaction, via `messageRepository.softDeleteUndoRange` — this route
+    // only carries that post-write rev out to the rooms: the legacy
+    // chat:undo_applied (moved in from here) plus the authoritative
+    // conversation:undo_applied. Page-event broadcasts below cover the
+    // page-domain side.
+    //
+    // The route MUST NOT bump. It used to: `recordUndoApplied` opened its own
+    // transaction here, after the write had already committed, inside a
+    // swallowing try/catch. A single failure in that block meant a committed
+    // deletion with no rev movement and no event — permanent silent staleness
+    // in every open pane, because `syncWatchedConversationRevs` compares revs
+    // and nothing else, so it could never heal. Emission is still best-effort
+    // (it is delivery, not durability); the rev is what makes losing it
+    // recoverable.
+    if (result.bumpedConversation !== undefined) {
+      const legacyTriggeredBy = await resolveTriggeredBy(userId, request);
+      const broadcastPageId = preview.source === 'page_chat' && preview.pageId
+        ? preview.pageId
+        : globalChannelId(userId);
+      const messageIdsFromActivities = preview.activitiesAffected
+        .filter((a) => a.resourceType === 'message')
+        .map((a) => a.resourceId);
+      const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
+      messageRepository.emitUndoApplied({
+        conversationId: preview.conversationId,
+        bumped: result.bumpedConversation,
+        legacyChannelId: broadcastPageId,
+        scope: preview.source === 'page_chat' && preview.pageId
+          ? { kind: 'page', pageId: preview.pageId }
+          : { kind: 'global', ownerId: userId },
+        mode,
+        affectedMessageIds,
+        legacyTriggeredBy,
+      });
+    }
 
     // Broadcast real-time updates for affected pages and channels
     if (mode === 'messages_and_changes') {

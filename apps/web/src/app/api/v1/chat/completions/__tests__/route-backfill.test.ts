@@ -25,7 +25,6 @@ vi.mock('@pagespace/db/db', () => ({
     }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
     query: {
-      chatMessages: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
 }));
@@ -48,11 +47,31 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_col, val) => ({ __eq: val })),
   and: vi.fn((...args) => ({ __and: args })),
+  sql: vi.fn(),
+  ne: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    // Absorbed from `chat-message-repository` by the reader cutover (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12) — one
+    // module now serves both the history reads and the durable writes.
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+  },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', type: 'pages.type' },
-  chatMessages: {},
   drives: {},
 }));
 
@@ -90,7 +109,6 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 
 vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
     const msg = m as { id: string; role: string; content: string };
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
@@ -104,6 +122,10 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 }));
 
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
   filterToolsForImageGen: vi.fn((tools: unknown) => tools),
@@ -125,14 +147,6 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
-}));
-
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
-    getMessagesForPage: vi.fn().mockResolvedValue([]),
-    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
-    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -168,10 +182,11 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+
 import { extractToolResults } from '@/lib/ai/core/message-utils';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -212,7 +227,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
     } as unknown as ReturnType<typeof db.select>);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
   });
 
@@ -220,9 +235,8 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
     const fakeResults = [{ toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' as const }];
     vi.mocked(extractToolResults).mockReturnValue(fakeResults);
 
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
       id: 'db-row-server-id',
-      pageId: 'page-123',
       conversationId: 'conv-abc',
       userId: 'user-1',
       role: 'assistant',
@@ -245,6 +259,9 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -266,7 +283,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
     await response.text();
     await new Promise(r => setTimeout(r, 0));
 
-    const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
+    const backFillCalls = vi.mocked(messageRepository.updateMessageToolResults).mock.calls;
     assert({
       given: 'client_manages_history=true with a prior assistant message carrying output-available tool parts',
       should: 'back-fill using the DB row ID matched via tool_call_id, not the UIMessage id',
@@ -288,9 +305,8 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
     const fakeResults = [{ toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' as const }];
     vi.mocked(extractToolResults).mockReturnValue(fakeResults);
 
-    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
+    vi.mocked(messageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
       id: 'db-row-server-id',
-      pageId: 'page-123',
       conversationId: 'conv-abc',
       userId: 'user-1',
       role: 'assistant',
@@ -313,6 +329,9 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -334,7 +353,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
     await response.text();
     await new Promise(r => setTimeout(r, 0));
 
-    const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
+    const backFillCalls = vi.mocked(messageRepository.updateMessageToolResults).mock.calls;
     assert({
       given: 'client_manages_history=true with OpenAI-format messages that have no id fields',
       should: 'back-fill using the server-assigned DB row ID, not the random UIMessage id',
@@ -357,6 +376,9 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  workspaceId: null,
+      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      planPageId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -378,7 +400,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
     assert({
       given: 'client_manages_history=true but no prior assistant messages have output-available tool parts',
       should: 'not call updateMessageToolResults at all',
-      actual: vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls.length,
+      actual: vi.mocked(messageRepository.updateMessageToolResults).mock.calls.length,
       expected: 0,
     });
   });

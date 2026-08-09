@@ -30,7 +30,36 @@ on:
       - '.github/workflows/security.yml'
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
+      # Surfaces that only scripts/test-security.sh covers. Without these the
+      # script would be wired in and still dark for the code it uniquely guards:
+      # the OAuth 2.1 provider routes/repository, the MCP WebSocket route, the
+      # AI tools' SSRF boundary, and the CLI/SDK credential + token paths.
+      - 'apps/web/src/app/api/oauth/**'
+      - 'apps/web/src/app/api/mcp-ws/**'
+      - 'apps/web/src/lib/ai/tools/**'
+      - 'apps/web/src/lib/repositories/**'
+      - 'packages/cli/**'
+      - 'packages/sdk/**'
+      # The agent-workspace layer. Its compare-and-swap suite
+      # (`agent-sessions-store.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere — and a path filter
+      # that omitted the code under test meant a PR touching only
+      # `agent-sessions-store.ts` never triggered this workflow and never ran
+      # it. The tool-layer authz gates (`session-tools*.ts`) live under
+      # `apps/web/src/lib/ai/tools/**`, already listed above.
+      - 'packages/lib/src/services/agent-workspaces/**'
+      - 'packages/lib/src/agent-workspaces/**'
+      - 'apps/web/src/lib/agent-workspaces/**'
   pull_request:
+    # BASE branches, not head. This branch listed itself here and it bought
+    # nothing: its PR targets `master`, which is already listed, so the suite
+    # was already running on every push (and did — every commit shows one
+    # `event=pull_request` Security Tests run and no second one). The entry
+    # would only matter for a PR *targeting* this branch, and there are none.
+    # Removed rather than left as a line that provably does nothing in a
+    # security workflow. See test.yml, where the same misreading cost real
+    # capacity rather than merely being inert.
     branches: [master, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
@@ -59,6 +88,27 @@ on:
       - '.github/workflows/security.yml'
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
+      # Surfaces that only scripts/test-security.sh covers. Without these the
+      # script would be wired in and still dark for the code it uniquely guards:
+      # the OAuth 2.1 provider routes/repository, the MCP WebSocket route, the
+      # AI tools' SSRF boundary, and the CLI/SDK credential + token paths.
+      - 'apps/web/src/app/api/oauth/**'
+      - 'apps/web/src/app/api/mcp-ws/**'
+      - 'apps/web/src/lib/ai/tools/**'
+      - 'apps/web/src/lib/repositories/**'
+      - 'packages/cli/**'
+      - 'packages/sdk/**'
+      # The agent-workspace layer. Its compare-and-swap suite
+      # (`agent-sessions-store.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere — and a path filter
+      # that omitted the code under test meant a PR touching only
+      # `agent-sessions-store.ts` never triggered this workflow and never ran
+      # it. The tool-layer authz gates (`session-tools*.ts`) live under
+      # `apps/web/src/lib/ai/tools/**`, already listed above.
+      - 'packages/lib/src/services/agent-workspaces/**'
+      - 'packages/lib/src/agent-workspaces/**'
+      - 'apps/web/src/lib/agent-workspaces/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -151,9 +201,51 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # The agent-session store's compare-and-swap predicates are Postgres's
+      # guarantee, not ours: a fake compares with `===` (which handles null for
+      # free) while SQL needs `IS NULL`, so a mocked test cannot tell a correct
+      # CAS from one that silently matches nothing. This runs them for real.
+      - name: Run agent-session store integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       - name: Run permission tests
         run: |
           bun run --filter '@pagespace/lib' test:db -- src/__tests__/permissions.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # THESE RAN NOWHERE. All five are excluded from @pagespace/lib's default
+      # vitest config (they need a live Postgres) and no workflow or script
+      # named them, so `zero-trust-boundaries` and `cross-tenant-escalation` —
+      # the two suites whose entire subject is the authorization boundary — had
+      # no runner at all. `test:db` uses vitest.security.config.ts, which sets
+      # no `include` and therefore only runs the files passed as arguments;
+      # being excluded from the default config is not the same as being run
+      # somewhere else, and nothing was closing that gap.
+      #
+      # The two auth service files are the same story with an extra twist: the
+      # "web app auth library tests" step below runs `src/auth/` through the
+      # DEFAULT config, which excludes exactly these two, so that step steps
+      # right over them.
+      - name: Run zero-trust and cross-tenant boundary tests
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/permissions/__tests__/zero-trust-boundaries.test.ts \
+            src/permissions/__tests__/permission-mutations.test.ts \
+            src/__tests__/cross-tenant-escalation.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      - name: Run auth service tests (magic link, passkey)
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/auth/magic-link-service.test.ts \
+            src/auth/passkey-service.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
@@ -200,6 +292,26 @@ jobs:
         env:
           NODE_ENV: test
 
+      # scripts/test-security.sh was repaired to 51/51 green at the start of the
+      # agent-session epic and then invoked by no workflow, so nothing it uniquely
+      # covers has ever been gated: the OAuth 2.1 provider routes and repository,
+      # the MCP WebSocket route, the AI tools' SSRF boundary (web_fetch redirect /
+      # DNS-rebind), Google One Tap and open-redirect protection, the magic-link and
+      # passkey route suites, device-fingerprint utils, and the security-test-utils
+      # self-check. It is not a superset of the steps above (those add the sandbox
+      # suites, the broadcast-claim and agent-session-store concurrency tests, and
+      # whole-directory runs of packages/lib/src/auth and the web auth routes) and
+      # the steps above are not a superset of it — so it runs IN ADDITION rather
+      # than replacing them. The overlap costs runtime; the gap cost signal.
+      #
+      # DATABASE_URL is set so the script uses this job's Postgres service instead
+      # of trying to `docker compose up` its own (its local-dev path).
+      - name: Run scripts/test-security.sh (suites no step above covers)
+        run: bun run test:security
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
@@ -234,7 +346,7 @@ jobs:
           fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@v3.95.9
+        uses: trufflesecurity/trufflehog@v3.96.0
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -271,13 +383,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v4.37.4
         with:
           languages: javascript-typescript
           queries: security-extended
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v4.37.4
         with:
           category: "/language:javascript-typescript"
 

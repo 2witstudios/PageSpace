@@ -3,8 +3,9 @@
  *
  * Membership of a page in a task list is determined by the page tree: a TASK_LIST
  * page whose `parentId` points to another TASK_LIST page is a task in that parent.
- * The `task_items` row is a metadata sidecar (status, priority, position, assignee)
- * that must mirror that relationship.
+ * The `task_items` row is a metadata sidecar (status, priority, assignee)
+ * that must mirror that relationship. Ordering is NOT part of it — that lives on
+ * `pages.position` alone (#2143).
  *
  * These functions decide WHAT must change. The imperative shells in
  * `task-sync-service.ts` look up types and perform the database I/O.
@@ -29,10 +30,27 @@ export interface TaskItemSyncAction {
 
 /**
  * Decide which `task_items` mutations a page move requires:
- * - remove the row when the page leaves a TASK_LIST parent
+ * - remove the row when the page LEAVES task-list membership entirely
  * - add the row when the page lands under a TASK_LIST parent
  *
  * No-op for non-TASK_LIST pages and for pure reorders (parent unchanged).
+ *
+ * Moving between two TASK_LIST parents WITHIN A DRIVE deliberately does NOT remove.
+ * The row is keyed by pageId and carries no pointer to its list — membership is
+ * derived from pages.parentId — so it stays valid under the new parent. Removing
+ * and re-adding would destroy the user's data: addTaskItemUnderParent re-inserts
+ * bare defaults (status 'pending', priority 'medium'), and task_assignees cascades
+ * on the delete, so a task dragged between two lists silently lost its status,
+ * priority, due date, metadata and every assignee. `shouldAdd` stays true for that
+ * case so the destination list is still seeded (task_lists row + default status
+ * configs) and a genuinely missing row is still backfilled — addTaskItemUnderParent
+ * returns early when a row already exists, which is what preserves it.
+ *
+ * A CROSS-DRIVE move preserves the row too, but the caller must first scrub what IS
+ * drive-scoped — see scrubDriveScopedTaskAssociations. Deleting the row instead would
+ * throw away priority, dueDate and metadata, none of which are drive-scoped, and would
+ * only cover the moved ROOTS: a descendant's parentId never changes, so no membership
+ * event fires for it even though its drive did change.
  */
 export const resolveTaskItemSyncAction = (input: {
   movedPageType: string;
@@ -44,39 +62,43 @@ export const resolveTaskItemSyncAction = (input: {
   if (input.movedPageType !== TASK_LIST_TYPE || input.oldParentId === input.newParentId) {
     return { shouldRemove: false, shouldAdd: false };
   }
+  const landsInTaskList = input.newParentId !== null && input.newParentType === TASK_LIST_TYPE;
+  const leavesTaskList = input.oldParentId !== null && input.oldParentType === TASK_LIST_TYPE;
   return {
-    shouldRemove: input.oldParentId !== null && input.oldParentType === TASK_LIST_TYPE,
-    shouldAdd: input.newParentId !== null && input.newParentType === TASK_LIST_TYPE,
+    shouldRemove: leavesTaskList && !landsInTaskList,
+    shouldAdd: landsInTaskList,
   };
 };
-
-/**
- * Next position for a new task item: after the last child, defaulting to slot 1.
- */
-export const nextTaskItemPosition = (lastChildPosition: number | null | undefined): number =>
-  (lastChildPosition ?? 0) + 1;
 
 export interface TaskItemInsert {
   readonly userId: string;
   readonly pageId: string;
-  readonly status: 'pending';
+  readonly status: string;
   readonly priority: 'medium';
-  readonly position: number;
 }
 
 /**
  * Build the row for a new task item linked to a page.
+ *
+ * Carries no position: order lives solely on the linked page's `pages.position`
+ * (#2143), which the page itself already has by the time this row is created.
  */
 export const buildTaskItemInsert = (input: {
   pageId: string;
   userId: string;
-  lastChildPosition: number | null | undefined;
+  /**
+   * Slug to seed. Defaults to 'pending' — the first of DEFAULT_TASK_STATUSES — but a
+   * list whose owner deleted that status (permitted, via migrateToSlug) does not define
+   * it, and a hardcoded seed would create exactly the orphaned-status row that
+   * normalizeStatusForList exists to prevent. Callers that know the destination's
+   * vocabulary pass its default instead.
+   */
+  status?: string;
 }): TaskItemInsert => ({
   userId: input.userId,
   pageId: input.pageId,
-  status: 'pending',
+  status: input.status ?? 'pending',
   priority: 'medium',
-  position: nextTaskItemPosition(input.lastChildPosition),
 });
 
 /**

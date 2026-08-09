@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import {
@@ -13,6 +13,22 @@ import {
 // WorkflowChatTransport lands, at which point the transport adapter feeds
 // usePendingStreamsStore directly and this hook is deleted (not ported).
 // Deletion gate: `grep -rn "TRANSITIONAL" apps/web/src` must return zero.
+
+export interface UseOwnStreamMirrorResult {
+  /**
+   * The conversationId this mirror latched for the in-flight send, or undefined when the chat is
+   * idle. Spans exactly the busy window: set on the rising edge of a send (status →
+   * submitted/streaming), cleared on the falling edge (status → ready/error).
+   *
+   * This is what the pre-send handoff (`useConversationSendHandoff`) reads to decide whether a
+   * send targets a DIFFERENT conversation than the one this chat is currently consuming — the
+   * AI SDK's `Chat` cannot consume two response bodies at once, so such a send must first stop
+   * the local read and hand the old conversation's stream to the socket path. It is also what
+   * `useStopStream` reads to keep a Stop on a socket-attached conversation from aborting another
+   * conversation's live local fetch.
+   */
+  getLatchedConversationId: () => string | undefined;
+}
 
 export interface UseOwnStreamMirrorInput {
   status: OwnStreamMirrorStatus;
@@ -52,6 +68,16 @@ export interface UseOwnStreamMirrorInput {
  * So: latch on the RISING EDGE of the send — the moment status becomes submitted/streaming, which
  * is the moment the user hit Send and the surface is still, by construction, on the conversation
  * being sent to. Hold it for the send; release on the falling edge.
+ *
+ * KNOWN LIMITATION (accepted): the SDK's `sendAutomaticallyWhen` auto-resend re-fires the
+ * transport with the ORIGINAL conversation's body, but if a `ready` commit lands between the
+ * resend's falling and rising edges AFTER the user has moved to another conversation, the
+ * re-latch captures the live (new) conversation while the fetch consumes the old one. The
+ * consuming MARK stays correct (it is body-derived — see extractConversationIdFromBody), but the
+ * latch — and everything gated on it (useConversationSendHandoff's equality check, the rawStop
+ * gate) — briefly mis-names the fetch. Closing this requires a transport-level identity (the
+ * WorkflowChatTransport swap this whole hook is deleted at); until then the window is one React
+ * commit wide inside an auto-resend, and the failure mode is the pre-fix behavior, not a new one.
  */
 export const useOwnStreamMirror = ({
   status,
@@ -59,7 +85,7 @@ export const useOwnStreamMirror = ({
   pageId,
   conversationId,
   triggeredBy,
-}: UseOwnStreamMirrorInput): void => {
+}: UseOwnStreamMirrorInput): UseOwnStreamMirrorResult => {
   const mirroredIdRef = useRef<string | undefined>(undefined);
   const identityRef = useRef<OwnStreamIdentity | undefined>(undefined);
   // The content we last mirrored for the latched id. Needed only to restore a wiped entry after the
@@ -208,4 +234,11 @@ export const useOwnStreamMirror = ({
     // re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, ownMessages, mirroredEntryExists]);
+
+  const getLatchedConversationId = useCallback(
+    () => identityRef.current?.conversationId,
+    [],
+  );
+
+  return { getLatchedConversationId };
 };

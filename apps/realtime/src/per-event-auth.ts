@@ -33,17 +33,6 @@ export type SensitiveEventType =
   | 'task_update'
   | 'task_delete';
 
-/**
- * Events that are read-only and don't require re-authorization.
- * Room membership is sufficient for these.
- */
-export type ReadOnlyEventType =
-  | 'cursor_move'
-  | 'presence_update'
-  | 'typing_indicator'
-  | 'selection_change'
-  | 'activity_logged';
-
 const SENSITIVE_EVENTS = new Set<string>([
   'document_update',
   'page_content_change',

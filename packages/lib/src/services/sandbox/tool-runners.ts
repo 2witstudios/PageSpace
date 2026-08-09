@@ -38,12 +38,6 @@ import {
   type CheckpointState,
 } from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
-import {
-  resolveMachinePageId,
-  type AcquireMachineSandboxInput,
-  type AcquireMachineSandboxResult,
-  type MachineRefLike,
-} from './machine-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -56,6 +50,15 @@ export interface SandboxActorContext {
   tenantId: string;
   /** Absent for global (non-drive) contexts. */
   driveId?: string;
+  /**
+   * The drive's owner (or, for a driveless global context, the acting user —
+   * global sessions are owner-only, so actor and owner coincide there). Feeds
+   * the call-time gate's tier-eligibility check, which resolves the PAYER's
+   * tier, not the actor's — see `resolveSandboxPayerTier`. Absent only when a
+   * session genuinely doesn't exist yet at gate-time (falls back to `userId`,
+   * which denies more strictly, never grants incorrectly).
+   */
+  ownerId?: string;
   conversationId: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
@@ -63,9 +66,14 @@ export interface SandboxActorContext {
   actorDisplayName?: string;
   aiProvider?: string;
   aiModel?: string;
+  /**
+   * The PAYER's subscription tier (drive owner, or the acting user for a
+   * driveless global context) — NOT the actor's own. Consumed by the quota
+   * eligibility check and the concurrency ceiling; the slot itself is still
+   * counted per acting user (`userId`), so per-actor accounting stays separate
+   * from payer-based entitlement (review #2326).
+   */
   tier: SubscriptionTier;
-  /** The ACTIVE machine this call routes to (Terminal epics); undefined defaults to 'own'. */
-  activeMachine?: MachineRefLike;
   /**
    * Stable id for the CURRENT agent turn (one streamText run) — the same value
    * for every tool call within that run, a fresh value for the next one.
@@ -86,7 +94,7 @@ export interface SandboxQuotaDeps {
 /**
  * Metering seam for a machine run's active-runtime cost (Terminal Epic 3).
  * Optional — omitting it disables metering (no hold, no charge), mirroring
- * every other optional seam in this file (`screenOutput`, `notifyTerminalActivity`).
+ * every other optional seam in this file (`screenOutput`, `notifyShellActivity`).
  *
  * The hold->settle protocol mirrors the voice STT recipe
  * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
@@ -98,16 +106,34 @@ export interface SandboxQuotaDeps {
  */
 export interface SandboxBillingDeps {
   /**
-   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
-   * referenced machine's actual page owner when resolvable, else the acting
-   * tenantId. The one seam payer resolution goes through; see
-   * `machine-payer.ts`'s `resolveMachinePayerId`.
+   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — from the
+   * ACQUIRED SESSION's own `driveId`/`ownerId` (drive owner when it has one,
+   * else the session's own owner), never the caller's surface drive or agent
+   * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
+   * `resolveSessionPayerId` — the same rule `storageBillingTarget` applies for
+   * storage attribution.
    */
-  resolvePayerId: (input: { tenantId: string; machinePageId?: string }) => Promise<string>;
+  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
-  /** Settles the hold to the real active-window cost. Only called on a successful run. */
-  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number; pageId?: string }) => Promise<void>;
+  /**
+   * Settles the hold to the real active-window cost. Only called on a
+   * successful run. `pageId` is the AI-tool-runner path's calling-surface
+   * agent page; `driveId` is the realtime shell bridge's session-level
+   * attribution (a session is drive-scoped, not page-anchored) — a caller
+   * sets whichever one its own model has, never both.
+   */
+  trackUsage: (input: {
+    payerId: string;
+    holdId?: string;
+    activeSeconds: number;
+    /** The referenced agent page, for the per-agent usage-breakdown grouping — purely descriptive, never the payer source. */
+    pageId?: string;
+    /** The session's own drive — first-class attribution so the usage breakdown can group terminal spend by drive without JSON forensics. Undefined for a global-assistant session. */
+    driveId?: string;
+    /** The `agent_workspaces.id` this run belongs to — first-class attribution, mirroring `driveId`. */
+    workspaceId?: string;
+  }) => Promise<void>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -117,11 +143,18 @@ export interface SandboxBillingDeps {
  * Terminal's live PTY/output feed (Terminal Epic 1 T1.5 activity visibility) —
  * so a human watching a Terminal page sees the agent's work as it happens.
  */
-export interface TerminalActivityNotification {
-  /** The machine's identifying page (resolveMachinePageId's output). */
-  pageId: string;
-  driveId?: string;
-  tenantId: string;
+export interface ShellActivityNotification {
+  /**
+   * The session whose sandbox the agent acted on — `agent_workspaces.id`, NOT
+   * the conversation id (post-unconflation the two are different namespaces:
+   * one session hosts many conversations).
+   *
+   * This replaces the old `(tenantId, driveId, pageId)` machine tuple, which
+   * had no successor and, worse, could not address a global-assistant session
+   * at all: those have a null agent page, so the tuple's `pageId` gate silently
+   * excluded them from the feed. Every session has this id.
+   */
+  workspaceId: string;
   command: string;
   output: string;
   exitCode: number;
@@ -140,7 +173,7 @@ export interface TerminalActivityNotification {
  * `getState`/`recordCheckpoint` are the bookkeeping the pure `shouldCheckpoint`
  * policy (`checkpoint-policy.ts`) needs to enforce "at most once per turn" +
  * the rapid-batch throttle; production wires them to an in-process Map keyed
- * by sandboxId (mirrors `quota.ts`'s `machineActivityByKey` — no persistence,
+ * by sandboxId (mirrors `quota.ts`'s `sessionActivityByKey` — no persistence,
  * no reaper). `createCheckpoint` is the actual SDK call against a live,
  * already-awake sandbox handle.
  */
@@ -155,10 +188,51 @@ export interface SandboxCheckpointDeps {
   createCheckpoint: (input: { sandbox: ExecutableSandbox; comment: string }) => Promise<void>;
 }
 
+/** `acquireSandbox`'s request: everything the session-anchored acquire implementation needs to ensure the caller's agent-session sandbox. */
+export interface AcquireSandboxRequest {
+  tenantId: string;
+  /** Absent for global (non-drive) contexts. */
+  driveId?: string;
+  userId: string;
+  requestOrigin?: 'user' | 'agent';
+  agentPageId?: string;
+  /**
+   * The conversation this run belongs to — NOT the agent-session id
+   * (contract.ts invariant 1: a session hosts MANY conversations, and the two
+   * are different id namespaces post-unconflation). The session-anchored
+   * `acquireSandbox` implementation resolves this conversation's session row
+   * (`conversations.workspaceId`) and folds the Sprite key off THAT row's own
+   * id, never off this one.
+   */
+  conversationId?: string;
+}
+
+export type SandboxAcquireResult =
+  | {
+      ok: true;
+      sandboxId: string;
+      resumed: boolean;
+      /**
+       * The SESSION the sandbox belongs to (`agent_workspaces.id`) — required,
+       * because every post-run hook (storage measurement, shell-activity
+       * notification) is keyed by it. The conversation id is NOT a substitute:
+       * post-unconflation they are different namespaces, and keying the hooks
+       * on the conversation silently no-oped measurement (underbilling) and
+       * mis-addressed activity (codex review, P1).
+       */
+      workspaceId: string;
+      pageId?: string;
+    }
+  | {
+      ok: false;
+      reason: SandboxToolDenialReason;
+      cause?: unknown;
+    };
+
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
-  /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (input: Omit<AcquireMachineSandboxInput, 'deps'>) => Promise<AcquireMachineSandboxResult>;
+  /** Ensures the caller's agent-session sandbox is provisioned and live (lifecycle deps already injected). */
+  acquireSandbox: (input: AcquireSandboxRequest) => Promise<SandboxAcquireResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -179,12 +253,45 @@ export interface SandboxRunDeps {
    * result, and omitting it simply disables the feed (no Terminal epic
    * consumer wired yet, or the machine has no live watcher).
    */
-  notifyTerminalActivity?: (input: TerminalActivityNotification) => Promise<void>;
+  notifyShellActivity?: (input: ShellActivityNotification) => Promise<void>;
   /**
    * Optional metering seam (Terminal Epic 3): meters this run's active-runtime
    * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
    */
   billing?: SandboxBillingDeps;
+  /**
+   * Cheap resolve of the CALLER's session identity for billing attribution — a
+   * read of the session row only (`agent_workspaces.driveId`/`ownerId`/`id`), no
+   * sandbox provisioning. Called BEFORE the gate whenever `billing` is set, so
+   * a credit-exhausted payer is denied without ever waking a hibernating
+   * sandbox — the same fail-fast property the old (surface-derived, ctx-only)
+   * payer resolution had, now backed by a real (if cheap) session read instead
+   * of trusting client-influenceable context. Required whenever `billing` is
+   * set; never called otherwise.
+   *
+   * Three outcomes:
+   * - A session: gate against its payer as usual.
+   * - `null` = the conversation will NEVER have a session on its own (a
+   *   legacy pre-session thread, or one whose type never auto-provisions):
+   *   nothing to gate against, so `withMachineBilling` falls through
+   *   unmetered and lets `run()` surface the ordinary `no_session` denial.
+   * - `{ deny }` = an implementation that auto-provisions a session (a
+   *   Global Assistant conversation) attempted to and failed for a reason
+   *   that is NOT safely "this will just deny again" — e.g. the owner's
+   *   session cap was hit by a CONCURRENT call's spawn. Returning `null`
+   *   here would be unsafe: `run()`'s own resolution moments later can
+   *   still succeed if a racing sibling's claim lands in the interim
+   *   (executing against the sibling's session), while this call already
+   *   gave up on billing it — an unmetered execution. `{ deny }` fails the
+   *   whole call closed instead of gambling that the second, independent
+   *   resolution will agree with the first (review finding — P1, PR #2314,
+   *   second pass, chatgpt-codex-connector).
+   */
+  resolveBillingSession?: (ctx: SandboxActorContext) => Promise<
+    | { workspaceId: string; driveId: string | null; ownerId: string }
+    | { deny: SandboxToolDenialReason }
+    | null
+  >;
   /**
    * Optional opportunistic storage-measurement seam (Sprites Platform Alignment
    * 6-1): while this sprite is ALREADY awake for this real op, capture its used
@@ -192,7 +299,7 @@ export interface SandboxRunDeps {
    * MEASURED usage without ever waking a paused sprite. Best-effort — a failure
    * must never affect the tool result; omitting it disables measurement.
    */
-  measureStorage?: (input: { sandbox: ExecutableSandbox; pageId: string }) => Promise<void>;
+  measureStorage?: (input: { sandbox: ExecutableSandbox; workspaceId: string }) => Promise<void>;
   /**
    * Optional pre-batch checkpoint seam (Sprites Platform Alignment 5-2). Omitted
    * → no checkpointing (the seam is fully optional, matching every other
@@ -219,7 +326,7 @@ function asError(value: unknown): Error | undefined {
   return new Error(String(value));
 }
 
-function safeLogWarn(
+export function safeLogWarn(
   logger: SandboxRunDeps['logger'],
   message: string,
   metadata?: Record<string, unknown>,
@@ -229,22 +336,30 @@ function safeLogWarn(
 
 // Acquisition reasons that represent expected policy/authz outcomes (warn-level)
 // vs infra failures that are genuinely unexpected (error-level).
+// Refusals that are the system working as intended — logged at warn, because an
+// error-level line for every free-tier user hitting their own plan ceiling is
+// noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
-  'machine_runtime_exceeded',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'kill_switch_off', 'no_machine',
+  'session_runtime_exceeded', 'session_limit_reached',
+  // A legacy conversation that predates sessions has no working context to run
+  // in — an expected refusal (not an infra fault), so it belongs here rather
+  // than paging on-call for every pre-session thread an agent tool touches.
+  'no_session',
 ]);
 
 
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
-  | 'app_admin_required'
+  | 'tier_ineligible'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
   | 'no_machine'
-  | 'machine_runtime_exceeded'
+  | 'session_runtime_exceeded'
   | 'credit_exhausted'
   | 'concurrency_limit'
+  | 'session_limit_reached'
   | 'empty_command'
   | 'command_too_large'
   | 'blocked_metadata_access'
@@ -253,6 +368,7 @@ export type SandboxToolDenialReason =
   | 'content_too_large'
   | 'edit_no_match'
   | 'edit_not_unique'
+  | 'no_session'
   | 'provision_failed'
   | 'execution_failed'
   | 'not_found'
@@ -274,17 +390,23 @@ export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
-const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
+export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
-  app_admin_required: 'Code execution is currently restricted to application administrators.',
+  tier_ineligible: 'Running code requires a Pro plan or above.',
   no_drive_access: 'You do not have access to run code in this drive.',
-  insufficient_role: 'Running code requires drive owner or admin access.',
+  insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   no_machine: 'No machine is configured for this run.',
-  machine_runtime_exceeded:
-    'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
+  session_runtime_exceeded:
+    "This session's sandbox has been running continuously for too long. Wait for it to go idle, or switch to a different session.",
   credit_exhausted: 'Insufficient credits to run this machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
+  // A different limit from `concurrency_limit`, and the distinction is the
+  // whole point: that one clears on its own when a sibling run finishes, this
+  // one does not clear until somebody ENDS a session. Telling an agent to
+  // "wait and retry" for this one is telling it to spin forever.
+  session_limit_reached:
+    'The owner is at their plan limit for live agent sessions. Retrying will not help — an existing session has to be ended first.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
   blocked_metadata_access: 'This command is blocked by policy.',
@@ -294,6 +416,8 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   content_too_large: 'The file content is too large.',
   edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
   edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
+  no_session:
+    'This conversation has no session (workspace), so there is no sandbox to run in — it predates sessions. Start a new conversation to get one.',
   provision_failed: 'Could not provision a sandbox for this run.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
@@ -306,16 +430,14 @@ function fail(
   return { success: false, error: DENIAL_MESSAGES[reason], reason };
 }
 
-function acquireRequest(
-  ctx: SandboxActorContext,
-): Omit<AcquireMachineSandboxInput, 'deps'> {
+function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
   return {
     tenantId: ctx.tenantId,
     driveId: ctx.driveId,
     userId: ctx.userId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
-    activeMachine: ctx.activeMachine,
+    conversationId: ctx.conversationId,
   };
 }
 
@@ -353,34 +475,31 @@ async function safeAudit(
 
 // Best-effort, fire-and-forget: a failing/missing activity feed must never
 // affect the bash tool's result — it is a visibility nicety, not a safety gate.
-async function safeNotifyTerminalActivity(
+async function safeNotifyShellActivity(
   deps: SandboxRunDeps,
-  input: TerminalActivityNotification,
+  input: ShellActivityNotification,
 ): Promise<void> {
-  if (!deps.notifyTerminalActivity) return;
+  if (!deps.notifyShellActivity) return;
   try {
-    await deps.notifyTerminalActivity(input);
+    await deps.notifyShellActivity(input);
   } catch {
     // Intentionally swallowed.
   }
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: false }>): SandboxToolDenialReason {
-  switch (result.reason) {
-    case 'app_admin_required':
-    case 'no_drive_access':
-    case 'insufficient_role':
-    case 'no_agent_access':
-    case 'no_machine':
-    case 'provision_failed':
-    case 'machine_runtime_exceeded':
-      return result.reason;
-    case 'kill_switch_off':
-      return 'kill_switch_off';
-    default:
-      return 'error';
+/**
+ * Narrow a generic acquisition failure to the specific thing that went wrong,
+ * when the acquirer said. A plan-ceiling refusal arrives as `provision_failed`
+ * with the ceiling named in `cause`; without this it reached the agent as
+ * "Could not provision a sandbox for this run" — indistinguishable from a
+ * provider outage, and so retried on a limit that no amount of retrying moves.
+ */
+export function reasonFromAcquire(result: Extract<SandboxAcquireResult, { ok: false }>): SandboxToolDenialReason {
+  if (result.reason === 'provision_failed' && result.cause === 'session_limit_reached') {
+    return 'session_limit_reached';
   }
+  return result.reason;
 }
 
 const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
@@ -389,7 +508,7 @@ const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
   return exitCode === 137 ? 'timeout' : 'nonzero_exit';
 };
 
-type MeteredResult<S> =
+export type MeteredResult<S> =
   | ({ success: true } & S)
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
@@ -403,8 +522,14 @@ type MeteredResult<S> =
  * there is nothing to charge (mirrors the voice STT recipe's `holdHandedOff`
  * safety net). Skipped entirely (no hold, no charge) when `deps.billing` is
  * unset — an unmetered deployment behaves exactly as before this seam existed.
+ *
+ * Exported so every sandbox tool-op runner (bash, write, read, edit, git/gh)
+ * shares this ONE metering path rather than a per-runner copy — git/gh's own
+ * runner going years without billing wired in was exactly a duplicated-acquire
+ * path silently drifting from this one (review finding, PR #2314 follow-up,
+ * issue #2315).
  */
-async function withMachineBilling<S>(
+export async function withMachineBilling<S>(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
   run: () => Promise<MeteredResult<S>>,
@@ -412,8 +537,27 @@ async function withMachineBilling<S>(
   const billing = deps.billing;
   if (!billing) return run();
 
-  const machinePageId = resolveMachinePageId({ agentPageId: ctx.agentPageId, activeMachine: ctx.activeMachine });
-  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, machinePageId });
+  // Resolve the CALLER's session for billing attribution — a cheap session-row
+  // read (no sandbox provisioning), so a credit-exhausted payer is denied
+  // before any sandbox work happens: the same fail-fast property the old
+  // surface-derived resolution had, now backed by the SESSION's own
+  // driveId/ownerId instead of the caller's (client-influenceable) surface
+  // drive/agent page — a session hosts MANY conversations, and its drive can
+  // differ from the one the caller happens to be chatting from.
+  //
+  // See the three-outcome contract on `resolveBillingSession` above: `null`
+  // is only safe when nothing could ever auto-provision here; `{ deny }`
+  // fails the call closed rather than falling through to `run()`, whose own
+  // independent resolution might still succeed against a session a
+  // concurrent sibling call bound in the interim.
+  const billingSession = deps.resolveBillingSession ? await deps.resolveBillingSession(ctx) : null;
+  if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
+  if (!billingSession) return run();
+
+  const payerId = await billing.resolvePayerId({
+    driveId: billingSession.driveId,
+    ownerId: billingSession.ownerId,
+  });
   const gate = await billing.gate({ payerId });
   if (!gate.allowed) return fail('credit_exhausted');
 
@@ -425,7 +569,16 @@ async function withMachineBilling<S>(
     if (result.success) {
       handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: machinePageId });
+      await billing.trackUsage({
+        payerId,
+        holdId,
+        activeSeconds,
+        // Purely descriptive (which agent page this run was for) — never the
+        // payer source, which is resolved from the session above.
+        pageId: ctx.agentPageId,
+        driveId: billingSession.driveId ?? undefined,
+        workspaceId: billingSession.workspaceId,
+      });
     }
     return result;
   } finally {
@@ -439,12 +592,15 @@ async function withMachineBilling<S>(
  * `finally`, or a denial (with the slot already released). The kill-switch and
  * any op-specific policy (command / path) are checked by the caller BEFORE this,
  * so a policy-blocked op never reaches quota or provisioning.
+ *
+ * Exported for the same reason as `withMachineBilling`: every sandbox-op
+ * runner acquires through this ONE path, never a local copy.
  */
-async function openSession(
+export async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; release: () => void; pageId?: string }
+  | { ok: true; sandbox: ExecutableSandbox; workspaceId: string; release: () => void; pageId?: string }
   | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
@@ -478,6 +634,7 @@ async function openSession(
     return {
       ok: true,
       sandbox,
+      workspaceId: acquired.workspaceId,
       release: () => {
         deps.quota.releaseSlot({ userId: ctx.userId });
         // Opportunistic, throttled, best-effort storage measurement. Fired from
@@ -486,11 +643,15 @@ async function openSession(
         // the op, would persist the pre-write footprint and let the throttle
         // suppress the post-write one) and runs sequentially after the op rather
         // than contending with it. Never blocks or fails the op.
-        if (acquired.pageId && deps.measureStorage) {
-          const pageId = acquired.pageId;
-          void deps.measureStorage({ sandbox, pageId }).catch((error) => {
+        // Keyed by the SESSION id the acquire resolved — the sandbox whose
+        // bytes these are belongs to the session (not the agent page, and not
+        // the conversation: both are different namespaces, and each has
+        // silently excluded a class of sessions from measurement before).
+        if (deps.measureStorage) {
+          const workspaceId = acquired.workspaceId;
+          void deps.measureStorage({ sandbox, workspaceId }).catch((error) => {
             safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
-              pageId,
+              workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
           });
@@ -707,24 +868,25 @@ export async function runBashInSandbox({
       durationMs,
       anomaly: anomalyForExit(run.exitCode),
     });
-    if (session.pageId) {
+    // Keyed by the SESSION id the acquire resolved: the sandbox this ran in
+    // belongs to the session — not the agent page, and not the conversation
+    // (a different id namespace; addressing the feed by it pointed every
+    // notification at a session that does not exist).
+    {
       // Fire-and-forget: this is a visibility nicety over a network hop to
       // another service, not a safety gate. Awaiting it would tie every
-      // successful bash call's latency to the terminal-activity feed's
-      // availability (up to its own request timeout) for no benefit — the
-      // tool result below does not depend on it. safeNotifyTerminalActivity
-      // already swallows its own errors, so this can never surface as an
-      // unhandled rejection.
-      void safeNotifyTerminalActivity(deps, {
-        pageId: session.pageId,
-        driveId: ctx.driveId,
-        tenantId: ctx.tenantId,
+      // successful bash call's latency to the activity feed's availability (up
+      // to its own request timeout) for no benefit — the tool result below does
+      // not depend on it. safeNotifyShellActivity already swallows its own
+      // errors, so this can never surface as an unhandled rejection.
+      void safeNotifyShellActivity(deps, {
+        workspaceId: session.workspaceId,
         command,
         output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
         exitCode: run.exitCode,
         // No display name is set for a plain email fallback — a raw email
-        // address is PII and this feed is visible to every viewer with edit
-        // access to the Terminal page, not just the acting user.
+        // address is PII and this feed is visible to everyone watching a shell
+        // of this session, not just the acting user.
         agentLabel: ctx.actorDisplayName ?? 'AI agent',
       });
     }

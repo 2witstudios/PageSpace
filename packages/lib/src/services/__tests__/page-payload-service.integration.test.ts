@@ -9,10 +9,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadPagePayload } from '../page-payload-service';
@@ -21,7 +21,6 @@ import { PageType } from '../../utils/enums';
 describe('loadPagePayload (integration)', () => {
   beforeEach(async () => {
     await db.delete(channelMessages);
-    await db.delete(chatMessages);
     await db.delete(connections);
     await db.delete(pagePermissions);
     await db.delete(pages);
@@ -79,6 +78,33 @@ describe('loadPagePayload (integration)', () => {
 
     expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['kept']);
     expect(payload.context.chatMessages?.[0].role).toBeDefined();
+  });
+
+  /**
+   * `fetchChatMessages` reads the one `messages` table, scoped by
+   * `conversations.type='page' AND contextId = pageId` — the join that
+   * replaced `chat_messages.pageId` (epic "Agent-Session Single Source of
+   * Truth", Phase 4 / D6). What it must return is the page's ACTIVE,
+   * non-streaming rows, oldest-first, each carrying its derived page.
+   */
+  it('returns the AI_CHAT page\'s active history, oldest first, with the page derived', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const chat = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'AI parity' });
+
+    await factories.createChatMessage(chat.id, { content: 'oldest', userId: owner.id, createdAt: new Date('2026-01-01T10:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'newest', userId: owner.id, createdAt: new Date('2026-01-01T11:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'tombstoned', userId: owner.id, isActive: false, createdAt: new Date('2026-01-01T12:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: '', userId: owner.id, status: 'streaming', createdAt: new Date('2026-01-01T13:00:00Z') });
+
+    const payload = await loadPagePayload(owner.id, chat.id);
+
+    // The tombstone and the mid-flight placeholder are excluded; what remains
+    // is oldest-first.
+    expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['oldest', 'newest']);
+    // `pageId` is DERIVED from the conversation now — there is no per-row page
+    // column left to read it from.
+    expect(payload.context.chatMessages?.every((m) => m.pageId === chat.id)).toBe(true);
   });
 
   it('returns FILE context with metadata for FILE pages', async () => {

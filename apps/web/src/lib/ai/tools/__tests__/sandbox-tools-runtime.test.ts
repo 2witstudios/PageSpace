@@ -1,12 +1,66 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// The runtime module wires the real DB-backed resolver deps and the
+// session-anchored `acquireSandbox`. The DB client and the shared
+// agent-sessions runtime are mocked so the module loads (and acquires) without
+// a database or a Sprites SDK; `createResolveSandboxActorContext` is exercised
+// with injected fakes and never touches the mocked defaults.
+const {
+  mockFindSessionForConversation,
+  mockProvisionSessionSandbox,
+  mockMeasureWarmSessionStorage,
+  mockCheckSessionRuntimeGuardrail,
+  mockRecordSessionActivity,
+  mockEnsureGlobalSandboxSession,
+  mockGetConversation,
+} = vi.hoisted(() => ({
+  mockFindSessionForConversation: vi.fn(),
+  mockProvisionSessionSandbox: vi.fn(),
+  mockMeasureWarmSessionStorage: vi.fn(async () => {}),
+  mockCheckSessionRuntimeGuardrail: vi.fn(),
+  mockRecordSessionActivity: vi.fn(),
+  mockEnsureGlobalSandboxSession: vi.fn(),
+  mockGetConversation: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/db', () => ({ db: {} }));
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
+  findSessionForConversation: mockFindSessionForConversation,
+  provisionSessionSandbox: mockProvisionSessionSandbox,
+  // Opportunistic storage measurement rides this path fire-and-forget. Stubbed
+  // so the module loads; the assertions below deliberately do not await it,
+  // which is the property that matters — a billing observation must never delay
+  // or fail a tool call.
+  measureWarmSessionStorage: mockMeasureWarmSessionStorage,
+  ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getConversation: mockGetConversation },
+}));
+vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
+  acquireCodeExecutionSlot: vi.fn(() => true),
+  releaseCodeExecutionSlot: vi.fn(),
+  checkSessionRuntimeGuardrail: mockCheckSessionRuntimeGuardrail,
+  recordSessionActivity: mockRecordSessionActivity,
+}));
+vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
+  defaultSandboxBillingDeps: {
+    resolvePayerId: vi.fn(),
+    gate: vi.fn(),
+    trackUsage: vi.fn(),
+    releaseHold: vi.fn(),
+  },
+}));
+
 import {
   createResolveSandboxActorContext,
-  createMachineDirectory,
+  buildRealSandboxRunDeps,
+  buildSandboxTools,
   type ResolveSandboxActorContextDeps,
-  type MachineDirectoryRuntimeDeps,
 } from '../sandbox-tools-runtime';
 import type { ToolExecutionContext } from '../../core/types';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+import type { AcquireSandboxRequest } from '@pagespace/lib/services/sandbox/tool-runners';
+import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -14,6 +68,7 @@ function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): Reso
     findPageDriveId: async () => undefined,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
+    findSessionForConversation: async () => null,
     ...overrides,
   };
 }
@@ -67,18 +122,45 @@ describe('resolveSandboxActorContext', () => {
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('owner-1');
     });
-  });
 
-  describe('given chatSource type "global", currentDrive present, but drive not found in DB', () => {
-    it('should return an active drive error', async () => {
+    it("should resolve the quota tier from the PAYER (drive owner), not the actor (review #2326)", async () => {
+      // A free-tier collaborator in a Pro-owned drive: every quota check
+      // downstream (`isSandboxAvailable` + the concurrency ceiling) consumes
+      // ctx.tier, so loading the actor's own tier here denied the very access
+      // the payer-based eligibility gate had just granted.
       const context: ToolExecutionContext = {
-        ...baseGlobalContext,
-        locationContext: { currentDrive: { id: 'd-missing', name: 'X', slug: 'x' } },
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
       };
+      const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => undefined }),
+        makeDeps({
+          findDrive: async () => ({ ownerId: 'owner-1' }),
+          findUser: async (userId) => {
+            tierLookups.push(userId);
+            return userId === 'owner-1'
+              ? { subscriptionTier: 'pro' }
+              : { subscriptionTier: 'free' };
+          },
+        }),
       );
       const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.tier).toBe('pro');
+      expect(tierLookups).toEqual(['owner-1']);
+    });
+  });
+
+  describe('given chatSource type "global" bound to a session whose drive is not found in DB', () => {
+    it('should return an active drive error (fail closed)', async () => {
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: 'd-missing', ownerId: 'owner-2' }),
+          findDrive: async () => undefined,
+        }),
+      );
+      const result = await resolve(baseGlobalContext);
       expect('error' in result).toBe(true);
       if (!('error' in result)) return;
       expect(result.error).toContain('Code execution requires an active drive.');
@@ -132,22 +214,93 @@ describe('resolveSandboxActorContext', () => {
     });
   });
 
-  describe('given chatSource type "global" and currentDrive present', () => {
-    it('should resolve with driveId from locationContext and tenantId from drive ownerId', async () => {
+  describe('given chatSource type "global" and currentDrive present but NO bound session', () => {
+    it('ignores the location drive — the payer is this user, whose auto-spawned session is driveless (review #2326)', async () => {
+      // A free-tier user merely VISITING a Pro-owned drive must not be gated
+      // eligible against the drive owner: `ensureGlobalSandboxSession` spawns
+      // the conversation's session with `driveId: null`, so provisioning
+      // resolves THIS USER as the payer — and conversely, a paid user
+      // visiting a free-owned drive funds their own driveless session fine.
       const context: ToolExecutionContext = {
         ...baseGlobalContext,
         locationContext: {
           currentDrive: { id: 'd1', name: 'My Drive', slug: 'my-drive' },
         },
       };
+      const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => ({ ownerId: 'tenant-from-drive' }) }),
+        makeDeps({
+          findDrive: async () => {
+            throw new Error('must not consult the location drive for an unbound global conversation');
+          },
+          findUser: async (userId) => {
+            tierLookups.push(userId);
+            return { subscriptionTier: 'pro' };
+          },
+        }),
       );
       const result = await resolve(context);
       expect('error' in result).toBe(false);
       if ('error' in result) return;
-      expect(result.driveId).toBe('d1');
-      expect(result.tenantId).toBe('tenant-from-drive');
+      expect(result.driveId).toBeUndefined();
+      expect(result.tenantId).toBe('u1');
+      expect(result.ownerId).toBe('u1');
+      expect(tierLookups).toEqual(['u1']);
+    });
+  });
+
+  describe('given chatSource type "page" BOUND to a DRIVELESS Global session', () => {
+    it("pays as the session's owner, not the agent's drive owner (review #2326)", async () => {
+      // A global session may host any accessible agent
+      // (create-conversation-in-workspace.ts), and provisioning authorizes the
+      // SESSION's coordinates — deriving the payer from the agent/location
+      // drive here diverged from what provisioning would actually decide.
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-agent', name: 'Agent Drive', slug: 'agent-drive' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: null, ownerId: 'session-owner' }),
+          findDrive: async () => {
+            throw new Error('must not consult a drive for a driveless bound session');
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBeUndefined();
+      expect(result.tenantId).toBe('session-owner');
+      expect(result.ownerId).toBe('session-owner');
+    });
+  });
+
+  describe('given chatSource type "global" BOUND to a drive-scoped session', () => {
+    it("resolves the session's own drive and pays as its owner, regardless of location (review #2326)", async () => {
+      const context: ToolExecutionContext = {
+        ...baseGlobalContext,
+        locationContext: {
+          currentDrive: { id: 'd-elsewhere', name: 'Elsewhere', slug: 'elsewhere' },
+        },
+      };
+      const consultedDrives: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: 'd-session', ownerId: 'session-owner' }),
+          findDrive: async (driveId) => {
+            consultedDrives.push(driveId);
+            return { ownerId: 'session-drive-owner' };
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBe('d-session');
+      expect(result.tenantId).toBe('session-drive-owner');
+      expect(result.ownerId).toBe('session-owner');
+      expect(consultedDrives).toEqual(['d-session']);
     });
   });
 
@@ -196,420 +349,427 @@ describe('resolveSandboxActorContext', () => {
   });
 });
 
-function makeMachineDirectoryDeps(
-  overrides: Partial<MachineDirectoryRuntimeDeps> = {},
-): MachineDirectoryRuntimeDeps {
-  return {
-    findPage: async () => ({
-      title: 'Shared Terminal',
-      type: 'MACHINE',
-      driveId: 'drive-1',
-      isTrashed: false,
-      allowPageAgents: true,
-      visibleToGlobalAssistant: true,
-    }),
-    canViewPage: async () => true,
-    getAgentConfig: async () => ({ machineAccess: false, machines: [] }),
-    getGlobalConfig: async () => ({ machineAccess: false, machines: [] }),
-    getOrCreateOwnMachinePageId: async () => 'own-machine-page-1',
-    lookupPageOwnerId: async () => 'drive-owner-1',
-    isUserScopedAgent: async () => false,
-    ...overrides,
-  };
-}
+// The SESSION-anchored acquisition (THE HANDLE SOURCE): `conversationId` IS the
+// session id, `ensureSession` + `provisionSessionSandbox` are the one shared
+// provisioning path, and the continuous-runtime guardrail is keyed by the
+// session id — the exact discipline the deleted machine path keyed by page id.
+describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
+  function makeSessionRecord(overrides: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
+    const now = new Date('2026-06-01T00:00:00Z');
+    return {
+      id: 'ses-1',
+      ownerId: 'u1',
+      driveId: 'd1',
+      name: null,
+      spriteKey: null,
+      sandboxId: null,
+      spriteInstanceId: null,
+      egressPolicyToken: null,
+      teardownRequestedAt: null,
+      spriteTornDownAt: null,
+      storageLastBilledAt: now,
+      storageMeasuredBytes: null,
+      storageMeasuredAt: null,
+      lastActiveAt: null,
+      endedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
 
-const pageContext: ToolExecutionContext = {
-  userId: 'u1',
-  chatSource: { type: 'page', agentPageId: 'agent-1' },
-};
+  const sessionRecord = makeSessionRecord();
 
-describe('createMachineDirectory', () => {
-  describe('listMachines', () => {
-    it('given no rawContext at all, should return no machines (no userId to resolve a global config for)', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps());
-      await expect(directory.listMachines(undefined)).resolves.toEqual([]);
+  function baseInput(overrides: Partial<AcquireSandboxRequest> = {}): AcquireSandboxRequest {
+    return {
+      tenantId: 't1',
+      driveId: 'd1',
+      userId: 'u1',
+      agentPageId: 'agent-1',
+      conversationId: 'conv-1',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
+    mockFindSessionForConversation.mockResolvedValue(sessionRecord);
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' });
+    // Most tests in this block exercise a PAGE conversation (`baseInput` sets
+    // `agentPageId`) — page conversations never auto-provision, so the default
+    // here matches that and the global-only tests below override it.
+    mockGetConversation.mockResolvedValue({ type: 'page' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
+  });
+
+  it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
+    // `notifyShellActivity` is optional on `SandboxRunDeps`, and the runner
+    // no-ops when it is absent. That is precisely how this feature spent the
+    // whole rebuild dead: the realtime handler was implemented, tested and
+    // wired with real deps, its doc said "apps/web posts here after a
+    // successful bash run" — and nothing here supplied the dep, so nothing ever
+    // posted. Deleting the wiring line passed every other test in this file.
+    //
+    // Asserting presence rather than behaviour is the point: the behaviour is
+    // covered in `tool-runners`, and the only thing that was ever missing was
+    // the connection between the two.
+    const deps = buildRealSandboxRunDeps();
+    expect(typeof deps.notifyShellActivity).toBe('function');
+  });
+
+  it('should measure against the ACQUIRED sandbox\'s generation, not whatever the row says later', async () => {
+    // The storage CAS is only as good as the id handed to it. This seam is fed
+    // the sandbox the tool run ALREADY acquired, and the measurement is
+    // fire-and-forget — so between acquiring it and persisting, the session can
+    // be torn down and re-provisioned. Reading the instance from the session row
+    // at persist time would then name generation B while `du` walked A's disk,
+    // and the CAS would "succeed" against B with A's bytes: the exact write the
+    // CAS exists to reject, waved through by its own guard.
+    const deps = buildRealSandboxRunDeps();
+    expect(typeof deps.measureStorage).toBe('function');
+
+    const sandbox = {
+      spriteInstanceId: 'instance-A',
+      runCommand: vi.fn(async () => ({ exitCode: 0, stdout: '1\t/workspace', stderr: '' })),
+    };
+    await deps.measureStorage!({ sandbox: sandbox as never, workspaceId: 'conv-1' });
+
+    const [call] = mockMeasureWarmSessionStorage.mock.calls as unknown as [
+      [{ workspaceId: string; attach: () => Promise<{ spriteInstanceId: string | null } | null> }],
+    ];
+    expect(call[0].workspaceId).toBe('conv-1');
+    const attached = await call[0].attach();
+    expect(attached?.spriteInstanceId).toBe('instance-A');
+  });
+
+  it('given no conversationId, should fail as provision_failed/missing_conversation_id without touching the session runtime', async () => {
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ conversationId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' });
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockCheckSessionRuntimeGuardrail).not.toHaveBeenCalled();
+  });
+
+  it('given the runtime guardrail denies, should short-circuit BEFORE provisioning — keyed by the SESSION id', async () => {
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: false, reason: 'session_runtime_exceeded' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'session_runtime_exceeded' });
+    // One runtime budget per WORKSPACE, however many threads work in it.
+    expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith({
+      workspaceId: 'ses-1',
+      now: expect.any(Number),
     });
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
 
-    it('given a global assistant context with machineAccess off, should return no machines (fail closed)', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getGlobalConfig: async () => ({ machineAccess: false, machines: [] }) }),
-      );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([]);
-    });
+  it('given a PAGE conversation with NO session, should DENY — page agents still require an explicit "New session" spawn', async () => {
+    // Per-conversation minting is exactly the conflation the session model
+    // removed; it is what made panes unable to share a sandbox. Page agents
+    // never auto-provision — only the global-assistant case below does.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
 
-    it('given a global assistant context with machineAccess on and no machines configured, should default to the own machine resolved into the personal Terminal page', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({ machineAccess: true, machines: [] }),
-          getOrCreateOwnMachinePageId: async () => 'personal-page-1',
-        }),
-      );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
-        { kind: 'existing', machineId: 'personal-page-1' },
-      ]);
-    });
+  it('given a GLOBAL conversation with NO session, should auto-provision one and proceed to provision its sandbox', async () => {
+    // The default Global Assistant chat is always minted session-less and
+    // nothing else ever claims it — restore the pre-refactor "own machine"
+    // parity by auto-provisioning a REAL session the first time it's needed,
+    // through the exact same spawn+claim primitive a manual "New session"
+    // spawn uses.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: sessionRecord });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
+  });
 
-    it('given a global assistant context with configured machines including "own", should resolve only "own" into the personal Terminal page and pass "existing" machines through', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({
-            machineAccess: true,
-            machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
-          }),
-          getOrCreateOwnMachinePageId: async () => 'personal-page-1',
-        }),
-      );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
-        { kind: 'existing', machineId: 'personal-page-1' },
-        { kind: 'existing', machineId: 't1' },
-      ]);
-    });
 
-    it('given a global assistant context, should NOT filter hidden machines at resolution — isMachineAccessible is the single policy site (it denies them with the toggle reason)', async () => {
-      const machines: MachineRef[] = [
-        { kind: 'existing', machineId: 'hidden-1' },
-        { kind: 'existing', machineId: 'visible-1' },
-      ];
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({ machineAccess: true, machines }),
-          findPage: async (pageId) => ({
-            title: pageId === 'hidden-1' ? 'Hidden Machine' : 'Visible Machine',
-            type: 'MACHINE',
-            driveId: 'drive-1',
-            isTrashed: false,
-            allowPageAgents: true,
-            visibleToGlobalAssistant: pageId !== 'hidden-1',
-          }),
-        }),
-      );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual(
-        machines,
-      );
-    });
+  it('given a GLOBAL conversation whose auto-provisioning was ATTEMPTED and failed (any reason), should DENY as provision_failed with that reason as the cause — never the plain no_session', async () => {
+    // Once an attempt was made, "no_session" alone would be misleading (it
+    // reads as "nothing was ever tried"); provision_failed/cause names WHY.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'spawn_failed' });
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
 
-    it('given a page agent with machineAccess off, should return no machines (fail closed)', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: false, machines: [{ kind: 'own' }] }) }),
-      );
-      await expect(directory.listMachines(pageContext)).resolves.toEqual([]);
-    });
+  it('given a GLOBAL conversation with NO session, and the owner is at their session cap, should DENY with the specific session_limit_reached cause', async () => {
+    // A distinct, actionable denial ("end an existing session first") —
+    // collapsing it into the generic no_session message would tell an agent
+    // at its owner's session cap to do something that can't help.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_limit_reached' });
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
 
-    it('given a page agent with machineAccess on and configured machines, should return the configured machines', async () => {
-      const machines: MachineRef[] = [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }];
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: true, machines }) }),
-      );
-      await expect(directory.listMachines(pageContext)).resolves.toEqual(machines);
-    });
+  it('given two conversations bound to ONE session, both should acquire the SAME sandbox', async () => {
+    // R0's payoff test at the tool layer: sandbox sharing is structural. Both
+    // threads resolve one session row, and provisioning folds ITS id — so both
+    // acquisitions name one sandboxId with no shared id threaded anywhere.
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true, workspaceId: 'ws-1' });
+    const deps = buildRealSandboxRunDeps();
 
-    it('given a page agent with machineAccess on but no machines configured, should default to the own machine', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: true, machines: [] }) }),
-      );
-      await expect(directory.listMachines(pageContext)).resolves.toEqual([{ kind: 'own' }]);
-    });
+    const a = await deps.acquireSandbox(baseInput({ conversationId: 'conv-a' }));
+    const b = await deps.acquireSandbox(baseInput({ conversationId: 'conv-b' }));
 
-    it('given no agent config found for the page, should return no machines (fail closed)', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ getAgentConfig: async () => null }));
-      await expect(directory.listMachines(pageContext)).resolves.toEqual([]);
-    });
+    expect(a).toMatchObject({ ok: true, sandboxId: 'sbx-shared' });
+    expect(b).toMatchObject({ ok: true, sandboxId: 'sbx-shared' });
+    expect(mockFindSessionForConversation.mock.calls).toEqual([['conv-a'], ['conv-b']]);
+    // Both provisions received the SAME session row — the structural share.
+    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(1, sessionRecord, 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(2, sessionRecord, 'u1');
+  });
 
-    it('given a sub-agent context (parentAgentId, no chatSource), should resolve config for the parent agent', async () => {
-      const seen: string[] = [];
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getAgentConfig: async (agentPageId) => {
-            seen.push(agentPageId);
-            return { machineAccess: true, machines: [{ kind: 'own' }] };
-          },
-        }),
-      );
-      await directory.listMachines({ userId: 'u1', parentAgentId: 'parent-agent-1' });
-      expect(seen).toEqual(['parent-agent-1']);
+  it('given provisioning is denied as not_authorized, should map to the runners\' no_drive_access vocabulary', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'not_authorized' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it('given provisioning is denied for any other reason, should map to provision_failed with the denial as the cause', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'session_torn_down' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_torn_down' });
+  });
+
+  it('given a non-denial provisioning failure, should map to provision_failed preferring the detail as the cause', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'race_lost', detail: 'cas beaten' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'cas beaten' });
+  });
+
+  it('given a non-denial provisioning failure without detail, should fall back to the reason as the cause', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'egress_denied' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'egress_denied' });
+  });
+
+  it('given a successful provision, should return the sandbox with pageId = the agent page and record activity keyed by the session id', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ws-1' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ses-1', pageId: 'agent-1' });
+    expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(mockRecordSessionActivity).toHaveBeenCalledWith({
+      workspaceId: 'ses-1',
+      now: expect.any(Number),
     });
   });
 
-  describe('describeMachine', () => {
-    it('given the own machine, should return a fixed name without a DB lookup', async () => {
-      const findPage = async () => ({ title: 'should not be used', type: 'MACHINE', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true });
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage }));
-      await expect(directory.describeMachine(undefined, { kind: 'own' })).resolves.toEqual({ name: 'My Machine' });
-    });
+  it('given no agentPageId (a global-assistant conversation), should return no pageId', async () => {
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined, driveId: undefined }));
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ses-1', pageId: undefined });
+    expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
+  });
+});
 
-    it('given an existing machine, should return the Terminal page title', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }) }),
-      );
-      await expect(
-        directory.describeMachine(undefined, { kind: 'existing', machineId: 't1' }),
-      ).resolves.toEqual({ name: 'Shared Terminal' });
-    });
+// Billing attribution resolve (issue #2260): a CHEAP session-row read (no
+// provisioning) so `withMachineBilling` can resolve the payer from the
+// SESSION's own driveId/ownerId before gating — never from the caller's
+// surface drive/tenant.
+describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
+  function makeSessionRecord(overrides: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
+    const now = new Date('2026-06-01T00:00:00Z');
+    return {
+      id: 'ses-1',
+      ownerId: 'u1',
+      driveId: 'd1',
+      name: null,
+      spriteKey: null,
+      sandboxId: null,
+      spriteInstanceId: null,
+      egressPolicyToken: null,
+      teardownRequestedAt: null,
+      spriteTornDownAt: null,
+      storageLastBilledAt: now,
+      storageMeasuredBytes: null,
+      storageMeasuredAt: null,
+      lastActiveAt: null,
+      endedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
 
-    it('given an existing machine whose page is missing, should fall back to a generic name', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
-      await expect(
-        directory.describeMachine(undefined, { kind: 'existing', machineId: 'gone' }),
-      ).resolves.toEqual({ name: 'Terminal' });
-    });
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  describe('isMachineAccessible', () => {
-    const context: ToolExecutionContext = { userId: 'u1' };
-    const globalContext: ToolExecutionContext = { userId: 'u1', chatSource: { type: 'global' } };
+  it("resolves the session's own driveId/ownerId — NOT ctx.tenantId/ctx.driveId, which may be a different drive entirely", async () => {
+    mockFindSessionForConversation.mockResolvedValue(
+      makeSessionRecord({ id: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' }),
+    );
+    const deps = buildRealSandboxRunDeps();
 
-    it('given the own machine, should always be accessible', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps());
-      await expect(directory.isMachineAccessible(undefined, { kind: 'own' })).resolves.toEqual({ allowed: true });
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'surface-tenant-should-never-be-used',
+      driveId: 'surface-drive-should-never-be-used',
+      conversationId: 'conv-1',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
     });
 
-    it('given no rawContext, should deny an existing machine (fail closed)', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps());
-      await expect(
-        directory.isMachineAccessible(undefined, { kind: 'existing', machineId: 't1' }),
-      ).resolves.toEqual({ allowed: false });
-    });
-
-    it('given the terminal page is missing, should deny', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
-      await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', machineId: 'gone' }),
-      ).resolves.toEqual({ allowed: false });
-    });
-
-    it('given the page exists but is not a MACHINE page, should deny', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Not a terminal', type: 'DOCUMENT', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }) }),
-      );
-      await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', machineId: 'doc-1' }),
-      ).resolves.toEqual({ allowed: false });
-    });
-
-    it('given a MACHINE page the actor cannot view, should deny', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => false }));
-      await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
-      ).resolves.toEqual({ allowed: false });
-    });
-
-    it('given a MACHINE page the actor can view, should allow', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => true }));
-      await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
-      ).resolves.toEqual({ allowed: true });
-    });
-
-    it('given a TRASHED machine page, should deny (a soft-deleted machine must not accept agent commands)', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          findPage: async () => ({
-            title: 'Trashed Machine',
-            type: 'MACHINE',
-            driveId: 'drive-1',
-            isTrashed: true,
-            allowPageAgents: true,
-            visibleToGlobalAssistant: true,
-          }),
-        }),
-      );
-      await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
-      ).resolves.toEqual({ allowed: false });
-    });
-
-    describe('allowPageAgents toggle (Machine Settings)', () => {
-      const machineDenyingPageAgents = async () => ({
-        title: 'Locked Machine',
-        type: 'MACHINE',
-        driveId: 'drive-1',
-        isTrashed: false,
-        allowPageAgents: false,
-        visibleToGlobalAssistant: true,
-      });
-
-      it('given a page-scoped agent and allowPageAgents=false, should deny with the toggle code and an LLM-facing reason', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
-        );
-        const decision = await directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' });
-        expect(decision.allowed).toBe(false);
-        if (decision.allowed) return;
-        expect(decision.code).toBe('page_agents_disabled');
-        expect(decision.reason).toContain('does not allow page agents');
-      });
-
-      it('given a sub-agent (parentAgentId), should be treated as page-scoped and denied when allowPageAgents=false', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
-        );
-        const decision = await directory.isMachineAccessible(
-          { userId: 'u1', parentAgentId: 'parent-agent-1' },
-          { kind: 'existing', machineId: 't1' },
-        );
-        expect(decision.allowed).toBe(false);
-      });
-
-      it('given a sub-agent (parentAgentId only, no chatSource), the user-scoped exemption should NOT apply — it keys off chatSource.agentPageId, not parentAgentId', async () => {
-        // isUserScopedAgent would allow ANY id through, proving the exemption
-        // check never even fires: getAgentPageId(context) is undefined here
-        // (no chatSource.type==='page'), so deps.isUserScopedAgent is never called.
-        const isUserScopedAgent = async () => true;
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
-        );
-        const decision = await directory.isMachineAccessible(
-          { userId: 'u1', parentAgentId: 'parent-agent-1' },
-          { kind: 'existing', machineId: 't1' },
-        );
-        expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
-      });
-
-      it('given a page-scoped agent and allowPageAgents=true, should allow', async () => {
-        const directory = createMachineDirectory(makeMachineDirectoryDeps());
-        await expect(
-          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: true });
-      });
-
-      it('given the GLOBAL assistant and allowPageAgents=false, should allow (the flag only gates page agents)', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
-        );
-        await expect(
-          directory.isMachineAccessible(globalContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: true });
-      });
-
-      it('given a page-scoped agent that also cannot view the page, should deny WITHOUT the toggle reason (no title leak)', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, canViewPage: async () => false }),
-        );
-        await expect(
-          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: false });
-      });
-
-      it('given a USER-SCOPED page agent and allowPageAgents=false, should allow — it acts with the invoking user\'s own reach (mirroring canActorViewPage\'s resolveActingAgentId fallthrough), not the narrower page-agent class the toggle targets', async () => {
-        const isUserScopedAgent = async (agentPageId: string) => agentPageId === 'agent-1';
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
-        );
-        await expect(
-          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: true });
-      });
-
-      it('given a user-scoped page agent, should still be denied when the actor cannot VIEW the page (the exemption only bypasses the toggle, not view permissions)', async () => {
-        const isUserScopedAgent = async () => true;
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ canViewPage: async () => false, isUserScopedAgent }),
-        );
-        await expect(
-          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: false });
-      });
-
-      it('given a NON-user-scoped page agent (isUserScopedAgent returns false for it), should still be denied by allowPageAgents=false', async () => {
-        const isUserScopedAgent = async (agentPageId: string) => agentPageId === 'some-other-agent';
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
-        );
-        const decision = await directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' });
-        expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
-      });
-    });
-
-    describe('visibleToGlobalAssistant toggle (Machine Settings)', () => {
-      const machineHiddenFromGlobal = async () => ({
-        title: 'Hidden Machine',
-        type: 'MACHINE',
-        driveId: 'drive-1',
-        isTrashed: false,
-        allowPageAgents: true,
-        visibleToGlobalAssistant: false,
-      });
-
-      it('given the GLOBAL assistant and visibleToGlobalAssistant=false, should deny with the toggle code and an LLM-facing reason', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineHiddenFromGlobal }),
-        );
-        const decision = await directory.isMachineAccessible(globalContext, { kind: 'existing', machineId: 't1' });
-        expect(decision.allowed).toBe(false);
-        if (decision.allowed) return;
-        expect(decision.code).toBe('hidden_from_global');
-        expect(decision.reason).toContain('not visible to the global assistant');
-      });
-
-      it('given the GLOBAL assistant and visibleToGlobalAssistant=true, should allow', async () => {
-        const directory = createMachineDirectory(makeMachineDirectoryDeps());
-        await expect(
-          directory.isMachineAccessible(globalContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: true });
-      });
-
-      it('given a page-scoped agent and visibleToGlobalAssistant=false, should allow (the flag only gates the global assistant)', async () => {
-        const directory = createMachineDirectory(
-          makeMachineDirectoryDeps({ findPage: machineHiddenFromGlobal }),
-        );
-        await expect(
-          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
-        ).resolves.toEqual({ allowed: true });
-      });
-    });
+    expect(result).toEqual({ workspaceId: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' });
+    expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
   });
 
-  describe('resolveDriveId', () => {
-    it('given the own machine, should return the ambient driveId unchanged (page-agent path)', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps());
-      await expect(
-        directory.resolveDriveId?.(undefined, { kind: 'own' }, 'ambient-drive'),
-      ).resolves.toBe('ambient-drive');
+  it('given a global-assistant session (null driveId), resolves driveId null and the session ownerId', async () => {
+    mockFindSessionForConversation.mockResolvedValue(makeSessionRecord({ driveId: null, ownerId: 'global-owner-1' }));
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-1',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
     });
 
-    it('given an existing machine, should return the Terminal page\'s own driveId, overriding the ambient one', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          findPage: async () => ({ title: 'Personal Machine', type: 'MACHINE', driveId: 'home-drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }),
-        }),
-      );
-      await expect(
-        directory.resolveDriveId?.(undefined, { kind: 'existing', machineId: 't1' }, 'ambient-drive'),
-      ).resolves.toBe('home-drive-1');
-    });
-
-    it('given an existing machine whose page has vanished, should fall back to the ambient driveId', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
-      await expect(
-        directory.resolveDriveId?.(undefined, { kind: 'existing', machineId: 'gone' }, 'ambient-drive'),
-      ).resolves.toBe('ambient-drive');
-    });
+    expect(result).toEqual({ workspaceId: 'ses-1', driveId: null, ownerId: 'global-owner-1' });
   });
 
-  describe('resolveTenantId', () => {
-    it('given the own machine, should return the ambient tenantId unchanged (page-agent path)', async () => {
-      const directory = createMachineDirectory(makeMachineDirectoryDeps());
-      await expect(
-        directory.resolveTenantId?.(undefined, { kind: 'own' }, 'ambient-tenant'),
-      ).resolves.toBe('ambient-tenant');
+  it('given no conversationId, resolves null WITHOUT touching the session runtime', async () => {
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: undefined as unknown as string,
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
     });
 
-    it('given an existing machine in a different drive, should return that drive\'s ownerId, overriding the ambient tenantId', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ lookupPageOwnerId: async () => 'real-drive-owner' }),
-      );
-      await expect(
-        directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 't1' }, 'ambient-tenant'),
-      ).resolves.toBe('real-drive-owner');
+    expect(result).toBeNull();
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+  });
+
+  it('given a PAGE conversation with no session yet, resolves null (page agents never auto-provision)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-legacy',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
     });
 
-    it('given an existing machine whose page/drive can\'t be resolved, should fall back to the ambient tenantId', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ lookupPageOwnerId: async () => null }),
-      );
-      await expect(
-        directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 'gone' }, 'ambient-tenant'),
-      ).resolves.toBe('ambient-tenant');
+    expect(result).toBeNull();
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with no session yet, auto-provisions one and resolves ITS driveId/ownerId — closes the credit-gate bypass (review finding P1, PR #2314)', async () => {
+    // Before this fix, a session-less global conversation resolved null here
+    // (the old "nothing to bill, run() will just deny" assumption), but
+    // acquireSandbox's own auto-provisioning made run() actually SUCCEED —
+    // so a credit-exhausted user's first message executed completely
+    // unmetered. resolveBillingSession must see the SAME auto-provisioned
+    // session acquireSandbox is about to act on, not a stale "no session".
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    const provisioned = makeSessionRecord({ id: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
     });
+
+    expect(result).toEqual({ workspaceId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning hits the session cap, fails CLOSED with { deny } rather than resolving null — a concurrent sibling\'s claim could still let acquireSandbox succeed moments later, executing unmetered (review finding — P1, PR #2314, second pass)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'session_limit_reached' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning fails with a transient spawn fault, ALSO fails CLOSED with { deny } — same reasoning as session_limit_reached: a retry (this call\'s own acquireSandbox, or a concurrent sibling) could still succeed after the transient fault clears (review finding — P1, PR #2314, third round)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'provision_failed' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning attempt lost a claim with no winner found (attempted, reason no_session), STILL fails CLOSED — attempted-and-failed is never treated as safely null, regardless of which of the three reasons it is', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'provision_failed' });
+  });
+});
+
+describe('buildSandboxTools', () => {
+  it('should return exactly the four session tools', () => {
+    expect(Object.keys(buildSandboxTools()).sort()).toEqual(['bash', 'editFile', 'readFile', 'writeFile']);
   });
 });

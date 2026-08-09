@@ -9,7 +9,7 @@ import { createMockOpenRouter, MOCK_COST_DOLLARS } from '../mock-openrouter';
  * the hold/release handshake and the abort safety are proven without a database, a web
  * app, or a browser.
  *
- * Every model name below is deliberately one the APP would send (`openai/gpt-5.3-chat`, the
+ * Every model name below is deliberately one the APP would send (`openai/gpt-5.6-luna`, the
  * id it substitutes in): pacing is selected by mode alone, so these tests exercise the same
  * door a real send comes through.
  *
@@ -18,7 +18,7 @@ import { createMockOpenRouter, MOCK_COST_DOLLARS } from '../mock-openrouter';
  */
 
 /** The id the app actually sends, post model-substitution. Pacing must not depend on it. */
-const APP_MODEL = 'openai/gpt-5.3-chat';
+const APP_MODEL = 'openai/gpt-5.6-luna';
 
 async function setMode(mode: 'instant' | 'slow' | 'held', pacing?: { chunks?: number; intervalMs?: number }) {
   await fetch(`${base}/__stream-config`, {

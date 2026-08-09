@@ -121,6 +121,11 @@ import { useChannelStreamSocket } from '../useChannelStreamSocket';
 import { StreamJoinError } from '@/lib/ai/core/stream-join-client';
 import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
+import {
+  getChannelStreamSubscriberCount,
+  resetChannelStreamSubscribers,
+} from '@/lib/ai/streams/channelStreamSubscribers';
+import { resetChannelRebootstrapSignal } from '@/lib/ai/streams/channelRebootstrapSignal';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -203,6 +208,8 @@ describe('useChannelStreamSocket', () => {
     mockSocket._reset();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    resetChannelStreamSubscribers();
+    resetChannelRebootstrapSignal();
     mockConnectionStatus = 'disconnected';
     mockAuthUserId = LOCAL_USER_ID;
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
@@ -278,7 +285,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false }, undefined);
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
@@ -485,7 +492,7 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
     });
 
     // Line-by-line scan finding: a re-entrant chat:stream_start for the same messageId (e.g. a
@@ -535,6 +542,41 @@ describe('useChannelStreamSocket', () => {
       markChannelConsuming('page-a');
       renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', localPayload); });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+    });
+
+    // Consuming is CONVERSATION-scoped (the dual-stream mis-render fix). While conversation 2's
+    // POST is being read, conversation 1's own handed-off stream on the SAME channel must attach —
+    // the send handoff releases local consumption of conv-1 and relies on this path to render it.
+    it('given an own-session stream for conv-1 while this context consumes only conv-2, should attach', () => {
+      const conv1Payload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      };
+
+      markChannelConsuming('page-a', 'conv-2');
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', conv1Payload); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an own-session stream for the conversation actually being consumed, should still decline', () => {
+      const conv1Payload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      };
+
+      markChannelConsuming('page-a', 'conv-1');
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', conv1Payload); });
 
       expect(mockAddStream).not.toHaveBeenCalled();
       expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
@@ -605,12 +647,21 @@ describe('useChannelStreamSocket', () => {
     });
   });
 
-  // A page room holds every member of the page, but conversations are private by default
-  // (`listConversations` shows you only `userId = you OR isShared`). The server refuses
-  // these joins anyway; skipping them client-side is what stops every member firing a
-  // doomed /stream-join per assistant message — each one an authz denial in the audit log.
-  describe('chat:stream_start — conversation privacy pre-filter', () => {
-    it("given another user's stream in a PRIVATE conversation, should not attach or even attempt the join", () => {
+  // GATE DELETED (Agent-Session SSoT epic, Phase 2 / plan PR 3). There used to be a
+  // client-side "conversation privacy pre-filter" here: drop a `chat:stream_start`
+  // whose `triggeredBy.userId` is not mine when `isShared === false`, to save a
+  // /stream-join the server would refuse anyway.
+  //
+  // It was wrong about "not mine". `triggeredBy.userId` is the ACTOR, and a
+  // server-side dispatch (send_session, a workflow, the /help short-circuit) acts as
+  // whoever it acts as -- so the user's OWN private conversation, written on their
+  // behalf from another surface, matched the filter and every pane showing it went
+  // dark. That is the epic's canonical blank-pane bug in its stream-plane half.
+  //
+  // These tests now pin the ABSENCE of the filter: every start attaches, and the
+  // server (which re-authorizes every join with `canAccessConversation`) decides.
+  describe('chat:stream_start -- no client-side privacy pre-filter', () => {
+    it("given another user's stream in a PRIVATE conversation, should still attach and let the server refuse the join", () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => {
@@ -621,8 +672,11 @@ describe('useChannelStreamSocket', () => {
         });
       });
 
-      expect(mockAddStream).not.toHaveBeenCalled();
-      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+      // A refused join is a quiet 404 the hook already handles benignly -- and the
+      // conversation-scoped bootstrap in useConversationSubscription is what actually
+      // keeps a pane from asking about streams it has no business in.
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
     it("given another user's stream in an explicitly SHARED conversation, should attach (multiplayer)", () => {
@@ -640,7 +694,7 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // The same user in a second tab: a different browserSessionId, so `isOwn` is false —
+    // The same user in a second tab: a different browserSessionId, so `isOwn` is false --
     // but it is still THEIR stream and their private conversation. They must see it.
     it('given MY OWN stream from another tab in a private conversation, should still attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
@@ -657,19 +711,18 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // `useAuth()` returns `user: null` until auth resolves. Treating "I don't know who I
-    // am" as "not me" would drop the user's OWN private stream in that window — the exact
-    // failure this whole PR exists to fix. Skip only on certainty; when in doubt, attach
-    // and let the server decide (an unauthorized join is a quiet 404).
-    it('given the signed-in user is not known yet, should NOT drop a private stream (it may be the user\'s own)', () => {
-      mockAuthUserId = null;
+    // The dispatch case the old filter broke: a server-side write attributed to a
+    // DIFFERENT user id in the caller's own private conversation. Nothing about the
+    // payload distinguishes it from "somebody else's private chat" -- which is exactly
+    // why the client cannot be the one deciding.
+    it('given a server dispatch in a private conversation attributed to another actor, should attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => {
         mockSocket._trigger('chat:stream_start', {
           ...START_PAYLOAD,
           isShared: false,
-          triggeredBy: { userId: LOCAL_USER_ID, displayName: 'Me', browserSessionId: 'another-tab' },
+          triggeredBy: { userId: 'user-other', displayName: 'Agent', browserSessionId: 'agent-dispatch-xyz' },
         });
       });
 
@@ -677,10 +730,7 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
 
-    // Rolling deploy: an originator on the previous build emits no `isShared` field.
-    // Dropping on `undefined` would black out multiplayer for shared conversations
-    // mid-deploy, so only an explicit `false` skips. The server is the authority anyway.
-    it('given no isShared field at all (old server, rolling deploy), should attempt the join rather than drop it', () => {
+    it('given no isShared field at all (old server, rolling deploy), should attach', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
@@ -977,7 +1027,7 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', async () => {
@@ -1023,7 +1073,39 @@ describe('useChannelStreamSocket', () => {
 
   // A2 — double onStreamComplete prevention
   describe('onStreamComplete deduplication', () => {
-    it('given SSE done sentinel resolves and chat:stream_complete also fires, should call onStreamComplete exactly once', async () => {
+    // PR 6 review (CodeRabbit): a purely local finalize (SSE done sentinel, or the
+    // poll-fallback noticing the row vanished) has no server-told answer to
+    // "aborted or complete?" — it fires `aborted: undefined`, which downstream treats as
+    // best-effort 'complete'. If the AUTHORITATIVE chat:stream_complete arrives afterward
+    // with the real `aborted` value, it must still reach the consumer once — to correct a
+    // wrongly-'complete'-badged interrupted stream — not be silently dropped by the
+    // dedup guard. A second, later call for the SAME messageId is therefore expected
+    // here, not a bug: it is the authoritative upgrade the dedup guard is designed to let
+    // through exactly once.
+    it('given SSE done sentinel resolves (no authoritative aborted info) and chat:stream_complete fires afterward WITH aborted:true, should call onStreamComplete twice — once locally (aborted undefined), once authoritatively (aborted true)', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // SSE done resolves first — local-only finalize, no authoritative aborted info.
+      await act(async () => { resolveJoin(); });
+      expect(onStreamComplete).toHaveBeenCalledTimes(1);
+      expect(onStreamComplete.mock.calls[0][3]).toBeUndefined();
+
+      // The authoritative chat:stream_complete arrives afterward, revealing the stream
+      // was actually aborted — it must upgrade, not be dropped.
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: true }); });
+
+      expect(onStreamComplete).toHaveBeenCalledTimes(2);
+      expect(onStreamComplete.mock.calls[1][3]).toBe(true);
+    });
+
+    it('given SSE done sentinel resolves and chat:stream_complete also fires WITHOUT a differing aborted value, should still call onStreamComplete twice (local, then the authoritative confirmation)', async () => {
       let resolveJoin!: () => void;
       mockConsumeStreamJoin.mockReturnValue(
         new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
@@ -1036,10 +1118,25 @@ describe('useChannelStreamSocket', () => {
       // SSE done resolves first
       await act(async () => { resolveJoin(); });
 
-      // Then socket stream_complete also fires
+      // Then socket stream_complete also fires — this is the authoritative confirmation,
+      // still allowed through once even though it agrees with the local finalize.
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
+      expect(onStreamComplete).toHaveBeenCalledTimes(2);
+    });
+
+    it('given the authoritative chat:stream_complete fires TWICE for the same messageId, should call onStreamComplete only once (an authoritative fire is never itself upgraded again)', async () => {
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves naturally
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: true }); });
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: false }); });
+
       expect(onStreamComplete).toHaveBeenCalledTimes(1);
+      expect(onStreamComplete.mock.calls[0][3]).toBe(true);
     });
 
     it('given chat:stream_complete fires before SSE resolves, should call onStreamComplete exactly once', async () => {
@@ -1079,7 +1176,7 @@ describe('useChannelStreamSocket', () => {
       mockRemoveStream.mockClear();
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
       // Removed BEFORE the callback fired: shouldReloadOnComountComplete keys on the
       // absence of a store entry to choose the reload-from-DB branch over synthesizing
       // a bubble from what is, at best, a stale snapshot.
@@ -1141,7 +1238,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(firstCallback).not.toHaveBeenCalled();
-      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
+      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false }, undefined);
     });
   });
 
@@ -1224,6 +1321,32 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockClearPageStreams).not.toHaveBeenCalled();
     });
+
+    // Correctness-review finding (PR #2312): the abort loop released every controller's
+    // bootstrap claim but never removed the entries from `controllers` itself. A LATER
+    // real unmount (which can lag behind access_revoked by however long this component
+    // stays mounted showing a "you lost access" state) then read those stale entries as
+    // "was I actively consuming something," double-releasing an already-released claim
+    // and — worse — spuriously notifying a sibling to re-bootstrap a channel this user
+    // no longer has access to.
+    it('given access_revoked fires while a controller is active, a LATER real unmount should NOT double-release the claim or spuriously notify a sibling', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      vi.mocked(releaseBootstrapConsumer).mockClear();
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      first.unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(releaseBootstrapConsumer).not.toHaveBeenCalled();
+      expect(mockFetchWithAuth.mock.calls.length).toBe(fetchCallsBeforeUnmount);
+
+      second.unmount();
+    });
   });
 
   describe('cleanup on unmount', () => {
@@ -1242,6 +1365,104 @@ describe('useChannelStreamSocket', () => {
       expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_start', expect.any(Function));
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_complete', expect.any(Function));
+    });
+  });
+
+  describe('clearPageStreams — multi-subscriber refcounting', () => {
+    // Regression: two panes can be open on the same agent channel at once (by design —
+    // select-pane-agent.ts). Before refcounting, EITHER pane's unmount wiped the WHOLE
+    // channel's streams out of usePendingStreamsStore, including a sibling pane's own
+    // still-mid-generation stream.
+    it('given two subscribers on the same channel, unmounting one should NOT clearPageStreams (a sibling is still subscribed)', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(2);
+
+      first.unmount();
+
+      expect(mockClearPageStreams).not.toHaveBeenCalled();
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(1);
+    });
+
+    it('given two subscribers on the same channel, unmounting the LAST one should clearPageStreams', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      first.unmount();
+      mockClearPageStreams.mockClear();
+      second.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(0);
+    });
+
+    it('given subscribers on two DIFFERENT channels, unmounting one should not affect the other channel\'s count or clear it', () => {
+      const onA = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-b'));
+
+      onA.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(mockClearPageStreams).not.toHaveBeenCalledWith('page-b');
+      expect(getChannelStreamSubscriberCount('page-b')).toBe(1);
+    });
+  });
+
+  describe('sibling handoff on live-consumer unmount', () => {
+    // Review finding (chatgpt-codex-connector, PR #2312, P1): the refcount fix above
+    // stops the STORE from being wiped when a sibling remains, but does nothing about
+    // the actual live SSE connection — startConsume is claim-gated (bootstrapConsumerGuard),
+    // so only ONE co-mounted instance ever holds it per messageId. If THAT instance
+    // unmounts, its cleanup releases the claim but nothing tells a surviving sibling to
+    // reclaim consumption — the sibling's copy of the stream would silently stop
+    // receiving new tokens (frozen) until chat:stream_complete eventually arrives.
+    it('given the unmounting subscriber was actively consuming a live stream and a sibling remains, should trigger the sibling to re-bootstrap and reclaim consumption', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      // Both instances observe the same live start (mock socket broadcasts to every
+      // registered handler); at least one instance now holds an active controller for
+      // msg-1, which is what should be handed off on unmount.
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      first.unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchCallsBeforeUnmount);
+      expect(mockFetchWithAuth).toHaveBeenLastCalledWith(
+        '/api/ai/chat/active-streams?channelId=page-a',
+        expect.anything(),
+      );
+
+      second.unmount();
+    });
+
+    it('given the unmounting subscriber had NO active streams, should NOT trigger a sibling re-bootstrap (nothing to hand off)', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      first.unmount(); // never received chat:stream_start — controllers is empty
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBe(fetchCallsBeforeUnmount);
+
+      second.unmount();
+    });
+
+    it('given the unmounting subscriber was the LAST subscriber (no sibling), should NOT attempt a handoff notify', () => {
+      const only = renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // No sibling exists to notify — clearPageStreams fires (the existing
+      // last-subscriber path) and nothing should throw reaching for a nonexistent peer.
+      expect(() => only.unmount()).not.toThrow();
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
     });
   });
 
@@ -1617,6 +1838,55 @@ describe('useChannelStreamSocket', () => {
         messageId: 'msg-own',
         isOwn: true,
       }));
+    });
+
+    // Consuming is CONVERSATION-scoped: the send handoff (dual-stream fix) stops conv-1's local
+    // read, then relies on this bootstrap to re-attach conv-1 while conv-2's POST is being read
+    // on the same channel.
+    it('given an own conv-1 stream in the DB while this context consumes only conv-2, should attach it', async () => {
+      markChannelConsuming('page-a', 'conv-2');
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-own',
+        conversationId: 'conv-1',
+        isOwn: true,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an own conv-2 stream in the DB while this context consumes conv-2, should still decline it', async () => {
+      markChannelConsuming('page-a', 'conv-2');
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-2',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
 
     it('given a stream is already in processedRef (completed via socket race), should not re-add', async () => {

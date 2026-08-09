@@ -64,6 +64,13 @@ export const oauthDeviceCodes = pgTable('oauth_device_codes', {
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   approvedAt: timestamp('approvedAt', { mode: 'date' }),
   deniedAt: timestamp('deniedAt', { mode: 'date' }),
+  // RFC 8628 §3.5: the device_code MUST be invalidated once redeemed. Set in
+  // the same transaction that issues credentials for it, so a second poll of
+  // an approved code sees it already set and is refused (invalid_grant)
+  // instead of issuing again. Load-bearing for mint-shaped grants — without
+  // it, every extra poll of an approved `keys create --device` code would
+  // mint another `mcp_*` key.
+  redeemedAt: timestamp('redeemedAt', { mode: 'date' }),
   lastPolledAt: timestamp('lastPolledAt', { mode: 'date' }),
   pollIntervalSeconds: integer('pollIntervalSeconds').default(5).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

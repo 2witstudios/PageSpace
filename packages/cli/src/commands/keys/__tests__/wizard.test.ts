@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PageSpaceClient } from '@pagespace/sdk';
-import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
+import type { CredentialStore, DeviceTokenResult, HostCredential, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
 import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exit-codes.js';
@@ -113,6 +113,14 @@ function baseMintDeps(store: CredentialStore) {
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    requestDeviceAuthorization: async () => {
+      throw new Error('device flow not exercised by this test — loopback transport expected');
+    },
+    pollDeviceToken: async () => {
+      throw new Error('device flow not exercised by this test — loopback transport expected');
+    },
+    createIsInterrupted: () => () => false,
+    deviceWaitMs: async () => {},
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
   };
 }
@@ -759,5 +767,143 @@ describe('createKeysHandler — Revoke flow', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(tokensRevoke).toHaveBeenCalledWith({ tokenId: 'tok1' });
+  });
+});
+
+/**
+ * Regression guard: the wizard used to wire the device adapters into its deps
+ * but never read `intent.flags.device`, so `pagespace keys --device` still
+ * opened a local browser for every ceremony — and Edit, which exists ONLY in
+ * the wizard, had no headless path at all.
+ */
+describe('createKeysHandler — --device', () => {
+  const DRIVE_ROW = { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null };
+  const MCP_TOKENS = { kind: 'mcp' as const, token: 'mcp_device_tok', scope: 'drive:drv1:member name:my-key offline_access' };
+
+  function deviceSetup(pollResult: DeviceTokenResult) {
+    const store = fakeStore();
+    let browserOpened = false;
+    let deviceScope: string | undefined;
+    const deps = {
+      ...baseMintDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+      startServer: async () => {
+        throw new Error('loopback server must not start in device mode');
+      },
+      requestDeviceAuthorization: async ({ scope }: { scope: string }) => {
+        deviceScope = scope;
+        return {
+          deviceCode: 'ps_dc_test',
+          userCode: 'ABCD-EFGH',
+          verificationUri: 'https://pagespace.ai/activate',
+          verificationUriComplete: 'https://pagespace.ai/activate?user_code=ABCD-EFGH',
+          expiresInSeconds: 900,
+          intervalSeconds: 5,
+        };
+      },
+      pollDeviceToken: async () => pollResult,
+      createIsInterrupted: () => () => false,
+      deviceWaitMs: async () => {},
+      discoverMetadata: async () => ({
+        authorizationEndpoint: 'https://pagespace.ai/api/oauth/authorize',
+        tokenEndpoint: 'https://pagespace.ai/api/oauth/token',
+        deviceAuthorizationEndpoint: 'https://pagespace.ai/api/oauth/device_authorization',
+      }),
+    };
+    return { deps, store, browserOpened: () => browserOpened, deviceScope: () => deviceScope };
+  }
+
+  it('Create mints over the device transport and never opens a browser', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-key');
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    spinnerHandle.message.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const setup = deviceSetup({ kind: 'success', tokens: MCP_TOKENS });
+    const sdk = fakeSdk({ drivesList: vi.fn(async () => [DRIVE_ROW]), tokensList: vi.fn(async () => []) });
+    const handler = createKeysHandler(setup.deps);
+
+    const code = await handler(createFakeContext({ sdk, isTTY: true, env: {} }), commandIntent(['keys', '--device']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(setup.browserOpened()).toBe(false);
+    expect(setup.deviceScope()).toContain('name:my-key');
+    // The verification code reaches the user through the spinner, since clack
+    // owns the terminal while a ceremony is pending.
+    const messages = spinnerHandle.message.mock.calls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes('ABCD-EFGH'))).toBe(true);
+    expect(credentialSecret((await setup.store.get('https://pagespace.ai', 'my-key'))!)).toBe('mcp_device_tok');
+  });
+
+  it('Edit — the wizard-only ceremony — re-scopes over the device transport', async () => {
+    const KEY = { id: 'tok1', name: 'my-key', tokenPrefix: 'mcp_abc', driveScopes: [{ id: 'drv1', name: 'Engineering' }], createdAt: '2026-01-01T00:00:00.000Z', lastUsed: null, isScoped: true };
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('edit')
+      .mockResolvedValueOnce('tok1')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    confirmMock.mockReset().mockResolvedValue(true);
+    spinnerHandle.message.mockReset();
+    spinnerHandle.error.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const setup = deviceSetup({
+      kind: 'success',
+      tokens: { kind: 'mcp_update', tokenId: 'tok1', scope: 'update_key:tok1 drive:drv1:member' },
+    });
+    const sdk = fakeSdk({ drivesList: vi.fn(async () => [DRIVE_ROW]), tokensList: vi.fn(async () => [KEY]) });
+    const handler = createKeysHandler(setup.deps);
+
+    const code = await handler(createFakeContext({ sdk, isTTY: true, env: {} }), commandIntent(['keys', '--device']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(setup.browserOpened()).toBe(false);
+    expect(setup.deviceScope()).toContain('update_key:tok1');
+    expect(spinnerHandle.error).not.toHaveBeenCalled();
+  });
+
+  it('without --device the wizard still uses the browser transport', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-key');
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    let deviceRequested = false;
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => MCP_TOKENS,
+      requestDeviceAuthorization: async () => {
+        deviceRequested = true;
+        throw new Error('device transport must not be used without --device');
+      },
+    };
+    const sdk = fakeSdk({ drivesList: vi.fn(async () => [DRIVE_ROW]), tokensList: vi.fn(async () => []) });
+
+    const code = await createKeysHandler(deps)(createFakeContext({ sdk, isTTY: true, env: {} }), commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(deviceRequested).toBe(false);
   });
 });

@@ -198,6 +198,92 @@ async function resolveClient(form: URLSearchParams, clientId: string, grantType:
   return { client, clientDbId };
 }
 
+/** The outcomes that mean a key was minted, re-scoped, or approved for activation. */
+const KEY_GRANT_OUTCOMES = ['ok_mcp_token', 'ok_mcp_update', 'ok_mcp_activate'] as const;
+
+type KeyGrantOutcome = (typeof KEY_GRANT_OUTCOMES)[number];
+
+/**
+ * Narrows either flow's result union down to just its key-shaped successes, so
+ * `keyGrantSuccessResponse` can take a precisely-typed argument (no optional
+ * fields, no non-null assertions) and each caller's remaining `else` branch is
+ * narrowed to the outcomes its own error map must cover.
+ */
+function isKeyGrantSuccess<T extends { outcome: string }>(
+  result: T,
+): result is Extract<T, { outcome: KeyGrantOutcome }> {
+  return (KEY_GRANT_OUTCOMES as readonly string[]).includes(result.outcome);
+}
+
+type KeyGrantSuccess =
+  | Extract<Awaited<ReturnType<typeof exchangeAuthorizationCode>>, { outcome: KeyGrantOutcome }>
+  | Extract<Awaited<ReturnType<typeof pollDeviceToken>>, { outcome: KeyGrantOutcome }>;
+
+/**
+ * Renders the three key-shaped success outcomes identically no matter which
+ * flow carried the grant. Both the loopback authorization-code exchange and
+ * the RFC 8628 device poll produce them (the repository applies them through
+ * one shared `applyKeyGrant`), and a client must not be able to tell the two
+ * doors apart from the response body — so the serialization, the audit event
+ * types, and the activity trail live here once rather than being mirrored per
+ * handler.
+ *
+ * `oauthEventPrefix` is the ONLY thing that differs between the two: the audit
+ * detail records which door was used.
+ */
+function keyGrantSuccessResponse(
+  req: NextRequest,
+  clientId: string,
+  result: KeyGrantSuccess,
+  oauthEventPrefix: 'code_exchange' | 'device_poll',
+): NextResponse {
+  // A switch, not an if-chain ending in a bare block: totality over
+  // `KeyGrantOutcome` is then checked by the compiler rather than asserted in
+  // prose, so a fourth key-shaped outcome fails to build here.
+  switch (result.outcome) {
+    case 'ok_mcp_token':
+      auditRequest(req, {
+        eventType: 'auth.token.created',
+        userId: result.userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_token` },
+      });
+      return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
+
+    case 'ok_mcp_update': {
+      // Mirror the web Settings PATCH's audit + activity trail
+      // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
+      // door. Fire-and-forget end to end: getActorInfo does a user lookup +
+      // PII decrypts, and it feeds only logTokenActivity (itself explicitly
+      // never awaited), so none of it belongs on the response path.
+      const { userId, tokenId } = result;
+      void getActorInfo(userId)
+        .then((actorInfo) => {
+          logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
+        })
+        .catch(() => {
+          // Activity logging is best-effort; the audit event below is the durable record.
+        });
+      auditRequest(req, {
+        eventType: 'auth.token.updated',
+        userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_update` },
+      });
+      return noStoreJson(mcpUpdateSuccessBody(tokenId, result.scopes), 200);
+    }
+
+    case 'ok_mcp_activate':
+      // Approval ceremony only — nothing was minted or changed, so this is an
+      // access-granted audit event (not token.created/updated), and there is
+      // no activity-trail write: the key row is untouched.
+      auditRequest(req, {
+        eventType: 'authz.access.granted',
+        userId: result.userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_activate` },
+      });
+      return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
+  }
+}
+
 async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
   const code = form.get('code');
   const redirectUri = form.get('redirect_uri');
@@ -223,47 +309,8 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
     now: new Date(),
   });
 
-  if (result.outcome === 'ok_mcp_token') {
-    auditRequest(req, {
-      eventType: 'auth.token.created',
-      userId: result.userId,
-      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_token' },
-    });
-    return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
-  }
-
-  if (result.outcome === 'ok_mcp_update') {
-    // Mirror the web Settings PATCH's audit + activity trail
-    // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
-    // door. Fire-and-forget end to end: getActorInfo does a user lookup +
-    // PII decrypts, and it feeds only logTokenActivity (itself explicitly
-    // never awaited), so none of it belongs on the exchange response path.
-    const { userId, tokenId } = result;
-    void getActorInfo(userId)
-      .then((actorInfo) => {
-        logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
-      })
-      .catch(() => {
-        // Activity logging is best-effort; the audit event below is the durable record.
-      });
-    auditRequest(req, {
-      eventType: 'auth.token.updated',
-      userId: result.userId,
-      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_update' },
-    });
-    return noStoreJson(mcpUpdateSuccessBody(result.tokenId, result.scopes), 200);
-  }
-
-  if (result.outcome === 'ok_mcp_activate') {
-    // Approval ceremony only — nothing was minted or changed, so this is an
-    // access-granted audit event (not token.created/updated), and there is
-    // no activity-trail write: the key row is untouched.
-    auditRequest(req, {
-      eventType: 'authz.access.granted',
-      userId: result.userId,
-      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_activate' },
-    });
-    return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
+  if (isKeyGrantSuccess(result)) {
+    return keyGrantSuccessResponse(req, client.clientId, result, 'code_exchange');
   }
 
   if (result.outcome !== 'ok') {
@@ -338,7 +385,15 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
  * unrecognized device_code (never issued) falls back to invalid_grant, same
  * treatment as an unknown authorization code or refresh token.
  */
-const DEVICE_POLL_ERROR_BODY: Record<Exclude<Awaited<ReturnType<typeof pollDeviceToken>>['outcome'], 'ok'>, Record<string, unknown>> = {
+type DevicePollOutcome = Awaited<ReturnType<typeof pollDeviceToken>>['outcome'];
+/**
+ * Every outcome that is a SUCCESS and therefore never appears in the error map
+ * below. Derived from `KEY_GRANT_OUTCOMES` rather than re-listed, so adding a
+ * key-grant outcome can't leave the error map demanding an entry for it.
+ */
+type DevicePollSuccessOutcome = 'ok' | KeyGrantOutcome;
+
+const DEVICE_POLL_ERROR_BODY: Record<Exclude<DevicePollOutcome, DevicePollSuccessOutcome>, Record<string, unknown>> = {
   not_found: INVALID_GRANT,
   authorization_pending: { error: 'authorization_pending' },
   slow_down: { error: 'slow_down' },
@@ -346,6 +401,19 @@ const DEVICE_POLL_ERROR_BODY: Record<Exclude<Awaited<ReturnType<typeof pollDevic
   access_denied: { error: 'access_denied' },
   // Constant-shape with not_found/expired/etc — no oracle on account status.
   user_suspended: INVALID_GRANT,
+  // RFC 8628 §3.5: a redeemed device_code is dead. Constant-shape rather than
+  // a distinct code, so a stolen device_code can't be used to probe whether
+  // the legitimate client already completed the flow.
+  already_redeemed: INVALID_GRANT,
+  // The device door refuses all_drives up front; this is the redemption-time
+  // backstop (see pollDeviceToken). Constant-shape — the CLI already refuses
+  // `--device --all-drives` locally with an actionable message, so nothing
+  // legitimate ever reaches here to need a specific code.
+  all_drives_unsupported: INVALID_GRANT,
+  // Target key revoked between consent and redemption — same constant shape
+  // the authorization-code exchange gives these.
+  update_target_gone: INVALID_GRANT,
+  activate_target_gone: INVALID_GRANT,
 };
 
 async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
@@ -364,6 +432,10 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   const { client, clientDbId } = resolved;
 
   const result = await pollDeviceToken({ deviceCode, clientDbId, now: new Date() });
+
+  if (isKeyGrantSuccess(result)) {
+    return keyGrantSuccessResponse(req, client.clientId, result, 'device_poll');
+  }
 
   if (result.outcome !== 'ok') {
     auditRequest(req, {

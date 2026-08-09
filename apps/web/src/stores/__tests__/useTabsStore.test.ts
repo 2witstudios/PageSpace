@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useTabsStore } from '../useTabsStore';
+import { useTabsStore, migrateTabsStorage } from '../useTabsStore';
 
 // Mock localStorage
 const mockLocalStorage = (() => {
@@ -136,6 +136,88 @@ describe('useTabsStore', () => {
       goForwardInActiveTab();
 
       expect(useTabsStore.getState().tabs[0].path).toBe('/page-2');
+    });
+  });
+
+  describe('setActiveTabHistoryIndex', () => {
+    it('given an index several steps away, should jump directly there without pushing a new entry', () => {
+      const { createTab, navigateInActiveTab, setActiveTabHistoryIndex } = useTabsStore.getState();
+
+      createTab({ path: '/page-1' });
+      navigateInActiveTab('/page-2');
+      navigateInActiveTab('/page-3');
+
+      setActiveTabHistoryIndex(0);
+
+      const tab = useTabsStore.getState().tabs[0];
+      expect(tab.path).toBe('/page-1');
+      expect(tab.historyIndex).toBe(0);
+      expect(tab.history).toEqual(['/page-1', '/page-2', '/page-3']);
+    });
+
+    it('given no active tab, should do nothing', () => {
+      const { setActiveTabHistoryIndex } = useTabsStore.getState();
+
+      setActiveTabHistoryIndex(0);
+
+      expect(useTabsStore.getState().tabs).toHaveLength(0);
+    });
+  });
+
+  describe('migrateTabsStorage (v0 -> v1: backfills Tab.search)', () => {
+    it('given a v0-shaped tab with no search field, should backfill an empty string', () => {
+      const v0State = {
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', path: '/dashboard/agents', history: ['/dashboard/agents'], historyIndex: 0, isPinned: false },
+        ],
+      };
+
+      const migrated = migrateTabsStorage(v0State, 0);
+
+      expect(migrated.tabs[0].search).toBe('');
+      expect(migrated.activeTabId).toBe('tab-1');
+    });
+
+    it('given an already-v1 state, should pass it through unchanged', () => {
+      const v1State = {
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', path: '/dashboard/agents', search: 'session=a', history: ['/dashboard/agents?session=a'], historyIndex: 0, isPinned: false },
+        ],
+      };
+
+      expect(migrateTabsStorage(v1State, 1)).toEqual(v1State);
+    });
+
+    it('given no persisted tabs at all, should not throw', () => {
+      expect(migrateTabsStorage({ activeTabId: null }, 0)).toEqual({ activeTabId: null, tabs: [] });
+    });
+
+    // A hand-edited or partially-written `localStorage` blob is outside this
+    // app's control. A `migrate` that throws leaves zustand's persist
+    // rehydration promise rejected, `state?.setRehydrated()` never runs, and
+    // `rehydrated` stays false forever — freezing the whole tab bar with no
+    // visible error. These prove malformed shapes degrade to an empty tab
+    // list instead.
+    it('given a completely malformed persisted value (null), should fall back to an empty tab list', () => {
+      expect(migrateTabsStorage(null, 0)).toEqual({ activeTabId: null, tabs: [] });
+    });
+
+    it('given a persisted value that is a primitive, not an object, should fall back to an empty tab list', () => {
+      expect(migrateTabsStorage('corrupted', 0)).toEqual({ activeTabId: null, tabs: [] });
+      expect(migrateTabsStorage(42, 1)).toEqual({ activeTabId: null, tabs: [] });
+    });
+
+    it('given tabs present but not an array, should fall back to an empty tab list rather than throw', () => {
+      expect(migrateTabsStorage({ activeTabId: 'tab-1', tabs: 'not-an-array' }, 0)).toEqual({
+        activeTabId: 'tab-1',
+        tabs: [],
+      });
+    });
+
+    it('given a non-string activeTabId, should fall back to null', () => {
+      expect(migrateTabsStorage({ activeTabId: 12345, tabs: [] }, 1)).toEqual({ activeTabId: null, tabs: [] });
     });
   });
 

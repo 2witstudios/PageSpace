@@ -126,6 +126,157 @@ function toSessionRepoDrives(scopes: Parameters<typeof scopeSetToDriveScopes>[0]
   }));
 }
 
+/**
+ * What a key-shaped grant DID, independent of which OAuth flow carried it.
+ * `not_a_key_grant` means the scope set is an ordinary login grant and the
+ * caller should fall through to minting an OAuth access/refresh pair.
+ */
+export type KeyGrantResult =
+  | { outcome: 'ok_mcp_token'; mcpToken: string }
+  | { outcome: 'ok_mcp_update'; tokenId: string }
+  | { outcome: 'ok_mcp_activate'; tokenId: string }
+  | { outcome: 'update_target_gone' }
+  | { outcome: 'activate_target_gone' }
+  | { outcome: 'not_a_key_grant' };
+
+/**
+ * Applies a consented, key-shaped grant — mint (`drive:*`/`all_drives`),
+ * re-scope in place (`update_key:<id>`), or approve activation
+ * (`activate_key:<id>`) — inside the caller's transaction.
+ *
+ * Extracted from `exchangeAuthorizationCode` so the RFC 8628 device flow
+ * (`pollDeviceToken`) applies grants through the SAME code rather than a
+ * parallel implementation: these branches decide what credential material a
+ * human's consent actually produces, and two copies would be two places for
+ * mint-vs-update semantics, ownership re-verification, or the `isScoped`
+ * flag to drift apart.
+ *
+ * What this function deliberately does NOT do is any per-flow bookkeeping:
+ * consuming the authorization code, persisting `lastPolledAt`, or checking
+ * user suspension all stay with the caller, which is the only party that
+ * knows what row it is holding. Callers MUST perform their own
+ * single-use bookkeeping for every outcome except `not_a_key_grant`,
+ * including the two `*_target_gone` failures — those fail closed by burning
+ * the grant, exactly as they did when this logic was inline.
+ *
+ * Ownership and un-revoked status of an update/activate target are
+ * re-verified here, inside the caller's transaction, so a key revoked
+ * between consent and redemption fails closed rather than being silently
+ * re-scoped or re-approved.
+ */
+/**
+ * Widens a `KeyGrantResult` into the shape both flows' result unions share,
+ * attaching the grant context the helper deliberately doesn't know about.
+ *
+ * Both callers previously re-implemented this as an identical five-case
+ * switch, so adding a sixth `KeyGrantResult` outcome meant the same edit in
+ * two places — the drift `applyKeyGrant` was extracted to prevent, reappearing
+ * one level up. Callers still own their own single-use bookkeeping, which is
+ * the part that genuinely differs (consuming an authorization code vs. setting
+ * `redeemedAt`).
+ */
+function withGrantContext(
+  keyGrant: Exclude<KeyGrantResult, { outcome: 'not_a_key_grant' }>,
+  userId: string,
+  scopes: string[],
+):
+  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string }
+  | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'update_target_gone' }
+  | { outcome: 'activate_target_gone' } {
+  switch (keyGrant.outcome) {
+    case 'ok_mcp_token':
+      return { outcome: 'ok_mcp_token', userId, scopes, mcpToken: keyGrant.mcpToken };
+    case 'ok_mcp_update':
+      return { outcome: 'ok_mcp_update', userId, scopes, tokenId: keyGrant.tokenId };
+    case 'ok_mcp_activate':
+      return { outcome: 'ok_mcp_activate', userId, scopes, tokenId: keyGrant.tokenId };
+    case 'update_target_gone':
+    case 'activate_target_gone':
+      return { outcome: keyGrant.outcome };
+  }
+}
+
+async function applyKeyGrant(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  input: { userId: string; scopes: string[] },
+): Promise<KeyGrantResult> {
+  const parsed = parseScopeList(input.scopes.join(' '));
+  // Every branch below is gated on a successful parse; a scope array this
+  // parser rejects is not a key grant as far as this helper is concerned, and
+  // the caller's own fallthrough decides what to do with it.
+  if (!parsed.ok) return { outcome: 'not_a_key_grant' };
+  const scopes = parsed.scopes;
+
+  // An `update_key:<tokenId>` grant re-scopes the consenting user's EXISTING
+  // mcp token in place — nothing is minted and `tokenHash` is never read or
+  // written, so there is no secret to return. The target token id was bound
+  // into the consent (it rides inside `scope`, which the step-up grant's
+  // action binding covers) and the grant row binds `userId`; nothing the
+  // client presents at redemption can retarget either.
+  if (isKeyUpdateGrant(scopes)) {
+    const updated = await sessionRepository.updateMcpTokenDriveScopes(
+      scopes.updateKeyId,
+      input.userId,
+      toSessionRepoDrives(scopes),
+      tx,
+    );
+    if (updated === null) return { outcome: 'update_target_gone' };
+    return { outcome: 'ok_mcp_update', tokenId: scopes.updateKeyId };
+  }
+
+  // An `activate_key:<tokenId>` grant is a pure approval ceremony: the human
+  // confirmed in a browser that the requesting device may make this EXISTING
+  // key its ambient default (`pagespace keys use`). Nothing is minted,
+  // nothing is re-scoped, and no secret is read or returned — the verified
+  // success signal IS the product.
+  if (isKeyActivationGrant(scopes)) {
+    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(scopes.activateKeyId, input.userId);
+    if (!target) return { outcome: 'activate_target_gone' };
+    return { outcome: 'ok_mcp_activate', tokenId: scopes.activateKeyId };
+  }
+
+  // A pure drive:* grant OR an `all_drives` grant both mint a real
+  // `mcp_tokens` row, not an OAuth refresh/access-token pair — the browser
+  // consent screen is still the human-approval gate for either. `all_drives`
+  // is the CLI/wizard equivalent of the web Settings > MCP "Clear selection
+  // (allow all drives)" key: unrestricted access to every drive the user
+  // owns, including ones created later, persisted `isScoped: false` with zero
+  // drive rows instead of a drive-scoped set. Deliberately NOT the `account`
+  // scope: `account` also grants full account control beyond drives (it
+  // resolves to a full personal OAuth session at the auth layer), which this
+  // feature must never silently produce.
+  if (isAllDrivesGrant(scopes) || isPureDriveGrant(scopes)) {
+    const allDrives = isAllDrivesGrant(scopes);
+    const { token: mcpToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
+    await sessionRepository.createMcpTokenWithDriveScopes(
+      {
+        userId: input.userId,
+        tokenHash,
+        tokenPrefix,
+        // Fallback is unreachable in practice: a mint-shaped grant with no
+        // name never gets this far — both entry points reject it before a
+        // redeemable grant is ever persisted (POST /api/oauth/authorize's
+        // validateAuthorizeRequest for the loopback flow; the
+        // device_authorization endpoint's own mint-name requirement for the
+        // device flow). NOT enforced by parseScopeList itself (that parser
+        // stays flow-agnostic — see its name_without_mint_grant rule and the
+        // doc comment on ScopeSet.newKeyName for why). Kept as defense in
+        // depth only, never meant to actually fire.
+        name: hasNewKeyName(scopes) ? scopes.newKeyName : 'pagespace CLI',
+        isScoped: !allDrives,
+        drives: allDrives ? [] : toSessionRepoDrives(scopes),
+      },
+      tx,
+    );
+
+    return { outcome: 'ok_mcp_token', mcpToken };
+  }
+
+  return { outcome: 'not_a_key_grant' };
+}
+
 async function revokeTokenFamily(
   tx: Pick<typeof db, 'update'>,
   familyId: string,
@@ -231,120 +382,28 @@ export async function exchangeAuthorizationCode(
     // `/api/oauth/authorize`) is the human-approval property this preserves;
     // only what gets PERSISTED on success changes. `manage_keys`/`account`
     // grants (`pagespace login`) are untouched — see `isPureDriveGrant`.
-    const parsedGrantedScope = parseScopeList(row.scopes.join(' '));
-
-    // An `update_key:<tokenId>` grant re-scopes the consenting user's
-    // EXISTING mcp token in place — nothing is minted and `tokenHash` is
-    // never read or written, so there is no secret to return. The target
-    // token id was bound into the consent (it rides inside `scope`, which
-    // the step-up grant's action binding covers) and the code row binds
-    // `userId`; nothing the client presents at exchange can retarget either.
-    // Ownership + un-revoked is re-verified inside this same FOR UPDATE
-    // transaction — a token revoked between consent and exchange fails
-    // closed as `update_target_gone` (route: constant-shape invalid_grant).
-    // Deliberately no `issuedFamilyId`: replaying the consumed code hits
-    // `already_consumed` above with nothing to revoke, which is correct —
-    // no credential family was ever issued for it.
-    if (parsedGrantedScope.ok && isKeyUpdateGrant(parsedGrantedScope.scopes)) {
+    //
+    // Shared verbatim with the device flow (`pollDeviceToken`) — see
+    // `applyKeyGrant`. Every non-`not_a_key_grant` outcome consumes the code,
+    // the two `*_target_gone` failures included: a burned code on a target
+    // that vanished between consent and exchange is the fail-closed result,
+    // and the route collapses both to the constant-shape invalid_grant.
+    // Deliberately no `issuedFamilyId` on any of them: replaying a consumed
+    // code then hits `already_consumed` above with nothing to revoke, which
+    // is correct — no credential family was ever issued for it.
+    const keyGrant = await applyKeyGrant(tx, { userId: row.userId, scopes: row.scopes });
+    if (keyGrant.outcome !== 'not_a_key_grant') {
       await tx
         .update(oauthAuthorizationCodes)
         .set({ consumedAt: input.now })
         .where(eq(oauthAuthorizationCodes.id, row.id));
-
-      const updated = await sessionRepository.updateMcpTokenDriveScopes(
-        parsedGrantedScope.scopes.updateKeyId,
-        row.userId,
-        toSessionRepoDrives(parsedGrantedScope.scopes),
-        tx,
-      );
-      if (updated === null) {
-        return { outcome: 'update_target_gone' };
-      }
-
-      return {
-        outcome: 'ok_mcp_update',
-        userId: row.userId,
-        scopes: row.scopes,
-        tokenId: parsedGrantedScope.scopes.updateKeyId,
-      };
+      return withGrantContext(keyGrant, row.userId, row.scopes);
     }
 
-    // An `activate_key:<tokenId>` grant is a pure approval ceremony: the
-    // human confirmed in a browser that the requesting device may make this
-    // EXISTING key its ambient default (`pagespace keys use`). Nothing is
-    // minted, nothing is re-scoped, and no secret is read or returned — the
-    // PKCE-verified success signal IS the product. Ownership + un-revoked is
-    // re-verified here (same FOR UPDATE transaction as the code consume) so
-    // a key revoked between consent and exchange fails closed as
-    // `activate_target_gone` (route: constant-shape invalid_grant).
-    // Deliberately no `issuedFamilyId`, mirroring ok_mcp_update.
-    if (parsedGrantedScope.ok && isKeyActivationGrant(parsedGrantedScope.scopes)) {
-      await tx
-        .update(oauthAuthorizationCodes)
-        .set({ consumedAt: input.now })
-        .where(eq(oauthAuthorizationCodes.id, row.id));
-
-      const target = await sessionRepository.findActiveMcpTokenByIdAndUser(
-        parsedGrantedScope.scopes.activateKeyId,
-        row.userId,
-      );
-      if (!target) {
-        return { outcome: 'activate_target_gone' };
-      }
-
-      return {
-        outcome: 'ok_mcp_activate',
-        userId: row.userId,
-        scopes: row.scopes,
-        tokenId: parsedGrantedScope.scopes.activateKeyId,
-      };
-    }
-
-    // A pure drive:* grant OR an `all_drives` grant both mint a real
-    // `mcp_tokens` row, not an OAuth refresh/access-token pair — the browser
-    // consent screen is still the human-approval gate for either. `all_drives`
-    // is the CLI/wizard equivalent of the web Settings > MCP "Clear selection
-    // (allow all drives)" key: unrestricted access to every drive the user
-    // owns, including ones created later, persisted `isScoped: false` with
-    // zero drive rows instead of a drive-scoped set. Deliberately NOT the
-    // `account` branch below: `account` also grants full account control
-    // beyond drives (it resolves to a full personal OAuth session at the auth
-    // layer), which this feature must never silently produce.
-    if (parsedGrantedScope.ok && (isAllDrivesGrant(parsedGrantedScope.scopes) || isPureDriveGrant(parsedGrantedScope.scopes))) {
-      await tx
-        .update(oauthAuthorizationCodes)
-        .set({ consumedAt: input.now })
-        .where(eq(oauthAuthorizationCodes.id, row.id));
-
-      const allDrives = isAllDrivesGrant(parsedGrantedScope.scopes);
-      const { token: mcpToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
-      await sessionRepository.createMcpTokenWithDriveScopes(
-        {
-          userId: row.userId,
-          tokenHash,
-          tokenPrefix,
-          // Fallback is unreachable in practice: a mint-shaped grant with no
-          // name never gets this far — POST /api/oauth/authorize's
-          // validateAuthorizeRequest (packages/lib/src/auth/oauth/authorize-request.ts)
-          // rejects it before an authorization code is ever minted, and this
-          // function only runs against an already-consented, already-persisted
-          // code's scopes. NOT enforced by parseScopeList itself (that parser
-          // stays flow-agnostic — see its name_without_mint_grant rule and the
-          // doc comment on ScopeSet.newKeyName for why). Kept as defense in
-          // depth only, never meant to actually fire.
-          name: hasNewKeyName(parsedGrantedScope.scopes) ? parsedGrantedScope.scopes.newKeyName : 'pagespace CLI',
-          isScoped: !allDrives,
-          drives: allDrives ? [] : toSessionRepoDrives(parsedGrantedScope.scopes),
-        },
-        tx,
-      );
-
-      return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken };
-    }
-
-    // NOTE: every mint/update/activate branch above is gated on
-    // `parsedGrantedScope.ok`. If parseScopeList ever rejects the persisted
-    // `row.scopes` for any reason (including some future unrelated bug), we
+    // NOTE: every mint/update/activate branch is gated on a successful
+    // `parseScopeList` inside `applyKeyGrant`. If that parser ever rejects
+    // the persisted `row.scopes` for any reason (including some future
+    // unrelated bug), it reports `not_a_key_grant` and we
     // fall through to here and mint a plain OAuth access/refresh pair
     // carrying the raw (rejected) scope array as its granted scopes — a
     // pre-existing fail-open risk, unrelated to and out of scope for this
@@ -612,6 +671,7 @@ interface DeviceCodeRow {
   expiresAt: Date;
   approvedAt: Date | null;
   deniedAt: Date | null;
+  redeemedAt: Date | null;
   lastPolledAt: Date | null;
   pollIntervalSeconds: number;
 }
@@ -626,6 +686,12 @@ function toDeviceCodeRecord(row: DeviceCodeRow): DeviceCodeRecord {
     pollIntervalSeconds: row.pollIntervalSeconds,
   };
 
+  // Checked before denied/approved: redemption is the strongest terminal
+  // state, and a redeemed code must never read back as freshly approved and
+  // issue credentials a second time (RFC 8628 §3.5).
+  if (row.redeemedAt !== null) {
+    return { status: 'redeemed', ...common };
+  }
   if (row.deniedAt !== null) {
     return { status: 'denied', ...common };
   }
@@ -674,8 +740,18 @@ export type PollDeviceTokenResult =
   | { outcome: 'slow_down' }
   | { outcome: 'expired_token' }
   | { outcome: 'access_denied' }
+  /** Already exchanged (RFC 8628 §3.5) — the route collapses this to invalid_grant. */
+  | { outcome: 'already_redeemed' }
   | { outcome: 'user_suspended' }
-  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair };
+  /** An `all_drives` grant reached redemption despite the device door refusing it — see the check in `pollDeviceToken`. */
+  | { outcome: 'all_drives_unsupported' }
+  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair }
+  /** Key-shaped grants, shared verbatim with the authorization-code exchange via `applyKeyGrant`. */
+  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string }
+  | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'update_target_gone' }
+  | { outcome: 'activate_target_gone' };
 
 /**
  * Atomically poll a device code (RFC 8628 §3.4-3.5). `FOR UPDATE` locks the
@@ -707,6 +783,7 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
         expiresAt: oauthDeviceCodes.expiresAt,
         approvedAt: oauthDeviceCodes.approvedAt,
         deniedAt: oauthDeviceCodes.deniedAt,
+        redeemedAt: oauthDeviceCodes.redeemedAt,
         lastPolledAt: oauthDeviceCodes.lastPolledAt,
         pollIntervalSeconds: oauthDeviceCodes.pollIntervalSeconds,
       })
@@ -741,6 +818,37 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     if (userRows[0]?.suspendedAt) {
       return { outcome: 'user_suspended' };
     }
+
+    // Defense in depth. `POST /api/oauth/device_authorization` refuses to mint
+    // a device code for an `all_drives` grant in the first place, for reasons
+    // documented there (a device-minted all_drives token would land in a shape
+    // the two authorization helper families read oppositely). This second
+    // check means even a device-code row that somehow carries the grant — a
+    // row predating that guard, or one written by a future code path — can
+    // never be redeemed into such a token. Fails closed; the route reports it
+    // as invalid_grant like any other unredeemable code.
+    const parsedGrant = parseScopeList(decision.grant.scopes.join(' '));
+    if (parsedGrant.ok && isAllDrivesGrant(parsedGrant.scopes)) {
+      await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
+      return { outcome: 'all_drives_unsupported' };
+    }
+
+    // Key-shaped grants (`keys create/edit/use --device`) apply through the
+    // same `applyKeyGrant` the loopback authorization-code exchange uses, and
+    // produce no OAuth token pair at all. Redemption is recorded for every
+    // outcome including the two `*_target_gone` failures — a target that
+    // vanished between consent and redemption burns the code rather than
+    // leaving it live for a retry.
+    const keyGrant = await applyKeyGrant(tx, { userId: decision.grant.userId, scopes: decision.grant.scopes });
+    if (keyGrant.outcome !== 'not_a_key_grant') {
+      await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
+      return withGrantContext(keyGrant, decision.grant.userId, decision.grant.scopes);
+    }
+
+    // RFC 8628 §3.5: the device_code is invalidated on redemption, in the same
+    // transaction that issues the credentials, so a concurrent second poll
+    // blocks on the FOR UPDATE lock above and then reads `redeemed`.
+    await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
 
     // F1 (ADR 0003, OIDC-standard): access-only unless offline_access was granted.
     const offlineAccess = decision.grant.scopes.includes('offline_access');
@@ -906,6 +1014,7 @@ export async function recordDeviceApproval(input: RecordDeviceApprovalInput): Pr
         expiresAt: oauthDeviceCodes.expiresAt,
         approvedAt: oauthDeviceCodes.approvedAt,
         deniedAt: oauthDeviceCodes.deniedAt,
+        redeemedAt: oauthDeviceCodes.redeemedAt,
         lastPolledAt: oauthDeviceCodes.lastPolledAt,
         pollIntervalSeconds: oauthDeviceCodes.pollIntervalSeconds,
       })

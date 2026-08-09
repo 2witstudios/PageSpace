@@ -35,8 +35,15 @@ import { computeChainHash, GENESIS_PREVIOUS_HASH } from '../../../audit/chain-st
 import { verifySecurityAuditChain } from '../../../audit/security-audit-chain-verifier';
 import type { AuditEvent } from '../../../audit/security-audit';
 import { pseudonymizeSecurityAuditLogForUser } from '../pseudonymize-repository';
+import { requireDbUrl } from '@pagespace/db/test/require-db';
 
 const url = process.env.ADMIN_DATABASE_URL;
+// A missing ADMIN_DATABASE_URL is an ENVIRONMENT failure, not a reason to
+// quietly report green. This suite skipped silently on every CI run until the
+// variable was added to the workflow steps that run it; `requireDbUrl` makes
+// that state loud, with `ALLOW_SKIP_DB_TESTS=1` as the one explicit local
+// opt-out (which CI never sets).
+requireDbUrl(url, 'ADMIN_DATABASE_URL', 'gdpr-eraser.integration.test.ts');
 
 const ERASER_PASSWORD = 'eraser-secret-e2e-1';
 const SUBJECT = 'subject-user';

@@ -3,11 +3,6 @@ import type { ClientConfig, RequestDescriptor, TransportOperation } from './type
 
 const PATH_PARAM_PATTERN = /:([A-Za-z0-9_]+)/g;
 
-/** Names of the `:param` segments in an operation path template, in order. */
-export function extractPathParamNames(path: string): string[] {
-  return [...path.matchAll(PATH_PARAM_PATTERN)].map((match) => match[1]!);
-}
-
 /**
  * Interpolates `:param` segments from `input`, URL-encoding each value so a
  * literal `/` or unicode in a param can never smuggle in an extra path

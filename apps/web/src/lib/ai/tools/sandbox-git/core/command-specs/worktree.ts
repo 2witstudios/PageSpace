@@ -30,7 +30,15 @@ export interface AddArgsInput {
 }
 
 export function buildAddArgs({ paths, all }: AddArgsInput): string[] {
-  return ['add', ...(all ? ['-A'] : paths ?? [])];
+  // `--` before the pathspecs, exactly as buildStatusArgs/buildDiffArgs do: without
+  // it a path like `-p` is read as a FLAG (interactive add), and other dash-prefixed
+  // values are reinterpreted as options rather than files. `-A` is our own literal,
+  // so it stays ahead of the separator.
+  if (all) return ['add', '-A'];
+  const list = paths ?? [];
+  // `--` only when there is something to separate: a bare trailing `--` is
+  // meaningless (and the row's own validate refuses the no-paths-no-all case).
+  return list.length > 0 ? ['add', '--', ...list] : ['add'];
 }
 
 export interface ResetArgsInput {

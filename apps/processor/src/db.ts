@@ -1,4 +1,4 @@
-// Minimal pg Pool interface to keep processor build self-contained without @types/pg
+// Minimal pg Pool interface, narrower than @types/pg's full surface
 export interface PgPoolClient {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
   release(): void;
@@ -9,7 +9,6 @@ interface PgPool {
   end(): Promise<void>;
 }
 
-// @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
 import { buildAdminPgTypes, type PgTypesConfig } from './admin-pg-types';
 const { Pool } = pg as unknown as {

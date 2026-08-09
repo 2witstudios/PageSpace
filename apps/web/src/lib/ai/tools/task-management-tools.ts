@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
+import { eq, and, desc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import type { ToolExecutionContext } from '../core/types';
@@ -17,6 +17,7 @@ import {
 } from '@/lib/workflows/task-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { compareByPagePosition } from '@/services/api/task-ordering';
 import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
@@ -143,6 +144,7 @@ Agent Triggers:
         }
 
         // Fetch status configs for rollup and validation
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const validConfigs = await db.query.taskStatusConfigs.findMany({
           where: eq(taskStatusConfigs.taskListId, taskList.id),
           columns: { slug: true, group: true },
@@ -345,7 +347,8 @@ Agent Triggers:
           action: 'updated',
           parentPageId: taskList.pageId!,
           taskListId: taskList.id,
-          resultTask,
+          // Sourced from the linked page — the single ordering rail (#2143).
+          resultTask: { ...resultTask, position: existingTask.page?.position ?? 0 },
           resultTitle,
           message: `Updated task "${resultTitle}"`,
         });
@@ -464,7 +467,13 @@ The position is clamped to the valid range. Returns the refreshed task list refl
 
       try {
         const { existingTask, taskList } = await resolveTaskForUpdate(ctx, userId, taskId);
-        const clamped = await reorderTaskPeers(taskList.pageId!, taskId, position);
+        const clamped = await reorderTaskPeers(taskList.pageId!, taskId, position, {
+          userId,
+          isAiGenerated: true,
+          aiProvider: ctx.aiProvider,
+          aiModel: ctx.aiModel,
+          aiConversationId: ctx.conversationId,
+        });
         const resultTitle = existingTask.page?.title ?? '';
         // Broadcast so collaborators/other clients see the reorder, matching update_task.
         await broadcastTaskUpdated({
@@ -477,9 +486,9 @@ The position is clamped to the valid range. Returns the refreshed task list refl
           action: 'updated',
           parentPageId: taskList.pageId!,
           taskListId: taskList.id,
-          resultTask: { ...existingTask, position: clamped },
+          resultTask: { ...existingTask, position: clamped.position },
           resultTitle,
-          message: `Reordered task "${resultTitle}" to position ${clamped}`,
+          message: `Reordered task "${resultTitle}" to position ${clamped.index}`,
         });
       } catch (error) {
         console.error('Error in reorder_task:', error);
@@ -562,18 +571,21 @@ This helps agents understand their responsibilities and coordinate work with oth
         }
 
         // Query tasks assigned to the agent (task list membership derived from pages.parentId)
-        const tasks = await db.query.taskItems.findMany({
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
+        const unorderedTasks = await db.query.taskItems.findMany({
           where: and(...conditions),
-          orderBy: [asc(taskItems.position)],
           with: {
             assignee: {
               columns: { id: true, name: true },
             },
             page: {
-              columns: { id: true, title: true, isTrashed: true, parentId: true },
+              columns: { id: true, title: true, isTrashed: true, parentId: true, position: true },
             },
           },
         });
+        // Ordered in JS: the ordering rail is pages.position on the joined page, and a
+        // relational findMany cannot order by a joined table's column (#2143).
+        const tasks = unorderedTasks.sort((a, b) => compareByPagePosition(a, b));
 
         // Collect unique task list page IDs from task parents
         const taskListPageIds = [...new Set(
@@ -583,12 +595,14 @@ This helps agents understand their responsibilities and coordinate work with oth
         // Fetch page info (driveId) and task list records for those parent pages
         const [taskListPagesInfo, taskListsInfo] = await Promise.all([
           taskListPageIds.length > 0
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             ? db.query.pages.findMany({
                 where: inArray(pages.id, taskListPageIds),
                 columns: { id: true, driveId: true },
               })
             : Promise.resolve([]),
           taskListPageIds.length > 0
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             ? db.query.taskLists.findMany({
                 where: inArray(taskLists.pageId, taskListPageIds),
                 columns: { id: true, pageId: true, title: true },
@@ -636,6 +650,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         // Build group lookup from status configs across all task lists
         const uniqueTaskListIds = taskListsInfo.map(tl => tl.id);
         const allConfigs = uniqueTaskListIds.length > 0
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           ? await db.query.taskStatusConfigs.findMany({
               where: inArray(taskStatusConfigs.taskListId, uniqueTaskListIds),
             })

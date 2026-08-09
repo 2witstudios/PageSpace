@@ -19,7 +19,8 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X, MessageSquareText } from 'lucide-react';
+import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
+import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -30,6 +31,7 @@ import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrich
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { refetchNotificationsIfMarkedRead } from '@/stores/useNotificationStore';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -64,7 +66,7 @@ interface CommandExecutionEntry {
 
 // AI sender metadata for messages posted by AI tools
 interface AiMeta {
-  senderType: 'global_assistant' | 'agent';
+  senderType: 'global_assistant' | 'agent' | 'webhook';
   senderName: string;
   agentPageId?: string;
   // Universal Commands execution feedback (UX spec §7) on agent replies —
@@ -152,6 +154,7 @@ function ChannelView({ page }: ChannelViewProps) {
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -186,9 +189,11 @@ function ChannelView({ page }: ChannelViewProps) {
       setNextCursor(data.nextCursor ?? null);
 
       // Mark channel as read when viewed
-      post(`/api/channels/${page.id}/read`, {}).catch(() => {
-        // Silently ignore errors - marking as read is not critical
-      });
+      post<{ success: boolean; notificationsMarkedRead: number }>(`/api/channels/${page.id}/read`, {})
+        .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+        .catch(() => {
+          // Silently ignore errors - marking as read is not critical
+        });
     };
     fetchMessages();
   }, [page.id]);
@@ -639,6 +644,23 @@ function ChannelView({ page }: ChannelViewProps) {
     <div className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
+          {/* Deliberately not permission-gated: the dialog itself explains the
+              owner/admin requirement, so the feature stays discoverable. */}
+          <button
+            type="button"
+            onClick={() => setWebhooksOpen(true)}
+            title="Incoming Webhooks"
+            aria-label="Incoming Webhooks"
+            className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Webhook size={14} aria-hidden />
+          </button>
+          <PageWebhooksDialog
+            open={webhooksOpen}
+            onOpenChange={setWebhooksOpen}
+            pageId={page.id}
+            pageType="CHANNEL"
+          />
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">
                     {hasMore && (
@@ -658,7 +680,9 @@ function ChannelView({ page }: ChannelViewProps) {
                         const aiLabel = isAi
                           ? m.aiMeta!.senderType === 'global_assistant'
                             ? 'global assistant'
-                            : 'agent'
+                            : m.aiMeta!.senderType === 'webhook'
+                              ? 'webhook'
+                              : 'agent'
                           : null;
                         const avatarFallback = isAi
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]

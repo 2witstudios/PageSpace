@@ -191,6 +191,7 @@ export const channelTools = {
           if (channel.driveId) {
             // Pending admins (acceptedAt IS NULL) must not receive inbox
             // notifications for channels in a drive they have not joined.
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             const members = await db.query.driveMembers.findMany({
               where: and(
                 eq(driveMembers.driveId, channel.driveId),

@@ -52,23 +52,6 @@ export function groupActivitiesByDate(activities: ActivityLog[]): Map<string, Ac
   return groups;
 }
 
-export function formatDateRange(startDate?: Date, endDate?: Date): string {
-  if (!startDate && !endDate) {
-    return 'All time';
-  }
-  if (startDate && endDate) {
-    return `${format(startDate, 'MMM d')} - ${format(endDate, 'MMM d, yyyy')}`;
-  }
-  if (startDate) {
-    return `From ${format(startDate, 'MMM d, yyyy')}`;
-  }
-  if (endDate) {
-    return `Until ${format(endDate, 'MMM d, yyyy')}`;
-  }
-  // All cases are covered above; this should never be reached
-  return 'All time';
-}
-
 // ============================================================================
 // Activity Grouping Functions
 // ============================================================================

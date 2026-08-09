@@ -291,6 +291,7 @@ export async function GET(request: Request) {
       // - DRIVE: visible to all drive members (including shared drives)
       // - ATTENDEES_ONLY: only visible to creator or attendees
       // - PRIVATE: only visible to creator
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const events = await db.query.calendarEvents.findMany({
         where: and(
           driveOrSharedCondition,
@@ -422,6 +423,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: [] });
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const events = await db.query.calendarEvents.findMany({
       where: and(
         or(...conditions),

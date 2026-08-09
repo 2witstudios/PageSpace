@@ -312,5 +312,3 @@ export function GoogleOneTap({
   // Otherwise nothing visible — the One Tap prompt is rendered by Google's library.
   return null;
 }
-
-export default GoogleOneTap;

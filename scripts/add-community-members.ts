@@ -16,10 +16,14 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { eq, gt, notInArray, sql } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 function parseArgs() {
   const args = process.argv.slice(2);

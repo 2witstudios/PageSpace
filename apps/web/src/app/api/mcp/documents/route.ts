@@ -263,6 +263,7 @@ export async function POST(req: NextRequest) {
 
           const [tasks, statusConfigs] = await Promise.all([
             fetchEnrichedTasks(pageId),
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             db.query.taskStatusConfigs.findMany({
               where: eq(taskStatusConfigs.taskListId, taskList.id),
               orderBy: [asc(taskStatusConfigs.position)],
@@ -397,6 +398,7 @@ export async function POST(req: NextRequest) {
         const isRangeRequest = startLine !== undefined || endLine !== undefined;
 
         if (page.type === PageType.CHANNEL) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const messages = await db.query.channelMessages.findMany({
             where: and(
               eq(channelMessages.pageId, page.id),

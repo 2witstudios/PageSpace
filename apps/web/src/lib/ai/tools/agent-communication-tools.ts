@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql } from '@pagespace/db/operators'
-import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+// Aliased: `messages` is used as a local variable name inside the tools below.
+import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
@@ -13,7 +15,8 @@ import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
-import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -29,7 +32,6 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { MAX_FILE_PARTS_PER_MESSAGE } from '@/lib/ai/core/validate-image-parts';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -176,12 +178,19 @@ export const agentCommunicationTools = {
         for (const agent of agents) {
           const canView = await canActorViewPage(executionContext, agent.id);
           if (canView) {
-            // Check if agent has conversation history
+            // Check if agent has conversation history. Unified `messages`
+            // table since the merge (Phase 4 / D6); the agent page comes from
+            // `conversations.contextId` (the end-state authority, indexed)
+            // rather than the transitional `messages.pageId`.
             const messageCount = await db
               .select({ count: sql<number>`count(*)` })
-              .from(chatMessages)
-              .where(eq(chatMessages.pageId, agent.id));
-            
+              .from(unifiedMessages)
+              .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
+              .where(and(
+                eq(conversationsTable.type, 'page'),
+                eq(conversationsTable.contextId, agent.id)
+              ));
+
             const hasConversationHistory = messageCount[0]?.count > 0;
             
             // Get parent title if exists
@@ -309,12 +318,17 @@ export const agentCommunicationTools = {
           for (const agent of agents) {
             const canView = await canActorViewPage(executionContext, agent.id);
             if (canView) {
-              // Check for conversation history
+              // Check for conversation history (unified `messages` table; see
+              // the same query in `list_agents` above).
               const messageCount = await db
                 .select({ count: sql<number>`count(*)` })
-                .from(chatMessages)
-                .where(eq(chatMessages.pageId, agent.id));
-              
+                .from(unifiedMessages)
+                .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
+                .where(and(
+                  eq(conversationsTable.type, 'page'),
+                  eq(conversationsTable.contextId, agent.id)
+                ));
+
               const hasConversationHistory = messageCount[0]?.count > 0;
               
               // Get parent title if exists
@@ -394,35 +408,45 @@ export const agentCommunicationTools = {
     },
   }),
 
+};
+
+/** The invoke-an-agent engine's input — see {@link executeAskAgent}. */
+export interface AskAgentInput {
+  /** Semantic path to the agent (e.g. "/finance/Budget Analyst") for context and readability. */
+  agentPath: string;
+  /** Unique ID of the AI agent page to consult. */
+  agentId: string;
+  /** The question or request for the target agent. */
+  question: string;
+  /** Additional context about why the question is being asked. */
+  context?: string;
+  /** Continue an existing conversation; absent mints a new one. */
+  conversationId?: string;
   /**
-   * Consult another AI agent in the workspace for specialized knowledge or assistance
+   * Recent image attachments (e.g. from channel context) for visual context.
+   * The count cap mirrors the human-upload limit (validate-image-parts.ts);
+   * URLs must be https:// or data: — the caller (an internal surface, today
+   * only the channel-mention responder) enforces both by construction.
    */
-  ask_agent: tool({
-    description: 'Consult another AI agent in the workspace for specialized knowledge or assistance. This tool supports PERSISTENT conversations - you can continue previous conversations by providing a conversationId, or start a new conversation. The conversationId is returned in the response so you can continue the conversation in subsequent calls.',
-    inputSchema: z.object({
-      agentPath: z.string().describe('Semantic path to the agent (e.g., "/finance/Budget Analyst", "/dev/Code Assistant") for context and user readability'),
-      agentId: z.string().describe('Unique ID of the AI agent page to consult'),
-      question: z.string().describe('Question or request for the target agent. Be specific and provide context.'),
-      context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for'),
-      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.'),
-      // ask_agent is itself an LLM-callable tool, so this input is untrusted
-      // model output, not just internal plumbing from the channel responder.
-      // The URL scheme restriction (https/data only) exists specifically so a
-      // prompt-injected caller can't point the model's file-part fetch at an
-      // arbitrary internal host (e.g. cloud metadata endpoints) — providers
-      // that don't accept URL passthrough have the AI SDK download file-part
-      // URLs server-side. The count cap mirrors the human-upload limit in
-      // validate-image-parts.ts so this path can't be used to bypass it.
-      imageAttachments: z.array(z.object({
-        url: z.string().refine(
-          (url) => url.startsWith('https://') || url.startsWith('data:'),
-          { message: 'imageAttachments url must be an https:// or data: URL' }
-        ).describe('Fetchable URL (data: URL or HTTPS) for the image'),
-        mediaType: z.string().describe('Image MIME type, e.g. image/png'),
-        filename: z.string().optional().describe('Original filename, if known'),
-      })).max(MAX_FILE_PARTS_PER_MESSAGE).optional().describe('Recent image attachments (e.g. from channel context) to give the target agent visual context. Ignored if the target agent\'s model does not support vision — a text note is added instead.'),
-    }),
-    execute: async ({ agentPath, agentId, question, context, conversationId, imageAttachments }, { experimental_context }) => {
+  imageAttachments?: Array<{ url: string; mediaType: string; filename?: string }>;
+}
+
+/**
+ * The internal INVOKE-AN-AGENT engine: run one synchronous consult against a
+ * target agent — its own config, tools, history and billing — and return the
+ * reply. This is NO LONGER A TOOL: the model-facing surface it used to carry
+ * (`ask_agent`) was absorbed by the session family (`spawn_session`/
+ * `send_session` with `wait: true` — one worker primitive instead of two
+ * consult shapes). The engine itself survives verbatim for the
+ * channel-mention responder, which needs exactly this inline, ephemeral
+ * generate — a mention reply is not a worker session.
+ */
+export async function executeAskAgent(
+  { agentPath, agentId, question, context, conversationId, imageAttachments }: AskAgentInput,
+  // Callers historically passed the AI-SDK tool-options shape; only the
+  // execution context matters here, the rest is tolerated for compatibility.
+  { experimental_context }: { experimental_context?: unknown; toolCallId?: string; messages?: unknown[] },
+): Promise<Record<string, unknown>> {
       const executionContext = experimental_context as ToolExecutionContext;
       const userId = executionContext?.userId;
       
@@ -491,16 +515,39 @@ export const agentCommunicationTools = {
         if (conversationId) {
           // Load existing conversation history. Excludes 'streaming' placeholders — this
           // feeds the target agent's own model context. See Server Stream Durability epic PR 2.
+          //
+          // Unified `messages` table since the merge (Phase 4 / D6). The agent
+          // predicate is preserved — it stops a caller pairing a conversation
+          // id with an agent it does not belong to — but reads
+          // `conversations.contextId` instead of the transitional
+          // `messages.pageId`.
           const dbMessages = await db
-            .select()
-            .from(chatMessages)
+            .select({
+              id: unifiedMessages.id,
+              // The agent page, taken from the conversation rather than the
+              // transitional column, so this reader survives its removal.
+              pageId: sql<string>`${conversationsTable.contextId}`,
+              userId: unifiedMessages.userId,
+              role: unifiedMessages.role,
+              content: unifiedMessages.content,
+              createdAt: unifiedMessages.createdAt,
+              isActive: unifiedMessages.isActive,
+              editedAt: unifiedMessages.editedAt,
+              messageType: unifiedMessages.messageType,
+              toolCalls: unifiedMessages.toolCalls,
+              toolResults: unifiedMessages.toolResults,
+              status: unifiedMessages.status,
+            })
+            .from(unifiedMessages)
+            .innerJoin(conversationsTable, eq(conversationsTable.id, unifiedMessages.conversationId))
             .where(and(
-              eq(chatMessages.pageId, agentId),
-              eq(chatMessages.conversationId, conversationId),
-              eq(chatMessages.isActive, true),
-              ne(chatMessages.status, 'streaming')
+              eq(conversationsTable.type, 'page'),
+              eq(conversationsTable.contextId, agentId),
+              eq(unifiedMessages.conversationId, conversationId),
+              eq(unifiedMessages.isActive, true),
+              ne(unifiedMessages.status, 'streaming')
             ))
-            .orderBy(chatMessages.createdAt);
+            .orderBy(unifiedMessages.createdAt);
 
           messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
@@ -557,7 +604,7 @@ export const agentCommunicationTools = {
         const sourceAgentId = callingPage?.type === 'AI_CHAT' ? callingPage.id : null;
 
         // Save user message to database
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: userMessageId,
           pageId: agentId,
           conversationId: activeConversationId,
@@ -803,7 +850,7 @@ export const agentCommunicationTools = {
 
         // 13. Save assistant's response to database
         const assistantMessageId = createId();
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: assistantMessageId,
           pageId: agentId,
           conversationId: activeConversationId,
@@ -900,6 +947,4 @@ export const agentCommunicationTools = {
           }
         };
       }
-    },
-  }),
-};
+}

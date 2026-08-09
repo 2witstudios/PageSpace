@@ -276,8 +276,6 @@ export const permissionManagementService = {
   },
 };
 
-export type PermissionManagementService = typeof permissionManagementService;
-
 // ============================================================================
 // Role permission types
 // ============================================================================

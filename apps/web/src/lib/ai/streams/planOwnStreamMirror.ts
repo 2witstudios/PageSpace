@@ -146,6 +146,15 @@ export const isOwnStreamSending = (status: OwnStreamMirrorStatus): boolean =>
  *    carries no own-stream filter, so it also fires for a collaborator's stream), and its
  *    `loadMessagesForConversation` skips the array write while our own stream is live.
  *
+ *    And the biggest foreign writer of all is a SECOND SEND on the same chat: the SDK's Chat
+ *    does not support two concurrent sendMessage calls (the second overwrites activeResponse and
+ *    the interleaved writes corrupt the array), and its assistant message is exactly the foreign
+ *    last-assistant that made this branch stamp one conversation's content under another
+ *    conversation's id — chat 1's stream rendering inside chat 2. `useConversationSendHandoff`
+ *    upholds the invariant for that writer: every surface's send path first stops the local read
+ *    of any OTHER conversation's in-flight stream (handing it to the socket path) and waits for
+ *    the falling edge, so this mirror never sees two sends on one chat.
+ *
  *    If a new writer into a chat's `messages` appears, it needs the same guard, or this branch
  *    will re-target onto whatever it wrote.
  */

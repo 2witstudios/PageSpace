@@ -37,12 +37,22 @@ function loadWorkflow(): Workflow {
   return parse(raw) as Workflow;
 }
 
+/**
+ * The published-image inventory. `admin` and `marketing` were added to the
+ * workflow matrix while this file still asserted a hard-coded five — nothing ran
+ * it, because `infrastructure/` is not a workspace and no job invoked its vitest.
+ * The count assertion below is now derived from this map in BOTH directions, so
+ * the next service added to (or dropped from) the matrix without updating this
+ * inventory fails here instead of drifting silently.
+ */
 const EXPECTED_SERVICES: Record<string, { dockerfile: string; context: string }> = {
   web: { dockerfile: 'apps/web/Dockerfile', context: '.' },
   migrate: { dockerfile: 'apps/web/Dockerfile.migrate', context: '.' },
   realtime: { dockerfile: 'apps/realtime/Dockerfile', context: '.' },
   processor: { dockerfile: 'apps/processor/Dockerfile', context: '.' },
   cron: { dockerfile: 'docker/cron/Dockerfile', context: 'docker/cron' },
+  admin: { dockerfile: 'apps/admin/Dockerfile', context: '.' },
+  marketing: { dockerfile: 'apps/marketing/Dockerfile', context: '.' },
 };
 
 describe('Docker Images CI workflow', () => {
@@ -51,11 +61,8 @@ describe('Docker Images CI workflow', () => {
   const serviceNames = matrix.map((e) => e.service);
 
   describe('service matrix', () => {
-    it('should include all 5 required services', () => {
-      expect(serviceNames).toHaveLength(5);
-      for (const name of Object.keys(EXPECTED_SERVICES)) {
-        expect(serviceNames).toContain(name);
-      }
+    it('should build exactly the services in the expected inventory — no more, no fewer', () => {
+      expect([...serviceNames].sort()).toEqual(Object.keys(EXPECTED_SERVICES).sort());
     });
 
     it.each(Object.entries(EXPECTED_SERVICES))(

@@ -328,5 +328,3 @@ export const ChatTextarea = forwardRef<ChatTextareaRef, ChatTextareaProps>(
   )
 );
 ChatTextarea.displayName = 'ChatTextarea';
-
-export default ChatTextarea;

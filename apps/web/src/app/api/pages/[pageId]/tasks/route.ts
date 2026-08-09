@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
+import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, count, isNotNull } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, count, isNotNull, ilike } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -14,8 +15,13 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
+import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
+import { parseTaskQuerySpec } from './query-spec';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -51,6 +57,7 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     });
   } else {
     // Ensure status configs exist for existing task lists (migration path)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const existingConfigs = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
     });
@@ -102,14 +109,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Get or create task list (also ensures default status configs)
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
-  // Parse query params for filtering
+  // Parse query params for filtering + pagination bounds
   const url = new URL(req.url);
-  const status = url.searchParams.get('status');
-  const assigneeId = url.searchParams.get('assigneeId');
-  const search = url.searchParams.get('search');
-  const sortOrder = url.searchParams.get('sortOrder') || 'asc';
+  const { status, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
 
   // Fetch status configs for this task list
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -126,31 +131,65 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     ));
   const childPageIds = childPages.map(p => p.id);
 
+  const emptyTasksResponse = () => NextResponse.json({
+    taskList: {
+      id: taskList.id,
+      title: taskList.title,
+      description: taskList.description,
+      status: taskList.status,
+      updatedAt: taskList.updatedAt,
+    },
+    tasks: [],
+    statusConfigs,
+    hasMore: false,
+  });
+
   if (childPageIds.length === 0) {
-    return NextResponse.json({
-      taskList: {
-        id: taskList.id,
-        title: taskList.title,
-        description: taskList.description,
-        status: taskList.status,
-        updatedAt: taskList.updatedAt,
-      },
-      tasks: [],
-      statusConfigs,
-    });
+    return emptyTasksResponse();
   }
 
   // Self-heal: any TASK_LIST child missing its task_items row (created or moved via a
   // path that skipped the sync) gets backfilled here so it always shows up as a task.
   await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
 
-  // Build query - include assignees relation
-  const query = db.query.taskItems.findMany({
-    where: and(
+  // Phase 1: a lightweight join resolves the ordered (by pages.position, the single
+  // ordering rail — #2143), filtered, bounded set of task ids — this is what keeps
+  // the query from pulling every task into memory (the OOM crash this route caused).
+  // Phase 2 hydrates only those ids' relations.
+  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
+  // frontend's Load More) without a separate COUNT(*) query.
+  const positionExpr = pages.position;
+  const orderedIdRows = await db
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(
       inArray(taskItems.pageId, childPageIds),
       status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
-    ),
+      search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
+    ))
+    // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
+    // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
+    // pages that never got a distinct one) have no guaranteed stable order across repeated
+    // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
+    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
+    .limit(limit + 1)
+    .offset(offset);
+  const hasMore = orderedIdRows.length > limit;
+  const boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
+
+  if (boundedTaskIds.length === 0) {
+    return emptyTasksResponse();
+  }
+
+  // Phase 2: hydrate the 5 relations only for the bounded page of ids from phase 1.
+  // The explicit `limit` is redundant with `boundedTaskIds` already being capped at phase 1
+  // — kept as defense-in-depth so this call stays bounded even if that invariant is ever
+  // broken upstream, and so it stays self-evidently bounded to a lint rule scanning for one.
+  const query = db.query.taskItems.findMany({
+    where: inArray(taskItems.id, boundedTaskIds),
+    limit: boundedTaskIds.length,
     columns: {
       id: true,
       userId: true,
@@ -159,7 +198,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       pageId: true,
       status: true,
       priority: true,
-      position: true,
       dueDate: true,
       metadata: true,
       completedAt: true,
@@ -219,22 +257,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
   });
 
-  let tasks = await decryptTaskUserRelations(await query);
+  const tasks = await decryptTaskUserRelations(await query);
 
-  // Sort by page.position (source of truth), fallback to task.position
-  tasks.sort((a, b) => {
-    const posA = a.page?.position ?? a.position;
-    const posB = b.page?.position ?? b.position;
-    return sortOrder === 'desc' ? posB - posA : posA - posB;
-  });
-
-  // Apply search filter in memory
-  if (search) {
-    const searchLower = search.toLowerCase();
-    tasks = tasks.filter(task =>
-      (task.page?.title ?? '').toLowerCase().includes(searchLower)
-    );
-  }
+  // Phase 2's `inArray` hydration does not preserve phase 1's order, so re-apply it
+  // here against the same rail and the same id tiebreaker.
+  tasks.sort((a, b) => compareByPagePosition(a, b, sortOrder));
 
   // Ground-truth active trigger count from task_triggers so badges don't go
   // stale when an agent page is trashed: the workflows row cascade-deletes,
@@ -285,6 +312,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: page?.position ?? 0,
     title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
     hasContent: computeHasContent(page?.content),
@@ -303,6 +332,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
     tasks: enrichedTasks,
     statusConfigs,
+    hasMore,
   });
 }
 
@@ -413,6 +443,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Validate status against task list's status configs
   let initialCompletedAt: Date | null = null;
   if (status) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const validStatuses = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
       columns: { slug: true, group: true },
@@ -427,14 +458,35 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
   }
 
-  // Get highest position for new page (task position mirrors page position)
+  // Get highest position for the new page. `pages.position` is the single ordering
+  // rail (#2143).
   const lastChildPage = await db.query.pages.findFirst({
     where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
     orderBy: [desc(pages.position)],
   });
 
   const nextPosition = (lastChildPage?.position ?? 0) + 1;
-  const taskPosition = typeof position === 'number' ? position : nextPosition;
+
+  // A caller-supplied `position` is resolved against the current siblings up front
+  // and applied to the insert directly, in the same transaction — not as a second
+  // move afterward. A split commit (insert, then a separate move transaction) would
+  // let a mid-flight failure leave a task the client sees as failed but that a retry
+  // would then duplicate.
+  const newTaskPageId = createId();
+  let initialPagePosition = nextPosition;
+  let densifyPlan: Extract<ReturnType<typeof computeTaskMovePosition>, { kind: 'densify' }> | undefined;
+  if (typeof position === 'number') {
+    const taskListPeers = await db
+      .select({ id: pages.id, position: pages.position })
+      .from(pages)
+      .where(and(eq(pages.parentId, pageId), eq(pages.type, 'TASK_LIST'), eq(pages.isTrashed, false)));
+    const plan = computeTaskMovePosition({ peers: taskListPeers, movedId: newTaskPageId, targetIndex: position });
+    if (plan.kind === 'single') {
+      initialPagePosition = plan.position;
+    } else {
+      densifyPlan = plan;
+    }
+  }
 
   // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
@@ -450,12 +502,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const result = await db.transaction(async (tx) => {
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
+      id: newTaskPageId,
       title: title.trim(),
       type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
       content: '',
-      position: nextPosition,
+      position: initialPagePosition,
       updatedAt: new Date(),
     }).returning();
 
@@ -468,7 +521,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: taskPosition,
       completedAt: initialCompletedAt,
       metadata: {
         createdAt: new Date().toISOString(),
@@ -517,8 +569,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       });
     }
 
+    // A densify plan (the float4 gap between the target slot's neighbours could no
+    // longer be split) re-derives every sibling's position in the same transaction
+    // as the insert, so the whole placement — new row included — commits atomically.
+    if (densifyPlan) {
+      await reorderTaskListChildPages(tx, pageId, computeReorderPlan([...densifyPlan.positions]));
+    }
+
     return { task: newTask, page: taskPage, agentTriggerResult };
   });
+
+  // Densify overwrote the insert's position for every sibling including the new
+  // page; everything else already landed on `initialPagePosition` at insert time.
+  const createdPosition = densifyPlan
+    ? densifyPlan.positions.find(p => p.id === newTaskPageId)?.position ?? result.page.position
+    : result.page.position;
 
   // Fetch task with relations (including assignees)
   const fetchedTask = await db.query.taskItems.findFirst({
@@ -608,6 +673,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   return NextResponse.json({
     ...taskWithRelations,
+    position: createdPosition,
     title: createdTitle,
     pageId: result.page.id,
     ...(result.agentTriggerResult ? { agentTrigger: result.agentTriggerResult } : {}),

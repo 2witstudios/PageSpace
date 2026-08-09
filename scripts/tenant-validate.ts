@@ -20,7 +20,13 @@ import { existsSync } from 'fs';
 import path from 'path';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
-import { fileChecksum, toSqlInList, validateIds } from './lib/migration-utils';
+import {
+  fileChecksum,
+  toSqlInList,
+  validateIds,
+  conversationSelectionWhere,
+  workspaceSelectionWhere,
+} from './lib/migration-utils';
 
 async function queryIds(
   db: DbClient,
@@ -141,12 +147,34 @@ export async function validateData(
   const channelMsgIds = (channelMsgRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
   const channelMsgIn = toSqlInList(channelMsgIds);
 
-  // Get conversation IDs for message validation
+  // THE CONVERSATIONS THE EXPORT ACTUALLY CARRIED — the shared predicate, not
+  // a re-typed subset of it. This was `WHERE "userId" IN (userIn)` alone, which
+  // silently dropped the two page arms the exporter has always had, so every
+  // downstream list built from it (messages, workspaces, shells) validated a
+  // NARROWER population than the bundle contained. Rows outside it were
+  // compared on neither the source nor the target side, which is not a missed
+  // check but a false PASS: `[PASS] messages` printed even when the import had
+  // dropped every message of a page chat started by a drive member outside
+  // `--user-ids`.
   const convoRows = await sourceDb.execute(
-    sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
+    sql.raw(`SELECT id FROM conversations WHERE ${conversationSelectionWhere(userIn, pageIn)}`),
   );
   const convoIds = (convoRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
   const convoIn = toSqlInList(convoIds);
+
+  // The owners of those conversations, which is what the export scopes
+  // workspaces and shells on (`allExportedUserIdSet`) — the requested users
+  // PLUS the ones DISCOVERED through the page arms. Validating on the
+  // requested set alone left a discovered user's workspace, and its shells'
+  // `coldTail` terminal scrollback, carried but never checked.
+  const convoOwnerRows = await sourceDb.execute(
+    sql.raw(`SELECT DISTINCT "userId" AS id FROM conversations WHERE id IN (${convoIn})`),
+  );
+  const exportedUserIds = new Set<string>(userIds);
+  for (const row of convoOwnerRows.rows as Record<string, unknown>[]) {
+    if (row.id) exportedUserIds.add(row.id as string);
+  }
+  const exportedUserIn = toSqlInList(exportedUserIds);
 
   // ID-based queries for tables with a single PK
   const idQueries: Record<string, ReturnType<typeof sql>> = {
@@ -157,13 +185,26 @@ export async function validateData(
     drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`),
     pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
     tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIn}))`),
-    chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIn})`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
-    conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
+    // The export's rule, from the shared helper: the sessions the EXPORTED
+    // conversations are bound to, owned by an EXPORTED user (requested or
+    // discovered) — matching `allExportedUserIdSet` on the export side.
+    agent_workspaces: sql.raw(
+      `SELECT id FROM agent_workspaces WHERE ${workspaceSelectionWhere(exportedUserIn, convoIn)}`,
+    ),
+    // The shells of those same sessions, owned by an exported user.
+    agent_workspace_shells: sql.raw(
+      `SELECT id FROM agent_workspace_shells WHERE "ownerId" IN (${exportedUserIn})`
+      + ` AND "workspaceId" IN (SELECT id FROM agent_workspaces WHERE ${workspaceSelectionWhere(exportedUserIn, convoIn)})`,
+    ),
+    // The same shared predicate the exporter and `convoIn` above both use, so
+    // these three can no longer disagree about what the bundle contains.
+    conversations: sql.raw(
+      `SELECT id FROM conversations WHERE ${conversationSelectionWhere(userIn, pageIn)}`,
+    ),
     messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
-    permissions: sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIn})`),
     page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),
     mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
     user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`),

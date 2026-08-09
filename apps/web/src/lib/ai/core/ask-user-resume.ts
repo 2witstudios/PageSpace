@@ -1,15 +1,14 @@
 import type { UIMessage } from 'ai';
 import { eq, and, ne, desc } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { chatMessages } from '@pagespace/db/schema/core';
-import { messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   convertDbMessageToUIMessage,
   convertGlobalAssistantMessageToUIMessage,
-  saveMessageToDatabase,
-  saveGlobalAssistantMessageToDatabase,
 } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 import {
   buildAssistantPersistencePayload,
   type AssistantPersistencePayload,
@@ -104,15 +103,16 @@ function pendingAskUserToolCallIds(parts: UIMessage['parts']): string[] {
  * double-submit, or answering in one tab while a dismiss-triggering message
  * arrives from another) can interleave and the later write wins, silently
  * dropping the earlier one. Not fixed here: doing so correctly requires
- * threading a transaction/row-lock through `saveMessageToDatabase` /
- * `saveGlobalAssistantMessageToDatabase` in message-utils.ts, which are
+ * threading a transaction/row-lock through the message repository's save
+ * methods (apps/web/src/lib/repositories/message-repository.ts), which are
  * shared by many unrelated AI features — broader blast radius than this
  * narrow, low-probability, self-healing race (the user can just answer
  * again) justifies in isolation.
  */
 interface FetchedAssistantMessage {
   message: UIMessage;
-  persist(payload: AssistantPersistencePayload): Promise<void>;
+  /** Result (the repository's MessageWriteResult) is intentionally ignored by callers. */
+  persist(payload: AssistantPersistencePayload): Promise<unknown>;
 }
 
 /**
@@ -174,7 +174,7 @@ async function dismissPendingAskUser(adapter: AssistantMessageAdapter): Promise<
 function pageAdapter(args: { pageId: string; conversationId: string }): AssistantMessageAdapter {
   const toUIMessage = (row: {
     id: string;
-    pageId: string;
+    pageId: string | null;
     userId: string | null;
     role: string;
     content: string;
@@ -202,7 +202,7 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     });
 
   const persistFor = (messageId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
-    saveMessageToDatabase({
+    messageRepository.savePageMessage({
       messageId,
       pageId: args.pageId,
       conversationId: args.conversationId,
@@ -212,6 +212,25 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       status,
     });
 
+  // Reads the one `messages` table (Phase 4 / D6). The page predicate is
+  // `unifiedPageScope` — the join through `conversations`, which is what
+  // `chat_messages.pageId` became — and the page itself is DERIVED from that
+  // same join rather than read off the row.
+  const pageRowColumns = {
+    id: globalMessages.id,
+    pageId: derivedPageId(),
+    userId: globalMessages.userId,
+    role: globalMessages.role,
+    content: globalMessages.content,
+    toolCalls: globalMessages.toolCalls,
+    toolResults: globalMessages.toolResults,
+    createdAt: globalMessages.createdAt,
+    isActive: globalMessages.isActive,
+    editedAt: globalMessages.editedAt,
+    messageType: globalMessages.messageType,
+    status: globalMessages.status,
+  } as const;
+
   return {
     // Both fetchers skip 'streaming' placeholders: a still-empty, mid-flight row is never
     // the message an ask_user resume should target — fetchLastAssistant in particular would
@@ -219,39 +238,41 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     // message" and merge results into the wrong row. See Server Stream Durability epic PR 2.
     async fetchById(messageId) {
       const [row] = await db
-        .select()
-        .from(chatMessages)
+        .select(pageRowColumns)
+        .from(globalMessages)
+        .innerJoin(conversations, eq(conversations.id, globalMessages.conversationId))
         .where(
           and(
-            eq(chatMessages.id, messageId),
-            eq(chatMessages.pageId, args.pageId),
-            eq(chatMessages.conversationId, args.conversationId),
-            eq(chatMessages.isActive, true),
-            ne(chatMessages.status, 'streaming')
+            eq(globalMessages.id, messageId),
+            unifiedPageScope(args.pageId),
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true),
+            ne(globalMessages.status, 'streaming')
           )
         )
         .limit(1);
       if (!row || row.role !== 'assistant') return null;
       // The fetchers' ne(status, 'streaming') filter guarantees row.status is 'complete' or
       // 'interrupted' here — persist must preserve it, not silently default back to 'complete'
-      // (saveMessageToDatabase's own default), or a genuinely cut-short reply with a pending
+      // (the repository save's own default), or a genuinely cut-short reply with a pending
       // ask_user call would read as fully complete the moment it's answered/dismissed.
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
     async fetchLastAssistant() {
       const [row] = await db
-        .select()
-        .from(chatMessages)
+        .select(pageRowColumns)
+        .from(globalMessages)
+        .innerJoin(conversations, eq(conversations.id, globalMessages.conversationId))
         .where(
           and(
-            eq(chatMessages.pageId, args.pageId),
-            eq(chatMessages.conversationId, args.conversationId),
-            eq(chatMessages.isActive, true),
-            eq(chatMessages.role, 'assistant'),
-            ne(chatMessages.status, 'streaming')
+            unifiedPageScope(args.pageId),
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true),
+            eq(globalMessages.role, 'assistant'),
+            ne(globalMessages.status, 'streaming')
           )
         )
-        .orderBy(desc(chatMessages.createdAt))
+        .orderBy(desc(globalMessages.createdAt))
         .limit(1);
       if (!row) return null;
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };
@@ -281,7 +302,9 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
   const toUIMessage = (row: {
     id: string;
     conversationId: string;
-    userId: string;
+    // Nullable since migration 0249 (agent-authored rows); the converter never
+    // reads it.
+    userId: string | null;
     role: string;
     content: string;
     toolCalls: unknown;
@@ -308,7 +331,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
     });
 
   const persistFor = (messageId: string, userId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
-    saveGlobalAssistantMessageToDatabase({
+    messageRepository.saveGlobalMessage({
       messageId,
       conversationId: args.conversationId,
       userId,
@@ -332,7 +355,10 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
           )
         )
         .limit(1);
-      if (!row || row.role !== 'assistant') return null;
+      // `userId === null` (possible on `messages` since 0249) means the row has
+      // no author to re-persist AS, so it is not resumable. No writer produces
+      // that shape yet — the guard is what keeps this path honest once one does.
+      if (!row || row.role !== 'assistant' || row.userId === null) return null;
       // See pageAdapter's fetchById: preserve the fetched row's terminal status rather than
       // letting persist silently default to 'complete'.
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
@@ -351,7 +377,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
         )
         .orderBy(desc(globalMessages.createdAt))
         .limit(1);
-      if (!row) return null;
+      if (!row || row.userId === null) return null;
       return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
   };

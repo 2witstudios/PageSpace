@@ -1,28 +1,39 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StrictMode } from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
-import { useSigninRecovery } from '../useSigninRecovery';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import {
+  useSigninRecovery,
+  DEVICE_TOKEN_TIMEOUT_MS,
+  CHECK_ME_TIMEOUT_MS,
+  RECOVERY_FAILSAFE_TIMEOUT_MS,
+} from '../useSigninRecovery';
 
 // Shell-level coverage for the recovery effect. The DECISION branches live in
-// signin-recovery.test.ts; here we assert the effects are wired to the right actions:
-// a live /api/auth/me redirects, an expired cookie + device token refreshes then redirects,
-// and an unrecoverable state renders the form. We also cover the two subtleties the shell
-// alone carries: it must not start before the redirect destination is resolved (readiness),
-// and it must survive React StrictMode's dev mount probe.
+// signin-recovery.test.ts; here we assert the effects are wired to the right actions AND to the
+// right platform-routed primitives (D1): check-me goes through fetchWithAuth (Bearer-attaching,
+// refresh-on-401), and hasDeviceToken reads PLATFORM storage (safeStorage over IPC on desktop),
+// never localStorage directly. We also cover the two subtleties the shell alone carries: it must
+// not start before the redirect destination is resolved (readiness), and it must survive React
+// StrictMode's dev mount probe.
 
 const replace = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
 }));
 
+const fetchWithAuth = vi.fn();
 const refreshAuthSession = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => fetchWithAuth(...args),
   refreshAuthSession: () => refreshAuthSession(),
 }));
 
-const isCapacitorApp = vi.fn(() => false);
-vi.mock('@/lib/capacitor-bridge', () => ({
-  isCapacitorApp: () => isCapacitorApp(),
+// The platform-storage seam: desktop returns a session read from safeStorage over IPC, web from
+// localStorage. The shell only ever touches it through getPlatformStorage().getStoredSession().
+const getStoredSession = vi.fn();
+let storagePlatform: 'web' | 'desktop' | 'ios' | 'android' = 'web';
+vi.mock('@/lib/auth/platform-storage', () => ({
+  getPlatformStorage: () => ({ platform: storagePlatform, getStoredSession }),
 }));
 
 let authFailedPermanently = false;
@@ -30,25 +41,24 @@ vi.mock('@/stores/useAuthStore', () => ({
   useAuthStore: { getState: () => ({ authFailedPermanently }) },
 }));
 
+// check-me result via fetchWithAuth('/api/auth/me').
 function mockMe(ok: boolean) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => ({ ok }) as Response),
-  );
+  fetchWithAuth.mockResolvedValue({ ok } as Response);
 }
 
 beforeEach(() => {
   replace.mockClear();
+  fetchWithAuth.mockReset();
   refreshAuthSession.mockReset();
-  isCapacitorApp.mockReturnValue(false);
+  getStoredSession.mockReset();
+  getStoredSession.mockResolvedValue(null); // default: no device token
+  storagePlatform = 'web';
   authFailedPermanently = false;
   localStorage.clear();
-  // Default: window.electron absent (pure web).
-  delete (window as unknown as { electron?: unknown }).electron;
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('useSigninRecovery', () => {
@@ -70,9 +80,20 @@ describe('useSigninRecovery', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
   });
 
+  it('checks the session through fetchWithAuth (Bearer-attaching), not raw fetch', async () => {
+    mockMe(true);
+    const rawFetch = vi.spyOn(globalThis, 'fetch');
+
+    renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(fetchWithAuth).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({ credentials: 'include' }));
+    expect(rawFetch).not.toHaveBeenCalled();
+  });
+
   it('refreshes via the device token then redirects when the cookie is expired', async () => {
     mockMe(false);
-    localStorage.setItem('deviceToken', 'dt_valid');
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
     refreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
 
     renderHook(() => useSigninRecovery('/dashboard', true));
@@ -83,6 +104,7 @@ describe('useSigninRecovery', () => {
 
   it('renders the form (no redirect) when the cookie is expired and there is no device token', async () => {
     mockMe(false);
+    getStoredSession.mockResolvedValue(null);
 
     const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
 
@@ -93,7 +115,7 @@ describe('useSigninRecovery', () => {
 
   it('renders the form when the device-token refresh fails, without looping', async () => {
     mockMe(false);
-    localStorage.setItem('deviceToken', 'dt_revoked');
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_revoked' });
     refreshAuthSession.mockResolvedValue({ success: false, shouldLogout: true });
 
     const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
@@ -103,40 +125,106 @@ describe('useSigninRecovery', () => {
     expect(refreshAuthSession).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the form immediately when auth has permanently failed (no /api/auth/me, no loop)', async () => {
+  it('renders the form immediately when auth has permanently failed (no check-me, no loop)', async () => {
     authFailedPermanently = true;
-    localStorage.setItem('deviceToken', 'dt_valid');
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
 
     const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
 
     await waitFor(() => expect(result.current.recovering).toBe(false));
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchWithAuth).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it('skips recovery in a native shell and renders the form', async () => {
-    isCapacitorApp.mockReturnValue(true);
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
+  // ── D1 acceptance: native shells now run the SAME recovery machine ───────────────────────
+  describe('desktop (native shell)', () => {
+    beforeEach(() => {
+      storagePlatform = 'desktop';
+    });
 
-    const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+    it('an authenticated check-me redirects — no signin form shown (acceptance #1)', async () => {
+      // safeStorage holds a valid session; check-me succeeds so we never even need the token.
+      getStoredSession.mockResolvedValue({ deviceToken: 'safe_dt' });
+      mockMe(true);
 
-    await waitFor(() => expect(result.current.recovering).toBe(false));
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
+      const { result } = renderHook(() => useSigninRecovery('/dashboard/deep', true));
+
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard/deep'));
+      expect(result.current.recovering).toBe(true); // stays recovering through the nav — no form
+    });
+
+    it('check-me carries a Bearer token (via fetchWithAuth) and hasDeviceToken reads platform storage (acceptance #2)', async () => {
+      getStoredSession.mockResolvedValue({ deviceToken: 'safe_dt' });
+      mockMe(true);
+
+      renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await waitFor(() => expect(replace).toHaveBeenCalled());
+      // Bearer path: goes through the auth-fetch wrapper, never raw fetch.
+      expect(fetchWithAuth).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({ credentials: 'include' }));
+      // Device token read from PLATFORM storage (safeStorage over IPC on desktop) — the shell's
+      // only token source is getPlatformStorage().getStoredSession(), not a raw localStorage read.
+      expect(getStoredSession).toHaveBeenCalled();
+    });
+
+    it('a successful device refresh redirects to /dashboard (acceptance #3)', async () => {
+      getStoredSession.mockResolvedValue({ deviceToken: 'safe_dt' });
+      mockMe(false); // cookie/session gone
+      refreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+
+      renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
+      expect(refreshAuthSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('NO redirect loop: when genuinely unauthenticated, authFailedPermanently wins and the form is shown (acceptance #4)', async () => {
+      // The loop-guard must short-circuit BEFORE any check-me/refresh — proving it, not the
+      // absence of a token, is what stops the check-me→refresh→bounce loop on desktop.
+      authFailedPermanently = true;
+      getStoredSession.mockResolvedValue({ deviceToken: 'safe_dt' });
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await waitFor(() => expect(result.current.recovering).toBe(false));
+      expect(fetchWithAuth).not.toHaveBeenCalled();
+      expect(refreshAuthSession).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+    });
+
+    it('shows the form when unauthenticated with no recoverable token (terminates, no loop)', async () => {
+      mockMe(false);
+      getStoredSession.mockResolvedValue({ deviceToken: null });
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await waitFor(() => expect(result.current.recovering).toBe(false));
+      expect(replace).not.toHaveBeenCalled();
+      expect(refreshAuthSession).not.toHaveBeenCalled();
+    });
   });
 
-  it('does not start recovery until ready — no /api/auth/me while the destination is unresolved', async () => {
-    const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
-    vi.stubGlobal('fetch', fetchSpy);
+  // ── Web regression: behavior is identical to before D1 ───────────────────────────────────
+  it('web: expired cookie + valid device token still refreshes and redirects (acceptance #5)', async () => {
+    storagePlatform = 'web';
+    mockMe(false);
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
+    refreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+
+    renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
+    expect(refreshAuthSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start recovery until ready — no check-me while the destination is unresolved', async () => {
+    mockMe(true);
 
     renderHook(() => useSigninRecovery(undefined, false));
 
     // Give any (incorrectly-scheduled) effect a chance to run.
     await Promise.resolve();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchWithAuth).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
   });
 
@@ -166,7 +254,7 @@ describe('useSigninRecovery', () => {
     // The driver is best-effort: a thrown rejection anywhere must fall back to the form
     // rather than leave the page stuck on the loading state forever.
     mockMe(false);
-    localStorage.setItem('deviceToken', 'dt_valid');
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
     refreshAuthSession.mockRejectedValue(new Error('boom'));
 
     const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
@@ -175,13 +263,8 @@ describe('useSigninRecovery', () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it('fails open to the form if the /api/auth/me fetch itself rejects', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        throw new Error('network down');
-      }),
-    );
+  it('fails open to the form if the check-me fetch itself rejects', async () => {
+    fetchWithAuth.mockRejectedValue(new Error('network down'));
 
     const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
 
@@ -190,8 +273,7 @@ describe('useSigninRecovery', () => {
   });
 
   it('runs recovery only once even if the component re-renders while ready stays true', async () => {
-    const fetchSpy = vi.fn(async () => ({ ok: false }) as Response);
-    vi.stubGlobal('fetch', fetchSpy);
+    mockMe(false);
 
     const { rerender, result } = renderHook(
       ({ n }: { n: number }) => useSigninRecovery(`/dashboard?r=${n}`, true),
@@ -203,7 +285,30 @@ describe('useSigninRecovery', () => {
     rerender({ n: 2 });
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it('never hangs forever if getStoredSession never resolves (iOS Keychain hang regression)', async () => {
+    // Reproduces the reported bug: a hung native Keychain read used to leave `recovering`
+    // stuck `true` forever, stranding the user on the "Welcome back / Loading..." screen.
+    vi.useFakeTimers();
+    try {
+      mockMe(false);
+      getStoredSession.mockReturnValue(new Promise(() => {})); // never resolves
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEVICE_TOKEN_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('completes recovery under React StrictMode (does not get stuck on loading)', async () => {
@@ -216,5 +321,157 @@ describe('useSigninRecovery', () => {
     // Under StrictMode the effect is set up, torn down, then set up again on mount. The
     // second run must complete rather than being stranded by a latched guard.
     await waitFor(() => expect(result.current.recovering).toBe(false));
+  });
+
+  // ── Round 2: raw fetch() calls in this chain had NO timeout at all ───────────────────────
+  it('never hangs if the check-me fetch never resolves (network stall regression)', async () => {
+    // Reproduces a true network stall (no rejection, no resolution — e.g. iOS cold-launch
+    // before the network stack is up). Mimics real fetch()'s AbortController contract: the
+    // request promise only settles when the signal fires.
+    vi.useFakeTimers();
+    try {
+      fetchWithAuth.mockImplementation(
+        (_url: string, options?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      getStoredSession.mockResolvedValue(null); // no device token → terminal show-form
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CHECK_ME_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: a fast check-me success is unaffected by the new timeout', async () => {
+    mockMe(true);
+
+    const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
+    expect(result.current.recovering).toBe(true); // still recovering through the nav
+  });
+
+  it('the failsafe timer flips recovering to false even if a hang bypasses every individual guard', async () => {
+    // hasDeviceToken and checkMeAuthenticated each carry their own timeout, but this proves
+    // the failsafe is a true backstop: fetchWithAuth here never settles and never observes the
+    // abort signal, simulating a hang neither of the two dedicated guards catches. Only the
+    // unconditional failsafe timer can save the page in that case.
+    vi.useFakeTimers();
+    try {
+      getStoredSession.mockReturnValue(new Promise(() => {}));
+      fetchWithAuth.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: the failsafe does not misfire mid-chain on a legitimately slow (not hung) full recovery', async () => {
+    // The failsafe budget must cover the FULL bearer-platform chain, not just hasDeviceToken +
+    // checkMeAuthenticated: check-me failing routes to a device-token refresh, whose own
+    // AuthFetch-side timeout (Keychain read + refresh POST) adds up to another ~11s on top.
+    // Each step here resolves just under its own guard's deadline — genuinely slow, never
+    // hung — so the failsafe (25s) must not fire before the chain's own ~21.7s completes.
+    vi.useFakeTimers();
+    try {
+      const delayedResolve = <T,>(value: T, ms: number) =>
+        new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+      getStoredSession.mockImplementation(() => delayedResolve({ deviceToken: 'dt_valid' }, 2900));
+      fetchWithAuth.mockImplementation(() => delayedResolve({ ok: false } as Response, 7900));
+      refreshAuthSession.mockImplementation(() =>
+        delayedResolve({ success: true, shouldLogout: false }, 10900),
+      );
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      // Just before the chain's own ~21.7s completion: still legitimately in progress.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2900 + 7900 + 10800);
+      });
+      expect(replace).not.toHaveBeenCalled();
+      expect(result.current.recovering).toBe(true);
+
+      // The chain completes on its own, well before the 25s failsafe deadline.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(replace).toHaveBeenCalledWith('/dashboard');
+      expect(result.current.recovering).toBe(true); // stays true through the nav
+
+      // Advancing the rest of the way to the failsafe deadline must not disturb that outcome.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+      expect(replace).toHaveBeenCalledTimes(1);
+      expect(result.current.recovering).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refresh that resolves AFTER the failsafe already gave up must not redirect out from under the form', async () => {
+    // Defense-in-depth for the platforms whose device-token refresh has no timeout of its own
+    // yet (web's refreshWebSession, desktop's attemptDesktopDeviceRefresh — both deferred
+    // follow-ups). If one of those truly hangs past the failsafe, the user sees the form; if
+    // the hung call THEN eventually resolves successfully, it must not yank them into a
+    // surprise navigation after they've already started looking at (or filling in) the form.
+    vi.useFakeTimers();
+    try {
+      mockMe(false);
+      getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
+
+      let resolveRefresh: ((result: { success: boolean; shouldLogout: boolean }) => void) | undefined;
+      refreshAuthSession.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+
+      // The stuck refresh finally settles, long after the failsafe already showed the form.
+      await act(async () => {
+        resolveRefresh?.({ success: true, shouldLogout: false });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(result.current.recovering).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

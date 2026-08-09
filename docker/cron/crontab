@@ -27,6 +27,23 @@
 # Verifies hash chain integrity of security audit log
 0 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
 
+# Database backup freshness check - Daily at 2:45am UTC
+# Asserts a recent, non-empty, AES-256-encrypted pg_dump exists in Tigris under
+# db-backups/. The dump itself is produced by a Fly SCHEDULED MACHINE outside this
+# app (pagespace-db-backup, see PageSpace-Deploy fly/backup/), which fires around
+# 00:30 UTC — so 02:45 leaves ~2h of slack for a slow run before we check.
+# Alerts to Sentry (level fatal) and returns 503 when the newest object is older
+# than BACKUP_MAX_AGE_HOURS (default 36h, i.e. one missed run is tolerated).
+# Exists because that job died silently for 44 days (2026-06-26 → 2026-08-08):
+# a fail-closed BACKUP_ENCRYPTION_KEY gate with the secret never set, then a Fly
+# host migration that dropped the machine's schedule. A scheduled machine that
+# never fires is indistinguishable from a finished one by STATE alone, so the
+# bucket is the only trustworthy signal.
+# This image also runs in the tenant compose stack, which has no such backup job —
+# the route skips (200) unless DEPLOYMENT_MODE is cloud, so tenants are not paged
+# nightly for infrastructure they do not have.
+45 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-db-backup-freshness >> /var/log/cron/verify-db-backup-freshness.log 2>&1
+
 # Activity log archival (hot→cold tier) - Daily at 2:30am UTC
 # Flips isArchived=true on activity_logs older than ACTIVITY_LOGS_ARCHIVE_DAYS (default 365)
 # so the active-view stays bounded. Flag-flip only: never deletes rows or touches the hash chain.
@@ -55,6 +72,14 @@
 # Orphaned file cleanup - Weekly on Sundays at 6am UTC
 # Detects and deletes file records with zero references + physical files
 0 6 * * 0 cron-curl GET __WEB_URL__/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
+
+# Subscription tier reconcile - Every 30 minutes
+# Compares users.subscriptionTier (denormalized cache) against the
+# subscriptions table and repairs repairable drift; indeterminate drift
+# (an entitled subscription on an unmapped price id) is logged/audited for
+# a human, never auto-repaired. Backstop for missed/failed Stripe webhooks
+# (see subscription-tier-reconcile.ts in @pagespace/lib).
+*/30 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-subscription-tiers >> /var/log/cron/reconcile-subscription-tiers.log 2>&1
 
 # Credit reconcile - Every 10 minutes
 # Re-settles ledger rows stuck 'pending' and bills usage rows that never
@@ -90,6 +115,7 @@
 # doing redundant work.
 */30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
 
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default
@@ -99,3 +125,18 @@
 # Scheduled drive backups - Hourly
 # Fires automated drive backups for pro+ users whose nextRunAt is due
 0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1
+
+# Storage reconcile - Every 15 minutes, offset 5 minutes off the hour
+# Rewrites users.storageUsedBytes from SUM(files.sizeBytes) wherever the cache
+# has drifted from the charge basis (#2155). Idempotent — a run that finds no
+# drift for a user makes no writes. The route itself holds a Postgres advisory
+# lock across ALL callers (any container, any manual trigger); flock -n here
+# is just this container's own defense-in-depth against overlapping ticks.
+# Deliberately offset from `*/15` (would tick at :00) so it never fires in the
+# same instant as the weekly orphan cleanup below (0 6 * * 0) — a files-row
+# delete observed as drift here, before the reaper's separate credit call
+# lands, would otherwise double-credit the same bytes every single week
+# (#2225 review — Codex round 6). The narrower, purely race-timed version of
+# this window (an orphan reaped mid-tick on any OTHER minute) remains an
+# accepted residual risk — see findStorageDriftCandidates's doc.
+5,20,35,50 * * * * flock -n /run/reconcile-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-storage >> /var/log/cron/reconcile-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-storage.log

@@ -201,16 +201,77 @@ describe('stream-abort-client', () => {
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
     });
 
-    it('given a non-ok response (e.g. 402 out of credits), should unmark the channel', async () => {
+    it('given a non-ok response (e.g. 402 out of credits), should unmark the channel and throw a typed-cause Error (epic leaf 6.5) instead of returning the raw response', async () => {
       const client = await import('../stream-abort-client');
       const consuming = await import('@/lib/ai/streams/consumingChannels');
 
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('{}', { status: 402 }));
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'out_of_credits', message: 'balance too low' }), { status: 402 }),
+      );
 
       const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
-      await trackingFetch('/api/ai/chat', { method: 'POST' });
+      await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toMatchObject({
+        cause: { code: 'out_of_credits', httpStatus: 402, message: 'balance too low', retryable: false },
+      });
 
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    // Conversation scoping (the dual-stream fix): the mark must name the conversation the POST
+    // body targets, so the socket can attach a DIFFERENT conversation's own handed-off stream on
+    // the same channel — and the unmark must release that same key, not a channel-wide one.
+    it('given a body carrying a conversationId, should scope the mark to that conversation and release the same key', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [], conversationId: 'conv-a' }),
+      });
+
+      // Marked for conv-a; conv-b on the same channel is NOT consuming, so its own
+      // stream may attach off the socket.
+      expect(consuming.isChannelConsuming('page-1', 'conv-a')).toBe(true);
+      expect(consuming.isChannelConsuming('page-1', 'conv-b')).toBe(false);
+
+      await drain(response);
+
+      expect(consuming.isChannelConsuming('page-1', 'conv-a')).toBe(false);
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given a body without a conversationId, should fall back to the channel-wide mark (conservative)', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [] }),
+      });
+
+      // The sentinel mark makes EVERY conversation on the channel report consuming.
+      expect(consuming.isChannelConsuming('page-1', 'conv-anything')).toBe(true);
+
+      await drain(response);
+
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given a non-ok response with a non-JSON body, should still throw a safe typed-cause Error (never crash)', async () => {
+      const client = await import('../stream-abort-client');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('not json', { status: 500 }));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toMatchObject({
+        cause: { code: 'unknown', httpStatus: 500, retryable: true },
+      });
     });
 
     it('given the tracked response, should preserve status and headers (the X-Stream-Id contract must survive the body re-wrap)', async () => {
@@ -241,6 +302,7 @@ describe('stream-abort-client', () => {
       const client = await import('../stream-abort-client');
 
       const mockResponse = {
+        ok: true,
         headers: {
           get: vi.fn().mockReturnValue('stream-id'),
         },
@@ -262,6 +324,7 @@ describe('stream-abort-client', () => {
       const client = await import('../stream-abort-client');
 
       const mockResponse = {
+        ok: true,
         headers: { get: vi.fn().mockReturnValue(null) },
       } as unknown as Response;
 

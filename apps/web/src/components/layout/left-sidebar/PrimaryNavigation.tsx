@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare, SquareTerminal } from "lucide-react";
+import { Bot, Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useSidebarBadges } from "@/hooks/useSidebarBadges";
+import { useShallow } from "zustand/react/shallow";
+import { useAgentSurfaceStore } from "@/stores/agents/useAgentSurfaceStore";
+import { EMPTY_AGENT_SELECTION, buildAgentSelectionUrl } from "@/lib/agents/agent-selection";
 
 interface PrimaryNavigationProps {
     driveId?: string;
@@ -20,10 +23,33 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
     const badges = useSidebarBadges();
     const { user } = useAuth();
-    // Machines are an app-admin feature end to end (only an admin can create a
-    // MACHINE page, and MachineView mounts no tabs for anyone else), so a
-    // non-admin gets no nav entry rather than a destination that refuses them.
-    const isAdmin = user?.role === "admin";
+    // Sessions/chat/panes are open to every authenticated user — only the
+    // sandbox itself (real cloud compute) is tier-gated, server-side, and
+    // that gate lives on the terminal affordance inside a session, not on
+    // nav-item visibility.
+    const isAuthenticated = Boolean(user);
+
+    // The Agents surface keeps its whole selection in the URL query string
+    // (see useAgentSurfaceStore's "the URL is the state" design) and never
+    // clears it on route unmount, so the store still has the right values in
+    // memory even after navigating away. A bare href here would silently drop
+    // them on the way back in — derive the link's href from the live
+    // selection instead, scoped to this nav's own drive so a different
+    // drive's (or global vs. drive-scoped) session is never carried over.
+    const agentsSelectionDriveId = useAgentSurfaceStore((state) => state.driveId);
+    const agentSelection = useAgentSurfaceStore(
+        useShallow((state) => ({
+            sessionId: state.selectedSessionId,
+            conversationId: state.selectedConversationId,
+            agentId: state.selectedAgentId,
+        }))
+    );
+    const agentsTargetDriveId = driveId ?? null;
+    const agentsMatchesDrive = agentsSelectionDriveId === agentsTargetDriveId;
+    const agentsHref = buildAgentSelectionUrl({
+        driveId: agentsTargetDriveId,
+        ...(agentsMatchesDrive ? agentSelection : EMPTY_AGENT_SELECTION),
+    });
 
     const navigation = [
         {
@@ -69,13 +95,14 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             exact: false,
             badge: badges.calendar,
         },
-        // Driveless href hits a redirect, not a second implementation of the
-        // surface — the drive always ends up in the path.
-        ...(isAdmin
+        // Both hrefs are real views: the driveless one aggregates every
+        // accessible drive's agents, the drive-scoped one shows just that
+        // drive's. Neither redirects to the other.
+        ...(isAuthenticated
             ? [{
-                name: "Development",
-                href: driveId ? `/dashboard/${driveId}/development` : "/dashboard/development",
-                icon: SquareTerminal,
+                name: "Agents",
+                href: agentsHref,
+                icon: Bot,
                 exact: false,
                 badge: 0,
             }]
@@ -91,9 +118,15 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     return (
         <nav className="flex flex-col gap-0.5 mb-2">
             {navigation.map((item) => {
+                // The Agents entry's href can carry a query string (the live
+                // agent-session selection); isActive must compare against the
+                // bare path, since usePathname() never includes the query
+                // string. Every other item's href never has a "?", so this
+                // is a no-op for them.
+                const matchPath = item.href.split("?")[0];
                 const isActive = item.exact
-                    ? pathname === item.href
-                    : pathname?.startsWith(item.href);
+                    ? pathname === matchPath
+                    : pathname?.startsWith(matchPath);
 
                 return (
                     <Link

@@ -28,6 +28,13 @@ export interface CommandSummary {
   enabled?: boolean;
   /** Set on a precedence winner that hides a lower-precedence command. */
   shadows?: CommandScope;
+  /**
+   * 'skill' marks a built-in with a code-shipped instruction body that the
+   * model can load on demand (skill catalog + load_skill). Absent for plain
+   * built-ins (/help) and for user/drive commands, whose bodies live in
+   * entry pages instead.
+   */
+  kind?: 'skill';
 }
 
 /**
@@ -47,6 +54,20 @@ export interface BuiltinPromptContext {
 export interface BuiltinCommandDefinition {
   trigger: string;
   description: string;
+  /**
+   * 'skill' = this built-in has a code-shipped instruction body (registered
+   * server-side, see apps/web skill-bodies) that is injected on chip
+   * invocation and loadable by the model via load_skill. Absent = plain
+   * built-in (/help) whose content comes from buildPromptSection.
+   */
+  kind?: 'skill';
+  /**
+   * The skill is offered (catalog + load) only when the agent has at least
+   * one of these tools (hasAny semantics, mirroring inline-instructions).
+   * `undefined` availableTools at the call site means "no filtering context"
+   * and keeps the skill eligible. Absent = always eligible.
+   */
+  requiredTools?: readonly string[];
   /**
    * Optional dynamic prompt section: a pure function of injected data (data
    * in, string out). When present, the resolver loads a BuiltinPromptContext
@@ -94,16 +115,22 @@ export const HELP_DESCRIPTION_CHAR_LIMIT = 200;
  * entry or smuggle multi-line instructions into the system prompt: collapse
  * all whitespace/control characters to single spaces, clip to the display
  * limit, and never end on a split surrogate pair.
+ *
+ * Exported because every surface that renders command/skill descriptions
+ * into a prompt (the /help section here, the capability catalog in apps/web)
+ * must apply the same sanitization — it is a security property, not display
+ * formatting.
  */
-function clipDescription(description: string): string {
+export function clipDescription(
+  description: string,
+  charLimit: number = HELP_DESCRIPTION_CHAR_LIMIT
+): string {
   // eslint-disable-next-line no-control-regex -- stripping control chars is the point
   const singleLine = description.replace(/[\s\u0000-\u001F\u007F]+/g, ' ').trim();
-  if (singleLine.length <= HELP_DESCRIPTION_CHAR_LIMIT) return singleLine;
+  if (singleLine.length <= charLimit) return singleLine;
   // Avoid slicing through an astral character (emoji etc.): a trailing lone
   // high surrogate would be malformed once the prompt is serialized.
-  const clipped = singleLine
-    .slice(0, HELP_DESCRIPTION_CHAR_LIMIT)
-    .replace(/[\uD800-\uDBFF]$/, '');
+  const clipped = singleLine.slice(0, charLimit).replace(/[\uD800-\uDBFF]$/, '');
   return `${clipped}…`;
 }
 
@@ -151,9 +178,51 @@ export function buildHelpPromptSection(context: BuiltinPromptContext): string {
 }
 
 /**
+ * The /help answer: a direct, human-facing reply listing the sender's actual
+ * command list, for a message that is nothing but the /help chip (no other
+ * text). Unlike buildHelpPromptSection this is not a model instruction — it
+ * IS the answer, rendered as the assistant's message with no LLM round trip.
+ * Shares the same data shape, sanitization, and list cap as the prompt
+ * section so the two never disagree about what's "available."
+ */
+export function buildHelpAnswerText(context: BuiltinPromptContext): string {
+  const lines: string[] = [];
+
+  if (context.availableCommands.length === 0) {
+    lines.push(
+      'No commands are available here yet. You can create one from the "/" picker in the message box.'
+    );
+  } else {
+    lines.push('Here are the commands available to you:', '');
+    const listed = context.availableCommands.slice(0, HELP_COMMAND_LIST_LIMIT);
+    for (const command of listed) {
+      lines.push(
+        `- **/${command.trigger}** (${COMMAND_SCOPE_ADJECTIVES[command.scope]}) — ${clipDescription(command.description)}`
+      );
+    }
+    const omitted = context.availableCommands.length - listed.length;
+    if (omitted > 0) {
+      lines.push(
+        '',
+        `(${omitted} more command${omitted === 1 ? '' : 's'} not shown — type "/" in the message box to see the full list.)`
+      );
+    }
+    lines.push('', 'Type "/" in the message box to open the picker and insert a command.');
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Built-in command registry. Built-ins with a `buildPromptSection` get a
  * dynamic section injected at execution (phase 5); the rest inject their
- * static description.
+ * static description. Entries with `kind: 'skill'` additionally have a
+ * code-shipped instruction body (registered in apps/web) and appear in the
+ * model-facing skill catalog.
+ *
+ * Skill descriptions follow the Agent Skills trigger formula: third person,
+ * "what it does + when to use it", with the vocabulary users actually say
+ * front-loaded — the description text is the model's only retrieval signal.
  */
 export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
   {
@@ -161,7 +230,54 @@ export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
     description: 'List the commands available here and explain how to use them.',
     buildPromptSection: buildHelpPromptSection,
   },
+  {
+    trigger: 'canvas-websites',
+    kind: 'skill',
+    description:
+      'Builds websites, landing pages, dashboards, forms, and interactive pages on CANVAS pages — HTML/CSS/JS authoring, the iframe sandbox rules, linking between pages, embedding uploaded files and images, contact/signup forms, dark-and-light theming, and publishing to a public site. Use when the user asks to build, style, publish, or fix a website, landing page, form, or any CANVAS page.',
+    requiredTools: ['create_page', 'replace_lines'],
+  },
+  {
+    trigger: 'spreadsheets',
+    kind: 'skill',
+    description:
+      'Creates and edits SHEET (spreadsheet) pages: the sheet document format, cell edits with edit_sheet_cells, formulas and the supported function set, and references between sheets. Use when the user asks for a spreadsheet, budget, tracker, table of computed values, or help with formulas.',
+    requiredTools: ['edit_sheet_cells'],
+  },
+  {
+    trigger: 'task-management',
+    kind: 'skill',
+    description:
+      'Runs task workflows on TASK_LIST pages: creating and structuring tasks and subtasks, statuses, assignees (including agent assignees), due dates, and recurring or automated follow-ups via task triggers. Use when the user asks to plan work, manage a todo or task list, assign work, or automate follow-ups.',
+    requiredTools: ['create_task', 'update_task'],
+  },
+  {
+    trigger: 'writing-documents',
+    kind: 'skill',
+    description:
+      'Writes and edits DOCUMENT and CODE pages: HTML versus markdown content modes, line-numbered reading with precise line-range edits, inserting content relative to headings, and linking pages or people with @mentions. Use when the user asks to write, draft, restructure, or edit documents, notes, or long-form content.',
+    requiredTools: ['replace_lines', 'insert_content', 'create_page'],
+  },
 ];
+
+/** The built-ins that are skills (code-shipped loadable instruction bodies). */
+export const BUILTIN_SKILLS: readonly BuiltinCommandDefinition[] = BUILTIN_COMMANDS.filter(
+  (command) => command.kind === 'skill'
+);
+
+/**
+ * Whether a skill should be offered to an agent. `availableTools` undefined
+ * means "no filtering context — include everything" (the same sentinel as
+ * inline-instructions' hasAny); otherwise the skill needs at least one of
+ * its requiredTools present.
+ */
+export function isSkillEligible(
+  definition: BuiltinCommandDefinition,
+  availableTools?: readonly string[]
+): boolean {
+  if (!definition.requiredTools || availableTools === undefined) return true;
+  return definition.requiredTools.some((tool) => availableTools.includes(tool));
+}
 
 /**
  * Triggers that user/drive commands may never claim. Creation with a reserved

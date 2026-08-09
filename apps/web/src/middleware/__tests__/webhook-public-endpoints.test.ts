@@ -13,6 +13,7 @@ const createSecureResponse = vi.fn(() => ({ response: { status: 200, headers: ne
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
   createSecureErrorResponse: vi.fn((body: unknown, status: number) => new Response(JSON.stringify(body), { status })),
+  isHandoffBridgeRoute: vi.fn((pathname: string) => pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback'),
   isPublicPageRoute: vi.fn(() => false),
   isPublishedSiteHost: vi.fn(() => false),
   isSecureRequest: vi.fn(() => true),
@@ -48,6 +49,10 @@ describe('middleware — third-party webhooks are public (own signature/HMAC aut
     '/api/stripe/webhook',
     '/api/integrations/google-calendar/webhook',
     '/api/integrations/zoom/webhook',
+    // Page incoming-webhook intake: the caller is an external system (CI,
+    // monitoring, a script) with no session; the route verifies the
+    // per-webhook HMAC signature itself.
+    '/api/webhooks/tok-abc123',
   ])('lets POST %s through with no session cookie instead of 401ing before the route runs', async (path) => {
     createSecureResponse.mockClear();
     const req = new NextRequest(`https://pagespace.ai${path}`, { method: 'POST' });

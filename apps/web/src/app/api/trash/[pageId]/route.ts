@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, sql } from '@pagespace/db/operators'
-import { pages, favorites, pageTags, chatMessages } from '@pagespace/db/schema/core'
+import { pages, favorites, pageTags } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat';
+import { deleteConversationsForPages, type DbHandle } from '@pagespace/lib/repositories/conversation-cleanup';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -14,7 +15,11 @@ import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // Note: taskItems linked to this page are automatically deleted via FK cascade (onDelete: 'cascade')
-async function recursivelyDelete(pageId: string, tx: typeof db) {
+// `tx` is a TRANSACTION handle, not `typeof db`: this walks a subtree issuing
+// many deletes that only make sense together, and `deleteConversationsForPages`
+// below states the same requirement. Typed loosely, the recursion was a hole
+// one level above the helper's own guard.
+async function recursivelyDelete(pageId: string, tx: DbHandle) {
     const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
     for (const child of children) {
@@ -24,7 +29,22 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     await tx.delete(pagePermissions).where(eq(pagePermissions.pageId, pageId));
     await tx.delete(favorites).where(eq(favorites.pageId, pageId));
     await tx.delete(pageTags).where(eq(pageTags.pageId, pageId));
-    await tx.delete(chatMessages).where(eq(chatMessages.pageId, pageId));
+
+    // Permanent delete of a page must take its chat history with it (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). Explicit, because
+    // nothing else would do it: `conversations.contextId` has never been a
+    // foreign key, `conversations.agentPageId`'s is ON DELETE SET NULL, and
+    // the `chat_messages.pageId` cascade that used to cover this went with the
+    // table at PR 15. Without this a permanently deleted page's chat history
+    // would outlive it, still readable by conversation id.
+    //
+    // Called BEFORE the `pages` delete below, which is what clears
+    // `agentPageId`. This statement used to be written inline here, which is
+    // why every OTHER deletion path — the cron purge and all four drive-delete
+    // sites — silently under-deleted; it now lives in one shared helper they
+    // all call. Recursion above means this node's own id is the whole scope.
+    await deleteConversationsForPages(tx, [pageId]);
+
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 
     await tx.delete(pages).where(eq(pages.id, pageId));

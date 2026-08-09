@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { ArrowRight, Calendar, Github, Server, Monitor } from "lucide-react";
+import { ArrowRight, Calendar, Github, Server, Monitor, Webhook } from "lucide-react";
 import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Integrations",
-  description: "Google Calendar, GitHub, and MCP — the three ways PageSpace connects to what lives outside it.",
+  description: "Google Calendar, GitHub, MCP, and Incoming Webhooks — how PageSpace connects to what lives outside it, in both directions.",
   path: "/docs/integrations",
-  keywords: ["integrations", "Google Calendar", "GitHub", "MCP", "Claude Desktop", "Cursor"],
+  keywords: ["integrations", "Google Calendar", "GitHub", "MCP", "Claude Desktop", "Cursor", "webhooks"],
 });
 
 const integrations = [
@@ -14,6 +14,7 @@ const integrations = [
   { title: "GitHub", href: "/docs/integrations/github", icon: Github, description: "Give agents a GitHub identity — browse repos, leave PR reviews, file issues, all under your account." },
   { title: "MCP", href: "/docs/integrations/mcp", icon: Server, description: "Connect Claude Desktop, Cursor, or any MCP client to your workspace using a scoped token." },
   { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop", icon: Monitor, description: "Run local MCP servers inside the PageSpace desktop app — your AI chats get the same external tools you use everywhere else." },
+  { title: "Incoming Webhooks", href: "/docs/integrations/incoming-webhooks", icon: Webhook, description: "Mint a signed, page-scoped URL so CI, monitoring, or a script can push events into a channel or fire a workflow." },
 ];
 
 export default function IntegrationsIndexPage() {
@@ -21,7 +22,7 @@ export default function IntegrationsIndexPage() {
     <div>
       <h1 className="text-3xl font-bold tracking-tight mb-4">Integrations</h1>
       <p className="text-lg text-muted-foreground mb-8">
-        PageSpace connects outward and inward. Outward — your agents reach into <strong>Google Calendar</strong> and <strong>GitHub</strong> on your behalf. Inward — external AI clients connect in through <strong>MCP</strong>. That&#39;s the full list.
+        PageSpace connects outward and inward. Outward — your agents reach into <strong>Google Calendar</strong> and <strong>GitHub</strong> on your behalf. Inward — external AI clients connect in through <strong>MCP</strong>, and external systems push events in through <strong>Incoming Webhooks</strong>.
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">

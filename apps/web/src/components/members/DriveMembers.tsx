@@ -11,7 +11,7 @@ import { AppMemberRow, type AppMember } from './AppMemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
 import { DriveShareLinkSection } from './DriveShareLinkSection';
 import type { PendingInvite } from './PendingInviteRow';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
@@ -78,7 +78,6 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
   const [loading, setLoading] = useState(true);
   const [inviteAgentOpen, setInviteAgentOpen] = useState(false);
   const router = useRouter();
-  const { toast } = useToast();
   const socket = useSocket();
   // Sequence guard: socket events can fire fetchMembers while a prior fetch is
   // in flight. Only the latest request commits state to avoid a stale response
@@ -116,15 +115,11 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
     } catch (error) {
       if (currentSeq !== requestSeqRef.current) return;
       console.error('Error fetching members:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load drive members',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load drive members');
     } finally {
       if (currentSeq === requestSeqRef.current) setLoading(false);
     }
-  }, [driveId, toast]);
+  }, [driveId]);
 
   useEffect(() => {
     fetchMembers();
@@ -157,17 +152,10 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
 
       setMembers((prev) => prev.filter((m) => m.userId !== userId));
 
-      toast({
-        title: 'Success',
-        description: 'Member removed successfully',
-      });
+      toast.success('Member removed successfully');
     } catch (error) {
       console.error('Error removing member:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to remove member',
-        variant: 'destructive',
-      });
+      toast.error('Failed to remove member');
     }
   };
 
@@ -179,7 +167,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
 
   const handleRemoveAgent = (agentPageId: string) => {
     setAgentMembers((prev) => prev.filter((a) => a.agentPageId !== agentPageId));
-    toast({ title: 'Agent removed', description: 'Agent member removed successfully' });
+    toast.success('Agent member removed successfully');
   };
 
   const handleAppRoleChange = (tokenId: string, updated: Partial<AppMember>) => {
@@ -190,24 +178,17 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
 
   const handleRemoveApp = (tokenId: string) => {
     setAppMembers((prev) => prev.filter((a) => a.tokenId !== tokenId));
-    toast({ title: 'App removed', description: 'App member removed successfully' });
+    toast.success('App member removed successfully');
   };
 
   const handleRevokeInvite = async (inviteId: string) => {
     try {
       await del(`/api/drives/${driveId}/pending-invites/${inviteId}`);
       setPendingInvites((prev) => prev.filter((inv) => inv.id !== inviteId));
-      toast({
-        title: 'Invitation revoked',
-        description: 'The invitation link no longer works.',
-      });
+      toast.success('The invitation link no longer works.');
     } catch (error) {
       console.error('Error revoking invite:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to revoke invitation',
-        variant: 'destructive',
-      });
+      toast.error('Failed to revoke invitation');
     }
   };
 

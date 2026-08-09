@@ -22,18 +22,6 @@ export interface CommandResponse {
   updatedAt: Date;
 }
 
-/**
- * List-enriched command shape returned by GET /api/commands — adds what the
- * settings lists render: entry page title + availability and the author name
- * for drive command rows ("Added by {name}").
- */
-export interface CommandListItem extends CommandResponse {
-  entryPageTitle: string | null;
-  entryPageDriveId: string | null;
-  entryPageAvailable: boolean;
-  authorName: string | null;
-}
-
 export function toCommandResponse(command: SelectCommand): CommandResponse {
   return {
     id: command.id,

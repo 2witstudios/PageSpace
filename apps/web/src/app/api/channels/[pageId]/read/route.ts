@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { markPageNotificationsRead } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -43,7 +44,14 @@ export async function POST(
     DO UPDATE SET "lastReadAt" = NOW()
   `);
 
-  // Broadcast read status change to user's inbox
+  // Clear MENTION notifications tied to this page BEFORE broadcasting —
+  // otherwise the nav Channels badge stays lit even though the channel
+  // itself is read. Sequenced (not parallel): a listener like
+  // useSidebarBadges revalidates /api/sidebar/badges as soon as the
+  // broadcast lands, and must observe the post-write notification state
+  // rather than racing the still-in-flight update.
+  const notificationsMarkedRead = await markPageNotificationsRead(userId, pageId);
+
   await broadcastInboxEvent(userId, {
     operation: 'read_status_changed',
     type: 'channel',
@@ -52,7 +60,7 @@ export async function POST(
     unreadCount: 0,
   });
 
-  loggers.api.debug('Channel marked as read', { channelId: pageId, userId });
+  loggers.api.debug('Channel marked as read', { channelId: pageId, userId, notificationsMarkedRead });
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, notificationsMarkedRead });
 }

@@ -84,6 +84,7 @@ vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user-test-1';
 const mockChannelId = 'page-test-1';
@@ -97,8 +98,9 @@ const mockSessionAuth = (userId = mockUserId): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const mockAuthFailure = (status = 401): AuthError => ({
+const mockAuthFailure = (status = 401, authFailureReason?: AuthError['authFailureReason']): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+  authFailureReason,
 });
 
 const makeRequest = (channelId = mockChannelId) =>
@@ -391,6 +393,22 @@ describe('GET /api/ai/chat/active-streams', () => {
     expect(response.status).toBe(401);
   });
 
+  // D5: the auth_failed audit must carry the machine-readable reason so an incident is provable
+  // (expired vs revoked vs ...) rather than a bare auth_failed.
+  it('given auth fails with a known reason, should populate details.authFailureReason in the audit', async () => {
+    vi.mocked(isAuthError).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthFailure(401, 'expired'));
+
+    await GET(makeRequest());
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: expect.objectContaining({ reason: 'auth_failed', authFailureReason: 'expired' }),
+      }),
+    );
+  });
+
   it('given the user cannot view the page, should return 403 without querying streams', async () => {
     vi.mocked(canUserViewPage).mockResolvedValue(false);
 
@@ -517,5 +535,68 @@ describe('GET /api/ai/chat/active-streams?scope=user', () => {
 
     expect(response.status).toBe(401);
     expect(mockOrderBy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Conversation-scoped bootstrap (Agent-Session SSoT epic, Phase 2 / plan PR 3).
+ * `?conversationId=` narrows the CHANNEL form to one conversation — what a pane wants,
+ * since a pane shows exactly one. It is applied AFTER `filterSubscribableStreams`, so it
+ * can only ever return fewer rows than the channel form and grants nothing.
+ */
+describe('GET /api/ai/chat/active-streams?conversationId=', () => {
+  const row = (messageId: string, conversationId: string) => ({
+    messageId,
+    conversationId,
+    userId: mockUserId,
+    displayName: 'Me',
+    browserSessionId: 'session-1',
+    parts: [],
+    rawPartsCount: 0,
+    startedAt: new Date('2024-01-01T00:00:00.000Z'),
+    lastHeartbeatAt: new Date(),
+  });
+
+  const makeScopedRequest = (conversationId: string) =>
+    new Request(
+      `http://test.local/api/ai/chat/active-streams?channelId=${encodeURIComponent(mockChannelId)}&conversationId=${encodeURIComponent(conversationId)}`,
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    mockFilterSubscribableStreams.mockImplementation(async ({ rows }: { rows: unknown[] }) => rows);
+  });
+
+  it('given a conversationId, should return only that conversation\'s streams', async () => {
+    mockOrderBy.mockResolvedValueOnce([row('msg-mine', 'conv-mine'), row('msg-sibling', 'conv-sibling')]);
+
+    const response = await GET(makeScopedRequest('conv-mine'));
+    const body = await response.json();
+
+    expect(body.streams.map((s: { messageId: string }) => s.messageId)).toEqual(['msg-mine']);
+  });
+
+  it('given no conversationId, should keep the whole-channel form', async () => {
+    mockOrderBy.mockResolvedValueOnce([row('msg-mine', 'conv-mine'), row('msg-sibling', 'conv-sibling')]);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.streams.map((s: { messageId: string }) => s.messageId)).toEqual(['msg-mine', 'msg-sibling']);
+  });
+
+  // The narrowing must never be mistaken for authorization: a row the subscription
+  // filter already removed stays removed whatever the query string says.
+  it('given a conversationId the caller may not subscribe to, should still return nothing', async () => {
+    mockOrderBy.mockResolvedValueOnce([row('msg-private', 'conv-private')]);
+    mockFilterSubscribableStreams.mockResolvedValueOnce([]);
+
+    const response = await GET(makeScopedRequest('conv-private'));
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
   });
 });

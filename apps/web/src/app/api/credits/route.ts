@@ -4,11 +4,8 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getCreditBalance } from '@/lib/subscription/credit-balance';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-
-const isSubscriptionTier = (value: string): value is SubscriptionTier =>
-  value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /**
  * GET /api/credits — the authenticated user's prepaid credit balance.
@@ -30,7 +27,7 @@ export async function GET(request: NextRequest) {
       .where(eq(users.id, userId))
       .limit(1);
     const rawTier = rows[0]?.subscriptionTier;
-    const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
+    const tier: SubscriptionTier = toSubscriptionTier(rawTier);
 
     const balance = await getCreditBalance(userId, tier);
 

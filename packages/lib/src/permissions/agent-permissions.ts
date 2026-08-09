@@ -70,6 +70,20 @@ export async function hasAgentDriveMembership(agentPageId: string, driveId: stri
   return row.length > 0;
 }
 
+/**
+ * Whether an agent's membership in a drive carries an ADMINISTRATIVE role.
+ *
+ * Distinct from `hasAgentDriveMembership`, which answers only "is there a row"
+ * and ignores `role` entirely. Callers that gate a drive-level administrative
+ * action (e.g. accepting pages INTO a drive on a cross-drive move, where the
+ * REST equivalent demands OWNER/ADMIN) must use this instead, or a plain MEMBER
+ * agent clears a bar the same operation denies to a human.
+ */
+export async function hasAgentDriveAdminRole(agentPageId: string, driveId: string): Promise<boolean> {
+  const membership = await fetchAgentMembership(agentPageId, driveId);
+  return membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+}
+
 export async function getAgentAccessiblePagesInDrive(
   agentPageId: string,
   driveId: string,

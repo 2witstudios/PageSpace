@@ -379,10 +379,12 @@ describe('releaseHold', () => {
     expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when billing is disabled', async () => {
+  it('still deletes the hold when billing is disabled (billing-off ceiling reservations must not linger), but skips the credits push', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
+    const { where } = deleteReturning([{ userId: 'u1' }]);
     await releaseHold('hold_99');
-    expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(where).toHaveBeenCalledTimes(1);
     expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 

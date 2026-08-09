@@ -23,11 +23,11 @@ mockSet.mockReturnValue({ where: mockWhere });
 mockUpdate.mockReturnValue({ set: mockSet });
 
 vi.mock('@pagespace/db/db', () => ({
-  db: {
+  getMigrationDb: () => ({
     query: { users: { findFirst: mockFindFirst } },
     update: mockUpdate,
     insert: mockInsert,
-  },
+  }),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({

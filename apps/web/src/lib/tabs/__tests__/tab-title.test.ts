@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTabPath,
   getStaticTabMeta,
+  isDriveScopedPath,
 } from '../tab-title';
 
 describe('tab-title', () => {
@@ -84,6 +85,21 @@ describe('tab-title', () => {
       expect(result.type).toBe('drive-workflows');
       expect(result.driveId).toBe('drive-123');
       expect(result.pageId).toBeUndefined();
+    });
+
+    it('given drive agents path, should return drive-agents type', () => {
+      const result = parseTabPath('/dashboard/drive-123/agents');
+
+      expect(result.type).toBe('drive-agents');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
+    it('given global agents path, should return dashboard-agents type', () => {
+      const result = parseTabPath('/dashboard/agents');
+
+      expect(result.type).toBe('dashboard-agents');
+      expect(result.driveId).toBeUndefined();
     });
 
     it('given dms root, should return dms type', () => {
@@ -464,6 +480,20 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Workflow');
     });
 
+    it('given drive-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-agents', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
+    });
+
+    it('given dashboard-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-agents' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
+    });
+
     // Members sub-routes
     it('given drive-members-invite type, should return Invite Members title', () => {
       const meta = getStaticTabMeta({ type: 'drive-members-invite', driveId: 'drive-123' });
@@ -555,5 +585,40 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('Personalization');
     });
+  });
+});
+
+// isDriveScopedPath prefix-matches `drive-*`, so a future drive-level PathType
+// named something else would silently reintroduce the bug it was added to fix
+// (the assistant losing the workspace on drive sub-routes) with no compile
+// error. This sweeps every drive route shape parseTabPath can actually return
+// and asserts the predicate holds for all of them.
+describe('isDriveScopedPath', () => {
+  const DRIVE_SECTIONS = [
+    'tasks', 'activity', 'members', 'settings',
+    'trash', 'calendar', 'channels', 'files', 'workflows', 'agents',
+  ];
+
+  it('holds for the bare drive route and every drive section', () => {
+    const paths = ['/dashboard/drive-1', ...DRIVE_SECTIONS.map((s) => `/dashboard/drive-1/${s}`),
+      '/dashboard/drive-1/members/invite', '/dashboard/drive-1/members/user-9'];
+    for (const path of paths) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: true });
+    }
+  });
+
+  // A page route also carries a driveId, but callers handle it separately (it
+  // resolves to routeType 'page', which already carries the drive).
+  it('does not claim page routes, global routes, or the drive list', () => {
+    for (const path of ['/dashboard/drives', '/dashboard/tasks', '/dashboard/calendar',
+      '/dashboard/agents', '/dashboard/channels/c1', '/settings/account', '/dashboard']) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: false });
+    }
+  });
+
+  it('requires a driveId, not merely a drive-shaped type', () => {
+    expect(isDriveScopedPath({ type: 'drive-tasks' })).toBe(false);
   });
 });

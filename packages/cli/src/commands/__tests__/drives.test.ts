@@ -6,6 +6,7 @@ import {
   drivesRestoreHandler,
   drivesSetHomePageHandler,
   drivesTrashHandler,
+  drivesUpdateContextHandler,
   EXIT_RUNTIME_ERROR,
   EXIT_SUCCESS,
   EXIT_USAGE_ERROR,
@@ -148,6 +149,69 @@ describe('drivesRenameHandler', () => {
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('drivesUpdateContextHandler', () => {
+  it('calls drives.updateContext with driveId and drivePrompt', async () => {
+    const updateContext = vi.fn(async () => ({ ...DRIVE, drivePrompt: 'be concise' }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { updateContext } }) });
+
+    const code = await drivesUpdateContextHandler(ctx, commandIntent(['drv_1', 'be concise']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(updateContext).toHaveBeenCalledWith({ driveId: 'drv_1', drivePrompt: 'be concise' });
+  });
+
+  it('allows an empty string to clear the context prompt', async () => {
+    const updateContext = vi.fn(async () => ({ ...DRIVE, drivePrompt: '' }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { updateContext } }) });
+
+    const code = await drivesUpdateContextHandler(ctx, commandIntent(['drv_1', '']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(updateContext).toHaveBeenCalledWith({ driveId: 'drv_1', drivePrompt: '' });
+  });
+
+  it('exits 2 with a usage error when args are missing, never calling the SDK', async () => {
+    const updateContext = vi.fn(async () => DRIVE);
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { updateContext } }) });
+
+    const code = await drivesUpdateContextHandler(ctx, commandIntent(['drv_1']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(updateContext).not.toHaveBeenCalled();
+  });
+
+  it('--json emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({
+      stdout,
+      sdk: fakeSdk({ drives: { updateContext: async () => ({ ...DRIVE, drivePrompt: 'be concise' }) } }),
+    });
+
+    await drivesUpdateContextHandler(ctx, commandIntent(['drv_1', 'be concise', '--json']));
+
+    expect(JSON.parse(stdout.lines.join(''))).toEqual({ ...DRIVE, drivePrompt: 'be concise' });
+  });
+
+  it('exits 1 and surfaces the server error on API failure', async () => {
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({
+      stderr,
+      sdk: fakeSdk({
+        drives: {
+          updateContext: async () => {
+            throw new Error('Requires owner/admin authority');
+          },
+        },
+      }),
+    });
+
+    const code = await drivesUpdateContextHandler(ctx, commandIntent(['drv_1', 'be concise']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('Requires owner/admin authority');
   });
 });
 

@@ -11,6 +11,7 @@ import {
   getAgentAccessLevel,
   getAgentAccessiblePagesInDrive,
   hasAgentDriveMembership,
+  hasAgentDriveAdminRole,
 } from '@pagespace/lib/permissions/agent-permissions';
 import {
   getAppAccessLevel,
@@ -20,6 +21,7 @@ import {
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -34,13 +36,32 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * would otherwise confine the agent to its own drive memberships should fall
  * back to the invoking user's own access instead — for personal/global-style
  * assistants that need the user's full reach rather than explicit membership.
+ *
+ * Carries the SAME AI_CHAT type gate as resolveActingAgentId — the two seams
+ * answer the same question ("is this an agent acting with the user's reach?")
+ * and consumers (MachineDirectoryRuntimeDeps.isUserScopedAgent) are documented
+ * as mirroring them. The column is AI_CHAT-only by construction today, but a
+ * permissions seam does not lean on a schema invariant holding forever: a
+ * non-agent row that somehow carries the flag must not widen the machine
+ * Settings-toggle exemption.
  */
 export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
+  const row = await fetchActingPageRow(agentPageId);
+  return row?.type === PageType.AI_CHAT && row.userScopedAccess;
+}
+
+/**
+ * The ONE row both actor gates read for `chatSource.agentPageId`: is this page
+ * actually an agent (`type`), and has it opted into user-scoped reach
+ * (`userScopedAccess`)? Kept as a single select so the type gate below costs
+ * zero additional queries on a path every tool call runs through.
+ */
+async function fetchActingPageRow(agentPageId: string) {
   const [row] = await db
-    .select({ userScopedAccess: pages.userScopedAccess })
+    .select({ type: pages.type, userScopedAccess: pages.userScopedAccess })
     .from(pages)
     .where(eq(pages.id, agentPageId));
-  return row?.userScopedAccess ?? false;
+  return row;
 }
 
 /**
@@ -50,6 +71,25 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
  * Invoker-scoped by design: a user-scoped agent acts with the CURRENT
  * chatter's reach, never its owner's.
  *
+ * "Not a page-agent" is a claim about the PAGE, not just about whether a
+ * chatSource carries an id: a chat on any non-AI_CHAT page carries THAT page
+ * as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
+ * non-agent page must not be treated as an acting agent — no driveAgentMembers
+ * row can ever exist for it, so every getAgentAccessLevel lookup returned null
+ * and denied. Falling through to the authenticated user is the honest actor —
+ * the chat route already authorized that user against the page. A missing
+ * page row is a non-agent for the same reason (and the user's own ACL still
+ * denies a page that does not exist).
+ *
+ * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
+ * agent-communication-tools.ts spreads the caller's context, and
+ * sandbox-tools-runtime's activeMachineAgentPageId documents the same "the
+ * agent's own page or the parent's for a sub-agent" rule. So a consulted agent
+ * reached FROM a machine pane also resolves to the invoking user: bounded by
+ * that user's own ACL, never beyond it, and never wider than what the pane's
+ * own tools already reach. Before this gate that whole path was dead, not
+ * tighter — ask_agent's own canActorViewPage gate denied at the door.
+ *
  * Exported for tools that branch on the same "is this a membership-scoped
  * agent, or should it fall through to the user's own reach" question outside
  * these chokepoints (e.g. drive discovery/creation) — reuse this instead of
@@ -58,7 +98,9 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
 export async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
   const agentPageId = getAgentPageId(context);
   if (!agentPageId) return undefined;
-  return (await hasAgentUserScopedAccess(agentPageId)) ? undefined : agentPageId;
+  const row = await fetchActingPageRow(agentPageId);
+  if (row?.type !== PageType.AI_CHAT) return undefined;
+  return row.userScopedAccess ? undefined : agentPageId;
 }
 
 /**
@@ -245,12 +287,47 @@ export async function canActorManageDrive(
   context: ToolExecutionContext,
   driveId: string,
 ): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveMembership);
+}
+
+/**
+ * Shared body of the two drive-level gates. The MCP scope ceiling, the
+ * app-token ceiling and the user owner/admin fallback are identical for both
+ * and MUST stay that way — if one of those ever tightens and only one gate
+ * picks it up, the looser gate becomes the way in. Only the agent question
+ * differs, so that is the one thing injected.
+ */
+async function driveGateWithAgentCheck(
+  context: ToolExecutionContext,
+  driveId: string,
+  agentCheck: (agentPageId: string, driveId: string) => Promise<boolean>,
+): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
   const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  if (agentPageId) return agentCheck(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
   return access.isOwner || access.isAdmin;
+}
+
+/**
+ * Whether the actor may ADMINISTER a drive — the owner/admin bar, enforced
+ * uniformly for user and agent actors alike.
+ *
+ * Deliberately separate from `canActorManageDrive`. That helper resolves an
+ * agent actor to `hasAgentDriveMembership`, a bare row-existence check that
+ * ignores `role`, which is the right model for tools whose reach is already
+ * bounded by the agent's enabledTools allowlist. It is the WRONG model for
+ * accepting content into a drive from outside it: a plain MEMBER agent would
+ * clear a bar that /api/pages/bulk-move denies to a human without OWNER/ADMIN,
+ * and the moved subtree would land in a drive on weaker authority than the REST
+ * path requires. Used by the cross-drive move's destination check.
+ */
+export async function canActorAdministerDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
 }
 
 export async function getActorAccessiblePagesInDrive(

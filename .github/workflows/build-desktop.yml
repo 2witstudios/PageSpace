@@ -39,7 +39,10 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript
@@ -124,7 +127,10 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript
@@ -169,7 +175,10 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript

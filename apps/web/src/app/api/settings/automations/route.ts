@@ -9,15 +9,12 @@ import {
   buildAutomationView,
   validateAutomationPatch,
 } from '@pagespace/lib/billing/automation-preferences';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-const isSubscriptionTier = (value: string): value is SubscriptionTier =>
-  value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /** Read the user's tier, pulse preference, and memory (personalization) flag. */
 async function loadAutomationState(userId: string) {
@@ -36,7 +33,7 @@ async function loadAutomationState(userId: string) {
   ]);
 
   const rawTier = userRow[0]?.tier;
-  const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
+  const tier: SubscriptionTier = toSubscriptionTier(rawTier);
   return { tier, pulseRow: pulseRow[0], personalization: personalization[0] };
 }
 

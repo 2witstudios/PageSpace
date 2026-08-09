@@ -28,14 +28,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Mock dotenv so the config call is a no-op
 vi.mock('dotenv', () => ({ config: vi.fn() }));
 
-// createDbMachineSessionStore does a dynamic import('@pagespace/db/db') from
-// INSIDE @pagespace/lib's (externalized, pre-built) dependency graph, which
-// bypasses this file's `@pagespace/db/db` mock (vi.mock only intercepts
-// modules Vitest's own loader transforms, not a workspace package's own
-// transitive requires) — so it's mocked directly here instead. Everything
-// else from this module (deriveMachineSessionKey, acquireMachineSession,
-// etc.) passes through to the real, pure/DI'd implementation.
-const mockFindBySessionKey = vi.fn();
 vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', async () => {
   const actual = await vi.importActual<typeof import('@pagespace/lib/services/sandbox/machine-session-manager')>(
     '@pagespace/lib/services/sandbox/machine-session-manager',
@@ -43,7 +35,6 @@ vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', async () => {
   return {
     ...actual,
     getSandboxSessionSecret: () => 'a'.repeat(32),
-    createDbMachineSessionStore: async () => ({ findBySessionKey: mockFindBySessionKey }),
   };
 });
 
@@ -59,6 +50,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  initializeLogging: vi.fn(),
+}));
+
+// instrument.ts (Sentry init) is a side-effecting module-load-time import —
+// stub it so index.ts's `import './instrument'` doesn't hit the real SDK.
+vi.mock('../instrument', () => ({}));
+vi.mock('@sentry/node', () => ({
+  captureException: vi.fn(),
+  flush: vi.fn(async () => true),
 }));
 
 // broadcast-auth mock
@@ -77,6 +77,21 @@ vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
+}));
+
+// conversation-access predicate mock (join_conversation authz — SSoT Phase 2)
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
+  canAccessConversation: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: {
+    id: 'id',
+    userId: 'userId',
+    isShared: 'isShared',
+    type: 'type',
+    contextId: 'contextId',
+  },
 }));
 
 // auth/session mock
@@ -251,6 +266,50 @@ const mockIo = {
   }),
 };
 
+// The session map is consulted at exactly ONE place in index.ts — the
+// `shell:connect` success path — so a controllable `getBySocket` exercises both
+// its found/not-found branches without a live PTY.
+const mockGetBySocket = vi.fn<(key: string) => unknown>().mockReturnValue(undefined);
+vi.mock('../terminal/terminal-session-map', () => ({
+  createTerminalSessionMap: () => ({
+    getBySocket: (key: string) => mockGetBySocket(key),
+  }),
+}));
+
+// Shell handlers: the connect path is driven directly so both outcomes of
+// index.ts's `shell:connect` wrapper (success lookup, tagged error emit) are
+// exercised without a live Sprite.
+const mockShellOnConnect = vi.fn<(payload: unknown) => Promise<void>>().mockResolvedValue(undefined);
+vi.mock('../terminal/shell-handler', () => ({
+  buildShellHandlers: () => ({
+    onConnect: (payload: unknown) => mockShellOnConnect(payload),
+    onInput: vi.fn(),
+    onResize: vi.fn(),
+    onDisconnect: vi.fn(),
+  }),
+  // Real implementation (pure, no deps) — the `shell:connect` success-path
+  // tests below assert index.ts looks the just-registered session up under
+  // this SAME composed key.
+  composeSocketKey: (socketId: string, connectionId: string) => `${socketId}\u0000${connectionId}`,
+}));
+
+// Captures the deps object index.ts builds for the shell-IO bridge, so the
+// WIRING can be asserted. `reauthorizeViewer` is optional on `ShellIoDeps` and
+// the module fails closed without it — which is exactly how it shipped for a
+// while: declared, defaulted to `?? false`, and never supplied, so a revoked
+// user's identity was never refreshed and their running work never evicted.
+const capturedShellIoDeps: Record<string, unknown>[] = [];
+vi.mock('../terminal/shell-io', () => ({
+  handleShellReadRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true, shells: [] } });
+  },
+  handleShellSendRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true } });
+  },
+}));
+
 vi.mock('socket.io', () => ({
   Server: vi.fn().mockImplementation(() => mockIo),
 }));
@@ -261,6 +320,7 @@ vi.mock('socket.io', () => ({
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { emitValidationError } from '../validation';
@@ -336,6 +396,7 @@ function createMockReq(overrides: Partial<{
     url: '/api/broadcast',
     headers: {},
     socket: { remoteAddress: '127.0.0.1' },
+    destroy: vi.fn(),
     on: vi.fn((event: string, cb: (chunk: unknown) => void) => {
       listeners[event] = listeners[event] || [];
       listeners[event].push(cb);
@@ -349,9 +410,25 @@ function createMockReq(overrides: Partial<{
 }
 
 function createMockRes() {
+  const listeners: Record<string, ((chunk?: unknown) => void)[]> = {};
   const res = {
     writeHead: vi.fn(),
-    end: vi.fn(),
+    // Real `http.ServerResponse#writableEnded` flips true the instant `end()`
+    // is called — `trackRequestAbandonment` (index.ts) reads it to tell a
+    // late `res` 'close' (ordinary connection teardown after a completed
+    // response) apart from an early one (the client walked away first).
+    writableEnded: false,
+    end: vi.fn(function (this: { writableEnded: boolean }) {
+      this.writableEnded = true;
+    }),
+    on: vi.fn((event: string, cb: (chunk?: unknown) => void) => {
+      listeners[event] = listeners[event] || [];
+      listeners[event].push(cb);
+    }),
+    _listeners: listeners,
+    _emit: (event: string, data?: unknown) => {
+      (listeners[event] || []).forEach(cb => cb(data));
+    },
   };
   return res;
 }
@@ -401,6 +478,27 @@ describe('requestListener - /api/broadcast', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true }));
+  });
+
+  it('given a body over the internal byte cap, should destroy the connection and answer NOTHING — the HMAC check must never be reachable by memory exhaustion', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.alloc(1024 * 1024 + 1));
+    // Chunks after the cap are ignored, and 'end' (if the socket teardown still
+    // fires it) must not run the handler on a truncated body.
+    req._emit('data', Buffer.from('trailing'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(req.destroy).toHaveBeenCalled();
+    expect(res.writeHead).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(mockIo.emit).not.toHaveBeenCalled();
   });
 
   it('given POST /api/broadcast with valid signature but disallowed audience channelId, should return 403 and not emit (#972)', async () => {
@@ -599,125 +697,6 @@ describe('requestListener - /api/kick', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
     expect(mockHandleKickRequest).not.toHaveBeenCalled();
-  });
-});
-
-describe('requestListener - /api/terminal-activity', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindBySessionKey.mockResolvedValue(null);
-  });
-
-  function terminalActivityBody(over: Partial<{ tenantId: string; driveId?: string; pageId: string; command: string; output: string; exitCode: number; agentLabel: string }> = {}) {
-    return JSON.stringify({
-      tenantId: 't1',
-      driveId: 'd1',
-      pageId: 'terminal-page-1',
-      command: 'echo hi',
-      output: 'hi',
-      exitCode: 0,
-      agentLabel: 'Agent Bob',
-      ...over,
-    });
-  }
-
-  it('given a valid signed request with no driveId, should return 200 with delivered:false without any sandbox lookup', async () => {
-    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody({ driveId: undefined })));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(mockFindBySessionKey).not.toHaveBeenCalled();
-    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
-  });
-
-  it('given no signature, should return 401 without any sandbox lookup', async () => {
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: {} });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody()));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
-    expect(mockFindBySessionKey).not.toHaveBeenCalled();
-  });
-
-  it('given no persisted sandbox record for the machine, should return 200 with delivered:false', async () => {
-    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-    mockFindBySessionKey.mockResolvedValueOnce(null);
-
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody()));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
-  });
-
-  // Regression test: resolveSessionKey does a real async DB lookup
-  // (machine_sessions), unlike the old synchronous deriveSessionKey it
-  // replaced. Without a .catch() on the handleTerminalActivityRequest(...)
-  // promise chain, a rejection here left the HTTP request hanging forever
-  // and could crash the whole realtime process via an unhandled rejection.
-  it('given the sandbox lookup rejects (e.g. a transient DB error), should respond 500 instead of hanging or throwing unhandled', async () => {
-    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-    mockFindBySessionKey.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
-
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody()));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: false, error: 'Internal error' }));
-  });
-
-  it('given the sandbox lookup rejects with a non-Error value, should still respond 500 (wraps it via String() before logging)', async () => {
-    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-    mockFindBySessionKey.mockRejectedValueOnce('connection terminated unexpectedly');
-
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody()));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: false, error: 'Internal error' }));
-  });
-
-  it('given a persisted sandbox record for the machine, should resolve the agent-terminal session key (still delivered:false with nobody watching)', async () => {
-    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-    mockFindBySessionKey.mockResolvedValueOnce({ sandboxId: 'sbx-persisted-1' });
-
-    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
-    const res = createMockRes();
-
-    capturedRequestListener!(req, res);
-    req._emit('data', Buffer.from(terminalActivityBody()));
-    req._emit('end');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(mockFindBySessionKey).toHaveBeenCalled();
-    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
   });
 });
 
@@ -1156,6 +1135,8 @@ describe('Socket.IO connection handler', () => {
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:tasks');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:calendar');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:drives');
+    // Directory plane (SSoT Phase 2): the user's own sessions room is auto-joined.
+    expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:sessions');
     expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-conn-1', 'notifications:user-conn-1');
   });
 
@@ -1310,6 +1291,134 @@ describe('Socket.IO connection handler', () => {
       await socket._trigger('join_dm_conversation', 'athmieqpwr4ax1t2e0i4lmor');
 
       expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.objectContaining({ message: 'DB error' }), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
+    });
+  });
+
+  describe('join_conversation event (SSoT Phase 2 — canAccessConversation authz)', () => {
+    const CONV = 'athmieqpwr4ax1t2e0i4lmor';
+    const row = { userId: 'owner-1', isShared: false, type: 'page', contextId: 'pageabc123' };
+
+    it('given the predicate allows (owner, or shared + page access), joins the conv room', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'owner-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith('owner-1', row);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+      expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-1', `conv:${CONV}`);
+    });
+
+    it('given a non-owner on a PRIVATE conversation (predicate denies), does not join and does not disconnect', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(false);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'intruder', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('given a collaborator on a SHARED conversation (predicate allows), joins the conv room', async () => {
+      const sharedRow = { ...row, isShared: true };
+      mockDbLimit.mockResolvedValueOnce([sharedRow]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'collab-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith('collab-1', sharedRow);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+    });
+
+    it('given no conversations row, fails closed without consulting the predicate', async () => {
+      mockDbLimit.mockResolvedValueOnce([]);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(canAccessConversation).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', { not: 'a string' });
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_conversation', 'Conversation ID must be a valid ID');
+    });
+
+    it('given no user on the socket, returns silently — no join, no validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(emitValidationError).not.toHaveBeenCalled();
+    });
+
+    it('given the conversation lookup throws, logs the error without joining or disconnecting', async () => {
+      mockDbLimit.mockRejectedValueOnce(new Error('DB error'));
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith(
+        'Error joining conversation',
+        expect.objectContaining({ message: 'DB error' }),
+        { conversationId: CONV },
+      );
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('leave_conversation event', () => {
+    it('leaves the conv room', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).toHaveBeenCalledWith('conv:athmieqpwr4ax1t2e0i4lmor');
+      expect(mockSocketRegistry.trackRoomLeave).toHaveBeenCalledWith('socket-1', 'conv:athmieqpwr4ax1t2e0i4lmor');
+    });
+
+    it('given no user on the socket, returns silently — no leave', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error and leaves nothing', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 12345);
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_conversation', 'Conversation ID must be a valid ID');
+      expect(socket.leave).not.toHaveBeenCalled();
     });
   });
 
@@ -2001,5 +2110,242 @@ describe('resolveActorEmail', () => {
 
     expect(decryptField).not.toHaveBeenCalled();
     expect(result).toBe('');
+  });
+});
+
+/**
+ * A `shell:error` emitted WITHOUT the failing pane's `connectionId` is claimed by
+ * every shell multiplexed on the socket, because the client's `isMine`
+ * deliberately accepts untagged events. One pane's billing/database failure
+ * would then mark all of them dead and suppress their reconnects, so the tag is
+ * what scopes the kill to the pane that actually failed.
+ */
+describe('shell:connect error scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given onConnect rejects for a pane, should emit shell:error tagged with that pane connectionId', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-1',
+      data: { user: { id: 'user-shell-1', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-A', cols: 80, rows: 24 });
+    // Let the rejection settle through .then().catch().
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).toMatchObject({ connectionId: 'conn-A' });
+    }
+  });
+
+  // The one case where an error is still socket-wide. Acceptable because
+  // XtermTerminal ALWAYS sends a connectionId, so this is unreachable from the
+  // real client — and inventing an id would be worse: it would tag the error for
+  // a pane that does not exist, silently dropping the failure entirely.
+  it('given a payload with no connectionId, should emit an untagged error rather than inventing one', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-2',
+      data: { user: { id: 'user-shell-2', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).not.toHaveProperty('connectionId');
+    }
+  });
+});
+
+describe('shell:connect success path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a resolved connect whose session is found, should log it under the pane connectionId key', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-3', data: { user: { id: 'user-shell-3', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce({ sessionKey: 'pgs-ses-abc', sandboxId: 'sbx-1' });
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-B', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Keyed by the PANE's connectionId, not the shared socket id — several
+    // panes multiplex this socket and a bare socket.id would only ever find
+    // whichever pane sent none.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-3\u0000conn-B');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+
+  it('given a resolved connect with no tracked session, should stay silent rather than emit', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-4', data: { user: { id: 'user-shell-4', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce(undefined);
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No connectionId on the payload → falls back to the socket id for lookup.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-4\u0000socket-shell-4');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+});
+
+describe('shell:connect error coercion and connection metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a NON-Error rejection, should coerce it to a generic message rather than leak the raw value', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-5', data: { user: { id: 'user-shell-5', name: 'U', avatarUrl: null } } });
+    // A driver can reject with a plain string/object; the emit must stay a
+    // well-formed { message } payload either way.
+    mockShellOnConnect.mockRejectedValueOnce('raw string blip');
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-C', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const [, payload] = socket.emit.mock.calls.find(([event]) => event === 'shell:error')!;
+    expect(payload).toEqual({ message: 'Internal error', connectionId: 'conn-C' });
+  });
+
+  it('given a socket with no user-agent or cookie headers, should still complete the connection handshake', async () => {
+    // Exercises the optional-chain / present-missing metadata branches that a
+    // fully-populated handshake never reaches.
+    const socket = createMockSocket({
+      id: 'socket-shell-6',
+      data: { user: { id: 'user-shell-6', name: 'U', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_test' },
+        headers: { origin: undefined, cookie: undefined, 'user-agent': undefined },
+        address: '127.0.0.1',
+      },
+    });
+
+    expect(() => capturedIoConnectionCallback!(socket)).not.toThrow();
+    expect(socket.on).toHaveBeenCalledWith('shell:connect', expect.any(Function));
+  });
+});
+
+/**
+ * The HTTP dispatch chain: `/api/broadcast`, then the three signed shell
+ * endpoints, then a fallthrough. An unmatched POST must reach the fallthrough
+ * rather than being swallowed by a shell route, and a GET to a shell path must
+ * not be served just because the URL matches.
+ */
+describe('requestListener - dispatch fallthrough', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given POST to an unknown path, should fall through every shell route to a 404', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/definitely-not-a-route', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to a shell endpoint path, should not serve it (POST-only routes)', async () => {
+    const req = createMockReq({ method: 'GET', url: '/api/shell-read', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to the health path, should respond without falling through', async () => {
+    const req = createMockReq({ method: 'GET', url: '/health', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - shell bridge wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedShellIoDeps.length = 0;
+  });
+
+  it('should supply reauthorizeViewer to the shell-IO bridge', async () => {
+    // Not a behaviour test — `shell-io`'s own suite covers what the dep does.
+    // This pins that index.ts CONNECTS it, which is the only part that was ever
+    // missing. The dep is optional and fails closed, so an unwired build denies
+    // nothing loudly: it simply stops re-authorizing, and a revoked user keeps
+    // typing into a live shell until someone notices.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(capturedShellIoDeps).toHaveLength(1);
+    expect(typeof capturedShellIoDeps[0].reauthorizeViewer).toBe('function');
+  });
+
+  it('should supply every OPTIONAL seam the bridge degrades silently without', async () => {
+    // Each of these is optional on `ShellIoDeps` with a benign default, so an
+    // unwired one produces no error anywhere — just a quietly missing feature:
+    //
+    //   startSession    absent → an agent can never start a shell that has
+    //                   never run; `read_shell`/`send_shell` answer "not live"
+    //                   forever (the whole of issue #2206, undone)
+    //   rearmIdleReap   absent → a viewer-less session's idle reap keeps the
+    //                   clock it started with, so a long agent-driven build is
+    //                   killed mid-run by the very timer its own activity
+    //                   should have pushed back
+    //
+    // Asserting presence, not behaviour: both are covered in `shell-io`'s own
+    // suite, and the connection is the only part that has ever gone missing in
+    // this PR — three times.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const deps = capturedShellIoDeps[0];
+    expect(typeof deps.startSession).toBe('function');
+    expect(typeof deps.rearmIdleReap).toBe('function');
   });
 });

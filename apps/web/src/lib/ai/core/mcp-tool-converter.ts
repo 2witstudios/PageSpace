@@ -293,14 +293,6 @@ export function parseMCPToolName(namespacedName: string): {
 }
 
 /**
- * Checks if a tool name is an MCP tool (client-side execution required)
- * Supports both new format (mcp:) and legacy format (mcp__)
- */
-export function isMCPTool(toolName: string): boolean {
-  return toolName.startsWith('mcp:') || toolName.startsWith('mcp__');
-}
-
-/**
  * Sanitizes a single tool name for AI provider compatibility.
  * Replaces colons with double underscores.
  *

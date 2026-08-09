@@ -3,10 +3,14 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPri
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
 
 interface AgentSummary {
   id: string;
@@ -36,7 +40,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'multi_drive_list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'multi_drive_list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const { userId } = auth;
@@ -62,6 +66,54 @@ export async function GET(request: Request) {
       }
     }
 
+    // Batch-fetch each accessible drive's OWNER tier, once for the whole
+    // request — a drive's sandbox eligibility is the PAYER's tier (the
+    // owner), not the requester's, same rule agent-sessions billing/quota
+    // already apply. Several drives commonly share one owner, so this is
+    // deduped by ownerId, not one query per drive.
+    const ownerIds = Array.from(new Set(accessibleDrives.map((d) => d.ownerId)));
+    const ownerRows = ownerIds.length
+      ? await db.select({ id: users.id, subscriptionTier: users.subscriptionTier }).from(users).where(inArray(users.id, ownerIds))
+      : [];
+    // The requester's edit-capable memberships, batched — the flag is "can
+    // THIS requester use the sandbox there" (payer tier AND actor edit access
+    // AND the kill switch), not payer tier alone (review #2326): a
+    // viewer-role member would otherwise be offered shell affordances every
+    // enforcement point then 403s. Custom roles bound a MEMBER's drive-wide
+    // edit exactly as `getUserDrivePermissions` does (codex round 13): the
+    // role's driveWidePermissions must grant canEdit explicitly, an
+    // unresolvable role fails closed, and ADMINs bypass custom roles —
+    // otherwise a view-only custom-role member sees an enabled Shell item
+    // that provisioning then rejects with insufficient_role.
+    const accessibleDriveIds = accessibleDrives.map((d) => d.id);
+    const membershipRows = accessibleDriveIds.length
+      ? await db
+          .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId })
+          .from(driveMembers)
+          .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, accessibleDriveIds), isNotNull(driveMembers.acceptedAt)))
+      : [];
+    const customRoleIds = Array.from(
+      new Set(membershipRows.filter((row) => row.role !== 'ADMIN' && row.customRoleId).map((row) => row.customRoleId as string)),
+    );
+    const customRoleRows = customRoleIds.length
+      ? await db
+          .select({ id: driveRoles.id, driveId: driveRoles.driveId, driveWidePermissions: driveRoles.driveWidePermissions })
+          .from(driveRoles)
+          .where(inArray(driveRoles.id, customRoleIds))
+      : [];
+    const editableDriveIds = resolveEditableDriveIds(
+      membershipRows,
+      customRoleRows.map((row) => ({
+        ...row,
+        driveWidePermissions: row.driveWidePermissions as { canEdit?: boolean } | null,
+      })),
+    );
+    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows, {
+      userId,
+      editableDriveIds,
+      codeExecutionEnabled: isCodeExecutionEnabled(),
+    });
+
     // Filter by MCP token scope (if scoped)
     const allowedDriveIds = getAllowedDriveIds(auth);
     const scopedDrives = allowedDriveIds.length > 0
@@ -75,6 +127,8 @@ export async function GET(request: Request) {
       driveSlug: string;
       agentCount: number;
       agents: AgentSummary[];
+      /** Whether THIS REQUESTER can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
+      sandboxEligible: boolean;
     }[] = [];
     const allAccessibleAgents: AgentSummary[] = [];
 
@@ -153,7 +207,8 @@ export async function GET(request: Request) {
           driveName: drive.name,
           driveSlug: drive.slug,
           agentCount: accessibleAgentsInDrive.length,
-          agents: accessibleAgentsInDrive
+          agents: accessibleAgentsInDrive,
+          sandboxEligible: sandboxEligibleByDrive.get(drive.id) ?? false,
         });
       }
     }
@@ -178,7 +233,7 @@ export async function GET(request: Request) {
       },
       nextSteps: [
         totalAgentCount > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating some',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         'Use list_agents for drive-specific agent listings',
         `Accessible drives: ${scopedDrives.map(d => d.name).join(', ')}`
       ]

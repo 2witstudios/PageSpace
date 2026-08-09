@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/index";
 import { ArrowDownIcon } from "lucide-react";
-import { useCallback, type ComponentProps, type ReactNode, useRef, useEffect, useState, type RefObject } from "react";
+import { useCallback, type ComponentProps, useRef, useEffect, useState, type RefObject } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
@@ -11,7 +11,15 @@ export type ConversationProps = ComponentProps<typeof StickToBottom>;
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
+    // `initial` fires exactly once per mounted content element — the content
+    // going 0 -> full height. Animating that scrolls the entire thread past the
+    // user from top to bottom every time this mounts: on first open, and on each
+    // conversation switch in the main chat, where ChatLayout keys the messages
+    // panel by conversationId and so remounts this. (The sidebar's Conversation
+    // is not remounted per conversation, so there it only affects first open.)
+    // `resize` — every subsequent growth, i.e. normal token streaming — stays
+    // smooth so following the stream still reads as motion rather than a snap.
+    initial="instant"
     resize="smooth"
     role="log"
     {...props}
@@ -30,41 +38,6 @@ export const ConversationContent = ({
     className={cn("flex flex-col gap-8 p-4", className)}
     {...props}
   />
-);
-
-export type ConversationEmptyStateProps = ComponentProps<"div"> & {
-  title?: string;
-  description?: string;
-  icon?: ReactNode;
-};
-
-export const ConversationEmptyState = ({
-  className,
-  title = "No messages yet",
-  description = "Start a conversation to see messages here",
-  icon,
-  children,
-  ...props
-}: ConversationEmptyStateProps) => (
-  <div
-    className={cn(
-      "flex size-full flex-col items-center justify-center gap-3 p-8 text-center",
-      className
-    )}
-    {...props}
-  >
-    {children ?? (
-      <>
-        {icon && <div className="text-muted-foreground">{icon}</div>}
-        <div className="space-y-1">
-          <h3 className="font-medium text-sm">{title}</h3>
-          {description && (
-            <p className="text-muted-foreground text-sm">{description}</p>
-          )}
-        </div>
-      </>
-    )}
-  </div>
 );
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;

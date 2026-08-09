@@ -62,7 +62,7 @@ describe('aggregateUsageBreakdown', () => {
     expect(r.totalSpendCents).toBe(0);
     expect(r.byFeature).toEqual([]);
     expect(r.byModel).toEqual([]);
-    expect(r.byMachine).toEqual([]);
+    expect(r.byAgentSession).toEqual([]);
     expect(r.periodStart).toBe(PERIOD.periodStart);
     expect(r.periodEnd).toBe(PERIOD.periodEnd);
   });
@@ -138,8 +138,8 @@ describe('aggregateUsageBreakdown', () => {
     expect(r.byFeature[0].calls).toBe(1);
   });
 
-  describe('byMachine (Terminal Epic 3 usage surface)', () => {
-    const machineRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+  describe('byAgentSession (Terminal Epic 3 usage surface)', () => {
+    const agentSessionRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
       row({
         source: 'terminal',
         model: 'terminal-machine',
@@ -151,16 +151,16 @@ describe('aggregateUsageBreakdown', () => {
     it('groups terminal rows by pageId, summing spend and active seconds', () => {
       const r = aggregateUsageBreakdown(
         [
-          machineRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 10_000, durationMs: 30_000 }),
-          machineRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 5_000, durationMs: 10_000 }),
-          machineRow({ pageId: 'page-b', pageTitle: 'Scratch', chargeMillicents: 20_000, durationMs: 60_000 }),
+          agentSessionRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 10_000, durationMs: 30_000 }),
+          agentSessionRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 5_000, durationMs: 10_000 }),
+          agentSessionRow({ pageId: 'page-b', pageTitle: 'Scratch', chargeMillicents: 20_000, durationMs: 60_000 }),
         ],
         PERIOD,
       );
-      expect(r.byMachine).toHaveLength(2);
-      const a = r.byMachine.find((m) => m.pageId === 'page-a')!;
+      expect(r.byAgentSession).toHaveLength(2);
+      const a = r.byAgentSession.find((m) => m.pageId === 'page-a')!;
       expect(a).toMatchObject({ label: 'My Project', spendCents: 15, calls: 2, activeSeconds: 40 });
-      const b = r.byMachine.find((m) => m.pageId === 'page-b')!;
+      const b = r.byAgentSession.find((m) => m.pageId === 'page-b')!;
       expect(b).toMatchObject({ label: 'Scratch', spendCents: 20, calls: 1, activeSeconds: 60 });
     });
 
@@ -169,61 +169,106 @@ describe('aggregateUsageBreakdown', () => {
         [row({ source: 'chat', pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 50_000 })],
         PERIOD,
       );
-      expect(r.byMachine).toEqual([]);
+      expect(r.byAgentSession).toEqual([]);
     });
 
-    it('collapses rows with no resolvable page into one "Unattributed machine" bucket rather than dropping them', () => {
+    it('collapses rows with no resolvable page into one "Unattributed agent" bucket rather than dropping them', () => {
       const r = aggregateUsageBreakdown(
         [
-          machineRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
-          machineRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
+          agentSessionRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
+          agentSessionRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
         ],
         PERIOD,
       );
-      expect(r.byMachine).toHaveLength(1);
-      expect(r.byMachine[0]).toMatchObject({ pageId: null, label: 'Unattributed machine', calls: 2 });
+      expect(r.byAgentSession).toHaveLength(1);
+      expect(r.byAgentSession[0]).toMatchObject({ pageId: null, label: 'Unattributed agent', calls: 2 });
     });
 
-    it('falls back to "Untitled machine" when the page has no title (deleted/unresolvable page)', () => {
+    it('falls back to "Untitled agent" when the page has no title (deleted/unresolvable page)', () => {
       const r = aggregateUsageBreakdown(
-        [machineRow({ pageId: 'page-c', pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 })],
+        [agentSessionRow({ pageId: 'page-c', pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 })],
         PERIOD,
       );
-      expect(r.byMachine[0]).toMatchObject({ pageId: 'page-c', label: 'Untitled machine' });
+      expect(r.byAgentSession[0]).toMatchObject({ pageId: 'page-c', label: 'Untitled agent' });
     });
 
     it('tolerates a null durationMs (e.g. an idle-storage charge, which has no wall-clock window) as 0 runtime without dropping its cost', () => {
       const r = aggregateUsageBreakdown(
-        [machineRow({ pageId: 'page-d', pageTitle: 'Storage-billed page', chargeMillicents: 5_000, durationMs: null })],
+        [agentSessionRow({ pageId: 'page-d', pageTitle: 'Storage-billed page', chargeMillicents: 5_000, durationMs: null })],
         PERIOD,
       );
-      expect(r.byMachine[0]).toMatchObject({ pageId: 'page-d', activeSeconds: 0, spendCents: 5, calls: 1 });
+      expect(r.byAgentSession[0]).toMatchObject({ pageId: 'page-d', activeSeconds: 0, spendCents: 5, calls: 1 });
+    });
+
+    it('rolls a session\'s idle-storage charge up under the same agent page as its runtime charge', () => {
+      // The storage reconcile charges an agent session's measured bytes
+      // against its own agent page (sandbox-storage-attribution.ts), so those
+      // rows are indistinguishable HERE from the session's own runtime cost —
+      // which is the point: one agent, one line, whatever charge produced it.
+      const storageRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+        agentSessionRow({ model: 'terminal-machine-storage', durationMs: 0, ...over });
+
+      const r = aggregateUsageBreakdown(
+        [
+          agentSessionRow({ pageId: 'agent-page-1', pageTitle: 'My Agent', chargeMillicents: 10_000, durationMs: 30_000 }),
+          // Two storage-reconcile charges for that same session, metered separately.
+          storageRow({ pageId: 'agent-page-1', pageTitle: 'My Agent', chargeMillicents: 4_000 }),
+          storageRow({ pageId: 'agent-page-1', pageTitle: 'My Agent', chargeMillicents: 6_000 }),
+        ],
+        PERIOD,
+      );
+
+      expect(r.byAgentSession).toHaveLength(1);
+      expect(r.byAgentSession[0]).toMatchObject({
+        pageId: 'agent-page-1',
+        label: 'My Agent',
+        spendCents: 20,
+        calls: 3,
+        activeSeconds: 30,
+      });
+    });
+
+    it('never lands a session\'s storage charge in the "Unattributed agent" bucket', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          agentSessionRow({
+            model: 'terminal-machine-storage',
+            pageId: 'agent-page-1',
+            pageTitle: 'My Agent',
+            chargeMillicents: 4_000,
+            durationMs: 0,
+          }),
+        ],
+        PERIOD,
+      );
+
+      expect(r.byAgentSession.map((m) => m.pageId)).toEqual(['agent-page-1']);
     });
 
     it('computes sharePct against TOTAL TERMINAL spend, not overall spend across all features', () => {
       const r = aggregateUsageBreakdown(
         [
           row({ source: 'chat', chargeMillicents: 900_000 }), // huge non-terminal spend
-          machineRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 7_500 }),
-          machineRow({ pageId: 'page-b', pageTitle: 'B', chargeMillicents: 2_500 }),
+          agentSessionRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 7_500 }),
+          agentSessionRow({ pageId: 'page-b', pageTitle: 'B', chargeMillicents: 2_500 }),
         ],
         PERIOD,
       );
-      const a = r.byMachine.find((m) => m.pageId === 'page-a')!;
-      const b = r.byMachine.find((m) => m.pageId === 'page-b')!;
+      const a = r.byAgentSession.find((m) => m.pageId === 'page-a')!;
+      const b = r.byAgentSession.find((m) => m.pageId === 'page-b')!;
       expect(a.sharePct).toBe(75);
       expect(b.sharePct).toBe(25);
     });
 
-    it('sorts byMachine by spend descending', () => {
+    it('sorts byAgentSession by spend descending', () => {
       const r = aggregateUsageBreakdown(
         [
-          machineRow({ pageId: 'small', pageTitle: 'Small', chargeMillicents: 1_000 }),
-          machineRow({ pageId: 'big', pageTitle: 'Big', chargeMillicents: 50_000 }),
+          agentSessionRow({ pageId: 'small', pageTitle: 'Small', chargeMillicents: 1_000 }),
+          agentSessionRow({ pageId: 'big', pageTitle: 'Big', chargeMillicents: 50_000 }),
         ],
         PERIOD,
       );
-      expect(r.byMachine.map((m) => m.pageId)).toEqual(['big', 'small']);
+      expect(r.byAgentSession.map((m) => m.pageId)).toEqual(['big', 'small']);
     });
   });
 });

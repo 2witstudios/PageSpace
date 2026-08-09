@@ -63,6 +63,7 @@ export async function GET(
     });
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -258,6 +259,7 @@ export async function PUT(
   });
 
   // Fetch updated configs
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const updatedConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -361,6 +363,7 @@ export async function DELETE(
   }
 
   // Ensure at least one status remains in each group
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const allConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
   });

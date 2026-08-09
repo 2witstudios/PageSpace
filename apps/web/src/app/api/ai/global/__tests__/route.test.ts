@@ -92,6 +92,8 @@ const mockConversation = (overrides: Partial<{
   createdAt: overrides.createdAt ?? new Date(),
   updatedAt: overrides.updatedAt ?? new Date(),
   isActive: overrides.isActive ?? true,
+  workspaceId: null,
+  closedInWorkspaceAt: null,
 });
 
 const createGetRequest = () =>

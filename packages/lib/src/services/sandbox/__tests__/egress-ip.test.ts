@@ -17,11 +17,11 @@ describe('resolveEgressIpTag', () => {
   });
 
   it('given an empty/whitespace tag, should treat it as unset (degraded)', () => {
-    expect(resolveEgressIpTag({ surface: 'machine', configuredTag: '   ' }).dedicated).toBe(false);
+    expect(resolveEgressIpTag({ surface: 'session', configuredTag: '   ' }).dedicated).toBe(false);
   });
 
   it('a configured tag is trimmed', () => {
-    expect(resolveEgressIpTag({ surface: 'machine', configuredTag: '  t1  ' })).toEqual({
+    expect(resolveEgressIpTag({ surface: 'session', configuredTag: '  t1  ' })).toEqual({
       tag: 't1',
       dedicated: true,
     });

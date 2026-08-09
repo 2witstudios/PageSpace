@@ -18,17 +18,12 @@ import {
   type SpritesSdk,
   type SpriteInstanceLike,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
-import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
+import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
+import { createExecClientFromSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sandbox-host-adapter';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
-import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
+import type { SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
 
 let cachedSdk: SpritesSdk | null = null;
-
-/** The raw Sprites SDK — for callers that need to reach a Sprite directly (e.g. to wake a resumed one) rather than through an `ExecSandboxClient`/`MachineHost` adapter. */
-export async function getProductionSpritesSdk(): Promise<SpritesSdk> {
-  return getSpritesSDK();
-}
 
 async function getSpritesSDK(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
@@ -44,19 +39,19 @@ async function getSpritesSDK(): Promise<SpritesSdk> {
 }
 
 export async function createProductionSpritesSandboxClient(): Promise<ExecSandboxClient> {
-  const host = await createProductionMachineHost();
-  return createExecClientFromMachineHost(host, { kind: 'sprite' });
+  const host = await createProductionSandboxHost();
+  return createExecClientFromSandboxHost(host, { kind: 'sprite' });
 }
 
 /**
- * The raw `MachineHost` (not re-adapted back to `ExecSandboxClient`), for
+ * The raw `SandboxHost` (not re-adapted back to `ExecSandboxClient`), for
  * callers that provision/attach/kill Sprites directly rather than through a
  * page-keyed persistent session — e.g. the Branches tier
  * (`services/machines/machine-branches.ts`), where each branch-terminal is
  * its OWN Sprite, addressed by its own derived session key.
  */
-export async function createProductionMachineHost(): Promise<MachineHost> {
+export async function createProductionSandboxHost(): Promise<SandboxHost> {
   const sdk = await getSpritesSDK();
   const client = createSpritesSandboxClient({ sdk });
-  return createSpriteMachineHost({ sdk, client });
+  return createSpriteSandboxHost({ sdk, client });
 }

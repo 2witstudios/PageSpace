@@ -156,5 +156,3 @@ export function MentionPickerPortal({
     document.body,
   );
 }
-
-export default MentionPickerPortal;

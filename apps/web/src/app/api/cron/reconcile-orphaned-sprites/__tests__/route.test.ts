@@ -14,12 +14,12 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/services/machines/machine-orphan-reconcile', () => ({
+vi.mock('@pagespace/lib/services/sandbox/sprite-orphan-reconcile', () => ({
   reconcileOrphanSprites: mockReconcile,
 }));
 
-vi.mock('@/lib/machines/machine-orphan-reconcile-runtime', () => ({
-  defaultReconcileOrphanSpritesDeps: {},
+vi.mock('@/lib/agent-workspaces/workspace-orphan-reconcile-runtime', () => ({
+  defaultReconcileAgentSessionOrphanSpritesDeps: {},
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

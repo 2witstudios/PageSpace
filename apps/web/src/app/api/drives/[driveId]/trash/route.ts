@@ -76,6 +76,7 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
       }
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const trashedPages = await db.query.pages.findMany({
       where: and(eq(pages.driveId, drive.id), eq(pages.isTrashed, true)),
       with: {

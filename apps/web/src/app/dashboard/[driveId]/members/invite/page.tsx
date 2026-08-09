@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
 import { ChevronLeft, UserPlus, User, RefreshCw, Shield, Mail } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -41,7 +41,6 @@ type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null
 export default function InviteMemberPage() {
   const params = useParams();
   const router = useRouter();
-  const { toast } = useToast();
   const driveId = params.driveId as string;
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
@@ -98,10 +97,7 @@ export default function InviteMemberPage() {
       const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
       if (role && permissionsGridRef.current) {
         permissionsGridRef.current.applyRolePermissions(role.permissions);
-        toast({
-          title: 'Permissions synced',
-          description: `Permissions reset to "${role.name}" defaults`,
-        });
+        toast.success(`Permissions reset to "${role.name}" defaults`);
       }
     }
   };
@@ -174,11 +170,7 @@ export default function InviteMemberPage() {
         }));
 
       if (permissionArray.length === 0 && !backendCustomRoleId) {
-        toast({
-          title: 'No permissions selected',
-          description: 'Please assign a role or select at least one page permission',
-          variant: 'destructive',
-        });
+        toast.error('Please assign a role or select at least one page permission');
         return;
       }
 
@@ -198,15 +190,9 @@ export default function InviteMemberPage() {
       );
 
       if (response?.kind === 'invited' && submittedEmail) {
-        toast({
-          title: 'Invitation sent',
-          description: `Invitation sent to ${submittedEmail}`,
-        });
+        toast.success(`Invitation sent to ${submittedEmail}`);
       } else {
-        toast({
-          title: 'Success',
-          description: isAdmin ? 'Admin invited successfully' : 'Member invited successfully',
-        });
+        toast.success(isAdmin ? 'Admin invited successfully' : 'Member invited successfully');
       }
 
       router.push(`/dashboard/${driveId}/members`);
@@ -216,11 +202,7 @@ export default function InviteMemberPage() {
         return;
       }
       console.error('Error adding member:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to add member',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to add member');
     } finally {
       setSaving(false);
     }

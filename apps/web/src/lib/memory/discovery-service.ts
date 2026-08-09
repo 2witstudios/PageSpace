@@ -9,12 +9,12 @@
 import { generateText } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, gte, desc, inArray, isNotNull, ne } from '@pagespace/db/operators'
-import { chatMessages, pages } from '@pagespace/db/schema/core'
+import { pages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
-import { BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -82,7 +82,15 @@ async function gatherRecentConversations(
 
   const allMessages: ConversationMessage[] = [];
 
-  // 1. Global/DM conversations (from unified conversations table)
+  // 1. Global/DM conversations.
+  //
+  // `eq(conversations.type, 'global')` is REQUIRED since the message-table
+  // merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6): page
+  // and client conversations now live in `messages` too, so without it this
+  // query would swallow the page-agent corpus that step 2 collects under a
+  // different (drive-membership-scoped, `userId`-attributed) rule — feeding
+  // the same rows to the model twice and, worse, bypassing step 2's
+  // drive-membership gate.
   const globalMessages = await db
     .select({
       content: messages.content,
@@ -93,17 +101,18 @@ async function gatherRecentConversations(
     .innerJoin(conversations, eq(conversations.id, messages.conversationId))
     .where(
       and(
+        eq(conversations.type, 'global'),
         eq(conversations.userId, userId),
         eq(messages.isActive, true),
         // Global Assistant placeholder rows carry the real conversation owner's userId (unlike
-        // page-agent chatMessages rows below, which use userId: null for assistant messages and
+        // page-agent rows below, which use userId: null for assistant messages and
         // so are excluded by the userId filter alone) — an in-flight 'streaming' row would
         // otherwise feed an empty assistant message into the preference-extraction prompt.
         ne(messages.status, 'streaming'),
         gte(messages.createdAt, lookbackDate)
       )
     )
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(150);
 
   allMessages.push(
@@ -114,7 +123,7 @@ async function gatherRecentConversations(
     }))
   );
 
-  // 2. Page agent conversations (chatMessages)
+  // 2. Page agent conversations.
   // acceptedAt IS NOT NULL filters pending invitations — a not-yet-accepted
   // member must not see prior conversations from the inviting drive.
   const userDrives = await db
@@ -124,23 +133,29 @@ async function gatherRecentConversations(
   const driveIds = userDrives.map((d) => d.driveId);
 
   if (driveIds.length > 0) {
+    // Unified `messages` table since the merge (Phase 4 / D6). The page is
+    // reached through `conversations.contextId` — the end-state authority,
+    // indexed — rather than the transitional `messages.pageId`, so this
+    // reader survives that column's removal at the contract PR.
     const pageMessages = await db
       .select({
-        content: chatMessages.content,
-        role: chatMessages.role,
-        createdAt: chatMessages.createdAt,
+        content: messages.content,
+        role: messages.role,
+        createdAt: messages.createdAt,
       })
-      .from(chatMessages)
-      .innerJoin(pages, eq(pages.id, chatMessages.pageId))
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .innerJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(chatMessages.userId, userId),
-          eq(chatMessages.isActive, true),
+          eq(conversations.type, 'page'),
+          eq(messages.userId, userId),
+          eq(messages.isActive, true),
           inArray(pages.driveId, driveIds),
-          gte(chatMessages.createdAt, lookbackDate)
+          gte(messages.createdAt, lookbackDate)
         )
       )
-      .orderBy(desc(chatMessages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(100);
 
     allMessages.push(
@@ -209,7 +224,7 @@ async function runDiscoveryPass(
   conversationContext: string
 ): Promise<string[]> {
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'anthropic',
+    selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
   });
 

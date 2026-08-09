@@ -6,6 +6,7 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
+  isHandoffBridgeRoute,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
@@ -23,6 +24,7 @@ import {
   OAUTH_ACCESS_TOKEN_PREFIX,
 } from '@/lib/auth/token-prefixes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { isElectronShell } from '@/lib/auth/native-shell';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 import { getClientIP } from '@/lib/security/edge-client-ip';
 
@@ -241,6 +243,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // never a session cookie or a recognized bearer prefix — each must be listed here or this
     // middleware (now that it actually runs) blocks them with a 401 before route.ts ever sees
     // the request.
+    // `/api/webhooks/[token]` is the page incoming-webhook intake: external senders (CI,
+    // monitoring, scripts) have no session and authenticate via the per-webhook HMAC
+    // signature verified inside the route — same rationale as the third-party webhooks.
     // Signup/verification endpoints run before any session exists by definition (that's what
     // they're creating), authenticating instead via login-CSRF token, WebAuthn challenge, a
     // one-time handoff token, or an emailed verification token. `/passkey/register` (and its
@@ -293,6 +298,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/integrations/zoom/webhook' ||
       pathname === '/api/stripe/webhook' ||
       pathname === '/api/integrations/google-calendar/webhook' ||
+      pathname.startsWith('/api/webhooks/') ||
       pathname === '/api/auth/signup-passkey' ||
       pathname === '/api/auth/signup-passkey/options' ||
       pathname === '/api/auth/passkey/register' ||
@@ -306,7 +312,13 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
-      const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
+      // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
+      // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
+      // and clobber the route's policy (which allows the page's inline styles).
+      const { response } = createSecureResponse(isProduction, req, {
+        isAPIRoute,
+        skipCSP: isHandoffBridgeRoute(pathname),
+      });
       return response;
     }
 
@@ -322,6 +334,27 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     const sessionToken = getSessionFromCookies(cookieHeader);
 
     if (!sessionToken) {
+      // Electron desktop shell: its page navigations carry COOKIES while the
+      // real credential (the Bearer token) lives in the Electron main process
+      // and is attached per API call — so a missing/stale session cookie says
+      // nothing about whether the desktop user is authenticated. Bouncing the
+      // shell to the signin form here IS the desktop "random logout". Let the
+      // page load and let the shell recover client-side via its Bearer. This
+      // relaxes only the navigation UX gate, never an auth boundary: the page
+      // shell is public and all data still comes from Bearer-validated API
+      // routes (the isAPIRoute 401 below is untouched). The iOS/Capacitor
+      // /dashboard rewrite below is a different shell (no Electron/ UA token)
+      // and keeps its own handling. Sits above the 'unauthorized' security
+      // event: this navigation is deliberately accepted, and logging it would
+      // fire on every client-side route change of a cookie-less desktop
+      // session, drowning out real unauthorized events.
+      if (!isAPIRoute && isElectronShell(req.headers.get('user-agent'))) {
+        const { response } = createSecureResponse(isProduction, req, {
+          disableCOEP: shouldDisableCOEP(pathname),
+        });
+        return response;
+      }
+
       logSecurityEvent('unauthorized', {
         pathname,
         reason: 'No session token',

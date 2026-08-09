@@ -107,15 +107,3 @@ export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
 export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort(
   (a, b) => a.cents - b.cents,
 );
-
-/** Buyable top-up packs as display strings (e.g. "$10"), sorted by value. */
-export const CREDIT_PACKS_DISPLAY: string[] = CREDIT_PACK_LIST.map((pack) =>
-  formatCreditDollars(pack.cents),
-);
-
-/** Top-up packs joined for prose, e.g. "$10, $25, or $50". */
-export function creditPacksPhrase(): string {
-  const packs = CREDIT_PACKS_DISPLAY;
-  if (packs.length <= 1) return packs.join('');
-  return `${packs.slice(0, -1).join(', ')}, or ${packs[packs.length - 1]}`;
-}

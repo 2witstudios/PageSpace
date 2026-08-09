@@ -16,6 +16,17 @@ svg.lucide {
   stroke-width: 1.5;
 }
 
+/* Backstop for xterm's containing blocks (the real sheet is imported by
+   XtermTerminal.tsx). xterm's selection/viewport/helper layers are
+   `position: absolute` against these two elements; if the vendor import is
+   ever lost again (it happened once, when its previous host component was
+   deleted), a text selection in one terminal pane paints its highlight into
+   whichever ancestor happens to be positioned — visually, a different pane. */
+.xterm,
+.xterm .xterm-screen {
+  position: relative;
+}
+
 /* ---------------------------------------------------------------------------
    Hover-revealed controls on touch devices.
 
@@ -721,6 +732,16 @@ svg.lucide {
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--accent));
+  }
+
+  /* Fully hidden scrollbar — scrolling still works, the bar never renders */
+  .scrollbar-none {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Electron */
   }
 
   /* SVG Color Utilities - for dark mode support in SVG elements */

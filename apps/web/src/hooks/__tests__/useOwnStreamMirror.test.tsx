@@ -333,4 +333,72 @@ describe('useOwnStreamMirror', () => {
     expect(entry('server-issued-id')?.parts).toEqual([text('the actual reply')]);
     expect(entry('client-generated-id')).toBeUndefined();
   });
+
+  // The latch getter feeds the pre-send handoff (useConversationSendHandoff) and the rawStop gate
+  // (useStopStream): "which conversation is this chat consuming for, right now?". It must span
+  // exactly the busy window — a value outside it would trigger handoffs for idle chats; a missing
+  // value inside it would let a second conversation's send corrupt the shared Chat.
+  describe('getLatchedConversationId', () => {
+    it('given an idle chat, should return undefined', () => {
+      const { result } = render({
+        status: 'ready',
+        ownMessages: [],
+        pageId: 'page-1',
+        conversationId: 'conv-C',
+      });
+
+      expect(result.current.getLatchedConversationId()).toBeUndefined();
+    });
+
+    it('given a send in the submitted window, should return the conversation captured at send', () => {
+      const { result, rerender } = render({
+        status: 'ready',
+        ownMessages: [],
+        pageId: 'page-1',
+        conversationId: 'conv-C',
+      });
+
+      act(() => rerender({ status: 'submitted', ownMessages: [], pageId: 'page-1', conversationId: 'conv-C' }));
+
+      expect(result.current.getLatchedConversationId()).toBe('conv-C');
+    });
+
+    it('given the surface moves to another conversation mid-send, should keep returning the SENT conversation', () => {
+      const { result, rerender } = render({
+        status: 'ready',
+        ownMessages: [],
+        pageId: 'page-1',
+        conversationId: 'conv-C',
+      });
+
+      act(() => rerender({ status: 'submitted', ownMessages: [], pageId: 'page-1', conversationId: 'conv-C' }));
+      act(() => rerender({
+        status: 'streaming',
+        ownMessages: streamingAs('m1', 'He'),
+        pageId: 'page-1',
+        conversationId: 'conv-D',
+      }));
+
+      expect(result.current.getLatchedConversationId()).toBe('conv-C');
+    });
+
+    it('given the send settles (falling edge), should return undefined again', () => {
+      const { result, rerender } = render({
+        status: 'streaming',
+        ownMessages: streamingAs('m1', 'Hello'),
+        pageId: 'page-1',
+        conversationId: 'conv-C',
+      });
+      expect(result.current.getLatchedConversationId()).toBe('conv-C');
+
+      act(() => rerender({
+        status: 'ready',
+        ownMessages: streamingAs('m1', 'Hello world'),
+        pageId: 'page-1',
+        conversationId: 'conv-C',
+      }));
+
+      expect(result.current.getLatchedConversationId()).toBeUndefined();
+    });
+  });
 });

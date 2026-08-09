@@ -13,6 +13,7 @@ const createSecureResponse = vi.fn(() => ({ response: { status: 200, headers: ne
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
   createSecureErrorResponse: vi.fn((body: unknown, status: number) => new Response(JSON.stringify(body), { status })),
+  isHandoffBridgeRoute: vi.fn((pathname: string) => pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback'),
   isPublicPageRoute: vi.fn(() => false),
   isPublishedSiteHost: vi.fn(() => false),
   isSecureRequest: vi.fn(() => true),

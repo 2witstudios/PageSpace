@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo, useRef, useId } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -7,22 +7,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, Cable, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
-import { useForm, useFieldArray, useFormState, Controller } from 'react-hook-form';
+import { useForm, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
+import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
-
-// The Machine tool group: gated behind the Machine Access toggle below and
-// hidden from the Default Tools list when access is off. switch_machine/
-// list_machines are named ahead of their registration landing in ai-tools.ts
-// so this list needs no changes once they ship.
-const MACHINE_TOOL_NAMES = new Set(['bash', 'writeFile', 'readFile', 'editFile', 'switch_machine', 'list_machines']);
+import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
+import { AgentIntegrationsPanel } from './AgentIntegrationsPanel';
+import {
+  AgentSettingsMenu,
+  type AgentSettingsCategory,
+  type AgentSettingsMenuItem,
+} from './AgentSettingsMenu';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -37,33 +38,34 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
-  machineAccess?: boolean;
-  machines?: MachineRef[];
-  availableMachines?: Array<{ id: string; title: string }>;
-}
-
-interface AgentMembership {
-  role: string;
-  customRole: { id: string; name: string; color: string | null } | null;
-}
-
-interface DriveRole {
-  id: string;
-  name: string;
-  color?: string | null;
+  sandboxEnabled?: boolean;
 }
 
 interface PageAgentSettingsTabProps {
   pageId: string;
   driveId: string;
   config: AgentConfig | null;
-  onConfigUpdate: (config: AgentConfig) => void;
+  /** Accepts a plain value OR an updater `(current) => next` — see onSubmit
+   * below for why the updater form matters (round 22). */
+  onConfigUpdate: (config: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
+  /** Re-fetches the shared config cache to reconcile it with the server's
+   * ground truth — see onSubmit below for why the optimistic update above
+   * isn't always enough on its own (round 23). */
+  onConfigRevalidate: () => void;
   selectedProvider: string;
   selectedModel: string;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
   onSavingChange?: (isSaving: boolean) => void;
+  /** Mirrors react-hook-form's `formState.isDirty` out to the host so its
+   * own Save button can show an unsaved-changes state — see AgentPageView
+   * and AgentPanes, which render the button outside this component. */
+  onDirtyChange?: (isDirty: boolean) => void;
+  /** Fires after a successful save instead of a toast — a toast can cover
+   * the very tabs/buttons the user needs to leave Settings with, so the
+   * host's Save button shows the confirmation inline instead. */
+  onSaved?: () => void;
 }
 
 function ApiModelIdCard({ pageId }: { pageId: string }) {
@@ -118,84 +120,91 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
-  machineAccess: boolean;
-  machines: MachineRef[];
+  sandboxEnabled: boolean;
 }
+
+const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
+  {
+    key: 'behavior',
+    title: 'Behavior',
+    description: 'Model, instructions, identity, and workspace context',
+    icon: Bot,
+  },
+  {
+    key: 'access',
+    title: 'Access',
+    description: 'Drive membership and workspace access',
+    icon: Shield,
+  },
+  {
+    key: 'tools',
+    title: 'Tools',
+    description: 'Sandbox, default tools, and tool exposure',
+    icon: Wrench,
+  },
+  {
+    key: 'integrations',
+    title: 'Integrations',
+    description: 'External services available to this agent',
+    icon: Cable,
+  },
+];
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
   driveId,
   config,
   onConfigUpdate,
+  onConfigRevalidate,
   selectedProvider,
   selectedModel,
   onProviderChange,
   onModelChange,
   isProviderConfigured,
-  onSavingChange
+  onSavingChange,
+  onDirtyChange,
+  onSaved
 }, ref) => {
+  // Stable per-MOUNT identifier — distinguishes this instance from another
+  // Settings surface for the SAME agent mounted elsewhere (see the
+  // useEditingStore registration below, round 20).
+  const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
-  const [membership, setMembership] = useState<AgentMembership | null | undefined>(undefined);
-  const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
-  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
-  const [membershipSaving, setMembershipSaving] = useState(false);
-  const [selectedMachineId, setSelectedMachineId] = useState('');
+  const [category, setCategory] = useState<AgentSettingsCategory | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const isInitialCategoryRender = useRef(true);
+
+  // The category heading only ever mounts as the result of a deliberate
+  // navigation-in (category starts null, so it's never present on first
+  // render) — a mount-time callback ref is enough to focus it. Returning to
+  // the menu is the ambiguous case (AgentSettingsMenu also mounts on first
+  // render), so that transition still needs the guarded effect below.
+  const focusOnMount = useCallback((el: HTMLElement | null) => el?.focus(), []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadMembership() {
-      try {
-        const [membersRes, rolesRes] = await Promise.all([
-          fetchWithAuth(`/api/drives/${driveId}/agents/members`),
-          fetchWithAuth(`/api/drives/${driveId}/roles`),
-        ]);
-        if (cancelled) return;
-        if (membersRes.ok) {
-          const data = await membersRes.json();
-          const entry = (data.agentMembers ?? []).find(
-            (m: { agentPageId: string }) => m.agentPageId === pageId,
-          );
-          setMembership(entry ? { role: entry.role, customRole: entry.customRole } : null);
-          setMembershipUserRole(data.currentUserRole ?? 'MEMBER');
-        } else {
-          setMembership(null);
-        }
-        if (rolesRes.ok) {
-          const data = await rolesRes.json();
-          setDriveRoles(data.roles ?? []);
-        }
-      } catch {
-        if (!cancelled) setMembership(null);
-      }
+    if (isInitialCategoryRender.current) {
+      isInitialCategoryRender.current = false;
+      return;
     }
-    loadMembership();
-    return () => { cancelled = true; };
-  }, [pageId, driveId]);
+    if (category === null) {
+      settingsMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    }
+  }, [category]);
+  // Shared across every mounted Settings surface for this agent (keyed by
+  // driveId in SWR's cache) — see useAgentMembership for why a per-instance
+  // useState here previously let two Settings surfaces for the same agent
+  // drift out of sync.
+  const { membership, membershipUserRole, driveRoles, updateRole, isSaving: membershipSaving } =
+    useAgentMembership(driveId, pageId);
 
   const handleMembershipRoleChange = useCallback(async (value: string) => {
-    setMembershipSaving(true);
     try {
-      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
-        value === 'ADMIN'
-          ? { role: 'ADMIN', customRoleId: null }
-          : value === 'MEMBER'
-          ? { role: 'MEMBER', customRoleId: null }
-          : { role: 'MEMBER', customRoleId: value };
-      await patch(`/api/drives/${driveId}/agents/${pageId}`, body);
-      const customRole = body.customRoleId
-        ? (driveRoles.find((r) => r.id === body.customRoleId) ?? null)
-        : null;
-      setMembership({
-        role: body.role,
-        customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
-      });
+      await updateRole(value);
       toast.success('Role updated');
     } catch {
       toast.error('Failed to update role');
-    } finally {
-      setMembershipSaving(false);
     }
-  }, [driveId, pageId, driveRoles]);
+  }, [updateRole]);
 
   // Dynamic Ollama models state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
@@ -215,35 +224,71 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
-      machineAccess: config?.machineAccess ?? false,
-      machines: config?.machines ?? [],
+      sandboxEnabled: config?.sandboxEnabled ?? false,
     }
   });
 
-  const { fields: machineFields, append: appendMachine, remove: removeMachine, move: moveMachine } = useFieldArray({
-    control,
-    name: 'machines',
-  });
+  // Read early (moved up from its original spot near the useEditingStore
+  // registration below) so the reset effect right below can gate on it.
+  // `dirtyFields` additionally lets onSubmit tell "the user actually
+  // edited this field in THIS instance" apart from "still whatever this
+  // instance's own (possibly now-stale) form snapshot happens to hold" —
+  // see onSubmit below, round 20.
+  const { isDirty: formIsDirty, dirtyFields } = useFormState({ control });
+  // Set right before THIS instance's own save propagates the new config
+  // into the shared cache (onSubmit below) — distinguishes "my own save,
+  // whose values I want as my new clean baseline" from "a SIBLING Settings
+  // surface for the same agent just saved, and its update arrived here via
+  // the shared SWR cache."
+  const justSavedOwnConfigRef = useRef(false);
+  // Set the first time THIS instance's own provider/model controls are
+  // touched — distinguishes "the user explicitly picked this here" from
+  // "still whatever useProviderSettings loaded on mount, possibly stale
+  // relative to a sibling's later save" (see onSubmit below, round 18).
+  const providerTouchedRef = useRef(false);
+  const modelTouchedRef = useRef(false);
 
-  // Reset form when config changes
+  // What to actually SHOW in the provider/model Selects — same resolution
+  // as onSubmit's resolvedProvider/resolvedModel (this instance's own
+  // untouched selection defers to the shared config), but read at render
+  // time rather than only at submit time. Without this, an untouched
+  // instance kept rendering its stale `selectedProvider`/`selectedModel`
+  // prop (owned by a separate, non-shared useProviderSettings() per mount)
+  // even after a SIBLING Settings surface for the same agent saved a
+  // different provider — the save itself was already correct (onSubmit's
+  // own resolution prevented the stale prop from being submitted), but the
+  // display never caught up (review finding — chatgpt-codex-connector on
+  // PR #2299, round 26, thread r3694897525).
+  const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+  const displayedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+  const displayedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
+
+  // Reset form when config changes — but NOT when this surface has its own
+  // unsaved edits from an EXTERNAL update (a different pane's Settings tab
+  // for the SAME agent saving propagates through the shared config cache
+  // `useAgentConfig` — see AgentPanes.tsx — and this effect used to reset
+  // unconditionally, silently discarding whatever the user was mid-typing
+  // here). Always resets for THIS instance's own save (justSavedOwnConfigRef)
+  // — its own newly-saved values become the new clean baseline as before
+  // (review finding — chatgpt-codex-connector on PR #2299, round 17).
   useEffect(() => {
-    if (config) {
-      reset({
-        systemPrompt: config.systemPrompt,
-        enabledTools: config.enabledTools,
-        aiProvider: config.aiProvider || selectedProvider || '',
-        aiModel: config.aiModel || selectedModel || '',
-        includeDrivePrompt: config.includeDrivePrompt ?? false,
-        agentDefinition: config.agentDefinition || '',
-        visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
-        includePageTree: config.includePageTree ?? false,
-        pageTreeScope: config.pageTreeScope ?? 'children',
-        toolExposureMode: config.toolExposureMode ?? 'upfront',
-        machineAccess: config.machineAccess ?? false,
-        machines: config.machines ?? [],
-      });
-    }
-  }, [config, reset, selectedProvider, selectedModel]);
+    if (!config) return;
+    if (formIsDirty && !justSavedOwnConfigRef.current) return;
+    justSavedOwnConfigRef.current = false;
+    reset({
+      systemPrompt: config.systemPrompt,
+      enabledTools: config.enabledTools,
+      aiProvider: config.aiProvider || selectedProvider || '',
+      aiModel: config.aiModel || selectedModel || '',
+      includeDrivePrompt: config.includeDrivePrompt ?? false,
+      agentDefinition: config.agentDefinition || '',
+      visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
+      includePageTree: config.includePageTree ?? false,
+      pageTreeScope: config.pageTreeScope ?? 'children',
+      toolExposureMode: config.toolExposureMode ?? 'upfront',
+      sandboxEnabled: config.sandboxEnabled ?? false,
+    });
+  }, [config, reset, selectedProvider, selectedModel, formIsDirty]);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -299,52 +344,134 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
   }, [lmstudioModels]);
 
-  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  // Get models for the DISPLAYED provider (dynamic for Ollama and LM Studio,
+  // static for others) — must match displayedProvider, not selectedProvider:
+  // an untouched instance can be displaying a sibling's saved provider (see
+  // displayedProvider above) while selectedProvider still holds this
+  // instance's own stale value, and listing the wrong provider's models
+  // would offer a model that doesn't belong to the shown provider.
   const getCurrentProviderModels = (): Record<string, string> => {
-    if (selectedProvider === 'ollama' && ollamaModels) {
+    if (displayedProvider === 'ollama' && ollamaModels) {
       return ollamaModels;
     }
-    if (selectedProvider === 'lmstudio' && lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && lmstudioModels) {
       return lmstudioModels;
     }
-    return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
+    return AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
     onSavingChange?.(true);
     try {
-      // Include the current provider and model from props
+      // `selectedProvider`/`selectedModel` are OWNED by the parent's own
+      // useProviderSettings() instance — a separate, per-mount hook with no
+      // shared cache (unlike useAgentConfig). If this instance never
+      // touched the provider/model controls itself, its copy can be stale
+      // relative to a SIBLING Settings surface for the same agent that
+      // just saved a provider change: submitting the stale prop here would
+      // silently revert that sibling's save the moment this instance saves
+      // anything else. Prefer the shared config's value in that case; only
+      // this instance's OWN explicit selection overrides it (review
+      // finding — chatgpt-codex-connector on PR #2299, round 18).
+      //
+      // Provider and model are a COUPLED pair — a model must belong to its
+      // provider — so they are resolved from the SAME source together, not
+      // independently: touching only the model here while a sibling
+      // changed the provider must not combine this instance's (stale-
+      // provider) model with the sibling's new provider, an invalid pair
+      // the route rejects with a 400 (review finding — chatgpt-codex-
+      // connector on PR #2299, round 20).
+      const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+      const resolvedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+      const resolvedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
+      // Every OTHER field: send ONLY what THIS instance's form actually has
+      // a pending edit for (react-hook-form's own dirtyFields) — a SPARSE
+      // PATCH, omitting untouched fields entirely rather than merging in a
+      // value copied from this instance's own (possibly already-stale)
+      // config snapshot. The route already applies each field only `if
+      // (field !== undefined)`, so an omitted field is left untouched
+      // server-side. Round 20's "merge from local config" still raced: two
+      // surfaces saving different fields close enough together that
+      // neither's SWR update had reached the other yet would both submit
+      // the SAME stale snapshot for their own "unedited" fields, and
+      // whichever PATCH landed second would stomp the first's just-saved
+      // change. Never sending a field this instance didn't touch removes
+      // that race entirely (review finding — chatgpt-codex-connector on
+      // PR #2299, round 21).
+      const dirtyPatch: Partial<FormData> = {};
+      if (dirtyFields.systemPrompt) dirtyPatch.systemPrompt = data.systemPrompt;
+      if (dirtyFields.enabledTools) dirtyPatch.enabledTools = data.enabledTools;
+      if (dirtyFields.includeDrivePrompt) dirtyPatch.includeDrivePrompt = data.includeDrivePrompt;
+      if (dirtyFields.agentDefinition) dirtyPatch.agentDefinition = data.agentDefinition;
+      if (dirtyFields.visibleToGlobalAssistant) dirtyPatch.visibleToGlobalAssistant = data.visibleToGlobalAssistant;
+      if (dirtyFields.includePageTree) dirtyPatch.includePageTree = data.includePageTree;
+      if (dirtyFields.pageTreeScope) dirtyPatch.pageTreeScope = data.pageTreeScope;
+      if (dirtyFields.toolExposureMode) dirtyPatch.toolExposureMode = data.toolExposureMode;
+      if (dirtyFields.sandboxEnabled) dirtyPatch.sandboxEnabled = data.sandboxEnabled;
       const requestData = {
-        ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
-        machineAccess: data.machineAccess,
-        machines: data.machines,
+        ...dirtyPatch,
+        ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
 
-      const updatedConfig = {
-        ...config,
-        ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
-        machineAccess: data.machineAccess,
-        machines: data.machines,
-      } as AgentConfig;
-      onConfigUpdate(updatedConfig);
-      toast.success('Agent configuration saved successfully');
+      // Updater form — merges against whatever the SHARED SWR cache
+      // actually holds at the moment this runs, not the `config` this
+      // closure captured when onSubmit was created. Two surfaces saving
+      // DIFFERENT fields concurrently each hold their OWN stale closure
+      // from before either save started; whichever finishes last spreading
+      // that closure as a plain value would publish a snapshot missing the
+      // other's meanwhile-arrived change, making it disappear from every
+      // mounted consumer even though both sparse PATCHes above persisted
+      // correctly server-side (review finding — chatgpt-codex-connector on
+      // PR #2299, round 22).
+      const patchThisSave = dirtyPatch;
+      const providerModelPatch = providerOrModelTouched
+        ? { aiProvider: resolvedProvider, aiModel: resolvedModel }
+        : {};
+      // This save's own values should always become this instance's new
+      // clean baseline, even though the form is (still, momentarily) dirty
+      // when the reset effect runs — the dirty-guard above only exists to
+      // protect against a DIFFERENT (sibling) surface's external update.
+      justSavedOwnConfigRef.current = true;
+      // Cleared here, not left true forever: `config.aiProvider`/`aiModel`
+      // now correctly reflect what THIS instance just chose (onConfigUpdate
+      // below), so "prefer the shared config" is exactly as correct for
+      // this instance's own just-saved value as it is for reacting to a
+      // LATER sibling's save. Leaving these true past this point would
+      // permanently pin onSubmit to this instance's local snapshot and
+      // revert every subsequent sibling save forever (review finding —
+      // chatgpt-codex-connector on PR #2299, round 19).
+      providerTouchedRef.current = false;
+      modelTouchedRef.current = false;
+      onConfigUpdate((current) => ({
+        ...current,
+        ...patchThisSave,
+        ...providerModelPatch,
+      } as AgentConfig));
+      // The optimistic merge above is instant but not the last word: a
+      // sibling surface PATCHing the SAME field concurrently can have its
+      // OWN response arrive after this one despite its write having
+      // committed FIRST in the DB (HTTP response order need not match
+      // write order) — merging alone can't tell the two apart, since both
+      // completions look identical from here. Re-fetching lets the cache
+      // reconcile to whatever the server actually holds once any
+      // overlapping sibling save has also had a chance to land (review
+      // finding — chatgpt-codex-connector on PR #2299, round 23).
+      onConfigRevalidate();
+      // Called directly here rather than relying solely on the
+      // onDirtyChange mirror effect below: that effect only re-fires once
+      // formIsDirty/providerOrModelTouched actually change value across a
+      // render, but formIsDirty only flips to false once the separate
+      // config-reset effect's reset() call takes effect — a LATER effect
+      // than this synchronous success path. Without this, a save with a
+      // real (non-provider/model) dirty field could render one frame with
+      // isSaving:false, justSaved:true, but the mirror effect's stale
+      // formIsDirty still true — flashing back to "dirty" before settling
+      // on "saved" (review finding — general-purpose adversarial review).
+      onDirtyChange?.(false);
+      onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
       toast.error('Failed to save configuration');
@@ -352,7 +479,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onDirtyChange, onSaved, dirtyFields]);
+
+  const handleProviderSelectChange = useCallback(
+    (provider: string) => {
+      providerTouchedRef.current = true;
+      onProviderChange(provider);
+    },
+    [onProviderChange],
+  );
+  const handleModelSelectChange = useCallback(
+    (model: string) => {
+      modelTouchedRef.current = true;
+      onModelChange(model);
+    },
+    [onModelChange],
+  );
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({
@@ -362,63 +504,96 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
 
-  // Eagerly fetch models when provider is Ollama or LM Studio
+  // Mirror dirty state out to the host's own Save button (rendered outside
+  // this component — see AgentPageView/AgentPanes) so it can show an
+  // unsaved-changes state without polling the ref every render.
+  //
+  // `formIsDirty` alone misses a provider/model-only change: the AI
+  // Provider/Model Selects above aren't wired through react-hook-form
+  // (`handleProviderSelectChange`/`handleModelSelectChange` update parent-
+  // owned state and `providerTouchedRef`/`modelTouchedRef` instead — see
+  // those refs' own comment), so `dirtyFields`/`formIsDirty` never reflects
+  // them. Without `providerOrModelTouched` here too, a Save button gated on
+  // this callback would stay disabled for a provider/model-only change —
+  // making it unsavable unless the user also touched an unrelated field
+  // (review finding — chatgpt-codex-connector on this PR).
   useEffect(() => {
-    if (selectedProvider === 'ollama' && !ollamaModels) {
+    onDirtyChange?.(formIsDirty || providerOrModelTouched);
+  }, [formIsDirty, providerOrModelTouched, onDirtyChange]);
+
+  // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
+  // above) when it's Ollama or LM Studio — must match what's actually
+  // rendered, not this instance's own possibly-stale selectedProvider.
+  useEffect(() => {
+    if (displayedProvider === 'ollama' && !ollamaModels) {
       fetchOllamaModels().catch(() => {
         console.debug('Initial Ollama model fetch failed');
       });
     }
-    if (selectedProvider === 'lmstudio' && !lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && !lmstudioModels) {
       fetchLMStudioModels().catch(() => {
         console.debug('Initial LM Studio model fetch failed');
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider]); // Only selectedProvider - fetch functions are stable, models checked inline
+  }, [displayedProvider]); // Only displayedProvider - fetch functions are stable, models checked inline
 
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
-  const machineAccess = watch('machineAccess', false);
+
+  // The sandbox switch gates the sandbox tool families out of the Default
+  // Tools list (the old machineAccess/MACHINE_TOOL_NAMES behaviour). The
+  // request-time filter in tool-filtering.ts is the real gate; this keeps the
+  // picker from offering tools the agent will never receive.
+  const sandboxEnabled = watch('sandboxEnabled', false);
 
   const visibleTools = useMemo(
-    () => (config?.availableTools || []).filter(
-      (tool) => machineAccess || !MACHINE_TOOL_NAMES.has(tool.name)
-    ),
-    [config, machineAccess]
+    () =>
+      (config?.availableTools || []).filter(
+        (tool) => sandboxEnabled || !SANDBOX_TOOL_NAMES.has(tool.name)
+      ),
+    [config, sandboxEnabled]
   );
 
+  // shouldDirty: true — without it, dirtyFields.enabledTools stays false
+  // even though the displayed selection changed, so onSubmit's dirty-only
+  // merge below would silently discard the bulk selection and resubmit
+  // the stale config value instead (review finding — chatgpt-codex-
+  // connector on PR #2299, round 21).
   const handleSelectAllTools = () => {
-    setValue('enabledTools', visibleTools.map(tool => tool.name));
+    setValue('enabledTools', visibleTools.map(tool => tool.name), { shouldDirty: true });
   };
 
   const handleDeselectAllTools = () => {
-    setValue('enabledTools', []);
+    setValue('enabledTools', [], { shouldDirty: true });
   };
 
-  const availableMachinesById = useMemo(
-    () => new Map((config?.availableMachines || []).map((t) => [t.id, t])),
-    [config]
-  );
-  const usedMachineIds = useMemo(
-    () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.machineId)),
-    [machineFields]
-  );
-  const hasOwnMachine = machineFields.some((m) => m.kind === 'own');
-  const machineOptions = (config?.availableMachines || []).filter((t) => !usedMachineIds.has(t.id));
-
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
-  // page mid-edit and clobber unsaved changes.
-  const { isDirty: formIsDirty } = useFormState({ control });
+  // page mid-edit and clobber unsaved changes. (formIsDirty is declared
+  // earlier, above the config-reset effect it also gates.) Keyed by a
+  // per-MOUNT id (mountId, below), not just pageId: two Settings surfaces
+  // for the SAME agent otherwise register the identical key, and either
+  // one saving/unmounting deletes the shared Map entry out from under the
+  // OTHER — a still-dirty sibling then silently drops out of
+  // isAnyEditing(), letting SWR revalidation and other editing-paused
+  // background work resume while it still has unsaved edits (review
+  // finding — chatgpt-codex-connector on PR #2299, round 20).
+  //
+  // `formIsDirty` alone misses a provider/model-only change (same gap as
+  // the `onDirtyChange` mirror above) — without `providerOrModelTouched`
+  // here too, an SWR revalidation or auth-refresh cycle is free to
+  // interrupt/clobber a pending provider/model selection this component
+  // never told useEditingStore about (review finding — coderabbitai on
+  // this PR).
   useEffect(() => {
-    const componentId = `page-agent-settings-${pageId}`;
-    if (formIsDirty) {
+    const componentId = `page-agent-settings-${pageId}-${mountId}`;
+    if (formIsDirty || providerOrModelTouched) {
       useEditingStore.getState().startEditing(componentId, 'form', { pageId });
     } else {
       useEditingStore.getState().endEditing(componentId);
     }
     return () => { useEditingStore.getState().endEditing(componentId); };
-  }, [formIsDirty, pageId]);
+  }, [formIsDirty, providerOrModelTouched, pageId, mountId]);
 
   if (!config) {
     return (
@@ -432,8 +607,30 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   }
 
   return (
-    <div className="p-4">
+    <div className="mx-auto w-full max-w-2xl p-4">
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
+        {category === null ? (
+          <AgentSettingsMenu ref={settingsMenuRef} items={SETTINGS_ITEMS} selectCategory={setCategory} />
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="-ml-2"
+                onClick={() => setCategory(null)}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                Agent Settings
+              </Button>
+              <h2 ref={focusOnMount} tabIndex={-1} className="text-xl font-semibold outline-none">
+                {SETTINGS_ITEMS.find((item) => item.key === category)?.title}
+              </h2>
+            </div>
+
+            {category === 'behavior' && (
+              <>
         {/* API Model ID */}
         <ApiModelIdCard pageId={pageId} />
 
@@ -447,7 +644,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Provider Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">AI Provider</label>
-                <Select value={selectedProvider} onValueChange={onProviderChange}>
+                <Select value={displayedProvider} onValueChange={handleProviderSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -470,13 +667,13 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Model Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">Model</label>
-                <Select value={selectedModel} onValueChange={onModelChange}>
+                <Select value={displayedModel} onValueChange={handleModelSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectLabel>{AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
+                      <SelectLabel>{AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
                       {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
                         <SelectItem key={key} value={key}>
                           {name}
@@ -533,8 +730,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <CardTitle className="text-lg">System Prompt</CardTitle>
           </CardHeader>
           <CardContent>
-            <label className="text-sm font-medium mb-2 block">Custom Instructions</label>
+            <label htmlFor={`${mountId}-system-prompt`} className="text-sm font-medium mb-2 block">
+              Custom Instructions
+            </label>
             <Textarea
+              id={`${mountId}-system-prompt`}
               {...register('systemPrompt')}
               placeholder="Define your AI agent's behavior, personality, and instructions here..."
               className="min-h-[200px] resize-none w-full"
@@ -652,135 +852,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             </CardContent>
           )}
         </Card>
+              </>
+            )}
 
-        {/* Machine Access */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TerminalSquare className="h-5 w-5" />
-                <div>
-                  <CardTitle className="text-lg">Machine Access</CardTitle>
-                  <CardDescription>
-                    Let this agent run commands on a persistent Machine and move between Machines.
-                  </CardDescription>
-                </div>
-              </div>
-              <Controller
-                name="machineAccess"
-                control={control}
-                render={({ field }) => (
-                  <Switch
-                    checked={field.value}
-                    onCheckedChange={(checked) => {
-                      field.onChange(checked);
-                      if (!checked) return;
-                      if (machineFields.length === 0) appendMachine({ kind: 'own' });
-                    }}
-                  />
-                )}
-              />
-            </div>
-          </CardHeader>
-          {machineAccess && (
-            <CardContent className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">Machines</label>
-                <p className="text-xs text-muted-foreground mb-3">
-                  The agent moves between these with switch_machine. The first Machine is the default active one.
-                </p>
-                {machineFields.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No machines configured yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {machineFields.map((field, index) => {
-                      const label = field.kind === 'own'
-                        ? 'Own machine'
-                        : availableMachinesById.get(field.machineId)?.title ?? 'Unknown machine';
-                      return (
-                        <div
-                          key={field.id}
-                          className="flex items-center justify-between rounded-lg border px-3 py-2"
-                        >
-                          <div className="flex items-center gap-2">
-                            {index === 0 && <Badge variant="outline">Default</Badge>}
-                            <span className="text-sm font-medium">{label}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              disabled={index === 0}
-                              onClick={() => moveMachine(index, index - 1)}
-                              aria-label="Move machine up"
-                            >
-                              <ArrowUp className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              disabled={index === machineFields.length - 1}
-                              onClick={() => moveMachine(index, index + 1)}
-                              aria-label="Move machine down"
-                            >
-                              <ArrowDown className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeMachine(index)}
-                              aria-label="Remove machine"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={hasOwnMachine}
-                  onClick={() => appendMachine({ kind: 'own' })}
-                >
-                  Add own machine
-                </Button>
-                <Select value={selectedMachineId} onValueChange={setSelectedMachineId} disabled={machineOptions.length === 0}>
-                  <SelectTrigger className="h-8 w-56 text-sm">
-                    <SelectValue placeholder={machineOptions.length === 0 ? 'No more machines to add' : 'Use existing machine…'} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {machineOptions.map((machine) => (
-                      <SelectItem key={machine.id} value={machine.id}>
-                        {machine.title}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!selectedMachineId}
-                  onClick={() => {
-                    appendMachine({ kind: 'existing', machineId: selectedMachineId });
-                    setSelectedMachineId('');
-                  }}
-                >
-                  Add
-                </Button>
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
+            {category === 'access' && (
+              <>
         {/* Drive Membership */}
         <Card>
           <CardHeader>
@@ -859,6 +935,43 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
         {/* Drives this agent can access */}
         <AgentDrivesCard agentPageId={pageId} />
+              </>
+            )}
+
+            {category === 'tools' && (
+              <>
+        {/* Sandbox — successor to the old Machine Access card, minus the
+            machine topology: there is nothing to pick, because the sandbox
+            belongs to the conversation's SESSION and is provisioned
+            automatically the first time the agent needs it. */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TerminalSquare className="h-5 w-5" />
+                <div>
+                  <CardTitle className="text-lg">Sandbox</CardTitle>
+                  <CardDescription>
+                    Let this agent run commands, edit files and use git in an isolated
+                    sandbox. It&apos;s provisioned automatically the first time the agent
+                    needs it — there is nothing to start or manage.
+                  </CardDescription>
+                </div>
+              </div>
+              <Controller
+                name="sandboxEnabled"
+                control={control}
+                render={({ field }) => (
+                  <Switch
+                    aria-label="Sandbox access"
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
+          </CardHeader>
+        </Card>
 
         {/* Tool Permissions */}
         <Card>
@@ -889,53 +1002,47 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <p className="text-sm text-muted-foreground mb-4">
               The agent&apos;s default toolset. The Tools menu in the chat composer is the live control at runtime — it can enable or disable any tool per session.
             </p>
-            <ScrollArea className="h-48">
-              <Controller
-                name="enabledTools"
-                control={control}
-                render={({ field: { value = [], onChange } }) => {
-                  const toolRow = (tool: { name: string; description: string }) => (
-                    <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
-                      <Checkbox
-                        id={tool.name}
-                        checked={value.includes(tool.name)}
-                        onCheckedChange={(checked) => {
-                          const newValue = checked
-                            ? [...value, tool.name]
-                            : value.filter(t => t !== tool.name);
-                          onChange(newValue);
-                        }}
-                        className="mt-1"
-                      />
-                      <div className="flex-1">
-                        <label
-                          htmlFor={tool.name}
-                          className="text-sm font-medium cursor-pointer"
-                        >
-                          {tool.name}
-                        </label>
-                        <p className="text-xs text-muted-foreground">
-                          {tool.description}
-                        </p>
+            {visibleTools.length === 0 ? (
+              <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                No tools are available for this agent.
+              </p>
+            ) : (
+              <ScrollArea className="h-48">
+                <Controller
+                  name="enabledTools"
+                  control={control}
+                  render={({ field: { value = [], onChange } }) => {
+                    const toolRow = (tool: { name: string; description: string }) => (
+                      <div key={tool.name} className="flex items-start space-x-3 rounded-lg p-2 hover:bg-muted/50">
+                        <Checkbox
+                          id={`${mountId}-${tool.name}`}
+                          checked={value.includes(tool.name)}
+                          onCheckedChange={(checked) => {
+                            const newValue = checked
+                              ? [...value, tool.name]
+                              : value.filter(t => t !== tool.name);
+                            onChange(newValue);
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="flex-1">
+                          <label
+                            htmlFor={`${mountId}-${tool.name}`}
+                            className="cursor-pointer text-sm font-medium"
+                          >
+                            {tool.name}
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            {tool.description}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  );
-                  const machineTools = visibleTools.filter((tool) => MACHINE_TOOL_NAMES.has(tool.name));
-                  const otherTools = visibleTools.filter((tool) => !MACHINE_TOOL_NAMES.has(tool.name));
-                  return (
-                    <div className="space-y-3">
-                      {machineTools.length > 0 && (
-                        <>
-                          <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Machine</p>
-                          {machineTools.map(toolRow)}
-                        </>
-                      )}
-                      {otherTools.map(toolRow)}
-                    </div>
-                  );
-                }}
-              />
-            </ScrollArea>
+                    );
+                    return <div className="space-y-3">{visibleTools.map(toolRow)}</div>;
+                  }}
+                />
+              </ScrollArea>
+            )}
             <p className="text-xs text-muted-foreground mt-2">
               Selected {enabledTools.length} of {visibleTools.length} tools
             </p>
@@ -986,7 +1093,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             </p>
           </CardContent>
         </Card>
+              </>
+            )}
 
+            {category === 'integrations' && (
+              <AgentIntegrationsPanel pageId={pageId} driveId={driveId} />
+            )}
+          </>
+        )}
       </form>
     </div>
   );

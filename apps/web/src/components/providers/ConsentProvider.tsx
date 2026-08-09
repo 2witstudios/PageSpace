@@ -9,7 +9,7 @@ import { CookieBanner } from '@/components/consent/CookieBanner';
  * until the user has made an explicit decision. Thin shell — gating logic is pure
  * (see @pagespace/lib/consent + useConsentStore).
  */
-export function ConsentProvider() {
+function ConsentProvider() {
   const hydrate = useConsentStore((s) => s.hydrate);
   const showBanner = useConsentStore((s) => s.showBanner());
   const [hydrated, setHydrated] = useState(false);

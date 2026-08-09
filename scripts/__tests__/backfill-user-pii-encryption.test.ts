@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn(), update: vi.fn() } }));
+vi.mock('@pagespace/db/db', () => ({ getMigrationDb: () => ({ select: vi.fn(), update: vi.fn() }) }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email', name: 'name', emailBidx: 'emailBidx' },
 }));

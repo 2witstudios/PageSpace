@@ -25,39 +25,6 @@ export interface FilterValues {
   statusGroup?: StatusGroupFilter;
 }
 
-export interface FilterSelectProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  placeholder: string;
-  options: Array<{ value: string; label: string }>;
-  className?: string;
-  triggerClassName?: string;
-}
-
-export function FilterSelect({
-  value,
-  onValueChange,
-  placeholder,
-  options,
-  className,
-  triggerClassName,
-}: FilterSelectProps) {
-  return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger className={triggerClassName}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent className={className}>
-        {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 export interface DriveSelectProps {
   isLocked: boolean;
   drives: Drive[];

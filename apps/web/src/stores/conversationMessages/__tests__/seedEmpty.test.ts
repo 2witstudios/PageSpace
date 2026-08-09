@@ -9,6 +9,12 @@ describe('seedEmpty', () => {
       loadGeneration: 0,
       pendingMutationsSinceLoad: [],
       loadStatus: 'idle',
+      olderCursor: null,
+      hasMoreOlder: false,
+      isLoadingOlder: false,
+      // No rev watermark until a load establishes one — `null` means "cannot
+      // prove currency", which `decideConversationApply` answers with a refetch.
+      rev: null,
     });
   });
 

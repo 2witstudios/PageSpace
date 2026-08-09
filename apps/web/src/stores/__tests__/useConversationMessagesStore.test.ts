@@ -18,7 +18,7 @@ describe('useConversationMessagesStore', () => {
 
   it('given a conversation never seen before, getEntry should return a seeded empty entry without mutating the store', () => {
     const entry = useConversationMessagesStore.getState().getEntry('c1');
-    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' });
+    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null });
     expect(useConversationMessagesStore.getState().byConversationId.c1).toBeUndefined();
   });
 
@@ -98,6 +98,36 @@ describe('useConversationMessagesStore', () => {
     expect(entry.messages).toEqual([msg('opt1')]);
   });
 
+  // Codex P2 (PR #2320): a snapshot is the LATEST page only. Replacing a
+  // paginated cache with it discarded every older loaded page while olderCursor
+  // still pointed below them — history vanished and the next load-older skipped
+  // the discarded range. The snapshot must merge onto the older pages instead.
+  it('given loaded older pages, applyServerSnapshot must preserve them in front of the overlapping snapshot and keep the pagination cursor', () => {
+    const { startLoad, applyLoad, applyOlderPage, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('c'), msg('d')], { hasMore: true, nextCursor: 'cur-c' });
+    applyOlderPage('c1', gen, [msg('a'), msg('b')], true, 'cur-a');
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('d'), msg('e')]);
+    const entry = getEntry('c1');
+    expect(entry.messages).toEqual([msg('a'), msg('b'), msg('c'), msg('d'), msg('e')]);
+    expect(entry.olderCursor).toBe('cur-a');
+    expect(entry.hasMoreOlder).toBe(true);
+  });
+
+  it('given a snapshot DISJOINT from the cache, applyServerSnapshot should replace the cache and reset pagination from the snapshot envelope', () => {
+    const { startLoad, applyLoad, applyOlderPage, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('a')], { hasMore: true, nextCursor: 'cur-a' });
+    applyOlderPage('c1', gen, [msg('z')], true, 'cur-z');
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('x'), msg('y')], { hasMore: false, nextCursor: null });
+    const entry = getEntry('c1');
+    expect(entry.messages).toEqual([msg('x'), msg('y')]);
+    expect(entry.olderCursor).toBeNull();
+    expect(entry.hasMoreOlder).toBe(false);
+  });
+
   it('given seedConversation for a freshly minted id, should mark the entry loaded-empty so no fetch is pending for it', () => {
     const { seedConversation, getEntry } = useConversationMessagesStore.getState();
     seedConversation('c-new');
@@ -157,7 +187,7 @@ describe('useConversationMessagesStore', () => {
   it('given actions against one conversation, should not affect another conversation entry', () => {
     const { addOptimisticSend, getEntry } = useConversationMessagesStore.getState();
     addOptimisticSend('c1', msg('opt1'));
-    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' });
+    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false, rev: null });
   });
 
   it('given isLoadCurrent with the generation returned by startLoad, should return true; with a stale generation, should return false', () => {
@@ -167,6 +197,72 @@ describe('useConversationMessagesStore', () => {
     const gen2 = startLoad('c1');
     expect(isLoadCurrent('c1', gen1)).toBe(false);
     expect(isLoadCurrent('c1', gen2)).toBe(true);
+  });
+
+  it('given startLoadingOlder for a conversation never seen before, should no-op (nothing to mark loading on)', () => {
+    const { startLoadingOlder, getEntry } = useConversationMessagesStore.getState();
+    startLoadingOlder('never-seeded');
+    expect(useConversationMessagesStore.getState().byConversationId['never-seeded']).toBeUndefined();
+    expect(getEntry('never-seeded').isLoadingOlder).toBe(false);
+  });
+
+  it('given startLoadingOlder for a tracked conversation, should set isLoadingOlder true', () => {
+    const { startLoad, applyLoad, startLoadingOlder, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('m1')]);
+    startLoadingOlder('c1');
+    expect(getEntry('c1').isLoadingOlder).toBe(true);
+  });
+
+  it('given failLoadingOlder for a conversation never seen before, should no-op', () => {
+    const { failLoadingOlder } = useConversationMessagesStore.getState();
+    failLoadingOlder('never-seeded', 1);
+    expect(useConversationMessagesStore.getState().byConversationId['never-seeded']).toBeUndefined();
+  });
+
+  it('given failLoadingOlder with a STALE generation (a newer load has since started), should leave isLoadingOlder untouched', () => {
+    const { startLoad, applyLoad, startLoadingOlder, failLoadingOlder, getEntry } = useConversationMessagesStore.getState();
+    const gen1 = startLoad('c1');
+    applyLoad('c1', gen1, [msg('m1')]);
+    startLoad('c1'); // bumps generation — gen1 is now stale
+    startLoadingOlder('c1'); // a NEW load-older fetch under the current generation
+    failLoadingOlder('c1', gen1); // the OLD (stale) fetch's failure handler fires late
+    expect(getEntry('c1').isLoadingOlder).toBe(true);
+  });
+
+  it('given failLoadingOlder with the CURRENT generation, should clear isLoadingOlder', () => {
+    const { startLoad, applyLoad, startLoadingOlder, failLoadingOlder, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('m1')]);
+    startLoadingOlder('c1');
+    failLoadingOlder('c1', gen);
+    expect(getEntry('c1').isLoadingOlder).toBe(false);
+  });
+
+  it('given removeOptimisticSendOnFailure for a tracked optimistic send, should remove it from optimisticSends', () => {
+    const { addOptimisticSend, removeOptimisticSendOnFailure, getEntry } = useConversationMessagesStore.getState();
+    addOptimisticSend('c1', msg('opt1'));
+    removeOptimisticSendOnFailure('c1', 'opt1');
+    expect(getEntry('c1').optimisticSends).toEqual([]);
+  });
+
+  it('given applyAskUserAnswer then revertAskUserAnswer for the same tool call, should patch to output-available then back to input-available with output dropped', () => {
+    const { startLoad, applyLoad, applyAskUserAnswer, revertAskUserAnswer, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    const askUserMessage: UIMessage = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [{ type: 'tool-ask_user', toolCallId: 'tc1', state: 'input-available', input: { questions: [] } } as UIMessage['parts'][number]],
+    };
+    applyLoad('c1', gen, [askUserMessage]);
+
+    applyAskUserAnswer('c1', { messageId: 'm1', toolCallId: 'tc1', output: { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] } });
+    expect(getEntry('c1').messages[0].parts[0]).toMatchObject({ state: 'output-available' });
+
+    revertAskUserAnswer('c1', { messageId: 'm1', toolCallId: 'tc1' });
+    const revertedPart = getEntry('c1').messages[0].parts[0] as Record<string, unknown>;
+    expect(revertedPart.state).toBe('input-available');
+    expect(revertedPart.output).toBeUndefined();
   });
 
   it('given applyConfirmedMessage for a new id, should append it; for an existing id, should replace its content in place', () => {

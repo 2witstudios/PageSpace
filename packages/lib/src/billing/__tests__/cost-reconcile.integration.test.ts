@@ -11,7 +11,9 @@
  * row survives and the balance is untouched.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
@@ -21,6 +23,7 @@ import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 const INT4_MAX = 2_147_483_647;
 let dbAvailable = false;
@@ -38,7 +41,8 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
     try {
       await db.select().from(creditBalances).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('cost-reconcile.integration.test.ts', error);
       dbAvailable = false;
     }
   });

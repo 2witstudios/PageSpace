@@ -33,7 +33,7 @@ const StreamingRegistration: React.FC<{ conversationId: string }> = ({ conversat
  * lives inside it. Replaces five independent mount sites: GlobalChatContext's 'global-chat',
  * GlobalAssistantView's 'global-assistant-*', SidebarChatTab's 'assistant-sidebar-*',
  * useAgentChannelMultiplayer's 'ai-channel-*' (which ORed a local flag with a dashboard-store
- * flag), and AiChatView's 'ai-chat-*'.
+ * flag), and the per-page chat surfaces' 'ai-chat-*'.
  *
  * THE CONTRACT (repo CLAUDE.md): a streaming registration gates SWR revalidation AND auth-token
  * refresh, and must be continuous from the send click through the stream's end. The old sites

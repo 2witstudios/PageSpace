@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
 
@@ -48,8 +48,12 @@ export async function GET(request: Request) {
       }, { status: 403 });
     }
 
-    // Get messages from repository
-    const dbMessages = await chatMessageRepository.getMessagesForPage(
+    // Get messages from the repository — the UNIFIED `messages` table since
+    // the message-table merge (epic "Agent-Session Single Source of Truth",
+    // Phase 4 / D6). Page scope is the join through `conversations.contextId`.
+    // `chat_messages` was DROPPED by migration 0253 — there is no dual write
+    // and no revert path.
+    const dbMessages = await messageRepository.getMessagesForPage(
       pageId,
       conversationId || undefined,
       includeStreaming

@@ -1,13 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 
-/** Tests for GET/POST /api/admin/broadcasts/templates — the phase-1 template library. */
+/**
+ * Tests for GET/POST /api/admin/broadcasts/templates — the phase-1 template library.
+ *
+ * Auth: mocked session + mocked `validateAdminAccess`, no database row. See the
+ * note in ../../__tests__/route.test.ts for why this suite must not depend on a
+ * row in the shared test database.
+ */
+
+vi.mock('@/lib/auth/admin-role', () => ({
+  validateAdminAccess: vi.fn(async () => ({ isValid: true })),
+  updateUserRole: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/repositories/broadcast-repository', () => ({
   broadcastRepository: {
@@ -18,6 +26,7 @@ vi.mock('@pagespace/lib/repositories/broadcast-repository', () => ({
 
 import { GET, POST } from '../route';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
+import { validateAdminAccess } from '@/lib/auth/admin-role';
 
 const mockRepo = vi.mocked(broadcastRepository);
 
@@ -30,19 +39,8 @@ describe('/api/admin/broadcasts/templates', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
 
-    const [adminUser] = await db
-      .insert(users)
-      .values({
-        id: createId(),
-        name: 'Broadcast Admin',
-        email: `broadcast-admin-${Date.now()}-${createId().slice(0, 6)}@example.com`,
-        provider: 'email',
-        role: 'admin',
-        tokenVersion: 1,
-        adminRoleVersion: 0,
-      })
-      .returning();
-    adminUserId = adminUser.id;
+    adminUserId = createId();
+    vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: true });
 
     vi.spyOn(sessionService, 'validateSession').mockResolvedValue({
       sessionId: mockSessionId,
@@ -55,14 +53,6 @@ describe('/api/admin/broadcasts/templates', () => {
       expiresAt: new Date(Date.now() + 3600000),
     });
     adminCsrfToken = generateCSRFToken(mockSessionId);
-  });
-
-  afterEach(async () => {
-    try {
-      await db.delete(users).where(eq(users.id, adminUserId));
-    } catch {
-      // Swallow cleanup errors to avoid masking test failures
-    }
   });
 
   it('GET lists active templates', async () => {

@@ -12,8 +12,8 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 // ============================================================================
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesForPage: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -55,7 +55,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 // ============================================================================
 // Test Fixtures
@@ -129,7 +129,7 @@ describe('GET /api/ai/chat/messages - MCP page scope enforcement', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
 
     const request = createRequest(pageIdInScope);
     const response = await GET(request);
@@ -143,7 +143,7 @@ describe('GET /api/ai/chat/messages - MCP page scope enforcement', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
 
     const request = createRequest(pageIdInScope);
     const response = await GET(request);

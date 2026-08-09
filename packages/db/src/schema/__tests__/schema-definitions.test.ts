@@ -15,8 +15,6 @@ import * as auth from '../auth';
 import * as sessions from '../sessions';
 // Core schema
 import * as core from '../core';
-// Permissions schema
-import * as permissions from '../permissions';
 // Members schema
 import * as members from '../members';
 // Chat schema
@@ -116,7 +114,6 @@ describe('Schema definitions', () => {
     it('exports tables', () => {
       expect(core.drives).toBeDefined();
       expect(core.pages).toBeDefined();
-      expect(core.chatMessages).toBeDefined();
       expect(core.tags).toBeDefined();
       expect(core.pageTags).toBeDefined();
       expect(core.storageEvents).toBeDefined();
@@ -128,27 +125,11 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(core.drivesRelations).toBeDefined();
       expect(core.pagesRelations).toBeDefined();
-      expect(core.chatMessagesRelations).toBeDefined();
       expect(core.tagsRelations).toBeDefined();
       expect(core.pageTagsRelations).toBeDefined();
       expect(core.favoritesRelations).toBeDefined();
       expect(core.mentionsRelations).toBeDefined();
       expect(core.userMentionsRelations).toBeDefined();
-    });
-  });
-
-  describe('permissions schema', () => {
-    it('exports enums', () => {
-      expect(permissions.permissionAction).toBeDefined();
-      expect(permissions.subjectType).toBeDefined();
-    });
-
-    it('exports tables', () => {
-      expect(permissions.permissions).toBeDefined();
-    });
-
-    it('exports relations', () => {
-      expect(permissions.permissionsRelations).toBeDefined();
     });
   });
 
@@ -209,6 +190,10 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(conversations.conversationsRelations).toBeDefined();
       expect(conversations.messagesRelations).toBeDefined();
+    });
+
+    it('pins closedInWorkspaceAt — listing membership, kept separate from isActive (history soft-delete)', () => {
+      expect(conversations.conversations.closedInWorkspaceAt).toBeDefined();
     });
   });
 

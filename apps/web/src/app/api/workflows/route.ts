@@ -11,6 +11,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -24,16 +25,25 @@ const DEFAULT_TRIGGER_PROMPT = 'Execute instructions from linked page.';
 const createWorkflowSchema = z.object({
   driveId: z.string().min(1),
   name: z.string().min(1).max(200),
-  agentPageId: z.string().min(1),
+  // Optional for step-based workflows whose ai steps carry their own agent
+  // (or that have no ai steps at all).
+  agentPageId: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
+  steps: workflowStepsSchema.optional(),
   instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).default([]),
   cronExpression: z.string().min(1),
   timezone: z.string().default('UTC'),
   isEnabled: z.boolean().default(true),
 }).strict().refine(
-  (data) => Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId),
-  { message: 'Either prompt or instructionPageId is required' },
+  // Step-based workflows carry their behavior in `steps`; legacy bodies keep
+  // the original agent + prompt/instruction requirements.
+  (data) =>
+    data.steps
+      ? true
+      : Boolean(data.agentPageId) &&
+        (Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId)),
+  { message: 'Either steps, or agentPageId with a prompt or instructionPageId, is required' },
 );
 
 // GET /api/workflows?driveId=xxx - List scheduled workflows for a drive
@@ -142,17 +152,35 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
-  // Validate agent page exists, is AI_CHAT, not trashed, and in the same drive
-  const [agent] = await db
-    .select()
-    .from(pages)
-    .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, data.driveId), eq(pages.isTrashed, false)));
+  // Validate agent page exists, is AI_CHAT, not trashed, and in the same
+  // drive. Step-based workflows validate their effective agents (step-level
+  // or this workflow-level fallback) inside validateStepsForApi instead.
+  if (data.agentPageId) {
+    const [agent] = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, data.driveId), eq(pages.isTrashed, false)));
 
-  if (!agent) {
-    return NextResponse.json({ error: 'Agent page not found in this drive' }, { status: 400 });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent page not found in this drive' }, { status: 400 });
+    }
+    if (agent.type !== 'AI_CHAT') {
+      return NextResponse.json({ error: 'Selected page is not an AI agent' }, { status: 400 });
+    }
   }
-  if (agent.type !== 'AI_CHAT') {
-    return NextResponse.json({ error: 'Selected page is not an AI agent' }, { status: 400 });
+
+  // Validate explicit steps: allowlist, $payload path syntax, ref-free schema
+  // parse, and drive-scoped AI_CHAT checks for every effective ai-step agent.
+  let stepWarnings: string[] = [];
+  if (data.steps) {
+    const stepsResult = await validateStepsForApi(data.steps, {
+      driveId: data.driveId,
+      workflowAgentPageId: data.agentPageId ?? null,
+    });
+    if (!stepsResult.ok) {
+      return NextResponse.json({ error: stepsResult.error }, { status: 400 });
+    }
+    stepWarnings = stepsResult.warnings;
   }
 
   // Validate instruction page exists, is not trashed, and is in the same drive
@@ -185,8 +213,10 @@ export async function POST(request: Request) {
     driveId: data.driveId,
     createdBy: userId,
     name: data.name,
-    agentPageId: data.agentPageId,
-    prompt: data.prompt?.trim() || DEFAULT_TRIGGER_PROMPT,
+    agentPageId: data.agentPageId ?? null,
+    // '' sentinel for step-based workflows — the real prompts live in ai steps.
+    prompt: data.steps ? '' : (data.prompt?.trim() || DEFAULT_TRIGGER_PROMPT),
+    steps: data.steps ?? null,
     instructionPageId: data.instructionPageId ?? null,
     contextPageIds: data.contextPageIds,
     triggerType: MANAGEABLE_TRIGGER_TYPE,
@@ -209,5 +239,8 @@ export async function POST(request: Request) {
     loggers.api.error('[WORKFLOWS_POST_BROADCAST]', broadcastError as Error);
   }
 
-  return NextResponse.json(workflow, { status: 201 });
+  return NextResponse.json(
+    stepWarnings.length > 0 ? { ...workflow, warnings: stepWarnings } : workflow,
+    { status: 201 }
+  );
 }

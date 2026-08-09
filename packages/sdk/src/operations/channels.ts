@@ -50,9 +50,9 @@ const channelCommandExecutionListSchema = z
   .optional()
   .transform((value) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]));
 
-/** Set when a channel message was posted by an AI tool (`channel-message-repository.ts` `ChannelMessageAiMeta`). */
+/** Set when a channel message was posted by an AI tool or an incoming channel webhook (`channel-message-repository.ts` `ChannelMessageAiMeta`). */
 const channelMessageAiMetaSchema = z.object({
-  senderType: z.enum(['global_assistant', 'agent']),
+  senderType: z.enum(['global_assistant', 'agent', 'webhook']),
   senderName: z.string(),
   agentPageId: z.string().optional(),
   commandExecution: channelCommandExecutionListSchema,

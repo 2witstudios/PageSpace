@@ -3,6 +3,11 @@
 > **Leaf:** `[sprites 5-3]` — Phase 5, Sprites Platform Alignment epic
 > **Type:** Design/research only. No product code changes in this leaf.
 > **Status:** Recommendations below are decisions, not options. Follow-up implementation leaves are listed at the end.
+> **OBSOLETE:** written against the "Machines" world (`MachineHandle`, `claude`/`codex`/`pagespace-cli`
+> agent terminals), which was torn down and superseded by Agent Sessions. Kept for historical
+> context only — do not treat anything below as current architecture or current env-var state
+> (e.g. `CODE_EXECUTION_ENABLED` is `true` in production today, not the "OFF in prod" this doc
+> describes at the time it was written).
 
 ---
 

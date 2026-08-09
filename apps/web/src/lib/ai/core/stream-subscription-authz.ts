@@ -1,6 +1,10 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
+import {
+  canAccessConversation,
+  decideConversationAccess,
+} from '@pagespace/lib/permissions/conversation-access';
 
 /**
  * Who may SUBSCRIBE to a server-owned stream.
@@ -12,9 +16,12 @@ import { conversations } from '@pagespace/db/schema/conversations';
  * `/api/ai/chat/active-streams` (which also returns the buffered `parts` snapshot) and
  * `/api/ai/chat/stream-join/[messageId]`.
  *
- * The right question is the conversation's. You may subscribe to a stream when:
- *   - you started it (the stream row carries its owner), or
- *   - its conversation is explicitly shared.
+ * The predicate is `canAccessConversation` (@pagespace/lib/permissions/
+ * conversation-access): owner OR (isShared AND page access) — the SAME
+ * implementation the realtime `join_conversation` handler enforces at room
+ * join, so the three enforcement points cannot drift (Agent-Session SSoT
+ * epic, Phase 2). The stream's own owner short-circuits first: you may
+ * always watch a stream you started.
  *
  * Fails closed: a conversation with no row is not shared, so a non-owner gets nothing.
  * Page-level authorization still runs first at each call site — this narrows it, it does
@@ -32,17 +39,27 @@ export const canSubscribeToStream = async ({
   if (streamOwnerId === userId) return true;
 
   const [conversation] = await db
-    .select({ isShared: conversations.isShared })
+    .select({
+      userId: conversations.userId,
+      isShared: conversations.isShared,
+      type: conversations.type,
+      contextId: conversations.contextId,
+    })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1);
 
-  return conversation?.isShared === true;
+  if (!conversation) return false;
+  return canAccessConversation(userId, conversation);
 };
 
 /**
  * Batched form of `canSubscribeToStream` for the active-streams listing: returns the
- * subset of `rows` this user may subscribe to. One query regardless of row count.
+ * subset of `rows` this user may subscribe to. One conversations query regardless of
+ * row count; page access resolves per unique page via the shared predicate's own
+ * decision core. Call sites are page-scoped routes that already verified the caller's
+ * access to THE page, so `hasPageAccess` is true by construction there — encoded
+ * explicitly instead of silently assumed.
  */
 export const filterSubscribableStreams = async <
   T extends { userId: string; conversationId: string },
@@ -65,5 +82,12 @@ export const filterSubscribableStreams = async <
     ));
 
   const shared = new Set(sharedIds.map((c) => c.id));
-  return rows.filter((r) => r.userId === userId || shared.has(r.conversationId));
+  return rows.filter((r) =>
+    decideConversationAccess({
+      isOwner: r.userId === userId,
+      isShared: shared.has(r.conversationId),
+      // Page-scoped call sites verified page access before calling in.
+      hasPageAccess: true,
+    }),
+  );
 };

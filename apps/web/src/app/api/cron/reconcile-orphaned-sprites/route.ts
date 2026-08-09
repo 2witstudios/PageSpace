@@ -1,15 +1,16 @@
-import { reconcileOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
+import { reconcileOrphanSprites } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
-import { defaultReconcileOrphanSpritesDeps } from '@/lib/machines/machine-orphan-reconcile-runtime';
+import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-workspaces/workspace-orphan-reconcile-runtime';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
- * Cron endpoint that reclaims ORPHANED Sprites — microVMs whose Machine page was
+ * Cron endpoint that reclaims ORPHANED Sprites — microVMs whose backing row was
  * deleted but whose teardown never confirmed, so they keep billing RAM with no
  * owner reachable from inside the app (Sprites Idle-Cost Remediation).
  *
- * Two sources (see `machine-orphan-reconcile.ts` in @pagespace/lib):
+ * Two sources (see `sprite-orphan-reconcile.ts` in @pagespace/lib):
  *
  *   (A) the RECLAIM OUTBOX — `sandboxId`s rescued by AFTER DELETE triggers as
  *       their tracking row was cascaded away by a page/drive/user hard delete:
@@ -20,15 +21,14 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  *       guard, which matters because Art. 17 erasure must never be blocked by a
  *       Sprite we failed to kill.
  *
- *   (B) tracking rows under a TRASHED page whose teardown was REQUESTED but never
- *       confirmed — a `deleteMachine` whose kill failed (the "recoverable state a
- *       background reconciler can reclaim" its doc always promised). A Machine
- *       merely dragged to the trash is deliberately left alone: its Sprite
- *       hibernates and a restore is expected to hand back the disk — a kill is
- *       irreversible, a trash is not.
+ *   (B) `agent_workspaces` rows whose teardown was REQUESTED but never confirmed —
+ *       an "end session" whose kill failed (the "recoverable state a background
+ *       reconciler can reclaim" its doc always promised). A session merely idle
+ *       is deliberately left alone: its Sprite hibernates in place — a kill is
+ *       irreversible, idleness is not.
  *
- * A page restored mid-run is re-checked and skipped, and every release write is a
- * CAS, so a live Sprite is never recorded as dead.
+ * A row restored/re-provisioned mid-run is re-checked and skipped, and every
+ * release write is a CAS, so a live Sprite is never recorded as dead.
  *
  * No advisory lock (unlike reconcile-machine-storage, whose charge is a
  * non-idempotent money movement): the kill is idempotent and every row write is
@@ -44,10 +44,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const run = await reconcileOrphanSprites(defaultReconcileOrphanSpritesDeps);
+    const run = await reconcileOrphanSprites(defaultReconcileAgentSessionOrphanSpritesDeps);
 
     console.log(
-      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
+      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}${run.incomplete ? ' (INCOMPLETE — a candidate source could not be listed; its Sprites were not considered)' : ''}`,
     );
 
     audit({
@@ -60,6 +60,7 @@ export async function GET(request: Request) {
         skipped: run.skipped,
         failed: run.failed,
         capped: run.capped,
+        incomplete: run.incomplete,
       },
     });
 
@@ -70,10 +71,11 @@ export async function GET(request: Request) {
       skipped: run.skipped,
       failed: run.failed,
       capped: run.capped,
+      incomplete: run.incomplete,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error reconciling orphaned sprites:', error);
+    loggers.system.error('[Cron] Error reconciling orphaned sprites', error as Error);
     return NextResponse.json(
       {
         success: false,

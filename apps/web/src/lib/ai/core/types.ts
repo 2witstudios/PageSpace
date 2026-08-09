@@ -5,7 +5,6 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -74,32 +73,29 @@ export interface ToolExecutionContext {
   // (UX spec §7), in document order.
   commandExecution?: CommandExecutionData[];
 
-  // Terminal epics: the ACTIVE machine for this run's terminal tool group
-  // (bash/readFile/writeFile/editFile/git + switch_machine/list_machines).
-  // This context object is the SAME reference for every tool call within one
-  // streamText run (AI SDK threads it unchanged through the step loop), so
-  // switch_machine mutates this field in place and later tool calls in the
-  // same turn see the new active machine. Undefined means "not yet
-  // switched" — callers fall back to the configured machines[0].
-  activeMachine?: MachineRef;
-
   // The page the agent is currently focused on for THIS turn: seeded from the
   // request's location/page context, then mutated in place by tools that
-  // represent the agent switching focus (e.g. create_page) — same
-  // mutate-in-place pattern as activeMachine above, so later page tool calls
-  // in the same turn default to wherever the agent's own actions left it,
-  // not just the page the user was on when the turn started. Used by
-  // resolveDefaultPageId (page-context-defaults.ts) to default an omitted
+  // represent the agent switching focus (e.g. create_page), so later page
+  // tool calls in the same turn default to wherever the agent's own actions
+  // left it, not just the page the user was on when the turn started. Used
+  // by resolveDefaultPageId (page-context-defaults.ts) to default an omitted
   // `pageId` argument on read/write page tools.
   currentWorkingPage?: { id: string; title: string; type: string };
+
+  // Drive-level twin of currentWorkingPage: mutated in place by create_page (and
+  // create_drive) so a later tool call in the SAME turn that omits `driveId`
+  // follows the agent's own action rather than snapping back to the turn-start
+  // location. Read by resolveDefaultDriveId (drive-context-defaults.ts). Not
+  // seeded at route level — the resolver already falls through to
+  // locationContext.currentDrive.
+  currentWorkingDrive?: { id: string; name?: string };
 
   // Sprites Platform Alignment 5-2: a stable id for THIS agent turn (one
   // streamText run), lazily stamped once by `resolveSandboxActorContext`
   // (apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts) the first time a
   // sandbox tool call reads this context, then reused by every later bash
-  // call in the same run — same mutate-in-place pattern as `activeMachine`
-  // above. Threads into `SandboxActorContext.turnId`, which gates the
-  // pre-batch checkpoint's "at most once per turn" throttle
+  // call in the same run. Threads into `SandboxActorContext.turnId`, which
+  // gates the pre-batch checkpoint's "at most once per turn" throttle
   // (`checkpoint-policy.ts`). Undefined until first stamped.
   turnId?: string;
 }

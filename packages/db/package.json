@@ -47,33 +47,13 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
-    "./schema/sandbox-sessions": {
-      "types": "./dist/schema/sandbox-sessions.d.ts",
-      "default": "./dist/schema/sandbox-sessions.js"
+    "./schema/agent-workspaces": {
+      "types": "./dist/schema/agent-workspaces.d.ts",
+      "default": "./dist/schema/agent-workspaces.js"
     },
-    "./schema/machine-sessions": {
-      "types": "./dist/schema/machine-sessions.d.ts",
-      "default": "./dist/schema/machine-sessions.js"
-    },
-    "./schema/machine-projects": {
-      "types": "./dist/schema/machine-projects.d.ts",
-      "default": "./dist/schema/machine-projects.js"
-    },
-    "./schema/machine-branches": {
-      "types": "./dist/schema/machine-branches.d.ts",
-      "default": "./dist/schema/machine-branches.js"
-    },
-    "./schema/machine-agent-terminals": {
-      "types": "./dist/schema/machine-agent-terminals.d.ts",
-      "default": "./dist/schema/machine-agent-terminals.js"
-    },
-    "./schema/machine-workspaces": {
-      "types": "./dist/schema/machine-workspaces.d.ts",
-      "default": "./dist/schema/machine-workspaces.js"
-    },
-    "./schema/machine-workspace-bootstraps": {
-      "types": "./dist/schema/machine-workspace-bootstraps.d.ts",
-      "default": "./dist/schema/machine-workspace-bootstraps.js"
+    "./schema/agent-workspace-layout": {
+      "types": "./dist/schema/agent-workspace-layout.d.ts",
+      "default": "./dist/schema/agent-workspace-layout.js"
     },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
@@ -243,6 +223,10 @@
       "types": "./dist/schema/workflow-runs.d.ts",
       "default": "./dist/schema/workflow-runs.js"
     },
+    "./schema/workflow-run-steps": {
+      "types": "./dist/schema/workflow-run-steps.d.ts",
+      "default": "./dist/schema/workflow-run-steps.js"
+    },
     "./schema/zoom": {
       "types": "./dist/schema/zoom.d.ts",
       "default": "./dist/schema/zoom.js"
@@ -254,6 +238,10 @@
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"
+    },
+    "./test/require-db": {
+      "types": "./dist/test/require-db.d.ts",
+      "default": "./dist/test/require-db.js"
     },
     "./transactions/auth-transactions": {
       "types": "./dist/transactions/auth-transactions.d.ts",
@@ -279,6 +267,10 @@
       "types": "./dist/schema/email-broadcasts.d.ts",
       "default": "./dist/schema/email-broadcasts.js"
     },
+    "./schema/page-webhooks": {
+      "types": "./dist/schema/page-webhooks.d.ts",
+      "default": "./dist/schema/page-webhooks.js"
+    },
     "./schema/oauth": {
       "types": "./dist/schema/oauth.d.ts",
       "default": "./dist/schema/oauth.js"
@@ -296,6 +288,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
@@ -310,12 +303,12 @@
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
     "dotenv": "^17.2.0",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/pg": "^8.15.4",
-    "drizzle-kit": "^0.23.2",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9.36.0",
     "tsx": "^4.20.3",
     "typescript-eslint": "^8.59.0"

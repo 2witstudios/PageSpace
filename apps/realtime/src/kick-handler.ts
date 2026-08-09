@@ -3,34 +3,24 @@
  * Handles permission revocation by removing users from Socket.IO rooms.
  *
  * Supports multiple revocation scenarios:
- * - Drive member removal: kick from drive:*, drive:*:calendar, activity:drive:*
+ * - Drive member removal: kick from the drive-scoped rooms
  * - Page permission revocation: kick from specific page room
  * - Full user revocation: kick from all rooms
+ *
+ * Requests arrive via POST /api/kick from the centralized revocation hook
+ * (@pagespace/lib/permissions/revocation-kick). Kicks are a BEST-EFFORT
+ * delivery optimization: the authoritative permission fact lives in Postgres,
+ * enforced at join time and re-checked per sensitive event
+ * (./per-event-auth.ts). A missed or failed kick therefore only widens the
+ * stale fan-out window; it never grants authority.
  */
 
 import { Server, Socket } from 'socket.io';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { KICK_REASONS, type KickPayload, type KickResult } from '@pagespace/lib/realtime/kick-client';
 import { socketRegistry } from './socket-registry';
 
-export interface KickPayload {
-  userId: string;
-  roomPattern: string; // e.g., 'drive:abc123' or 'drive:*' for all drives
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
-
-export interface KickResult {
-  success: boolean;
-  kickedCount: number;
-  rooms: string[];
-  error?: string;
-}
-
-const VALID_REASONS = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked', 'page_private'] as const;
+export type { KickPayload, KickResult };
 
 interface ParseResult {
   success: boolean;
@@ -67,7 +57,7 @@ export function validateKickPayload(payload: KickPayload): ValidationResult {
     return { valid: false, error: 'Missing or invalid roomPattern' };
   }
 
-  if (!payload.reason || !VALID_REASONS.includes(payload.reason)) {
+  if (!payload.reason || !KICK_REASONS.includes(payload.reason)) {
     return { valid: false, error: 'Missing or invalid reason' };
   }
 
@@ -75,44 +65,53 @@ export function validateKickPayload(payload: KickPayload): ValidationResult {
 }
 
 /**
- * Check if a room matches the given pattern
- * Supports exact match and prefix wildcard (e.g., 'drive:*')
+ * Check if a room matches the given kick pattern.
+ *
+ * Every real caller (the revocation→kick hook,
+ * @pagespace/lib/permissions/revocation-kick) builds `roomPattern` from the
+ * shared room grammar (@pagespace/lib/realtime/rooms), which only ever emits
+ * concrete room names — never a prefix pattern — so exact match is the only
+ * case this needs to handle.
  */
 export function roomMatchesPattern(room: string, pattern: string): boolean {
-  // Exact match
-  if (room === pattern) {
-    return true;
-  }
-
-  // Wildcard match: 'drive:*' matches any room starting with 'drive:'
-  if (pattern.endsWith('*')) {
-    const prefix = pattern.slice(0, -1);
-    return room.startsWith(prefix);
-  }
-
-  return false;
+  return room === pattern;
 }
 
 /**
- * Get all rooms that should be kicked for a drive removal
- * This includes the main drive room and associated activity rooms
+ * Room-wide kick (`userId: '*'`): evict every socket currently in the room,
+ * except `exceptUserId`'s sockets. Exists for conversation un-share, where
+ * the caller cannot enumerate which collaborators had joined the room but
+ * the room's own membership can. Same best-effort contract as the targeted
+ * kick — join-time authz is the real gate.
  */
-export function getRoomsForDriveKick(driveId: string): string[] {
-  return [
-    `drive:${driveId}`,
-    `drive:${driveId}:calendar`,
-    `activity:drive:${driveId}`,
-  ];
-}
+function executeRoomWideKick(io: Server, payload: KickPayload): KickResult {
+  const { roomPattern, reason, metadata, exceptUserId } = payload;
+  const memberSocketIds = io.sockets.adapter.rooms.get(roomPattern);
+  if (!memberSocketIds || memberSocketIds.size === 0) {
+    return { success: true, kickedCount: 0, rooms: [] };
+  }
 
-/**
- * Get all rooms that should be kicked for a page permission revocation
- */
-export function getRoomsForPageKick(pageId: string): string[] {
-  return [
-    pageId, // Page room uses pageId directly
-    `activity:page:${pageId}`,
-  ];
+  let kickedCount = 0;
+  for (const socketId of [...memberSocketIds]) {
+    const socket = io.sockets.sockets.get(socketId) as
+      | (Socket & { data: { user?: { id: string } } })
+      | undefined;
+    if (!socket) continue;
+    if (exceptUserId && socket.data.user?.id === exceptUserId) continue;
+
+    socket.leave(roomPattern);
+    socketRegistry.trackRoomLeave(socketId, roomPattern);
+    kickedCount++;
+    socket.emit('access_revoked', { room: roomPattern, reason, metadata });
+  }
+
+  loggers.realtime.info('Room-wide kick executed', {
+    roomPattern,
+    reason,
+    kickedCount,
+  });
+
+  return { success: true, kickedCount, rooms: kickedCount > 0 ? [roomPattern] : [] };
 }
 
 /**
@@ -123,6 +122,10 @@ export function executeKick(
   payload: KickPayload
 ): KickResult {
   const { userId, roomPattern, reason, metadata } = payload;
+
+  if (userId === '*') {
+    return executeRoomWideKick(io, payload);
+  }
 
   // Get all sockets for this user
   const userSocketIds = socketRegistry.getSocketsForUser(userId);

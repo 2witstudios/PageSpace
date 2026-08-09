@@ -79,6 +79,7 @@ async function getPermittedPages(driveId: string, userId: string) {
 
   const allVisiblePageIds = [...new Set([...permittedPageIds, ...ancestorIds])];
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   return db.query.pages.findMany({
     where: and(
       inArray(pages.id, allVisiblePageIds),
@@ -128,6 +129,7 @@ export async function GET(
       // role can see, not the owning user's.
       const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
       const accessibleIds = new Set(accessible.map(p => p.id));
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const allPages = await db.query.pages.findMany({
         where: and(
           eq(pages.driveId, drive.id),
@@ -158,6 +160,7 @@ export async function GET(
 
       // If user owns the drive or is an admin, fetch all pages
       if (isOwner || isAdmin) {
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         pageResults = await db.query.pages.findMany({
           where: and(
             eq(pages.driveId, drive.id),

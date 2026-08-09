@@ -120,7 +120,7 @@ describe('provider-factory', () => {
         if (!isProviderError(result)) {
           // DEFAULT_PROVIDER / DEFAULT_MODEL
           expect(result.provider).toBe('openai');
-          expect(result.modelName).toBe('openai/gpt-5.3-chat');
+          expect(result.modelName).toBe('openai/gpt-5.6-luna');
           expect(createOpenRouter).toHaveBeenCalled();
         }
       });
@@ -215,10 +215,10 @@ describe('provider-factory', () => {
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe('openai');
-          expect(result.modelName).toBe('openai/gpt-5.3-chat');
+          expect(result.modelName).toBe('openai/gpt-5.6-luna');
         }
         // the arbitrary model is never sent — only the default is
-        expect(mockOpenRouterChat).toHaveBeenCalledWith('openai/gpt-5.3-chat', expect.anything());
+        expect(mockOpenRouterChat).toHaveBeenCalledWith('openai/gpt-5.6-luna', expect.anything());
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('totally-unknown/model', expect.anything());
       });
 
@@ -233,7 +233,7 @@ describe('provider-factory', () => {
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.modelName).toBe('openai/gpt-5.3-chat');
+          expect(result.modelName).toBe('openai/gpt-5.6-luna');
         }
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('openai/not-a-real-model', expect.anything());
       });

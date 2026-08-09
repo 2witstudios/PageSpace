@@ -317,5 +317,3 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 );
 
 ChatInput.displayName = 'ChatInput';
-
-export default ChatInput;

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import fs from "fs";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
@@ -17,8 +18,16 @@ const nextConfig: NextConfig = {
   },
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
   serverExternalPackages: ["pg"],
-  webpack: (config, { isServer }) => {
-    if (isServer) {
+  webpack: (config, { isServer, nextRuntime }) => {
+    // Scoped to the nodejs runtime only — admin has edge middleware
+    // (src/middleware.ts) and an edge instrumentation path (sentry.edge.config.ts),
+    // and the Edge runtime has no require(). Externalizing here unconditionally
+    // for isServer (nodejs AND edge) would emit `require('@pagespace/lib/...')`
+    // into the edge bundle, breaking it at runtime the same way apps/web's
+    // middleware broke in PR #1932 (see apps/web/next.config.ts's
+    // edgeNodeOnlyGuard doc comment) — edge-reachable @pagespace/lib imports
+    // must be bundled from source, not externalized.
+    if (isServer && nextRuntime === 'nodejs') {
       const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
@@ -58,4 +67,15 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+const sentryBuildOptions = {
+  org: process.env.SENTRY_ORG,
+  // Admin gets its own Sentry project (SENTRY_PROJECT is baked from the
+  // SENTRY_PROJECT_ADMIN GH secret at admin's Docker build step only, see
+  // docker-images.yml) so its issue stream stays separate from web's.
+  project: process.env.SENTRY_PROJECT,
+  silent: !process.env.CI,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+};
+
+export default withSentryConfig(nextConfig, sentryBuildOptions);

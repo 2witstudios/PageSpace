@@ -122,6 +122,7 @@ export async function GET(
     }
 
     // Get attendees with user info
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const attendees = await db.query.eventAttendees.findMany({
       where: eq(eventAttendees.eventId, eventId),
       with: {
@@ -260,6 +261,7 @@ export async function POST(
     );
 
     // Fetch updated attendees
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const attendees = await db.query.eventAttendees.findMany({
       where: eq(eventAttendees.eventId, eventId),
       with: {

@@ -32,7 +32,7 @@ export interface QuotedMessageSnapshot {
 }
 
 interface ChannelAiMeta {
-  senderType: 'global_assistant' | 'agent';
+  senderType: 'global_assistant' | 'agent' | 'webhook';
   senderName: string;
   agentPageId?: string;
 }

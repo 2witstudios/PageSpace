@@ -48,6 +48,9 @@ export default defineConfig({
         // Advisory-lock primitive (Server Stream Durability epic, R.4 remediation):
         // the lock/unlock/destroy decision paths are gated at 100% branch.
         'src/advisory-lock.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Pure core behind the destructive-migration pins (#2160): every branch
+        // of the SQL analysis is what stops a bad DROP from passing review.
+        'src/migration-sql-analysis.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },

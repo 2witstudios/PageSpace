@@ -19,6 +19,14 @@ export interface VolatileTurnContextInput {
   mentionPrompt: string;
   commandPrompt: string;
   /**
+   * The per-viewer AVAILABLE COMMANDS catalog (see skill-catalog.ts). Lives
+   * here — not the system prompt — because the list varies per user/drive
+   * and changes whenever anyone edits a command; putting it ahead of the
+   * stable prefix would churn provider prompt caches (the palette-readiness
+   * memo's placement requirement).
+   */
+  commandCatalogPrompt?: string;
+  /**
    * The user's current page/drive, rebuilt fresh every turn (see
    * location-prompt.ts). Lives here — not the stable system prompt — so a
    * turn where only the user's location changed doesn't bust the provider
@@ -43,6 +51,7 @@ export function buildVolatileTurnContext(input: VolatileTurnContextInput): strin
   if (input.timestampPrompt.trim()) parts.push(input.timestampPrompt.trim());
   if (input.locationPrompt?.trim()) parts.push(input.locationPrompt.trim());
   if (input.mentionPrompt.trim()) parts.push(input.mentionPrompt.trim());
+  if (input.commandCatalogPrompt?.trim()) parts.push(input.commandCatalogPrompt.trim());
   if (input.commandPrompt.trim()) parts.push(input.commandPrompt.trim());
 
   return parts.join('\n\n');

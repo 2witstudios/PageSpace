@@ -41,11 +41,6 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 vi.mock('@pagespace/db/db', () => {
-  const mockTxUpdate = vi.fn(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn().mockResolvedValue(undefined),
-    })),
-  }));
   return {
     db: {
       query: {
@@ -53,25 +48,38 @@ vi.mock('@pagespace/db/db', () => {
         pages: { findFirst: vi.fn() },
       },
       transaction: vi.fn(async (callback) => {
-        const tx = { update: mockTxUpdate };
+        const tx = {};
         return callback(tx);
       }),
     },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  eq: vi.fn((a, b) => ({ op: 'eq', field: a, value: b })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: {},
+  pages: { id: 'pages.id' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: {},
   taskLists: {},
 }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/services/reorder', () => ({
+  computeReorderPlan: vi.fn((entries: { id: string; position: number }[]) => {
+    const positionById = new Map<string, number>();
+    for (const entry of entries) {
+      positionById.set(entry.id, entry.position);
+    }
+    return { orderedIds: Array.from(positionById.keys()).sort(), positionById };
+  }),
+}));
+
+vi.mock('../reorder-task-list', () => ({
+  reorderTaskListChildren: vi.fn(),
 }));
 
 // ---------- Imports (after mocks) ----------
@@ -82,6 +90,8 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildren } from '../reorder-task-list';
 
 // ---------- Helpers ----------
 
@@ -114,6 +124,9 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    // Default: every submitted task id resolves within scope (the "happy path").
+    // Individual tests override this to simulate out-of-scope/invalid ids.
+    vi.mocked(reorderTaskListChildren).mockImplementation(async (_tx, _pageId, plan) => plan.orderedIds);
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -163,6 +176,39 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(body.error).toBe('tasks must be an array');
   });
 
+  it('returns 400 and skips all DB work when tasks exceeds the batch bound', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    // lockedBatchReorder's batched UPDATE ... FROM (VALUES ...) binds 2 params
+    // per row + 1 scope param; an unbounded array can cross Postgres's 65,535
+    // param ceiling and 500 instead of failing cleanly. Reject up front —
+    // mirrors the bound added to apps/web/src/app/api/user/favorites/reorder/route.ts (#2164).
+    const oversized = Array.from({ length: 5001 }, (_, i) => ({ id: `task-${i}`, position: i }));
+    const response = await PATCH(createRequest({ tasks: oversized }), context);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/must not exceed/);
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(reorderTaskListChildren).not.toHaveBeenCalled();
+  });
+
+  it('allows a batch exactly at the bound', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    const atBound = Array.from({ length: 5000 }, (_, i) => ({ id: `task-${i}`, position: i }));
+    const response = await PATCH(createRequest({ tasks: atBound }), context);
+
+    expect(response.status).toBe(200);
+    expect(reorderTaskListChildren).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 400 when a task entry is missing id', async () => {
     setupAuth();
     vi.mocked(canUserEditPage).mockResolvedValue(true);
@@ -208,13 +254,65 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(body.success).toBe(true);
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(typeof vi.mocked(db.transaction).mock.calls[0][0]).toBe('function');
+    expect(reorderTaskListChildren).toHaveBeenCalledTimes(1);
+    expect(reorderTaskListChildren).toHaveBeenCalledWith(
+      expect.anything(),
+      mockPageId,
+      expect.objectContaining({ orderedIds: ['task-a', 'task-b'] }),
+    );
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tasks_reordered',
       taskId: 'task-a',
       taskListId: mockTaskListId,
       pageId: mockPageId,
     }));
+  });
+
+  it('issues a single reorderTaskListChildren call regardless of task count', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    const tasks = [
+      { id: 'task-a', position: 0 },
+      { id: 'task-b', position: 1 },
+      { id: 'task-c', position: 2 },
+      { id: 'task-d', position: 3 },
+      { id: 'task-e', position: 4 },
+    ];
+
+    const response = await PATCH(createRequest({ tasks }), context);
+    expect(response.status).toBe(200);
+
+    // The N-sequential-update loop that deadlocked production would have
+    // issued one write per task. reorderTaskListChildren (and the batched
+    // primitive it delegates to) is called exactly once, regardless of how
+    // many tasks are being reordered.
+    expect(computeReorderPlan).toHaveBeenCalledWith(tasks);
+    expect(reorderTaskListChildren).toHaveBeenCalledTimes(1);
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 when a submitted task id falls outside the task list scope', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    // Simulate reorderTaskListChildren's scope excluding one of the submitted
+    // ids (e.g. it belongs to a different task list) — only 'task-a' actually locked.
+    vi.mocked(reorderTaskListChildren).mockResolvedValue(['task-a']);
+
+    const tasks = [
+      { id: 'task-a', position: 0 },
+      { id: 'task-b', position: 1 },
+    ];
+
+    const response = await PATCH(createRequest({ tasks }), context);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid task IDs');
+    expect(broadcastTaskEvent).not.toHaveBeenCalled();
   });
 
   it('logs page activity when taskListPage exists', async () => {
@@ -295,5 +393,8 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       taskId: '',
     }));
+    // Empty plan is a no-op: no transaction should be opened for zero tasks.
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(reorderTaskListChildren).not.toHaveBeenCalled();
   });
 });

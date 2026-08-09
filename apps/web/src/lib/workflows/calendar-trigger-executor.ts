@@ -51,7 +51,12 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Cheap preflight: verify agent page still exists
+    // 3. Cheap preflight: verify agent page still exists. Calendar triggers
+    //    are AI-only — a step-based workflow without an agent cannot run here.
+    if (!workflow.agentPageId) {
+      const error = 'Workflow has no agent page (step-based workflows are not supported by calendar triggers)';
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed })
       .from(pages)

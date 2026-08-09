@@ -43,6 +43,21 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
   mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
 }));
 
+// The payer-tier sandbox tool filter (review #2326) hits the real DB through
+// resolveSandboxToolEligibility; a DB-backed lookup is out of scope for this
+// suite, so the payer is always eligible (the filter is a pass-through).
+// The bound-session lookup for payer-derived sandbox eligibility (review
+// #2326) hits the real DB through the agent-sessions runtime; this suite's
+// conversations are unbound, so the eligibility path takes the userId branch.
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
+  findSessionForConversation: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
   createStreamLifecycle: mockCreateStreamLifecycle,
 }));
@@ -59,6 +74,9 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -94,28 +112,41 @@ const mockUserProfile = { displayName: 'Display User' };
 const mockAuthUser = { name: 'Auth User', subscriptionTier: 'free' };
 
 vi.mock('@pagespace/db/db', () => {
-  const select = vi.fn(() => ({
-    from: vi.fn((table: unknown) => {
-      const tableLabel = table as { __label?: string } | undefined;
-      const isUsers = tableLabel?.__label === 'users';
-      return {
-        where: vi.fn(() => ({
-          then: <T>(
-            resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
-            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
-          ) => Promise.resolve(isUsers ? [mockAuthUser] : [mockConversation]).then(resolve, reject),
-          orderBy: vi.fn().mockResolvedValue([]),
-          limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
-        })),
-      };
-    }),
-  }));
-  const insert = vi.fn(() => ({
-    values: vi.fn(() => ({
-      onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
-    })),
-  }));
-  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+  // Reused inside `transaction()`'s callback too — see the identical
+  // pattern (and its own doc) in stream-socket-events.test.ts's db mock.
+  const makeDbLike = () => {
+    const select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        const isConversations = tableLabel?.__label === 'conversations';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(
+              resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+              reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+            ) => Promise.resolve(isUsers ? [mockAuthUser] : [mockConversation]).then(resolve, reject),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+            for: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue(isConversations ? [{ isActive: true }] : [mockConversation]),
+            })),
+          })),
+        };
+      }),
+    }));
+    const insert = vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
+      })),
+    }));
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+    return { select, insert, update };
+  };
+  const dbLike = makeDbLike();
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
   // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
   // exactly as before. Its own retry/degrade behavior is covered by
   // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
@@ -125,7 +156,7 @@ vi.mock('@pagespace/db/db', () => {
       release: vi.fn(),
     })),
   }));
-  return { db: { select, insert, update }, getAdvisoryLockPool };
+  return { db: { ...dbLike, transaction }, getAdvisoryLockPool };
 });
 
 vi.mock('@pagespace/db/operators', () => ({
@@ -133,17 +164,42 @@ vi.mock('@pagespace/db/operators', () => ({
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2): forwards to the same spy the
+// route used to call directly, preserving this file's assertions.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    saveGlobalMessage: vi.fn(async (args: Record<string, unknown>) => {
+      const { beforeSave: _b, triggeredBy: _t, ...rest } = args as { beforeSave?: unknown; triggeredBy?: unknown };
+      await mockSaveGlobalAssistantMessageToDatabase(rest);
+      return { saved: true, rev: 1 };
+    }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  conversations: { __label: 'conversations', id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
   messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -182,7 +238,6 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
-  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
 }));
 vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
@@ -195,6 +250,9 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),
@@ -276,7 +334,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
@@ -304,7 +362,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
-import { resolveOrCreateConversation, ConversationOwnershipError } from '../resolve-or-create-conversation';
+import { resolveOrCreateConversation, ConversationOwnershipError } from '@/lib/repositories/resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -386,6 +444,20 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(response.status).toBe(404);
     expect(streamText).not.toHaveBeenCalled();
     expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('does NOT create the conversation row when the gate denies (gate runs before create)', async () => {
+    // The other half of R3, and the reason `resolveOrCreateConversation` moved
+    // below the gate. It INSERTs on a first message and emits
+    // `conversation:created`, so gating afterwards left an out-of-credits first
+    // message with a durable empty conversation and a broadcast announcing it —
+    // the same orphan the message-save case above describes, one table over.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
   });
 
 });

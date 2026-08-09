@@ -27,6 +27,26 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./commands/starter-skills": {
+      "types": "./dist/commands/starter-skills.d.ts",
+      "import": "./dist/commands/starter-skills.js",
+      "require": "./dist/commands/starter-skills.js"
+    },
+    "./commands/starter-skill-installer": {
+      "types": "./dist/commands/starter-skill-installer.d.ts",
+      "import": "./dist/commands/starter-skill-installer.js",
+      "require": "./dist/commands/starter-skill-installer.js"
+    },
+    "./db/bounded-query": {
+      "types": "./dist/db/bounded-query.d.ts",
+      "import": "./dist/db/bounded-query.js",
+      "require": "./dist/db/bounded-query.js"
+    },
+    "./db/like-pattern": {
+      "types": "./dist/db/like-pattern.d.ts",
+      "import": "./dist/db/like-pattern.js",
+      "require": "./dist/db/like-pattern.js"
+    },
     "./ai/normalize-parts": {
       "types": "./dist/ai/normalize-parts.d.ts",
       "import": "./dist/ai/normalize-parts.js",
@@ -51,6 +71,41 @@
       "types": "./dist/ai/global-channel-id.d.ts",
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
+    },
+    "./agent-workspaces/contract": {
+      "types": "./dist/agent-workspaces/contract.d.ts",
+      "import": "./dist/agent-workspaces/contract.js",
+      "require": "./dist/agent-workspaces/contract.js"
+    },
+    "./agent-workspaces/workspace-layout-verbs": {
+      "types": "./dist/agent-workspaces/workspace-layout-verbs.d.ts",
+      "import": "./dist/agent-workspaces/workspace-layout-verbs.js",
+      "require": "./dist/agent-workspaces/workspace-layout-verbs.js"
+    },
+    "./agent-workspaces/workspace-sprite-key": {
+      "types": "./dist/agent-workspaces/workspace-sprite-key.d.ts",
+      "import": "./dist/agent-workspaces/workspace-sprite-key.js",
+      "require": "./dist/agent-workspaces/workspace-sprite-key.js"
+    },
+    "./agent-workspaces/plan-workspace-lifecycle": {
+      "types": "./dist/agent-workspaces/plan-workspace-lifecycle.d.ts",
+      "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
+      "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
+    },
+    "./agent-workspaces/decide-workspace-access": {
+      "types": "./dist/agent-workspaces/decide-workspace-access.d.ts",
+      "import": "./dist/agent-workspaces/decide-workspace-access.js",
+      "require": "./dist/agent-workspaces/decide-workspace-access.js"
+    },
+    "./agent-workspaces/plan-spawn-worker": {
+      "types": "./dist/agent-workspaces/plan-spawn-worker.d.ts",
+      "import": "./dist/agent-workspaces/plan-spawn-worker.js",
+      "require": "./dist/agent-workspaces/plan-spawn-worker.js"
+    },
+    "./agent-workspaces/redact-conversation-listing": {
+      "types": "./dist/agent-workspaces/redact-conversation-listing.d.ts",
+      "import": "./dist/agent-workspaces/redact-conversation-listing.js",
+      "require": "./dist/agent-workspaces/redact-conversation-listing.js"
     },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
@@ -86,6 +141,11 @@
       "types": "./dist/logging/ai-usage-purge.d.ts",
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
+    },
+    "./observability/sentry-env": {
+      "types": "./dist/observability/sentry-env.d.ts",
+      "import": "./dist/observability/sentry-env.js",
+      "require": "./dist/observability/sentry-env.js"
     },
     "./observability/clickhouse-buffer": {
       "types": "./dist/observability/clickhouse-buffer.d.ts",
@@ -137,6 +197,21 @@
       "import": "./dist/observability/error-resolutions.js",
       "require": "./dist/observability/error-resolutions.js"
     },
+    "./billing/subscription-tiers": {
+      "types": "./dist/billing/subscription-tiers.d.ts",
+      "import": "./dist/billing/subscription-tiers.js",
+      "require": "./dist/billing/subscription-tiers.js"
+    },
+    "./billing/subscription-tier-sync": {
+      "types": "./dist/billing/subscription-tier-sync.d.ts",
+      "import": "./dist/billing/subscription-tier-sync.js",
+      "require": "./dist/billing/subscription-tier-sync.js"
+    },
+    "./billing/subscription-tier-reconcile": {
+      "types": "./dist/billing/subscription-tier-reconcile.d.ts",
+      "import": "./dist/billing/subscription-tier-reconcile.js",
+      "require": "./dist/billing/subscription-tier-reconcile.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
@@ -187,10 +262,20 @@
       "import": "./dist/billing/automation-preferences.js",
       "require": "./dist/billing/automation-preferences.js"
     },
-    "./billing/machine-payer": {
-      "types": "./dist/billing/machine-payer.d.ts",
-      "import": "./dist/billing/machine-payer.js",
-      "require": "./dist/billing/machine-payer.js"
+    "./billing/sandbox-payer": {
+      "types": "./dist/billing/sandbox-payer.d.ts",
+      "import": "./dist/billing/sandbox-payer.js",
+      "require": "./dist/billing/sandbox-payer.js"
+    },
+    "./billing/sandbox-eligibility": {
+      "types": "./dist/billing/sandbox-eligibility.d.ts",
+      "import": "./dist/billing/sandbox-eligibility.js",
+      "require": "./dist/billing/sandbox-eligibility.js"
+    },
+    "./billing/live-concurrency-query": {
+      "types": "./dist/billing/live-concurrency-query.d.ts",
+      "import": "./dist/billing/live-concurrency-query.js",
+      "require": "./dist/billing/live-concurrency-query.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -372,6 +457,11 @@
       "import": "./dist/repositories/account-repository.js",
       "require": "./dist/repositories/account-repository.js"
     },
+    "./repositories/conversation-cleanup": {
+      "types": "./dist/repositories/conversation-cleanup.d.ts",
+      "import": "./dist/repositories/conversation-cleanup.js",
+      "require": "./dist/repositories/conversation-cleanup.js"
+    },
     "./repositories/activity-log-repository": {
       "types": "./dist/repositories/activity-log-repository.d.ts",
       "import": "./dist/repositories/activity-log-repository.js",
@@ -396,6 +486,16 @@
       "types": "./dist/services/preview.d.ts",
       "import": "./dist/services/preview.js",
       "require": "./dist/services/preview.js"
+    },
+    "./services/pending-uploads": {
+      "types": "./dist/services/pending-uploads.d.ts",
+      "import": "./dist/services/pending-uploads.js",
+      "require": "./dist/services/pending-uploads.js"
+    },
+    "./services/pending-uploads-core": {
+      "types": "./dist/services/pending-uploads-core.d.ts",
+      "import": "./dist/services/pending-uploads-core.js",
+      "require": "./dist/services/pending-uploads-core.js"
     },
     "./services/quote-enrichment": {
       "types": "./dist/services/quote-enrichment.d.ts",
@@ -447,11 +547,6 @@
       "import": "./dist/services/sandbox/audit.js",
       "require": "./dist/services/sandbox/audit.js"
     },
-    "./services/sandbox/lifecycle": {
-      "types": "./dist/services/sandbox/lifecycle.d.ts",
-      "import": "./dist/services/sandbox/lifecycle.js",
-      "require": "./dist/services/sandbox/lifecycle.js"
-    },
     "./services/sandbox/sandbox-options": {
       "types": "./dist/services/sandbox/sandbox-options.d.ts",
       "import": "./dist/services/sandbox/sandbox-options.js",
@@ -487,25 +582,30 @@
       "import": "./dist/services/sandbox/machine-session-manager.js",
       "require": "./dist/services/sandbox/machine-session-manager.js"
     },
-    "./services/sandbox/machine-session": {
-      "types": "./dist/services/sandbox/machine-session.d.ts",
-      "import": "./dist/services/sandbox/machine-session.js",
-      "require": "./dist/services/sandbox/machine-session.js"
+    "./services/sandbox/sandbox-billing": {
+      "types": "./dist/services/sandbox/sandbox-billing.d.ts",
+      "import": "./dist/services/sandbox/sandbox-billing.js",
+      "require": "./dist/services/sandbox/sandbox-billing.js"
     },
-    "./services/sandbox/machine-billing": {
-      "types": "./dist/services/sandbox/machine-billing.d.ts",
-      "import": "./dist/services/sandbox/machine-billing.js",
-      "require": "./dist/services/sandbox/machine-billing.js"
+    "./services/sandbox/sandbox-storage-measure": {
+      "types": "./dist/services/sandbox/sandbox-storage-measure.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-measure.js",
+      "require": "./dist/services/sandbox/sandbox-storage-measure.js"
     },
-    "./services/sandbox/machine-storage-reconcile": {
-      "types": "./dist/services/sandbox/machine-storage-reconcile.d.ts",
-      "import": "./dist/services/sandbox/machine-storage-reconcile.js",
-      "require": "./dist/services/sandbox/machine-storage-reconcile.js"
+    "./services/sandbox/sandbox-storage-reconcile": {
+      "types": "./dist/services/sandbox/sandbox-storage-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-reconcile.js",
+      "require": "./dist/services/sandbox/sandbox-storage-reconcile.js"
     },
-    "./services/sandbox/machine-storage-billing": {
-      "types": "./dist/services/sandbox/machine-storage-billing.d.ts",
-      "import": "./dist/services/sandbox/machine-storage-billing.js",
-      "require": "./dist/services/sandbox/machine-storage-billing.js"
+    "./services/sandbox/sandbox-storage-billing": {
+      "types": "./dist/services/sandbox/sandbox-storage-billing.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-billing.js",
+      "require": "./dist/services/sandbox/sandbox-storage-billing.js"
+    },
+    "./services/sandbox/sandbox-storage-attribution": {
+      "types": "./dist/services/sandbox/sandbox-storage-attribution.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-attribution.js",
+      "require": "./dist/services/sandbox/sandbox-storage-attribution.js"
     },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
@@ -547,20 +647,20 @@
       "import": "./dist/services/sandbox/sandbox-client/sprite-tasks.js",
       "require": "./dist/services/sandbox/sandbox-client/sprite-tasks.js"
     },
-    "./services/sandbox/sandbox-client/sprite-machine-host": {
-      "types": "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts",
-      "import": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js",
-      "require": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js"
+    "./services/sandbox/sandbox-client/sprite-sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js"
     },
-    "./services/sandbox/sandbox-client/machine-host-adapter": {
-      "types": "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts",
-      "import": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js",
-      "require": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js"
+    "./services/sandbox/sandbox-client/sandbox-host-adapter": {
+      "types": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.js",
+      "require": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.js"
     },
-    "./services/sandbox/machine-host": {
-      "types": "./dist/services/sandbox/machine-host.d.ts",
-      "import": "./dist/services/sandbox/machine-host.js",
-      "require": "./dist/services/sandbox/machine-host.js"
+    "./services/sandbox/sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-host.js"
     },
     "./services/sandbox/machine-fs": {
       "types": "./dist/services/sandbox/machine-fs.d.ts",
@@ -597,95 +697,65 @@
       "import": "./dist/services/sandbox/github-token.js",
       "require": "./dist/services/sandbox/github-token.js"
     },
-    "./services/machines/project-paths": {
-      "types": "./dist/services/machines/project-paths.d.ts",
-      "import": "./dist/services/machines/project-paths.js",
-      "require": "./dist/services/machines/project-paths.js"
+    "./services/agent-workspaces/agent-workspace-access": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-access.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-access.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-access.js"
     },
-    "./services/machines/project-name": {
-      "types": "./dist/services/machines/project-name.d.ts",
-      "import": "./dist/services/machines/project-name.js",
-      "require": "./dist/services/machines/project-name.js"
+    "./services/agent-workspaces/agent-workspace-sprite": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-sprite.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-sprite.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-sprite.js"
     },
-    "./services/machines/branch-name": {
-      "types": "./dist/services/machines/branch-name.d.ts",
-      "import": "./dist/services/machines/branch-name.js",
-      "require": "./dist/services/machines/branch-name.js"
+    "./services/agent-workspaces/agent-workspace-tenant": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-tenant.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-tenant.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-tenant.js"
     },
-    "./services/machines/name-slug": {
-      "types": "./dist/services/machines/name-slug.d.ts",
-      "import": "./dist/services/machines/name-slug.js",
-      "require": "./dist/services/machines/name-slug.js"
+    "./services/agent-workspaces/agent-workspaces": {
+      "types": "./dist/services/agent-workspaces/agent-workspaces.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspaces.js",
+      "require": "./dist/services/agent-workspaces/agent-workspaces.js"
     },
-    "./services/machines/machine-projects-store": {
-      "types": "./dist/services/machines/machine-projects-store.d.ts",
-      "import": "./dist/services/machines/machine-projects-store.js",
-      "require": "./dist/services/machines/machine-projects-store.js"
+    "./services/agent-workspaces/agent-workspaces-store": {
+      "types": "./dist/services/agent-workspaces/agent-workspaces-store.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspaces-store.js",
+      "require": "./dist/services/agent-workspaces/agent-workspaces-store.js"
     },
-    "./services/machines/machine-projects": {
-      "types": "./dist/services/machines/machine-projects.d.ts",
-      "import": "./dist/services/machines/machine-projects.js",
-      "require": "./dist/services/machines/machine-projects.js"
+    "./services/agent-workspaces/workspace-layout-store": {
+      "types": "./dist/services/agent-workspaces/workspace-layout-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-layout-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-layout-store.js"
     },
-    "./services/machines/branch-session": {
-      "types": "./dist/services/machines/branch-session.d.ts",
-      "import": "./dist/services/machines/branch-session.js",
-      "require": "./dist/services/machines/branch-session.js"
+    "./services/agent-workspaces/shell-scrollback": {
+      "types": "./dist/services/agent-workspaces/shell-scrollback.d.ts",
+      "import": "./dist/services/agent-workspaces/shell-scrollback.js",
+      "require": "./dist/services/agent-workspaces/shell-scrollback.js"
     },
-    "./services/machines/machine-branches-store": {
-      "types": "./dist/services/machines/machine-branches-store.d.ts",
-      "import": "./dist/services/machines/machine-branches-store.js",
-      "require": "./dist/services/machines/machine-branches-store.js"
+    "./services/agent-workspaces/workspace-shells": {
+      "types": "./dist/services/agent-workspaces/workspace-shells.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-shells.js",
+      "require": "./dist/services/agent-workspaces/workspace-shells.js"
     },
-    "./services/machines/machine-branches": {
-      "types": "./dist/services/machines/machine-branches.d.ts",
-      "import": "./dist/services/machines/machine-branches.js",
-      "require": "./dist/services/machines/machine-branches.js"
+    "./services/agent-workspaces/workspace-shells-store": {
+      "types": "./dist/services/agent-workspaces/workspace-shells-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-shells-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-shells-store.js"
     },
-    "./services/machines/machine-workspaces-store": {
-      "types": "./dist/services/machines/machine-workspaces-store.d.ts",
-      "import": "./dist/services/machines/machine-workspaces-store.js",
-      "require": "./dist/services/machines/machine-workspaces-store.js"
+    "./services/agent-workspaces/workspace-status": {
+      "types": "./dist/services/agent-workspaces/workspace-status.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-status.js",
+      "require": "./dist/services/agent-workspaces/workspace-status.js"
     },
-    "./services/machines/machine-workspaces": {
-      "types": "./dist/services/machines/machine-workspaces.d.ts",
-      "import": "./dist/services/machines/machine-workspaces.js",
-      "require": "./dist/services/machines/machine-workspaces.js"
+    "./services/agent-workspaces/shell-types": {
+      "types": "./dist/services/agent-workspaces/shell-types.d.ts",
+      "import": "./dist/services/agent-workspaces/shell-types.js",
+      "require": "./dist/services/agent-workspaces/shell-types.js"
     },
-    "./services/machines/machine-settings": {
-      "types": "./dist/services/machines/machine-settings.d.ts",
-      "import": "./dist/services/machines/machine-settings.js",
-      "require": "./dist/services/machines/machine-settings.js"
-    },
-    "./services/machines/agent-terminal-types": {
-      "types": "./dist/services/machines/agent-terminal-types.d.ts",
-      "import": "./dist/services/machines/agent-terminal-types.js",
-      "require": "./dist/services/machines/agent-terminal-types.js"
-    },
-    "./services/machines/agent-terminals-store": {
-      "types": "./dist/services/machines/agent-terminals-store.d.ts",
-      "import": "./dist/services/machines/agent-terminals-store.js",
-      "require": "./dist/services/machines/agent-terminals-store.js"
-    },
-    "./services/machines/agent-terminals": {
-      "types": "./dist/services/machines/agent-terminals.d.ts",
-      "import": "./dist/services/machines/agent-terminals.js",
-      "require": "./dist/services/machines/agent-terminals.js"
-    },
-    "./services/machines/machine-access": {
-      "types": "./dist/services/machines/machine-access.d.ts",
-      "import": "./dist/services/machines/machine-access.js",
-      "require": "./dist/services/machines/machine-access.js"
-    },
-    "./services/machines/machine-orphan-reconcile": {
-      "types": "./dist/services/machines/machine-orphan-reconcile.d.ts",
-      "import": "./dist/services/machines/machine-orphan-reconcile.js",
-      "require": "./dist/services/machines/machine-orphan-reconcile.js"
-    },
-    "./services/machines/machine-list": {
-      "types": "./dist/services/machines/machine-list.d.ts",
-      "import": "./dist/services/machines/machine-list.js",
-      "require": "./dist/services/machines/machine-list.js"
+    "./services/sandbox/sprite-orphan-reconcile": {
+      "types": "./dist/services/sandbox/sprite-orphan-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sprite-orphan-reconcile.js",
+      "require": "./dist/services/sandbox/sprite-orphan-reconcile.js"
     },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
@@ -762,15 +832,30 @@
       "import": "./dist/services/channel-message-repository.js",
       "require": "./dist/services/channel-message-repository.js"
     },
+    "./services/message-derived-state": {
+      "types": "./dist/services/message-derived-state.d.ts",
+      "import": "./dist/services/message-derived-state.js",
+      "require": "./dist/services/message-derived-state.js"
+    },
+    "./services/page-webhook-service": {
+      "types": "./dist/services/page-webhook-service.d.ts",
+      "import": "./dist/services/page-webhook-service.js",
+      "require": "./dist/services/page-webhook-service.js"
+    },
+    "./services/page-webhook-core": {
+      "types": "./dist/services/page-webhook-core.d.ts",
+      "import": "./dist/services/page-webhook-core.js",
+      "require": "./dist/services/page-webhook-core.js"
+    },
+    "./services/page-webhook-dispatch": {
+      "types": "./dist/services/page-webhook-dispatch.d.ts",
+      "import": "./dist/services/page-webhook-dispatch.js",
+      "require": "./dist/services/page-webhook-dispatch.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
       "require": "./dist/services/date-utils.js"
-    },
-    "./services/rate-limit-cache": {
-      "types": "./dist/services/rate-limit-cache.d.ts",
-      "import": "./dist/services/rate-limit-cache.js",
-      "require": "./dist/services/rate-limit-cache.js"
     },
     "./deployment-mode": {
       "types": "./dist/deployment-mode.d.ts",
@@ -892,10 +977,25 @@
       "import": "./dist/email-templates/SdkCliLaunchEmail.js",
       "require": "./dist/email-templates/SdkCliLaunchEmail.js"
     },
+    "./email-templates/AgentSandboxLaunchEmail": {
+      "types": "./dist/email-templates/AgentSandboxLaunchEmail.d.ts",
+      "import": "./dist/email-templates/AgentSandboxLaunchEmail.js",
+      "require": "./dist/email-templates/AgentSandboxLaunchEmail.js"
+    },
     "./email-templates/render-email": {
       "types": "./dist/email-templates/render-email.d.ts",
       "import": "./dist/email-templates/render-email.js",
       "require": "./dist/email-templates/render-email.js"
+    },
+    "./email-templates/PaymentReceiptEmail": {
+      "types": "./dist/email-templates/PaymentReceiptEmail.d.ts",
+      "import": "./dist/email-templates/PaymentReceiptEmail.js",
+      "require": "./dist/email-templates/PaymentReceiptEmail.js"
+    },
+    "./email-templates/FormSubmissionNotificationEmail": {
+      "types": "./dist/email-templates/FormSubmissionNotificationEmail.d.ts",
+      "import": "./dist/email-templates/FormSubmissionNotificationEmail.js",
+      "require": "./dist/email-templates/FormSubmissionNotificationEmail.js"
     },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
@@ -961,6 +1061,11 @@
       "types": "./dist/services/invites/index.d.ts",
       "import": "./dist/services/invites/index.js",
       "require": "./dist/services/invites/index.js"
+    },
+    "./services/reorder": {
+      "types": "./dist/services/reorder/index.d.ts",
+      "import": "./dist/services/reorder/index.js",
+      "require": "./dist/services/reorder/index.js"
     },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
@@ -1157,6 +1262,11 @@
       "import": "./dist/audit/audit-query.js",
       "require": "./dist/audit/audit-query.js"
     },
+    "./audit/chain-alert-payload": {
+      "types": "./dist/audit/chain-alert-payload.d.ts",
+      "import": "./dist/audit/chain-alert-payload.js",
+      "require": "./dist/audit/chain-alert-payload.js"
+    },
     "./audit/security-audit-alerting": {
       "types": "./dist/audit/security-audit-alerting.d.ts",
       "import": "./dist/audit/security-audit-alerting.js",
@@ -1291,6 +1401,16 @@
       "types": "./dist/security/path-validator.d.ts",
       "import": "./dist/security/path-validator.js",
       "require": "./dist/security/path-validator.js"
+    },
+    "./security/webhook-signature": {
+      "types": "./dist/security/webhook-signature.d.ts",
+      "import": "./dist/security/webhook-signature.js",
+      "require": "./dist/security/webhook-signature.js"
+    },
+    "./security/webhook-delivery-idempotency": {
+      "types": "./dist/security/webhook-delivery-idempotency.d.ts",
+      "import": "./dist/security/webhook-delivery-idempotency.js",
+      "require": "./dist/security/webhook-delivery-idempotency.js"
     },
     "./auth/constants": {
       "types": "./dist/auth/constants.d.ts",
@@ -1462,6 +1582,16 @@
       "import": "./dist/permissions/rollback-permissions.js",
       "require": "./dist/permissions/rollback-permissions.js"
     },
+    "./permissions/conversation-access": {
+      "types": "./dist/permissions/conversation-access.d.ts",
+      "import": "./dist/permissions/conversation-access.js",
+      "require": "./dist/permissions/conversation-access.js"
+    },
+    "./conversations/conversation-page": {
+      "types": "./dist/conversations/conversation-page.d.ts",
+      "import": "./dist/conversations/conversation-page.js",
+      "require": "./dist/conversations/conversation-page.js"
+    },
     "./permissions/enforced-context": {
       "types": "./dist/permissions/enforced-context.d.ts",
       "import": "./dist/permissions/enforced-context.js",
@@ -1476,6 +1606,31 @@
       "types": "./dist/permissions/permission-mutations.d.ts",
       "import": "./dist/permissions/permission-mutations.js",
       "require": "./dist/permissions/permission-mutations.js"
+    },
+    "./permissions/revocation-kick": {
+      "types": "./dist/permissions/revocation-kick.d.ts",
+      "import": "./dist/permissions/revocation-kick.js",
+      "require": "./dist/permissions/revocation-kick.js"
+    },
+    "./realtime/rooms": {
+      "types": "./dist/realtime/rooms.d.ts",
+      "import": "./dist/realtime/rooms.js",
+      "require": "./dist/realtime/rooms.js"
+    },
+    "./agent-workspaces/workspace-layout-wire": {
+      "types": "./dist/agent-workspaces/workspace-layout-wire.d.ts",
+      "import": "./dist/agent-workspaces/workspace-layout-wire.js",
+      "require": "./dist/agent-workspaces/workspace-layout-wire.js"
+    },
+    "./realtime/conversation-event-names": {
+      "types": "./dist/realtime/conversation-event-names.d.ts",
+      "import": "./dist/realtime/conversation-event-names.js",
+      "require": "./dist/realtime/conversation-event-names.js"
+    },
+    "./realtime/kick-client": {
+      "types": "./dist/realtime/kick-client.d.ts",
+      "import": "./dist/realtime/kick-client.js",
+      "require": "./dist/realtime/kick-client.js"
     },
     "./permissions/share-link-service": {
       "types": "./dist/permissions/share-link-service.d.ts",
@@ -1602,6 +1757,11 @@
       "import": "./dist/compliance/erasure/ai-provider-erasure.js",
       "require": "./dist/compliance/erasure/ai-provider-erasure.js"
     },
+    "./compliance/erasure/purge-stream-state": {
+      "types": "./dist/compliance/erasure/purge-stream-state.d.ts",
+      "import": "./dist/compliance/erasure/purge-stream-state.js",
+      "require": "./dist/compliance/erasure/purge-stream-state.js"
+    },
     "./compliance/erasure/pseudonymize": {
       "types": "./dist/compliance/erasure/pseudonymize.d.ts",
       "import": "./dist/compliance/erasure/pseudonymize.js",
@@ -1699,6 +1859,9 @@
       "billing/credit-funding": [
         "./dist/billing/credit-funding.d.ts"
       ],
+      "billing/live-concurrency-query": [
+        "./dist/billing/live-concurrency-query.d.ts"
+      ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
       ],
@@ -1762,6 +1925,12 @@
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
       ],
+      "services/pending-uploads": [
+        "./dist/services/pending-uploads.d.ts"
+      ],
+      "services/pending-uploads-core": [
+        "./dist/services/pending-uploads-core.d.ts"
+      ],
       "services/preview": [
         "./dist/services/preview.d.ts"
       ],
@@ -1795,20 +1964,20 @@
       "services/sandbox/audit": [
         "./dist/services/sandbox/audit.d.ts"
       ],
-      "services/sandbox/lifecycle": [
-        "./dist/services/sandbox/lifecycle.d.ts"
-      ],
       "services/sandbox/sandbox-options": [
         "./dist/services/sandbox/sandbox-options.d.ts"
       ],
       "services/sandbox/machine-session-manager": [
         "./dist/services/sandbox/machine-session-manager.d.ts"
       ],
-      "services/sandbox/machine-session": [
-        "./dist/services/sandbox/machine-session.d.ts"
+      "services/sandbox/sandbox-billing": [
+        "./dist/services/sandbox/sandbox-billing.d.ts"
       ],
-      "services/sandbox/machine-billing": [
-        "./dist/services/sandbox/machine-billing.d.ts"
+      "services/sandbox/sandbox-storage-billing": [
+        "./dist/services/sandbox/sandbox-storage-billing.d.ts"
+      ],
+      "services/sandbox/sandbox-storage-attribution": [
+        "./dist/services/sandbox/sandbox-storage-attribution.d.ts"
       ],
       "services/sandbox/command-policy": [
         "./dist/services/sandbox/command-policy.d.ts"
@@ -1834,74 +2003,20 @@
       "services/sandbox/github-token": [
         "./dist/services/sandbox/github-token.d.ts"
       ],
-      "services/machines/project-paths": [
-        "./dist/services/machines/project-paths.d.ts"
-      ],
-      "services/machines/project-name": [
-        "./dist/services/machines/project-name.d.ts"
-      ],
-      "services/machines/branch-name": [
-        "./dist/services/machines/branch-name.d.ts"
-      ],
-      "services/machines/name-slug": [
-        "./dist/services/machines/name-slug.d.ts"
-      ],
-      "services/machines/machine-projects-store": [
-        "./dist/services/machines/machine-projects-store.d.ts"
-      ],
-      "services/machines/machine-projects": [
-        "./dist/services/machines/machine-projects.d.ts"
-      ],
-      "services/machines/branch-session": [
-        "./dist/services/machines/branch-session.d.ts"
-      ],
-      "services/machines/machine-branches-store": [
-        "./dist/services/machines/machine-branches-store.d.ts"
-      ],
-      "services/machines/machine-branches": [
-        "./dist/services/machines/machine-branches.d.ts"
-      ],
-      "services/machines/machine-workspaces-store": [
-        "./dist/services/machines/machine-workspaces-store.d.ts"
-      ],
-      "services/machines/machine-workspaces": [
-        "./dist/services/machines/machine-workspaces.d.ts"
-      ],
-      "services/machines/machine-settings": [
-        "./dist/services/machines/machine-settings.d.ts"
-      ],
-      "services/machines/agent-terminal-types": [
-        "./dist/services/machines/agent-terminal-types.d.ts"
-      ],
-      "services/machines/agent-terminals-store": [
-        "./dist/services/machines/agent-terminals-store.d.ts"
-      ],
-      "services/machines/agent-terminals": [
-        "./dist/services/machines/agent-terminals.d.ts"
-      ],
-      "services/machines/machine-access": [
-        "./dist/services/machines/machine-access.d.ts"
-      ],
-      "services/machines/machine-orphan-reconcile": [
-        "./dist/services/machines/machine-orphan-reconcile.d.ts"
-      ],
-      "services/machines/machine-list": [
-        "./dist/services/machines/machine-list.d.ts"
-      ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"
       ],
       "services/sandbox/sandbox-client/sprites": [
         "./dist/services/sandbox/sandbox-client/sprites.d.ts"
       ],
-      "services/sandbox/sandbox-client/sprite-machine-host": [
-        "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts"
+      "services/sandbox/sandbox-client/sprite-sandbox-host": [
+        "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.d.ts"
       ],
-      "services/sandbox/sandbox-client/machine-host-adapter": [
-        "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts"
+      "services/sandbox/sandbox-client/sandbox-host-adapter": [
+        "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts"
       ],
-      "services/sandbox/machine-host": [
-        "./dist/services/sandbox/machine-host.d.ts"
+      "services/sandbox/sandbox-host": [
+        "./dist/services/sandbox/sandbox-host.d.ts"
       ],
       "services/sandbox/machine-fs": [
         "./dist/services/sandbox/machine-fs.d.ts"
@@ -1950,9 +2065,6 @@
       ],
       "services/date-utils": [
         "./dist/services/date-utils.d.ts"
-      ],
-      "services/rate-limit-cache": [
-        "./dist/services/rate-limit-cache.d.ts"
       ],
       "deployment-mode": [
         "./dist/deployment-mode.d.ts"
@@ -2005,6 +2117,15 @@
       "email-templates/SdkCliLaunchEmail": [
         "./dist/email-templates/SdkCliLaunchEmail.d.ts"
       ],
+      "email-templates/AgentSandboxLaunchEmail": [
+        "./dist/email-templates/AgentSandboxLaunchEmail.d.ts"
+      ],
+      "email-templates/PaymentReceiptEmail": [
+        "./dist/email-templates/PaymentReceiptEmail.d.ts"
+      ],
+      "email-templates/FormSubmissionNotificationEmail": [
+        "./dist/email-templates/FormSubmissionNotificationEmail.d.ts"
+      ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"
       ],
@@ -2032,6 +2153,9 @@
       "config/env-validation": [
         "./dist/config/env-validation.d.ts"
       ],
+      "observability/sentry-env": [
+        "./dist/observability/sentry-env.d.ts"
+      ],
       "services/page-content-store": [
         "./dist/services/page-content-store.d.ts"
       ],
@@ -2046,6 +2170,9 @@
       ],
       "services/invites": [
         "./dist/services/invites/index.d.ts"
+      ],
+      "services/reorder": [
+        "./dist/services/reorder/index.d.ts"
       ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
@@ -2160,6 +2287,9 @@
       ],
       "audit/audit-query": [
         "./dist/audit/audit-query.d.ts"
+      ],
+      "audit/chain-alert-payload": [
+        "./dist/audit/chain-alert-payload.d.ts"
       ],
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
@@ -2372,15 +2502,12 @@
     "@simplewebauthn/server": "^13.2.2",
     "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
-    "mammoth": "^1.10.0",
     "marked": "^17.0.1",
     "pako": "^2.1.0",
-    "pdf-parse-debugging-disabled": "^1.1.1",
     "react": "^19.1.2",
-    "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
     "sanitize-html": "^2.17.6",
@@ -2394,10 +2521,12 @@
     "@types/diff-match-patch": "^1.0.36",
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
+    "@types/pg": "^8.15.4",
     "@types/react": "^19.1.13",
     "@types/sanitize-html": "^2.16.1",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
+    "pg": "^8.16.3",
     "typescript-eslint": "^8.59.0"
   }
 }

@@ -20,15 +20,16 @@ import {
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForDispatchCredentials, filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
@@ -60,7 +61,7 @@ export async function POST(request: Request): Promise<Response> {
   // 1. Authenticate — MCP tokens only; no session, no CSRF, no browser session ID
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(authResult)) {
-    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST', authFailureReason: authResult.authFailureReason }, riskScore: 0.5 });
     return authResult.error;
   }
 
@@ -180,6 +181,18 @@ export async function POST(request: Request): Promise<Response> {
         return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
       }
       isConversationShared = conv?.isShared === true;
+      // A `type='client'` thread (the shape `POST /api/v1/conversations`
+      // mints) is created before anyone knows which agent it will talk to —
+      // the model, and therefore the agent page, arrives HERE. Claim it, once:
+      // the stamp is what makes the thread's rows page-scoped, and so what
+      // keeps this route's history load and the thread's own edit/delete route
+      // working now that `messages.pageId` is gone (epic "Agent-Session Single
+      // Source of Truth", Phase 4 PR 15). Write-once in the statement — a
+      // later request naming a different agent matches no row rather than
+      // re-anchoring a thread whose permissions already follow the first page.
+      if (conv?.type === 'client') {
+        await conversationRepository.stampClientConversationPage(incomingConversationId, pageId);
+      }
     }
   }
 
@@ -289,6 +302,27 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // This route authenticates via MCP/API credentials, never a browser
+      // session cookie — spawn_session/send_session dispatch by forwarding
+      // the caller's cookie and could only ever refuse here, so the
+      // dispatch-dependent pair is stripped (same posture as non-interactive
+      // workflow runs; codex round 8).
+      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -310,6 +344,27 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // This route authenticates via MCP/API credentials, never a browser
+      // session cookie — spawn_session/send_session dispatch by forwarding
+      // the caller's cookie and could only ever refuse here, so the
+      // dispatch-dependent pair is stripped (same posture as non-interactive
+      // workflow runs; codex round 8).
+      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -342,7 +397,12 @@ export async function POST(request: Request): Promise<Response> {
 
     let inferenceMessages = messages;
     if (isThreadMode && !clientManagesHistory) {
-      const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
+      // Reads the UNIFIED `messages` table (epic "Agent-Session Single Source
+      // of Truth", Phase 4 / D6). `pageId` stays a real scope: it is what
+      // stops a caller pairing another page's conversationId with a page they
+      // can reach. For a `type='client'` thread that scope resolves through
+      // `conversations.agentPageId`, stamped above — see `unifiedPageScope`.
+      const dbMessages = await messageRepository.getMessagesForPage(pageId, conversationId);
       inferenceMessages = [...await Promise.all(dbMessages.map(convertDbMessageToUIMessage)), userMessage];
     }
 
@@ -362,7 +422,7 @@ export async function POST(request: Request): Promise<Response> {
       if (resultsByCallId.size > 0) {
         // Fire-and-forget — the response does not wait for back-fill to complete.
         // Best-effort: a failure is logged but does not affect the streaming reply.
-        chatMessageRepository.getMessagesByConversationId(conversationId)
+        messageRepository.getMessagesByConversationId(conversationId)
           .then(dbRows => {
             for (const row of dbRows) {
               if (row.role !== 'assistant' || !row.isActive) continue;
@@ -380,7 +440,7 @@ export async function POST(request: Request): Promise<Response> {
                 )
                 .map(tc => resultsByCallId.get(tc.toolCallId as string)!);
               if (matched.length > 0) {
-                chatMessageRepository.updateMessageToolResults(row.id, conversationId, matched)
+                messageRepository.updateMessageToolResults(row.id, conversationId, matched)
                   .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
               }
             }
@@ -391,7 +451,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const userMessageId = userMessage.id;
     if (userMessage && userMessage.role === 'user') {
-      await saveMessageToDatabase({
+      await messageRepository.savePageMessage({
         messageId: userMessageId,
         pageId,
         conversationId,
@@ -473,7 +533,7 @@ export async function POST(request: Request): Promise<Response> {
       const extracted = extractToolCallsFromSteps(steps ?? []);
       const hasContent = text !== undefined || extracted.toolCalls.length > 0;
       if (hasContent) {
-        await saveMessageToDatabase({
+        await messageRepository.savePageMessage({
           messageId: assistantId,
           pageId,
           conversationId,

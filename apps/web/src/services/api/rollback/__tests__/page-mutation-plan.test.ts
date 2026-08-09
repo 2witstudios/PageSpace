@@ -8,7 +8,6 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
-import { chatMessages } from '@pagespace/db/schema/core';
 import {
   computePageMutation,
   restoreFields,
@@ -269,6 +268,18 @@ describe('pickConversationTable', () => {
     });
   });
 
+  it('routes global conversations with no pageId to the messages table', () => {
+    assert({
+      given: "conversationType 'global' with no pageId (how global-assistant message activities are logged)",
+      should: 'select messages and mark isGlobal',
+      actual: (() => {
+        const r = pickConversationTable({ conversationType: 'global', hasPageId: false });
+        return { isChannel: r.isChannel, isGlobal: r.isGlobal, label: r.label, isGlobalTable: r.table === messages };
+      })(),
+      expected: { isChannel: false, isGlobal: true, label: 'global', isGlobalTable: true },
+    });
+  });
+
   it('treats a missing pageId as global', () => {
     assert({
       given: 'no conversationType and no pageId',
@@ -281,15 +292,33 @@ describe('pickConversationTable', () => {
     });
   });
 
-  it('routes a page conversation to the chat-messages table', () => {
+  it('routes a page conversation to the one messages table', () => {
     assert({
       given: 'no conversationType but a pageId present',
-      should: 'select chatMessages as a page conversation',
+      should: 'select `messages` for reads and rollback writes — the legacy `chat_messages` leg it used to also mirror onto was dropped with the table (epic "Agent-Session Single Source of Truth", Phase 4 / D6, PR 15)',
       actual: (() => {
         const r = pickConversationTable({ conversationType: undefined, hasPageId: true });
-        return { isChannel: r.isChannel, isGlobal: r.isGlobal, label: r.label, isChatTable: r.table === chatMessages };
+        return {
+          isChannel: r.isChannel,
+          isGlobal: r.isGlobal,
+          label: r.label,
+          isUnifiedTable: r.table === messages,
+          hasLegacyLeg: 'legacyTable' in r,
+        };
       })(),
-      expected: { isChannel: false, isGlobal: false, label: 'page', isChatTable: true },
+      expected: { isChannel: false, isGlobal: false, label: 'page', isUnifiedTable: true, hasLegacyLeg: false },
+    });
+  });
+
+  it('routes a global conversation to the same table', () => {
+    assert({
+      given: 'a global conversation',
+      should: 'select `messages` — one table for every kind of thread, so page and global differ only in their label',
+      actual: (() => {
+        const r = pickConversationTable({ conversationType: 'global', hasPageId: false });
+        return { label: r.label, isUnifiedTable: r.table === messages, hasLegacyLeg: 'legacyTable' in r };
+      })(),
+      expected: { label: 'global', isUnifiedTable: true, hasLegacyLeg: false },
     });
   });
 });

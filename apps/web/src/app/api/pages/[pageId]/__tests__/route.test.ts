@@ -40,8 +40,14 @@ vi.mock('@/lib/websocket', () => ({
     type,
     ...data,
   })),
-  kickUserFromPage: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
-  kickUserFromPageActivity: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+}));
+
+// Revocation kicking is centralized (#2158) — the route calls this hook
+// instead of picking rooms itself. Its own room-set and best-effort behavior
+// are covered by packages/lib/src/permissions/__tests__/revocation-kick.test.ts;
+// here we only assert the route wires it up with the right arguments.
+vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
+  kickForPagePermissionRevocation: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -117,7 +123,8 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
-import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { kickForPagePermissionRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
@@ -345,8 +352,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         where: vi.fn().mockResolvedValue([]),
       }),
     });
-    vi.mocked(kickUserFromPage).mockResolvedValue({ success: true, kickedCount: 0, rooms: [] });
-    vi.mocked(kickUserFromPageActivity).mockResolvedValue({ success: true, kickedCount: 0, rooms: [] });
+    vi.mocked(kickForPagePermissionRevocation).mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -619,10 +625,12 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
 
-      expect(kickUserFromPage).toHaveBeenCalledWith(mockPageId, 'member_1', 'page_private');
-      expect(kickUserFromPage).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
-      expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_1', 'page_private');
-      expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+        userId: 'member_1', pageId: mockPageId, reason: 'page_private',
+      });
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+        userId: 'member_2', pageId: mockPageId, reason: 'page_private',
+      });
     });
 
     it('does not kick members who retain access via custom role when page transitions false→true', async () => {
@@ -639,8 +647,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
 
-      expect(kickUserFromPage).not.toHaveBeenCalled();
-      expect(kickUserFromPageActivity).not.toHaveBeenCalled();
+      expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
     });
 
     it('does not kick anyone when page is already private (no transition)', async () => {
@@ -649,8 +656,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
 
-      expect(kickUserFromPage).not.toHaveBeenCalled();
-      expect(kickUserFromPageActivity).not.toHaveBeenCalled();
+      expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
     });
 
     it('returns 403 when user lacks share permission to change privacy', async () => {

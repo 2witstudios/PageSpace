@@ -35,7 +35,37 @@ vi.mock('@pagespace/db/db', () => ({
     }),
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
+  sql: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+// Destination resolution: the tool authorizes the target itself (create-file-page
+// deliberately does not), so both seams it uses are mocked here.
+const canActorEditPage = vi.fn<(...a: unknown[]) => Promise<boolean>>(async () => true);
+const findPageById = vi.fn<(...a: unknown[]) => unknown>();
+// Partial mocks: the test also imports the full tool registry, which pulls in
+// every other export of these modules.
+vi.mock('../actor-permissions', async (orig) => ({
+  ...(await orig<typeof import('../actor-permissions')>()),
+  canActorEditPage: (...a: unknown[]) => canActorEditPage(...a),
+}));
+vi.mock('@pagespace/lib/repositories/page-repository', async (orig) => {
+  const actual = await orig<typeof import('@pagespace/lib/repositories/page-repository')>();
+  return {
+    ...actual,
+    pageRepository: { ...actual.pageRepository, findById: (...a: unknown[]) => findPageById(...a) },
+  };
+});
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', role: 'role', subscriptionTier: 'subscriptionTier' } }));
 
 import { imageGenerationTools } from '../image-generation-tools';
@@ -60,6 +90,141 @@ beforeEach(() => {
   createImageFilePage.mockReset();
   dbState.role = 'user';
   dbState.tier = 'pro';
+  canActorEditPage.mockReset();
+  canActorEditPage.mockResolvedValue(true);
+  findPageById.mockReset();
+});
+
+// --- destination targeting -------------------------------------------------
+//
+// Generated images used to land in the user's Home drive unconditionally, which
+// stranded them: the workspace the user was actually working in never got the
+// file, and no agent tool could move it there.
+describe('generate_image destination', () => {
+  const okGeneration = () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.01,
+      generationIds: ['gen-1'],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'page-9', driveId: 'drive-work', parentId: 'gallery-1' });
+  };
+
+  const admin = (extra: Partial<ToolExecutionContext> = {}) => ({
+    userId: 'u1', isAdmin: true, subscriptionTier: 'pro', ...extra,
+  });
+
+  const inDrive = (id: string) => ({
+    locationContext: { currentDrive: { id, name: 'Work', slug: 'work' } },
+  }) as Partial<ToolExecutionContext>;
+
+  it('files into the workspace currently in view', async () => {
+    okGeneration();
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-work')))) as { savedTo: string };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: 'drive-work', targetParentId: undefined }),
+    );
+    expect(res.savedTo).toBe('current_drive');
+  });
+
+  it('falls back to the Home gallery when no workspace is in view, and says so', async () => {
+    okGeneration();
+
+    const res = (await run({ prompt: 'a diagram' }, admin())) as { savedTo: string; nextSteps?: string[] };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: undefined, targetParentId: undefined }),
+    );
+    expect(res.savedTo).toBe('home_no_location');
+    // The relocate hint is what closes the loop for the model.
+    expect(res.nextSteps?.[0]).toContain('move_page');
+    expect(res.nextSteps?.[0]).toContain('no workspace was in view');
+  });
+
+  it('degrades to the Home gallery when the drive in view is view-only', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as { savedTo: string };
+
+    expect(res.savedTo).toBe('home_unwritable_location');
+  });
+
+  // The two Home outcomes must stay distinguishable: reporting "no workspace was
+  // in view" when the real cause was a read-only workspace makes the assistant
+  // explain the wrong thing, and buries a permissions problem under a
+  // navigation one that navigating cannot fix.
+  it('reports a read-only workspace as the reason, not an absent one', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as
+      { savedTo: string; nextSteps?: string[]; summary: string };
+
+    expect(res.nextSteps?.[0]).toContain('read-only');
+    expect(res.nextSteps?.[0]).not.toContain('no workspace was in view');
+    // Both Home outcomes still tell the user where the file actually is.
+    expect(res.summary).toContain('Home workspace gallery');
+  });
+
+  // An explicitly named destination must fail loudly rather than silently
+  // redirecting to Home — and it must fail BEFORE any spend.
+  it('rejects an unwritable explicit driveId without reserving credits or calling the provider', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram', driveId: 'drive-forbidden' }, admin())) as
+      { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Insufficient permissions');
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+    expect(releaseHold).not.toHaveBeenCalled();
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(createImageFilePage).not.toHaveBeenCalled();
+  });
+
+  it('files under an explicit parent, forwarding the parent\'s own drive', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-work', isTrashed: false });
+
+    const res = (await run({ prompt: 'a diagram', parentId: 'folder-1' }, admin())) as { savedTo: string };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: 'drive-work', targetParentId: 'folder-1' }),
+    );
+    expect(res.savedTo).toBe('requested');
+  });
+
+  it('rejects a parent that is not in the named drive, with no spend', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-other', isTrashed: false });
+
+    const res = (await run(
+      { prompt: 'a diagram', parentId: 'folder-1', driveId: 'drive-work' },
+      admin(),
+    )) as { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('is not in drive');
+    expect(canConsumeAI).not.toHaveBeenCalled();
+  });
+
+  it('rejects a trashed parent', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-work', isTrashed: true });
+
+    const res = (await run({ prompt: 'a diagram', parentId: 'folder-1' }, admin())) as
+      { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('was not found');
+  });
 });
 
 describe('generate_image registration', () => {

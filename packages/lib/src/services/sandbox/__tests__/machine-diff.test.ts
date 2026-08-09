@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { listMachineDiffFiles, readMachineDiffPair, resolveMachineMergeBase } from '../machine-diff';
 import type { GitSandboxRunDeps } from '../git-tool-runners';
-import type { MachineHandle } from '../machine-host';
+import type { SandboxHandle } from '../sandbox-host';
 import type { SandboxActorContext } from '../tool-runners';
 import type { ExecutableSandbox, RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
 
@@ -9,7 +9,7 @@ import type { ExecutableSandbox, RunCommandArgs, SandboxRunResult } from '../san
  * The Diff service drives the real `runGitInSandbox` / `readMachineGitBlob` /
  * `readMachineFile` (none mocked — they're pure orchestration over injected
  * deps), so a fake `ExecutableSandbox` whose `runCommand` is scripted per git
- * argv, plus a fake `MachineHandle` for working-tree reads, exercises every
+ * argv, plus a fake `SandboxHandle` for working-tree reads, exercises every
  * scope with zero real Sprite/git calls — the same harness shape as
  * `machine-git-blob.test.ts`.
  */
@@ -44,7 +44,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
   };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: { acquireSlot: () => true, releaseSlot: () => {} },
     buildEnv: () => ({}),
@@ -67,10 +67,10 @@ function scriptGit(
   };
 }
 
-function makeHandle(files: Record<string, string>): { handle: MachineHandle; reads: string[] } {
+function makeHandle(files: Record<string, string>): { handle: SandboxHandle; reads: string[] } {
   const reads: string[] = [];
-  const handle: MachineHandle = {
-    machineId: 'sbx-1',
+  const handle: SandboxHandle = {
+    sandboxId: 'sbx-1',
     spriteInstanceId: null,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},

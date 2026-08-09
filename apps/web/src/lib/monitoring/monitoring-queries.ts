@@ -14,7 +14,7 @@ import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
-import type { SubscriptionTier } from '@/lib/subscription/plans';
+import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
 import {
   getLogsByLevel as chGetLogsByLevel,
@@ -1364,7 +1364,7 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
     .from(subscriptions)
     .where(eq(subscriptions.status, 'active'));
 
-  const counts: Record<SubscriptionTier, number> = { free: 0, pro: 0, founder: 0, business: 0 };
+  const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
   for (const r of rows) {
     counts[getTierFromPrice(r.stripePriceId)] += 1;
   }

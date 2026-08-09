@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
@@ -202,7 +202,12 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     isFormulaFocused,
     isDirty: !!documentState?.isDirty,
   });
-  useEditingSession(`sheet-${page.id}`, isEditingActive, 'document', {
+  // instanceId distinguishes this mount from any other simultaneous mount of
+  // the SAME page (main center panel vs. an agent-session pane) — without it,
+  // both compute the identical `sheet-${page.id}` key and collide in
+  // useEditingStore's Map (see DocumentView's identical fix).
+  const instanceId = useId();
+  useEditingSession(`sheet-${page.id}-${instanceId}`, isEditingActive, 'document', {
     pageId: page.id,
     componentName: 'SheetView',
   });

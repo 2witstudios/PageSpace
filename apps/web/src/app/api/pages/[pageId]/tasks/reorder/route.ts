@@ -2,14 +2,26 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
+import { taskLists } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildren } from './reorder-task-list';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * lockedBatchReorder's batched `UPDATE ... FROM (VALUES ...)` binds 2
+ * parameters per row plus 1 scope parameter, so an unbounded tasks array
+ * can cross PostgreSQL's 65,535-parameter-per-statement ceiling and 500
+ * instead of failing cleanly. Task lists are never legitimately this large —
+ * reject oversized requests up front. Mirrors the bound on
+ * apps/web/src/app/api/user/favorites/reorder/route.ts (#2164).
+ */
+const MAX_REORDER_BATCH = 5000;
 
 /**
  * PATCH /api/pages/[pageId]/tasks/reorder
@@ -55,6 +67,10 @@ export async function PATCH(
     return NextResponse.json({ error: 'tasks must be an array' }, { status: 400 });
   }
 
+  if (tasks.length > MAX_REORDER_BATCH) {
+    return NextResponse.json({ error: `tasks must not exceed ${MAX_REORDER_BATCH} entries` }, { status: 400 });
+  }
+
   // Validate format: [{ id: string, position: number }]
   for (const task of tasks) {
     if (!task.id || typeof task.position !== 'number') {
@@ -64,14 +80,27 @@ export async function PATCH(
     }
   }
 
-  // Update positions in a transaction
-  await db.transaction(async (tx) => {
-    for (const task of tasks) {
-      await tx.update(taskItems)
-        .set({ position: task.position })
-        .where(eq(taskItems.id, task.id));
+  // Update positions via the locked-batch primitive (Phase 3): locks every
+  // target row FOR UPDATE in ascending-id order, then writes all positions in
+  // one batched statement — replaces the N-sequential-unordered-update loop
+  // that deadlocked production Postgres on 2026-07-18.
+  const plan = computeReorderPlan(tasks);
+  if (plan.orderedIds.length > 0) {
+    try {
+      await db.transaction(async (tx) => {
+        const lockedIds = await reorderTaskListChildren(tx, pageId, plan);
+
+        if (lockedIds.length !== plan.orderedIds.length) {
+          throw new Error('Invalid task IDs');
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Invalid task IDs') {
+        return NextResponse.json({ error: 'Invalid task IDs' }, { status: 400 });
+      }
+      throw error;
     }
-  });
+  }
 
   // Broadcast reorder event
   await broadcastTaskEvent({

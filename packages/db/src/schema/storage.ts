@@ -58,6 +58,37 @@ export const fileConversations = pgTable('file_conversations', {
   conversationIdx: index('file_conversations_conversation_id_idx').on(table.conversationId),
 }));
 
+/**
+ * One row per presign-reserved in-flight upload (#2154). Replaces the old
+ * users.activeUploads counter: the per-user concurrent-upload limit is derived
+ * by counting this user's rows with expiresAt > now(), so a process restart
+ * between presign and complete can never leak a permanent +1 — an orphaned row
+ * simply expires. Rows are deleted at complete/cancel/stale-sweep; expired
+ * leftovers are reaped by the sweep-expired cron.
+ */
+export const pendingUploads = pgTable('pending_uploads', {
+  /** The semaphore slot id (jobId) issued at presign. */
+  id: text('id').primaryKey(),
+  userId: text('userId')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  fileSize: bigint('fileSize', { mode: 'number' }).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+}, (table) => ({
+  // Live-count query: WHERE userId = ? AND expiresAt > now()
+  userExpiryIdx: index('pending_uploads_user_expires_idx').on(table.userId, table.expiresAt),
+  // TTL sweep: DELETE WHERE expiresAt < now()
+  expiryIdx: index('pending_uploads_expires_idx').on(table.expiresAt),
+}));
+
+export const pendingUploadsRelations = relations(pendingUploads, ({ one }) => ({
+  user: one(users, {
+    fields: [pendingUploads.userId],
+    references: [users.id],
+  }),
+}));
+
 export const filesRelations = relations(files, ({ one, many }) => ({
   drive: one(drives, {
     fields: [files.driveId],

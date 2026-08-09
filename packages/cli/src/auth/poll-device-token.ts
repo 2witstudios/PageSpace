@@ -7,16 +7,8 @@
  * `DeviceTokenResult` variants rather than throwing, so `decideNextPoll`
  * never needs to parse an error string to decide what happened.
  */
-import { z } from 'zod';
 import type { DeviceTokenResult, PollDeviceToken } from './device-flow.js';
-
-const tokenResponseSchema = z.object({
-  access_token: z.string(),
-  token_type: z.string(),
-  expires_in: z.number(),
-  refresh_token: z.string(),
-  scope: z.string(),
-});
+import { parseTokenResponse } from './token-response.js';
 
 const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 
@@ -64,24 +56,16 @@ export function createPollDeviceToken(fetchImpl: typeof fetch = fetch): PollDevi
       }
     }
 
-    const parsed = tokenResponseSchema.safeParse(json);
-    if (!parsed.success) {
+    // Discriminated through the SAME parser the authorization_code exchange
+    // uses (`token-response.ts`): the device grant now redeems key-shaped
+    // grants too, so any of the four shapes can arrive here. `runDeviceLogin`
+    // is what decides whether the shape it got is the one this particular
+    // flow asked for.
+    const tokens = parseTokenResponse(json);
+    if (tokens === null) {
       return { kind: 'request_failed', message: 'invalid_response' };
     }
 
-    return {
-      kind: 'success',
-      // `login --device` only ever requests `manage_keys offline_access`
-      // (never a pure drive:* grant), so the token endpoint's `ok_mcp_token`
-      // branch (oauth-repository.ts) never fires here — this is always the
-      // classic OAuth refresh/access-token pair, hence the literal 'oauth'.
-      tokens: {
-        kind: 'oauth',
-        accessToken: parsed.data.access_token,
-        refreshToken: parsed.data.refresh_token,
-        expiresIn: parsed.data.expires_in,
-        scope: parsed.data.scope,
-      },
-    };
+    return { kind: 'success', tokens };
   };
 }

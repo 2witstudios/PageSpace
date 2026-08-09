@@ -942,5 +942,3 @@ export function useVoiceMode({
     setAutoSend,
   };
 }
-
-export default useVoiceMode;

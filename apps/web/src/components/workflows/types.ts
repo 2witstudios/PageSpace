@@ -1,3 +1,5 @@
+import type { WorkflowStep } from './WorkflowStepsEditor';
+
 /**
  * JSON-serialized workflow from the API (dates are strings, not Date objects).
  *
@@ -19,8 +21,11 @@ export interface Workflow {
   driveId: string;
   createdBy: string;
   name: string;
-  agentPageId: string;
+  /** Null for step-based workflows whose ai steps carry their own agent. */
+  agentPageId: string | null;
   prompt: string;
+  /** Null = legacy single-AI-prompt workflow; the form synthesizes one ai step. */
+  steps: WorkflowStep[] | null;
   contextPageIds: string[];
   triggerType: 'cron';
   cronExpression: string | null;

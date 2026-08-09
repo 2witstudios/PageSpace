@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { z } from 'zod';
+import { ensureTestDb } from '@/test/ensure-test-db';
 
 // Mock boundaries
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -48,6 +49,14 @@ const createTestInput = (overrides: Partial<ActivityToolInput> = {}): ActivityTo
 });
 
 describe('activity-tools', () => {
+  // get_activity's execute path reads real rows (users lookup) even on the
+  // access-denied branch, so this file needs the provisioned test Postgres.
+  // Fail fast with an actionable message instead of a cryptic drizzle
+  // "Failed query" when run directly outside `bun run test`.
+  beforeAll(async () => {
+    await ensureTestDb();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

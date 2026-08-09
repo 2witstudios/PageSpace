@@ -129,9 +129,21 @@ accepted everywhere: `--json` (machine-readable output on stdout, nothing else),
 drives    list [--all]                # --all includes trashed drives
           create <name>
           rename <driveId> <name>
+          update-context <driveId> <drivePrompt>   # sets the drive's AI context prompt (max 10000 chars)
           set-home-page <driveId> <pageId|--clear>
           trash <driveId> [--yes]     # asks you to type the drive name unless --yes
           restore <driveId>
+
+roles     list <driveId>
+          get <driveId> <roleId>
+          create <driveId> <name> [--description <text>] [--color <hex>] [--is-default true|false]
+                 [--drive-wide-view true|false --drive-wide-edit true|false --drive-wide-share true|false]
+          update <driveId> <roleId> [--name <text>] [--description <text>|--clear-description] [--color <hex>|--clear-color]
+                 [--is-default true|false] [--drive-wide-view/--drive-wide-edit/--drive-wide-share true|false | --clear-drive-wide]
+          delete <driveId> <roleId> [--yes]
+          set-page-permissions <driveId> <roleId> <pageId> --view true|false --edit true|false --share true|false
+          set-drive-wide-permissions <driveId> <roleId> --view true|false --edit true|false --share true|false
+          remove-page-permissions <driveId> <roleId> <pageId> [--yes]
 
 pages     list --drive <driveId> [parentId]
           tree --drive <driveId> [parentId]

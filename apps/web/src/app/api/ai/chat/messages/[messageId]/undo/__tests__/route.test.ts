@@ -38,6 +38,14 @@ vi.mock('@/lib/repositories/global-conversation-repository', () => ({
 }));
 
 // Mock permissions
+// The ONE conversation-access predicate, stubbed at its module boundary — the
+// same seam the revs-route and plan-route suites use, since it reaches its
+// permission dependency through a package-relative import a consumer's
+// `vi.mock` cannot intercept. What this suite proves is DELEGATION: that undo
+// asks it, and asks about the right conversation.
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
+  canAccessConversation: vi.fn(),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
 }));
@@ -77,12 +85,14 @@ import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);
 const mockPreviewAiUndo = vi.mocked(previewAiUndo);
 const mockExecuteAiUndo = vi.mocked(executeAiUndo);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockCanAccessConversation = vi.mocked(canAccessConversation);
 const mockGlobalConvRepo = vi.mocked(globalConversationRepository);
 
 // Test helpers
@@ -154,6 +164,9 @@ const createAiUndoPreview = (overrides: Partial<AiUndoPreview> = {}): AiUndoPrev
   messageId: mockMessageId,
   conversationId: 'conv_123',
   pageId: mockPageId,
+  // The conversation's own facts, which the route hands to the shared
+  // predicate. Owned by the caller and private, i.e. the ordinary case.
+  conversationAccess: { userId: mockUserId, isShared: false, type: 'page', contextId: mockPageId },
   driveId: mockDriveId,
   source: 'page_chat',
   createdAt: new Date('2024-01-15'),
@@ -172,6 +185,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
     mockCheckMCPPageScope.mockResolvedValue(null); // MCP scope check passes
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
+    mockCanAccessConversation.mockResolvedValue(true);
     mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
   });
 
@@ -236,6 +250,90 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
       expect(response.status).toBe(403);
       expect(body.error).toContain('do not have permission');
     });
+
+    /**
+     * THE CONVERSATION GATE (review finding — MAJOR).
+     *
+     * This branch used to check `canPrincipalEditPage` and nothing else, while
+     * the undo sweep is scoped by `conversationId` alone — so any drive member
+     * with EDIT on a shared agent page could undo another member's PRIVATE
+     * conversation on that page. Note the shape of the two tests above: the
+     * GLOBAL branch was checked for ownership and the PAGE branch only for
+     * page permission. They pinned the asymmetry rather than catching it.
+     *
+     * Fails on the pre-fix route, which returned 200.
+     */
+    it('returns 403 for a page conversation the caller may NOT access, even with edit on the page', async () => {
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanAccessConversation.mockResolvedValue(false);
+      mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview({
+        // Another member's private thread on a page this caller can edit.
+        conversationAccess: { userId: 'someone_else', isShared: false, type: 'page', contextId: mockPageId },
+      }));
+
+      const response = await GET(createGetRequest(), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('do not have permission');
+      // Refused on the conversation, so the page gate is never even consulted.
+      expect(mockCanUserEditPage).not.toHaveBeenCalled();
+    });
+
+    it('asks the shared predicate about the conversation the undo would sweep', async () => {
+      await GET(createGetRequest(), { params: mockParams });
+
+      // Delegation, and with the whole row it decides on — a route passing only
+      // the owner could not express "shared AND page access" at all, which is
+      // how this came to answer differently from every other conversation gate.
+      expect(mockCanAccessConversation).toHaveBeenCalledWith(
+        mockUserId,
+        expect.objectContaining({ userId: mockUserId, isShared: false, type: 'page', contextId: mockPageId }),
+      );
+    });
+
+    it('still requires page EDIT once the conversation gate passes — both gates apply', async () => {
+      mockCanAccessConversation.mockResolvedValue(true);
+      mockCanUserEditPage.mockResolvedValue(false);
+
+      const response = await GET(createGetRequest(), { params: mockParams });
+
+      // Undo rolls page activities back, so access to the thread is not on its
+      // own a licence to mutate the page.
+      expect(response.status).toBe(403);
+    });
+
+    it('denies when the message has no conversation row at all — no row is not shared', async () => {
+      mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview({ conversationAccess: null }));
+      mockCanAccessConversation.mockResolvedValue(false);
+
+      const response = await GET(createGetRequest(), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(mockCanAccessConversation).toHaveBeenCalledWith(
+        mockUserId,
+        expect.objectContaining({ userId: '', isShared: false }),
+      );
+    });
+
+    /**
+     * A `type='drive'` conversation names no page (its `contextId` is a DRIVE),
+     * so it reaches the page branch — `source` is "anything not global" — with
+     * `pageId: null`. That used to be a 500, which reads as a server fault for
+     * what is really "this verb does not apply here" (review finding — MINOR).
+     */
+    it('404s a conversation that names no page, rather than 500ing', async () => {
+      mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview({
+        pageId: null,
+        conversationAccess: { userId: mockUserId, isShared: false, type: 'drive', contextId: 'drv_1' },
+      }));
+
+      const response = await GET(createGetRequest(), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toContain('does not support undo');
+    });
   });
 
   // ============================================
@@ -270,6 +368,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     mockCheckMCPPageScope.mockResolvedValue(null); // MCP scope check passes
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
+    mockCanAccessConversation.mockResolvedValue(true);
     mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
   });
 

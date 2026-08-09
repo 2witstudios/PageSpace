@@ -40,7 +40,7 @@ export type TerminalSession = {
    */
   lastViewerUserId: string;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
-  sessionId?: string;
+  spriteExecId?: string;
   /**
    * Every attached viewer, keyed by the handler's namespaced socketKey
    * (`${socket.id}\u0000${connectionId}`) — the SAME string the map's
@@ -109,8 +109,34 @@ export type TerminalSession = {
   payerId?: string;
   holdId?: string;
   connectedAt?: number;
-  /** The Terminal page this session is for — the usage-breakdown's per-machine attribution key. */
-  pageId?: string;
+  /**
+   * First-class billing attribution (Terminal Epic 3 usage-breakdown fix) —
+   * the agent-session's own drive (undefined for a global-assistant session)
+   * and its own `agent_workspaces.id`, so the usage breakdown can group shell
+   * runtime spend by drive/session without JSON forensics. A session is
+   * drive-level, not page-anchored, so there is no `pageId` to attribute to.
+   */
+  driveId?: string;
+  workspaceId?: string;
+  /**
+   * The `machine_agent_terminals` row this PTY belongs to (issue #2205's
+   * cold-tail persist). Known ONLY on the create path
+   * (`AgentTerminalSandboxResult.agentTerminalId`) — the only path that
+   * constructs a session — so a session with no row to persist onto (should
+   * that ever happen) simply persists nothing on teardown.
+   *
+   * LEGACY family only (`agent-terminal:*`); the `shell:*` family records
+   * `shellId` instead. Deleted with the machines sweep (Phase 8).
+   */
+  agentTerminalId?: string;
+  /**
+   * The `agent_workspace_shells` row this PTY belongs to — the `shell:*`
+   * family's twin of `agentTerminalId`, serving the same two persists
+   * (`spriteExecId`, the #2205 cold tail) against the re-keyed table.
+   * Exactly one of the two is ever set, by whichever handler family created
+   * the session.
+   */
+  shellId?: string;
 };
 
 export function appendScrollback(
@@ -144,7 +170,18 @@ export function broadcastClosed(session: Pick<TerminalSession, 'viewers'>, exitC
 export type TerminalSessionMap = {
   getBySocket(socketId: string): TerminalSession | undefined;
   getByKey(sessionKey: string): TerminalSession | undefined;
-  setNew(sessionKey: string, socketId: string, session: TerminalSession): void;
+  /**
+   * Install a freshly created session under its key, and bind `socketId` to it.
+   *
+   * `socketId` is `undefined` for a HEADLESS create — a session started by agent
+   * IO (`session-io.ts`) rather than by a viewer's socket. There is no socket to
+   * bind, and inventing a placeholder binding would be worse than none: every
+   * `bySocket` entry is a route by which input/resize/disconnect reach a PTY, so
+   * a binding no real connection owns is a binding nothing can ever remove.
+   * The session is still fully reachable by KEY, which is how every non-socket
+   * caller (session IO, the reap, re-auth) addresses it anyway.
+   */
+  setNew(sessionKey: string, socketId: string | undefined, session: TerminalSession): void;
   /**
    * Bind one more socket to a live session's key. `bySocket` is many-to-one
    * (issue #2093): every attached viewer holds its own binding, and joining
@@ -206,7 +243,7 @@ export function createTerminalSessionMap(): TerminalSessionMap {
     },
     setNew(sessionKey, socketId, session) {
       byKey.set(sessionKey, session);
-      bySocket.set(socketId, sessionKey);
+      if (socketId !== undefined) bySocket.set(socketId, sessionKey);
     },
     addBinding(sessionKey, socketId) {
       bySocket.set(socketId, sessionKey);

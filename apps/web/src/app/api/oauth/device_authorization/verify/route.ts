@@ -13,7 +13,7 @@ import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { isCredentialEscalatingGrant, parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
 import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -64,9 +64,63 @@ export async function POST(req: NextRequest) {
   }
 
   const scopeDescriptions: string[] = [];
+  // An empty scope list is a legitimate device-authorization request (the
+  // device_authorization route leaves `scopes: []` when the initial POST omits
+  // `scope` entirely) — but a NON-empty list this parser rejects is not
+  // something a human can be asked to approve: the screen would render an
+  // empty capability list and still offer an Allow button. Fail closed with
+  // the same no-oracle response as a bad code, matching the decision route,
+  // which already refuses an unparseable scope set with invalid_scope.
   const parsed = result.scopes.length > 0 ? parseScopeList(result.scopes.join(' ')) : null;
+  if (parsed !== null && !parsed.ok) {
+    return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
+  }
+  // Derived from the SAME predicate the decision route enforces with, so the
+  // screen can never advertise a ceremony the server doesn't demand (or skip
+  // one it does). Surfaced so the ceremony runs before the user clicks Allow
+  // rather than failing them afterward.
+  const requiresStepUp = parsed?.ok === true && isCredentialEscalatingGrant(parsed.scopes);
 
   if (parsed?.ok) {
+    // An update_key grant re-scopes one of the VERIFYING user's existing keys
+    // in place; an activate_key grant approves making one of them a device's
+    // ambient default. Ownership (and un-revoked) is checked here so this
+    // screen can only ever narrate the user's own key — a foreign, revoked, or
+    // nonexistent token id all collapse to the same invalid_code response (no
+    // oracle), killing the "point a victim's approval at the attacker's token"
+    // direction. Mirrors the loopback consent screen (app/oauth/consent/page.tsx);
+    // the decision POST re-checks server-side, this is the human-facing half.
+    const targetKeyId = parsed.scopes.updateKeyId ?? parsed.scopes.activateKeyId;
+    let targetKeyName: string | null = null;
+    if (targetKeyId !== null) {
+      const target = await sessionRepository.findActiveMcpTokenByIdAndUser(targetKeyId, auth.userId);
+      if (!target) {
+        return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
+      }
+      targetKeyName = target.name;
+    }
+
+    // Named first so the user reads "this creates a key named X" before the
+    // capability list that follows — same ordering as the consent screen.
+    if (parsed.scopes.newKeyName !== null) {
+      scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
+    }
+    if (parsed.scopes.updateKeyId !== null) {
+      scopeDescriptions.push(
+        describeScopeForConsent(
+          { kind: 'update_key', tokenId: parsed.scopes.updateKeyId },
+          { keyName: targetKeyName ?? undefined },
+        ),
+      );
+    }
+    if (parsed.scopes.activateKeyId !== null) {
+      scopeDescriptions.push(
+        describeScopeForConsent(
+          { kind: 'activate_key', tokenId: parsed.scopes.activateKeyId },
+          { keyName: targetKeyName ?? undefined },
+        ),
+      );
+    }
     if (parsed.scopes.account) {
       scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
     }
@@ -108,5 +162,12 @@ export async function POST(req: NextRequest) {
     clientName: client.name,
     firstParty: client.firstParty,
     scopeDescriptions,
+    requiresStepUp,
+    // The exact binding the decision route will recompute from its own
+    // lookup, handed to the client so the grant it mints can't be bound to a
+    // different tuple by accident. Not a trust boundary: a client that lied
+    // here would mint a grant whose hash simply fails to match the server's
+    // recomputed one at decision time, and the approval is refused.
+    stepUpActionBinding: requiresStepUp ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
   });
 }

@@ -169,7 +169,7 @@ describe('checkpoint state (in-process, per sandbox)', () => {
 
   // Efficiency finding from code review: this in-process Map has no
   // symmetric acquire/release, so it needs an opportunistic sweep (mirroring
-  // quota.ts's machineActivityByKey) or it grows by one entry per distinct
+  // quota.ts's sessionActivityByKey) or it grows by one entry per distinct
   // sandboxId ever seen for the life of the process.
   it('opportunistically evicts entries older than the TTL when a later checkpoint is recorded', () => {
     resetCheckpointState();

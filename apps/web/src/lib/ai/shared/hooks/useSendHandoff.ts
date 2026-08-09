@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
+import { parseLegacyErrorMessage } from '@/lib/ai/shared/parseLegacyErrorMessage';
+import { isAIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { isThenable } from '@/lib/ai/streams/isThenable';
 
 /**
@@ -131,7 +132,10 @@ export function useSendHandoff(
       setPendingSendConversationId(null);
       useEditingStore.getState().endPendingSend(conversationId);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      toast.error(getAIErrorMessage(error instanceof Error ? error.message : String(error)));
+      const cause = error instanceof Error && isAIErrorCause(error.cause)
+        ? error.cause
+        : parseLegacyErrorMessage(error instanceof Error ? error.message : String(error));
+      toast.error(cause.message);
     };
 
     try {

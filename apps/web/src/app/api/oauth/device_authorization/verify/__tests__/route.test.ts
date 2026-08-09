@@ -25,8 +25,12 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   verifyDeviceUserCode: (...args: unknown[]) => verifyDeviceUserCode(...args),
 }));
 
+const findActiveMcpTokenByIdAndUser = vi.fn();
 vi.mock('@/lib/repositories/session-repository', () => ({
-  sessionRepository: { findDrivesByIds: vi.fn().mockResolvedValue([]) },
+  sessionRepository: {
+    findDrivesByIds: vi.fn().mockResolvedValue([]),
+    findActiveMcpTokenByIdAndUser: (...args: unknown[]) => findActiveMcpTokenByIdAndUser(...args),
+  },
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -160,5 +164,94 @@ describe('POST /api/oauth/device_authorization/verify — outcomes', () => {
     const res = await POST(verifyRequest({}) as never);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_request' });
+  });
+});
+
+
+/**
+ * The screen must advertise the step-up ceremony for exactly the grants the
+ * decision route will REQUIRE one for — both sides read the same
+ * `isCredentialEscalatingGrant` predicate, and these cases pin the
+ * advertising half. If they drift, the user either runs a ceremony the server
+ * ignores or clicks Allow and is rejected after the fact.
+ */
+describe('POST /api/oauth/device_authorization/verify — step-up advertisement', () => {
+  beforeEach(() => {
+    findActiveMcpTokenByIdAndUser.mockResolvedValue({ id: 'tok1', name: 'my-key' });
+  });
+
+  const ESCALATING: ReadonlyArray<readonly [string, string[]]> = [
+    ['a mint grant', ['drive:drv1:member', 'name:remote-key', 'offline_access']],
+    ['a re-scope grant', ['update_key:tok1', 'drive:drv1:member']],
+    ['an activation grant', ['activate_key:tok1']],
+  ];
+
+  for (const [label, scopes] of ESCALATING) {
+    it(`advertises step-up for ${label}, bound to this code and scope`, async () => {
+      verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes });
+
+      const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
+
+      expect(body.requiresStepUp).toBe(true);
+      expect(body.stepUpActionBinding).toEqual({ userCode: 'ABCDEFGH', scope: scopes.join(' ') });
+    });
+  }
+
+  it('does not advertise step-up for a plain login grant', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['manage_keys', 'offline_access'],
+    });
+
+    const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
+
+    expect(body.requiresStepUp).toBe(false);
+    expect(body.stepUpActionBinding).toBeNull();
+  });
+
+  it('names the target key so the user sees WHICH key they are re-scoping', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['update_key:tok1', 'drive:drv1:member'],
+    });
+
+    const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
+
+    expect(findActiveMcpTokenByIdAndUser).toHaveBeenCalledWith('tok1', 'user-1');
+    expect(JSON.stringify(body.scopeDescriptions)).toContain('my-key');
+  });
+
+  // No oracle: a token id belonging to someone else, revoked, or nonexistent
+  // must be indistinguishable from a bad code — otherwise the screen becomes a
+  // probe for other users' key ids.
+  it('fails closed with invalid_code when the target key is not the verifying user\'s', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['activate_key:tok9'],
+    });
+    findActiveMcpTokenByIdAndUser.mockResolvedValue(null);
+
+    const res = await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_code' });
+  });
+
+  // Not merely a parse detail: rendering an empty capability list beneath an
+  // Allow button would ask a human to approve something unnarrated.
+  it('fails closed rather than rendering an empty consent list for an unparseable scope set', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['not a valid scope!'],
+    });
+
+    const res = await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_code' });
   });
 });

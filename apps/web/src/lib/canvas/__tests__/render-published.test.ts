@@ -10,6 +10,16 @@ describe('renderPublishedPage', () => {
     expect(out).toContain('<body>');
   });
 
+  it('given no injectThemeBridge, should inject the theme bridge by default', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>' });
+    expect(out).toContain('pagespace-theme');
+  });
+
+  it('given injectThemeBridge: false, should NOT inject the theme bridge', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', injectThemeBridge: false });
+    expect(out).not.toContain('pagespace-theme');
+  });
+
   it('given an author <script>, should PRESERVE it (published policy)', () => {
     const out = renderPublishedPage({
       html: '<div id="app"></div><script>document.getElementById("app").textContent = "hi";</script>',
@@ -159,6 +169,16 @@ describe('renderPublishedPage — SEO + social passthrough', () => {
     const out = renderPublishedPage({ html: '<p>x</p>', pageUrl });
     expect(out).toContain('prefers-color-scheme');
     expect(out).toContain('pagespace-theme');
+  });
+
+  // The in-app navigation bridge (CanvasFrame.tsx passing navigationBridge:
+  // true) must never reach the published artifact — published pages are
+  // top-level documents with no listening parent, so shipping the
+  // click-interceptor there would be dead weight at best. renderPublishedPage
+  // never sets the field, so this should stay true structurally, not by luck.
+  it('given a published page, should NEVER inject the navigation-bridge script', () => {
+    const out = renderPublishedPage({ html: '<a href="/dashboard/d1/p1">go</a>', pageUrl });
+    expect(out).not.toContain('pagespace-navigate');
   });
 });
 

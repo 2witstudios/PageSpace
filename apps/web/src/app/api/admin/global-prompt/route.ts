@@ -86,6 +86,7 @@ async function handleGlobalPrompt(
 
     // Get all drives the user has access to (for the picker)
     // 1. Get drives owned by the user
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const ownedDrives = await db.query.drives.findMany({
       where: and(eq(drives.ownerId, adminUser.id), eq(drives.isTrashed, false)),
     });
@@ -220,7 +221,16 @@ async function handleGlobalPrompt(
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
     // Build async context sections (require DB queries, shared across modes)
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id);
+    // Same gate as the live chat route (`canDelegate: !readOnlyMode` — the
+    // chat-only session family registers regardless of the CODE_EXECUTION
+    // kill-switch, but read-only strips spawn_session as a write tool): this
+    // preview must show the operator the prompt the model will ACTUALLY
+    // receive, delegation line included or not. Both variants are built here,
+    // and each mode in the loop below picks its own.
+    const [agentAwarenessPromptFull, agentAwarenessPromptReadOnly] = await Promise.all([
+      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: true }),
+      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: false }),
+    ]);
 
     let pageTreePrompt = '';
     if (showPageTree) {
@@ -249,6 +259,7 @@ async function handleGlobalPrompt(
     const promptData: Record<string, ModePromptData> = {};
 
     for (const { key, isReadOnly } of modes) {
+      const agentAwarenessPrompt = isReadOnly ? agentAwarenessPromptReadOnly : agentAwarenessPromptFull;
       // Build complete payload using shared module (EXACT match with chat route)
       const completePayload = buildCompleteRequest({
         isReadOnly,

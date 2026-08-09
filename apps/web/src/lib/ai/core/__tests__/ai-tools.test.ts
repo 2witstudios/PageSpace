@@ -193,8 +193,11 @@ import { workflowTools } from '../../tools/workflow-tools';
 import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 import { commandTools } from '../../tools/command-tools';
+import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
+import { pagePaneTools } from '../../tools/page-pane-tools-runtime';
+import { planTools } from '../../tools/plan-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -202,8 +205,27 @@ describe('ai-tools', () => {
       expect(pageSpaceTools).not.toHaveProperty('import_from_github');
     });
 
-    it('equals the merged object of all tool modules', () => {
-      expect(pageSpaceTools).toEqual({
+    it('equals the merged object of all tool modules plus the chat-only session family', () => {
+      // Worker verbs plus the LAYOUT family (issue #2208) — both chat-only,
+      // both outside TOOL_MODULES, so neither counts as a workspace tool.
+      const chatOnlySessionToolNames = [
+        'list_sessions',
+        'spawn_session',
+        'send_session',
+        'read_session',
+        'kill_session',
+        'list_panes',
+        'resize_pane',
+        'move_pane',
+        'arrange_panes',
+      ];
+      const workspaceOnly = Object.fromEntries(
+        Object.entries(pageSpaceTools).filter(([name]) => !chatOnlySessionToolNames.includes(name)),
+      );
+      for (const name of chatOnlySessionToolNames) {
+        expect(pageSpaceTools).toHaveProperty(name);
+      }
+      expect(workspaceOnly).toEqual({
         ...memberTools,
         ...roleManagementTools,
         ...driveTools,
@@ -222,8 +244,11 @@ describe('ai-tools', () => {
         ...triggerTools,
         ...modelTools,
         ...commandTools,
+        ...skillTools,
         ...formTools,
         ...imageGenerationTools,
+        ...pagePaneTools,
+        ...planTools,
       });
     });
 
@@ -249,6 +274,8 @@ describe('ai-tools', () => {
         Object.keys(commandTools),
         Object.keys(formTools),
         Object.keys(imageGenerationTools),
+        Object.keys(pagePaneTools),
+        Object.keys(planTools),
       ];
 
       const allKeys = moduleKeysets.flat();
@@ -283,9 +310,33 @@ describe('ai-tools', () => {
       expect(pageSpaceTools).not.toHaveProperty('writeFile');
       expect(pageSpaceTools).not.toHaveProperty('readFile');
     });
+
+    it('keeps the chat-only session family registered by default (flag off) — sessions are free on every deployment', () => {
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session']) {
+        expect(pageSpaceTools).toHaveProperty(name);
+      }
+      // The PTY shell subfamily is compute — the sandbox IS the shell — and
+      // stays behind the kill-switch with bash/git.
+      for (const name of ['spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(pageSpaceTools).not.toHaveProperty(name);
+      }
+    });
   });
 
   describe('buildPageSpaceTools code-execution gating', () => {
+    const stubSessionTools = () =>
+      ({
+        list_sessions: {},
+        spawn_session: {},
+        send_session: {},
+        read_session: {},
+        kill_session: {},
+        spawn_shell: {},
+        send_shell: {},
+        read_shell: {},
+        kill_shell: {},
+      }) as never;
+
     it('given the flag disabled, should not register bash/writeFile/readFile or call the factory', () => {
       let built = false;
       const tools = buildPageSpaceTools({
@@ -299,6 +350,31 @@ describe('ai-tools', () => {
       expect(tools).not.toHaveProperty('writeFile');
       expect(tools).not.toHaveProperty('readFile');
       expect(built).toBe(false);
+    });
+
+    it('given the flag disabled, should register the chat-only session family and strip the shell subfamily (review #2326)', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        sessionToolsFactory: stubSessionTools,
+      });
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session']) {
+        expect(tools).toHaveProperty(name);
+      }
+      for (const name of ['spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(tools).not.toHaveProperty(name);
+      }
+    });
+
+    it('given the flag enabled, should register the full session family, shells included', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        sessionToolsFactory: stubSessionTools,
+      });
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session', 'spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(tools).toHaveProperty(name);
+      }
     });
 
     it('given the flag enabled, should register bash/writeFile/readFile alongside the base tools', () => {

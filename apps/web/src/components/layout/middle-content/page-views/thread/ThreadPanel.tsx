@@ -921,5 +921,3 @@ export function ThreadPanel({
     </aside>
   );
 }
-
-export default ThreadPanel;

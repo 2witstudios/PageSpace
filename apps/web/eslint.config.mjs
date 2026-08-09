@@ -9,6 +9,29 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
+// Matches `<anything>.query.<table>.findMany(...)` — not hard-coded to a `db` identifier, so it
+// also catches the transaction/injected handles this codebase actually uses for the same
+// Drizzle relational query API (e.g. `tx.query.pages.findMany`, `database.query.pages.findMany`).
+// `ObjectExpression.arguments` uses esquery's field-name qualifier to anchor the object to the
+// call's own `arguments` position (i.e. its options object), so `:has(ObjectExpression.arguments
+// > Property[key.name='limit'])` only matches a `limit` that is a DIRECT key of that options
+// object — a `limit` nested inside a `with: { children: { limit } }` relation, or anywhere else
+// in the subtree, does not falsely satisfy the root query's own boundedness.
+//
+// Known limitation: this is a syntactic AST pattern, not a type-aware check, so it only
+// catches the call written out as `<handle>.query.<table>.findMany(...)` at the call site.
+// Aliasing the query object first (`const q = db.query.taskItems; q.findMany(...)`) evades
+// it, the same way the original `db`-only selector missed `tx`/`database` until reviewed.
+// If that pattern shows up in practice, the durable fix is a typed wrapper in packages/db
+// that makes `limit` a required parameter — immune to call-shape variation entirely — not
+// another AST special case here.
+const unboundedFindManyRule = {
+  selector:
+    "CallExpression[callee.property.name='findMany'][callee.object.object.property.name='query']:not(:has(ObjectExpression.arguments > Property[key.name='limit']))",
+  message:
+    "<handle>.query.<table>.findMany(...) needs a `limit` as a direct key of its options object — unbounded findMany() OOM-crashed prod on 2026-07-18. Add `limit: <n>`, or use findFirst() if you only need one row.",
+};
+
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
@@ -115,6 +138,18 @@ const eslintConfig = [
     },
   },
   {
+    // Unbounded <handle>.query.<table>.findMany() calls: production Postgres OOM-crashed on
+    // 2026-07-18 because a task-list route called findMany() with no `limit`, on a table
+    // that grows without bound. This flags any NEW findMany() call whose options object
+    // (or lack of one) has no direct `limit` key. findFirst() is exempt — it's inherently
+    // single-row. Pre-existing violations are suppressed with a per-call-site
+    // `eslint-disable-next-line`, NOT a file- or severity-level override — so a new unbounded
+    // findMany added anywhere, including in an already-flagged file, still errors.
+    rules: {
+      "no-restricted-syntax": ["error", unboundedFindManyRule],
+    },
+  },
+  {
     // Edge-runtime import graph: middleware.ts and every module it
     // (transitively) imports compiles for the Edge runtime, where db access
     // and @pagespace/lib's Node-only logger crash at request time — the
@@ -205,6 +240,108 @@ const eslintConfig = [
     ],
     rules: {
       "react-hooks/exhaustive-deps": "error",
+    },
+  },
+  {
+    // Functional-core purity boundary: src/lib/workflows/core/ holds the pure
+    // decision logic for workflow steps (arg templating, step planning,
+    // validation, budget selection). Purity is a hard contract, not a
+    // convention — these modules take everything they need (schema maps,
+    // payloads, timestamps) as arguments and perform no I/O, so their tests
+    // need no mocks and their behavior is fully specified by inputs. Runtime
+    // imports of the db, services, AI tool modules, or Node builtins would
+    // silently break that contract; `import type` is fine (erased at compile
+    // time). Sibling core modules and zod are the only runtime dependencies.
+    files: ["src/lib/workflows/core/**/*.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@pagespace/db", "@pagespace/db/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no database access. Take data as function arguments; the shell (workflow-executor.ts, API routes) owns I/O.",
+            },
+            {
+              group: ["@pagespace/lib", "@pagespace/lib/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: @pagespace/lib leaves may perform I/O (db, logger, env). Inject what you need as arguments.",
+            },
+            {
+              group: ["ai", "next", "next/*"],
+              allowTypeImports: true,
+              message: "Pure core: no AI SDK or framework dependencies.",
+            },
+            {
+              group: ["node:*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no Node builtins (fs, http, crypto). Randomness/time/IDs are injected by the shell.",
+            },
+            {
+              group: ["../*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: runtime imports may only come from sibling core modules (./x) or zod. Anything outside core/ is shell territory — inject it as an argument.",
+            },
+            {
+              // The `@/*` workspace alias resolves anywhere under apps/web/src
+              // — API routes, the tool registry, the executor itself — all of
+              // which do real I/O. The bare `../*` ban above only stops
+              // relative parent-traversal; without this, `@/lib/workflows/
+              // workflow-executor` (db, generateText, fetch) or any other
+              // absolute-aliased shell module imports into core/ completely
+              // silently, no matter how deep or unrelated to workflows it is.
+              group: ["@/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: the @/ alias reaches shell code anywhere in apps/web/src. Runtime imports may only come from sibling core modules (./x) or zod — inject anything else as an argument.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Pure core: no network I/O. The shell owns all fetches.",
+        },
+        {
+          name: "process",
+          message:
+            "Pure core: no environment access. Pass configuration in as arguments.",
+        },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "Date",
+          property: "now",
+          message:
+            "Pure core: no ambient clock. Take the timestamp as an argument.",
+        },
+        {
+          object: "Math",
+          property: "random",
+          message:
+            "Pure core: no ambient randomness. Take random values/IDs as arguments.",
+        },
+      ],
+    },
+  },
+  {
+    // Core tests live beside the modules they specify and may use anything
+    // (test harness, fixtures, node builtins) — the purity contract applies
+    // to the modules under test, not the tests.
+    files: ["src/lib/workflows/core/**/*.test.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": "off",
+      "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
     },
   },
 ];

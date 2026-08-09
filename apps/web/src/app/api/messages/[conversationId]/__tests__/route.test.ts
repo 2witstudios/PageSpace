@@ -27,7 +27,6 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 // --- DM repository seam (the boundary the route must delegate to) --------------
 const mockFindConversationForParticipant = vi.fn();
 const mockInsertDmMessageWithAttachment = vi.fn();
-const mockUpdateConversationLastMessage = vi.fn();
 const mockListActiveMessages = vi.fn();
 const mockMarkActiveMessagesRead = vi.fn();
 const mockUpdateConversationLastRead = vi.fn();
@@ -41,8 +40,6 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
       mockFindConversationForParticipant(...args),
     insertDmMessageWithAttachment: (...args: unknown[]) =>
       mockInsertDmMessageWithAttachment(...args),
-    updateConversationLastMessage: (...args: unknown[]) =>
-      mockUpdateConversationLastMessage(...args),
     listActiveMessages: (...args: unknown[]) => mockListActiveMessages(...args),
     markActiveMessagesRead: (...args: unknown[]) =>
       mockMarkActiveMessagesRead(...args),
@@ -69,9 +66,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 // --- Notifications -------------------------------------------------------------
 const mockCreateOrUpdateMessageNotification = vi.fn();
+const mockMarkDmConversationNotificationsRead = vi.fn();
 vi.mock('@pagespace/lib/notifications/notifications', () => ({
   createOrUpdateMessageNotification: (...args: unknown[]) =>
     mockCreateOrUpdateMessageNotification(...args),
+  markDmConversationNotificationsRead: (...args: unknown[]) =>
+    mockMarkDmConversationNotificationsRead(...args),
 }));
 
 // --- Realtime broadcast helpers ------------------------------------------------
@@ -182,7 +182,6 @@ function setupHappyPath() {
     kind: 'ok',
     message: mockInsertedRow(input),
   }));
-  mockUpdateConversationLastMessage.mockResolvedValue(undefined);
   mockCreateOrUpdateMessageNotification.mockResolvedValue(undefined);
   mockBroadcastInboxEvent.mockResolvedValue(undefined);
 }
@@ -343,7 +342,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/do not own this file/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -363,7 +362,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/not linked to this conversation/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -383,7 +382,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(404);
       const body = await res.json();
       expect(body.error).toMatch(/file not found/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
     });
   });
 
@@ -419,12 +418,6 @@ describe('POST /api/messages/[conversationId]', () => {
     it('uses [image: name] for image attachments with empty content', async () => {
       await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          conversationId: CONVERSATION_ID,
-          lastMessagePreview: `[image: ${imageMeta.originalName}]`,
-        })
-      );
       expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
         RECIPIENT_ID,
         CONVERSATION_ID,
@@ -436,10 +429,11 @@ describe('POST /api/messages/[conversationId]', () => {
     it('uses [file: name] for non-image attachments with empty content', async () => {
       await callRoute({ fileId: FILE_ID, attachmentMeta: pdfMeta });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastMessagePreview: `[file: ${pdfMeta.originalName}]`,
-        })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        `[file: ${pdfMeta.originalName}]`,
+        SENDER_ID
       );
     });
 
@@ -450,11 +444,6 @@ describe('POST /api/messages/[conversationId]', () => {
         attachmentMeta: imageMeta,
       });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastMessagePreview: `[image: ${imageMeta.originalName}]`,
-        })
-      );
       expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
         RECIPIENT_ID,
         CONVERSATION_ID,
@@ -490,8 +479,11 @@ describe('POST /api/messages/[conversationId]', () => {
         attachmentMeta: imageMeta,
       });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ lastMessagePreview: 'caption' })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        'caption',
+        SENDER_ID
       );
     });
 
@@ -500,8 +492,11 @@ describe('POST /api/messages/[conversationId]', () => {
       await callRoute({ content: long });
 
       const expected = long.substring(0, 100) + '...';
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ lastMessagePreview: expected })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        expected,
+        SENDER_ID
       );
     });
   });
@@ -612,11 +607,18 @@ const liveMessage = (overrides: Partial<{
 describe('GET /api/messages/[conversationId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
     mockListActiveMessages.mockResolvedValue([]);
-    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    // Default: this GET actually flips unread rows (realistic "opening a DM
+    // with unread messages" case) — markActiveMessagesRead now reports a
+    // count, not void, so downstream broadcast/notification-clear logic can
+    // gate on it (Hole D / GET-path noise).
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
     mockUpdateConversationLastRead.mockResolvedValue(undefined);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   it('GET_messages_filtersOutSoftDeleted_byDelegatingToListActiveMessages', async () => {
@@ -693,15 +695,69 @@ describe('GET /api/messages/[conversationId]', () => {
     expect(res.status).toBe(404);
     expect(mockListActiveMessages).not.toHaveBeenCalled();
   });
+
+  // ===== Hole D + GET-path noise (AC2, AC3) =====
+  it('AC2: broadcasts exactly one inbox:read_status_changed and clears DM notifications when the GET actually marks rows read', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(2);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+      SENDER_ID,
+      expect.objectContaining({
+        operation: 'read_status_changed',
+        type: 'dm',
+        id: CONVERSATION_ID,
+        unreadCount: 0,
+      })
+    );
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(2);
+  });
+
+  it('AC3: a GET that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    // Regression: a notification can be unread even when its message was
+    // already marked read by an older build (pre-Hole-E) — gating the
+    // notification clear on markedCount would leave it stuck forever.
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
+  });
 });
 
 describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
-    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
     mockUpdateConversationLastRead.mockResolvedValue(undefined);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   it('PATCH_markAsRead_skipsSoftDeleted_byDelegatingToMarkActiveMessagesRead', async () => {
@@ -734,6 +790,54 @@ describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
 
     expect(res.status).toBe(404);
     expect(mockMarkActiveMessagesRead).not.toHaveBeenCalled();
+  });
+
+  // ===== Hole D + GET-path noise mirror (AC2, AC3) =====
+  it('AC2: broadcasts exactly one inbox:read_status_changed and clears DM notifications when the PATCH actually marks rows read', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(3);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+      SENDER_ID,
+      expect.objectContaining({
+        operation: 'read_status_changed',
+        type: 'dm',
+        id: CONVERSATION_ID,
+        unreadCount: 0,
+      })
+    );
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
+  });
+
+  it('AC3: a PATCH that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
   });
 });
 
@@ -850,7 +954,6 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     );
     expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     // No mirror → conversation preview should not bump for the thread-only reply.
-    expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
     expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
     // PR 5: thread-only reply with NO followers (default mock) emits no inbox events.
     // Earlier assertion was "no inbox bumps at all"; now it remains true only because
@@ -902,11 +1005,13 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     expect(ids).toEqual(['mirror-1', 'reply-1']);
 
     // Mirror behaves like a regular top-level send — preview + recipient inbox bump.
-    expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: CONVERSATION_ID,
-        lastMessagePreview: 'echo',
-      })
+    // insertDmThreadReply itself recomputes the stored preview (#2153); the route's
+    // observable side effects here are the notification and inbox broadcast.
+    expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+      RECIPIENT_ID,
+      CONVERSATION_ID,
+      'echo',
+      SENDER_ID
     );
     expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
       RECIPIENT_ID,

@@ -84,13 +84,3 @@ export function verifyOAuthState(stateBase64: string): VerifyOAuthStateResult {
     return { status: 'malformed' };
   }
 }
-
-/**
- * Check if an OAuth state indicates a desktop platform request.
- * Only trusts the platform field if the HMAC signature is valid.
- */
-export function isDesktopOAuthState(stateBase64: string | null | undefined): boolean {
-  if (!stateBase64) return false;
-  const result = verifyOAuthState(stateBase64);
-  return result.status === 'valid' && result.data.platform === 'desktop';
-}

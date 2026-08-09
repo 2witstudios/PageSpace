@@ -18,10 +18,15 @@ import { workflowTools } from '../tools/workflow-tools';
 import { triggerTools } from '../tools/trigger-tools';
 import { modelTools } from '../tools/model-tools';
 import { commandTools } from '../tools/command-tools';
+import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
+import { pagePaneTools } from '../tools/page-pane-tools-runtime';
+import { planTools } from '../tools/plan-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
+import { buildSessionTools } from '../tools/session-tools-runtime';
+import { SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 /**
@@ -31,9 +36,10 @@ import { CORE_TOOL_NAMES } from './stub-tools';
  * a one-line edit here — the flat registry, the category map, and the doc-enforced
  * `WORKSPACE_TOOL_COUNT` all update together.
  *
- * Code-execution tools (`bash`/git/etc.) are intentionally NOT here — they are
- * flag-gated behind `CODE_EXECUTION_ENABLED` (default OFF, see `buildPageSpaceTools`)
- * and are not part of the public workspace-tool count.
+ * The sandbox-family tools are intentionally NOT here — the compute tools
+ * (`bash`/git/shells) are flag-gated behind `CODE_EXECUTION_ENABLED` (default
+ * OFF, see `buildPageSpaceTools`), the chat-only session tools are factory-built
+ * alongside them, and neither group is part of the public workspace-tool count.
  */
 const TOOL_MODULES = {
   members: memberTools,
@@ -54,8 +60,11 @@ const TOOL_MODULES = {
   triggers: triggerTools,
   models: modelTools,
   commands: commandTools,
+  skills: skillTools,
   forms: formTools,
   imageGeneration: imageGenerationTools,
+  pagePane: pagePaneTools,
+  plan: planTools,
 } as const;
 
 // Flatten the module map into one ToolSet. No key collisions across modules — the
@@ -92,35 +101,50 @@ export const WORKSPACE_TOOL_NAMES: readonly string[] = Object.keys(baseTools);
 export const WORKSPACE_TOOL_COUNT = WORKSPACE_TOOL_NAMES.length;
 
 /**
- * Assemble the agent tool registry, registering the code-execution tools
- * (`bash` / `writeFile` / `readFile`) ONLY when the global kill-switch is on.
+ * Assemble the agent tool registry, registering the COMPUTE tools
+ * (`bash` / `writeFile` / `readFile`, the git/gh CLI toolkit, and the PTY
+ * shell family) ONLY when the global kill-switch is on.
  *
  * Code execution is the highest-risk surface in the product, so it ships
- * default-OFF: with `CODE_EXECUTION_ENABLED` unset (the default), the tools are
- * never added to the registry, never discoverable via `tool_search`, and never
- * reachable by a model. Staged rollout rides this env kill-switch plus the
- * per-call `canRunCode` authz (drive owner/admin), not a separate flag table —
- * there is none. The sandbox factory is injected and the Fly Sprites driver is
+ * default-OFF: with `CODE_EXECUTION_ENABLED` unset (the default), the compute
+ * tools are never added to the registry, never discoverable via `tool_search`,
+ * and never reachable by a model. Staged rollout rides this env kill-switch
+ * plus the per-call `canRunCode` authz, not a separate flag table — there is
+ * none. The sandbox factory is injected and the Fly Sprites driver is
  * dynamically imported only when a tool runs, so the off-path never constructs
  * the client nor loads the Node-24/ESM-only `@fly/sprites` SDK, and both
  * branches are unit tested without real IO.
+ *
+ * The CHAT-ONLY session family (list/spawn/send/read/kill_session) registers
+ * on BOTH branches: those tools are conversation orchestration through the
+ * standard chat pipeline — part of the free session surface this route family
+ * opens to everyone (`/api/agent-workspaces` route docs) — and never touch the
+ * sandbox, so gating them on the kill-switch hid a chat capability behind a
+ * compute flag (review #2326). The split is `SANDBOX_COMPUTE_TOOL_NAMES`, the
+ * same source of truth the payer-tier filter uses.
  */
 export function buildPageSpaceTools({
   codeExecutionEnabled = isCodeExecutionEnabled(),
   sandboxToolsFactory = buildSandboxTools,
   sandboxGitToolsFactory = buildGitSandboxTools,
+  sessionToolsFactory = buildSessionTools,
 }: {
   codeExecutionEnabled?: boolean;
   sandboxToolsFactory?: () => Record<string, Tool>;
   sandboxGitToolsFactory?: () => Record<string, Tool>;
+  sessionToolsFactory?: () => Record<string, Tool>;
 } = {}) {
-  if (!codeExecutionEnabled) return { ...baseTools };
-  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory() };
+  const sessionTools = sessionToolsFactory();
+  if (!codeExecutionEnabled) {
+    const chatOnlySessionTools = Object.fromEntries(
+      Object.entries(sessionTools).filter(([name]) => !SANDBOX_COMPUTE_TOOL_NAMES.has(name)),
+    );
+    return { ...baseTools, ...chatOnlySessionTools };
+  }
+  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory(), ...sessionTools };
 }
 
 export const pageSpaceTools = buildPageSpaceTools();
-
-export type PageSpaceTools = typeof pageSpaceTools;
 
 export const corePageSpaceTools = Object.fromEntries(
   Object.entries(pageSpaceTools).filter(([name]) => CORE_TOOL_NAMES.has(name))

@@ -38,6 +38,9 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: { userId: 'aul.userId', cost: 'aul.cost', timestamp: 'aul.timestamp' },
+}));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
@@ -825,5 +828,148 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
+  });
+
+  it('applies a caller-supplied dailyCapCeilingCents even when no env cap is configured', async () => {
+    // The env caps default to 0 = disabled, but a caller whose runs are forced
+    // by a bearer credential (webhook triggers) passes an explicit ceiling that
+    // must bind regardless: 480¢ today + EST(25) = 505 > 500 → deny.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('effective cap is the smaller of the tier cap and the caller ceiling', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '1000';
+    // 480¢ + 25 = 505: under the env cap (1000) but over the ceiling (500) → deny.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+  });
+
+  it('allows + reserves a hold when the day spend stays under the caller ceiling', async () => {
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('ignores a zero ceiling (cap stays disabled when no env cap is set)', async () => {
+    // 2-select transaction: a 3rd select would throw if the cap path ran.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction(BAL, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 0 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+});
+
+describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/onprem)', () => {
+  // The billing-off ceiling decision runs in a transaction: advisory-lock
+  // serialize per user, sum unexpired holds (in-flight runs), sum the day's
+  // aiUsageLogs cost, then reserve a hold on allow. Selects resolve in that
+  // order: [holds agg], [usage agg].
+  function mockBillingOffTransaction(
+    reserved: number,
+    costUsd: number,
+    sink: { insertCalled?: boolean; executeSql?: string } = {},
+  ) {
+    mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+      let selectCount = 0;
+      const tx = {
+        execute: vi.fn((q: { strings?: readonly string[] }) => {
+          sink.executeSql = q?.strings?.join('');
+          return Promise.resolve(undefined);
+        }),
+        select: vi.fn(() => {
+          selectCount++;
+          const n = selectCount;
+          return {
+            from: () => ({
+              where: () =>
+                Promise.resolve(
+                  n === 1 ? [{ reserved, inFlight: 0 }] : [{ costUsd }],
+                ),
+            }),
+          };
+        }),
+        insert: vi.fn(() => ({
+          values: () => {
+            sink.insertCalled = true;
+            return { returning: () => Promise.resolve([{ id: 'hold-x' }]) };
+          },
+        })),
+      };
+      return cb(tx);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(false);
+  });
+
+  it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies when the day metered cost (aiUsageLogs) has reached the ceiling, without reserving a hold', async () => {
+    // $6 metered today ≥ the $5 ceiling → deny even though billing is off.
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(0, 6.0, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('counts in-flight hold reservations toward the ceiling (concurrent fan-out cannot blow past it)', async () => {
+    // Settled usage is only $0.50, but 480¢ of concurrent runs hold reservations:
+    // 50 + 480 + EST(25) = 555 > 500 → deny. Without in-flight accounting every
+    // run of a Promise.allSettled fan-out would see the same below-cap total.
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(480, 0.5, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows under the ceiling, reserves a hold, and serializes via a per-user advisory lock', async () => {
+    const sink: { insertCalled?: boolean; executeSql?: string } = {};
+    mockBillingOffTransaction(0, 1.2, sink); // 120 + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+    expect(r.holdId).toBe('hold-x');
+    expect(sink.insertCalled).toBe(true);
+    expect(sink.executeSql).toContain('pg_advisory_xact_lock');
+  });
+
+  it('treats missing/null metered cost as zero spend (local models log no cost)', async () => {
+    mockBillingOffTransaction(0, 0);
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
   });
 });

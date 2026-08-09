@@ -7,6 +7,7 @@ import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { setAppNavigator } from '@/lib/navigation/app-navigator';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 // Module-level flag to prevent concurrent lazy device registration attempts
 let deviceRegistrationInFlight = false;
@@ -17,6 +18,7 @@ interface User {
   email: string | null;
   image?: string | null;
   role?: 'user' | 'admin';
+  subscriptionTier?: SubscriptionTier;
 }
 
 interface AuthActions {

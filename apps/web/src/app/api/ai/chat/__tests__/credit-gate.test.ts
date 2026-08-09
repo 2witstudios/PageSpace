@@ -85,10 +85,12 @@ vi.mock('@pagespace/db/db', () => {
     },
   };
 });
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
+// exists/sql: globalConversationRepository's module-scope `hasMessages` query
+// (now reachable transitively via stream-takeover -> materialize-interrupted-stream
+// -> global-conversation-repository, #2153) needs both or the module throws on import.
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn(), exists: vi.fn(), sql: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
@@ -134,6 +136,10 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
@@ -151,7 +157,6 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-
 vi.mock('ai', () => ({
   streamText: vi.fn(),
   convertToModelMessages: vi.fn().mockReturnValue([]),

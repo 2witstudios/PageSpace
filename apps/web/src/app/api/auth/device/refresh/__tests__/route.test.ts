@@ -92,6 +92,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
     }),
     revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
+    expireSessionByHashSoon: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -176,6 +177,7 @@ describe('POST /api/auth/device/refresh', () => {
       scopes: ['*'],
     } as never);
     vi.mocked(sessionService.revokeSessionByHash).mockResolvedValue(undefined);
+    vi.mocked(sessionService.expireSessionByHashSoon).mockResolvedValue(undefined);
 
     // No replaced session cookie by default (existing tests exercise the
     // no-cookie path); retirement tests override this per-case.
@@ -632,7 +634,7 @@ describe('POST /api/auth/device/refresh', () => {
   });
 
   describe('replaced-session retirement', () => {
-    it('revokes the session the refresh replaces (same user) with replaced_by_refresh — web', async () => {
+    it('grace-expires the session the refresh replaces (same user) — web', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         platform: 'web',
@@ -646,15 +648,17 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       // Ownership resolved via the old cookie's session (same user-123), then
-      // revoked by its hash.
+      // grace-expired by its hash (NOT hard-revoked — in-flight requests must
+      // stay valid for the grace window).
       expect(hashToken).toHaveBeenCalledWith('old-web-session-token');
-      expect(sessionService.revokeSessionByHash).toHaveBeenCalledWith(
+      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+      expect(sessionService.expireSessionByHashSoon).toHaveBeenCalledWith(
         'hashed-old-session',
-        'replaced_by_refresh',
+        expect.any(Number),
       );
     });
 
-    it('revokes the replaced session on the desktop branch too', async () => {
+    it('grace-expires the replaced session on the desktop branch too', async () => {
       vi.mocked(getSessionFromCookies).mockReturnValue('old-desktop-session-token');
 
       const request = createRefreshRequest(validRefreshPayload, {
@@ -663,23 +667,23 @@ describe('POST /api/auth/device/refresh', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(sessionService.revokeSessionByHash).toHaveBeenCalledWith(
+      expect(sessionService.expireSessionByHashSoon).toHaveBeenCalledWith(
         'hashed-old-session',
-        'replaced_by_refresh',
+        expect.any(Number),
       );
     });
 
-    it('does NOT revoke anything when no session cookie accompanies the refresh', async () => {
+    it('does NOT touch anything when no session cookie accompanies the refresh', async () => {
       vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+      expect(sessionService.expireSessionByHashSoon).not.toHaveBeenCalled();
     });
 
-    it('does NOT revoke when the old cookie session belongs to a different user', async () => {
+    it('does NOT grace-expire when the old cookie session belongs to a different user', async () => {
       vi.mocked(getSessionFromCookies).mockReturnValue('someone-elses-token');
       // First validateSession call is for the new session (user-123); the second
       // (owner lookup for the old token) resolves to a different user.
@@ -707,12 +711,12 @@ describe('POST /api/auth/device/refresh', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+      expect(sessionService.expireSessionByHashSoon).not.toHaveBeenCalled();
     });
 
-    it('never fails the refresh when the retirement revoke throws', async () => {
+    it('never fails the refresh when the retirement grace-expiry throws', async () => {
       vi.mocked(getSessionFromCookies).mockReturnValue('old-web-session-token');
-      vi.mocked(sessionService.revokeSessionByHash).mockRejectedValue(new Error('db down'));
+      vi.mocked(sessionService.expireSessionByHashSoon).mockRejectedValue(new Error('db down'));
 
       const request = createRefreshRequest(validRefreshPayload, {
         Cookie: 'session=old-web-session-token',

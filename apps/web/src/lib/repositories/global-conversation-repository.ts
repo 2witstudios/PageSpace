@@ -1,14 +1,31 @@
 /**
  * Repository seam for global conversation routes.
  * Isolates database operations from route handlers for testability.
+ *
+ * SCOPE, since the message-table merge (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6, PR 12): this module owns `conversations` ROWS only.
+ * Every operation it used to have on the `messages` TABLE — read a message,
+ * edit one, soft/hard-delete one, purge, recompute `lastMessageAt` — moved to
+ * `message-repository.ts`, which is now the one writer AND the one reader for
+ * durable messages of every kind. `chat-message-repository.ts` was absorbed
+ * there wholesale and deleted.
+ *
+ * The plan's phrasing was "merge both repositories into message-repository";
+ * what actually merged is both repositories' MESSAGE surfaces, because that is
+ * what the two message tables becoming one makes redundant. A conversation's
+ * title, its history listing and its usage log are not messages, and burying
+ * them inside a message repository would trade one misnamed seam for another.
+ * They belong beside `conversation-repository.ts` — a consolidation for the
+ * naming phase (D7), not for the riskiest PR of the message cutover.
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, sql, lt, exists } from '@pagespace/db/operators'
+import { eq, and, desc, sql, lt, exists, isNull } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
+import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 
 // Types
 export interface ConversationSummary {
@@ -18,28 +35,22 @@ export interface ConversationSummary {
   contextId: string | null;
   lastMessageAt: Date | null;
   createdAt: Date;
+  /** Null for a plain (non-session) conversation. */
+  workspaceId: string | null;
 }
 
 export interface Conversation extends ConversationSummary {
   userId: string;
   isActive: boolean;
   updatedAt: Date;
+  /** Set when closed out of its session's listing; null while open (or never session-bound). */
+  closedInWorkspaceAt: Date | null;
 }
 
 export interface CreateConversationInput {
   title?: string | null;
   type?: string;
   contextId?: string | null;
-}
-
-export interface Message {
-  id: string;
-  conversationId: string;
-  content: string;
-  role: string;
-  isActive: boolean;
-  createdAt: Date;
-  status: 'streaming' | 'complete' | 'interrupted';
 }
 
 export interface UsageLog {
@@ -184,6 +195,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(
@@ -253,6 +265,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(...conditions))
@@ -305,6 +318,9 @@ export const globalConversationRepository = {
       })
       .returning();
 
+    if (newConversation) {
+      emitConversationLifecycle('created', { ...newConversation, rev: Number(newConversation.rev) });
+    }
     return newConversation;
   },
 
@@ -320,6 +336,7 @@ export const globalConversationRepository = {
         contextId: conversations.contextId,
         lastMessageAt: conversations.lastMessageAt,
         createdAt: conversations.createdAt,
+        workspaceId: conversations.workspaceId,
       })
       .from(conversations)
       .where(and(
@@ -359,6 +376,7 @@ export const globalConversationRepository = {
       .set({
         title,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -366,7 +384,31 @@ export const globalConversationRepository = {
       ))
       .returning();
 
+    if (updatedConversation) {
+      emitConversationLifecycle(
+        'updated',
+        { ...updatedConversation, rev: Number(updatedConversation.rev) },
+        undefined,
+        { title },
+      );
+    }
     return updatedConversation || null;
+  },
+
+  /**
+   * Auto-title from the first user message, never overwriting an existing
+   * title (IS NULL guard lives in the SQL, so it's race-safe to call on
+   * every message). Rev-bumped + emitted like every lifecycle mutation.
+   */
+  async autoTitleConversation(conversationId: string, title: string): Promise<void> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ title, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)))
+      .returning();
+    if (updated) {
+      emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, { title });
+    }
   },
 
   /**
@@ -378,12 +420,17 @@ export const globalConversationRepository = {
       .set({
         isActive: false,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
         eq(conversations.userId, userId)
       ))
       .returning();
+
+    if (deletedConversation) {
+      emitConversationLifecycle('deleted', { ...deletedConversation, rev: Number(deletedConversation.rev) });
+    }
 
     // Invalidate only when the user-scoped delete actually matched a row —
     // a caller holding someone else's conversation ID must not be able to
@@ -393,46 +440,6 @@ export const globalConversationRepository = {
     }
 
     return deletedConversation || null;
-  },
-
-  /**
-   * Get an active message by ID within a conversation
-   * Only returns messages that haven't been soft-deleted
-   */
-  async getMessageById(conversationId: string, messageId: string): Promise<Message | null> {
-    const [message] = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.id, messageId),
-        eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
-      ));
-
-    return message || null;
-  },
-
-  /**
-   * Update message content
-   */
-  async updateMessageContent(messageId: string, content: string): Promise<void> {
-    await db
-      .update(messages)
-      .set({
-        content,
-        editedAt: new Date()
-      })
-      .where(eq(messages.id, messageId));
-  },
-
-  /**
-   * Soft delete a message
-   */
-  async softDeleteMessage(messageId: string): Promise<void> {
-    await db
-      .update(messages)
-      .set({ isActive: false })
-      .where(eq(messages.id, messageId));
   },
 
   /**
@@ -463,33 +470,6 @@ export const globalConversationRepository = {
       .from(aiUsageLogs)
       .where(eq(aiUsageLogs.conversationId, conversationId))
       .orderBy(desc(aiUsageLogs.timestamp));
-  },
-
-  /**
-   * Permanently delete a message from the database
-   */
-  async hardDeleteMessage(messageId: string): Promise<void> {
-    await db
-      .delete(messages)
-      .where(eq(messages.id, messageId));
-  },
-
-  /**
-   * Purge soft-deleted messages older than the cutoff date.
-   * Returns the number of rows removed.
-   */
-  async purgeInactiveMessages(olderThan: Date): Promise<number> {
-    const result = await db
-      .delete(messages)
-      .where(
-        and(
-          eq(messages.isActive, false),
-          lt(messages.createdAt, olderThan)
-        )
-      )
-      .returning({ id: messages.id });
-
-    return result.length;
   },
 
   /**

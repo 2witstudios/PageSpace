@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { navigateInApp } from '@/lib/navigation/app-navigator';
 import { buildSigninRoute } from '@/lib/auth/resolve-signin-next';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 interface User {
   id: string;
@@ -12,6 +13,7 @@ interface User {
   image?: string | null;
   emailVerified?: Date | null;
   role?: 'user' | 'admin';
+  subscriptionTier?: SubscriptionTier;
 }
 
 interface AuthState {
@@ -414,7 +416,8 @@ export const useAuthStore = create<AuthState>()(
                 currentUser.name !== userData.name ||
                 currentUser.email !== userData.email ||
                 currentUser.image !== userData.image ||
-                currentUser.emailVerified !== userData.emailVerified;
+                currentUser.emailVerified !== userData.emailVerified ||
+                currentUser.subscriptionTier !== userData.subscriptionTier;
 
               if (hasChanged) {
                 // Data changed - update everything
@@ -546,10 +549,19 @@ export const useAuthStore = create<AuthState>()(
               lastFailedAuthCheck: Date.now(),
             });
           } finally {
-            // Clear loading state. Only clear _authPromise if this request is still current.
+            // Clear loading state — but ONLY if this call is still the current one.
+            // A 401 handler can issue a NESTED loadSession(true) retry (above) from
+            // inside this call's own try block; that retry's set({isLoading: true,
+            // _authPromise: newPromise}) already ran and is reflected in
+            // currentState._authPromise by the time this finally executes (return
+            // inside try/finally runs finally synchronously, before this async
+            // function's own promise settles — no await separates them). Touching
+            // isLoading here unconditionally clobbered that in-flight retry's state,
+            // making a stale isAuthenticated look "settled" before the retry's own
+            // fetch had even been issued (correctness-review finding, PR #2312).
             set((currentState) => {
               if (currentState._authPromise !== authPromise) {
-                return { isLoading: false };
+                return {};
               }
 
               return { isLoading: false, _authPromise: null };

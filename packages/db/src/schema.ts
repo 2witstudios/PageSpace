@@ -1,7 +1,6 @@
 export * from './schema/auth';
 export * from './schema/sessions';
 export * from './schema/core';
-export * from './schema/permissions';
 export * from './schema/members';
 export * from './schema/chat';
 export * from './schema/dashboard';
@@ -29,6 +28,7 @@ export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
 export * from './schema/workflow-runs';
+export * from './schema/workflow-run-steps';
 export * from './schema/task-triggers';
 export * from './schema/rate-limit-buckets';
 export * from './schema/revoked-service-tokens';
@@ -41,7 +41,6 @@ export * from './schema/share-links';
 export * from './schema/zoom';
 export * from './schema/webhook-triggers';
 export * from './schema/drafts';
-export * from './schema/machine-sessions';
 export * from './schema/published-pages';
 export * from './schema/credits';
 export * from './schema/commands';
@@ -51,18 +50,15 @@ export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/form-targets';
-export * from './schema/machine-projects';
-export * from './schema/machine-branches';
 export * from './schema/machine-sprite-reclaims';
-export * from './schema/machine-agent-terminals';
-export * from './schema/machine-workspaces';
-export * from './schema/machine-workspace-bootstraps';
 export * from './schema/email-broadcasts';
+export * from './schema/page-webhooks';
+export * from './schema/agent-workspaces';
+export * from './schema/agent-workspace-layout';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
 import * as core from './schema/core';
-import * as permissions from './schema/permissions';
 import * as members from './schema/members';
 import * as chat from './schema/chat';
 import * as dashboard from './schema/dashboard';
@@ -90,6 +86,7 @@ import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
 import * as workflowRuns from './schema/workflow-runs';
+import * as workflowRunSteps from './schema/workflow-run-steps';
 import * as taskTriggers from './schema/task-triggers';
 import * as rateLimitBuckets from './schema/rate-limit-buckets';
 import * as revokedServiceTokens from './schema/revoked-service-tokens';
@@ -102,7 +99,6 @@ import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
 import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
-import * as machineSessions from './schema/machine-sessions';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 import * as commands from './schema/commands';
@@ -112,19 +108,16 @@ import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
-import * as machineProjects from './schema/machine-projects';
-import * as machineBranches from './schema/machine-branches';
 import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
-import * as machineAgentTerminals from './schema/machine-agent-terminals';
-import * as machineWorkspaces from './schema/machine-workspaces';
-import * as machineWorkspaceBootstraps from './schema/machine-workspace-bootstraps';
 import * as emailBroadcasts from './schema/email-broadcasts';
+import * as pageWebhooks from './schema/page-webhooks';
+import * as agentWorkspaces from './schema/agent-workspaces';
+import * as agentWorkspaceLayout from './schema/agent-workspace-layout';
 
 export const schema = {
   ...auth,
   ...sessions,
   ...core,
-  ...permissions,
   ...members,
   ...chat,
   ...dashboard,
@@ -152,6 +145,7 @@ export const schema = {
   ...calendarTriggers,
   ...workflows,
   ...workflowRuns,
+  ...workflowRunSteps,
   ...taskTriggers,
   ...rateLimitBuckets,
   ...revokedServiceTokens,
@@ -164,7 +158,6 @@ export const schema = {
   ...zoom,
   ...webhookTriggers,
   ...drafts,
-  ...machineSessions,
   ...publishedPages,
   ...credits,
   ...commands,
@@ -174,11 +167,9 @@ export const schema = {
   ...dataSubjectRequests,
   ...oauth,
   ...formTargets,
-  ...machineProjects,
-  ...machineBranches,
   ...machineSpriteReclaims,
-  ...machineAgentTerminals,
-  ...machineWorkspaces,
-  ...machineWorkspaceBootstraps,
   ...emailBroadcasts,
+  ...pageWebhooks,
+  ...agentWorkspaces,
+  ...agentWorkspaceLayout,
 };

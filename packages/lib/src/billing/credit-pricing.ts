@@ -180,14 +180,18 @@ export function resolveImageCost(
 export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS', 2);
 
 /**
- * Max concurrent in-flight Machine runs per payer, applied to ALL tiers
- * (mirrors VOICE_MAX_INFLIGHT). Bounds worst-case concurrent overdraw to
- * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
- * multiple agent tool calls and/or interactive PTY sessions can run concurrently
- * across different machines, so this is generous enough for legitimate multi-machine
- * use. Default 4.
+ * FLOOR for max concurrent in-flight Machine runs per payer — mirrors
+ * VOICE_MAX_INFLIGHT, and bounds worst-case concurrent overdraw to
+ * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run`. Set to
+ * match the top subscription tier's `quota.ts` concurrency ceiling (business,
+ * 50) as a sane default, but `machine-billing.ts`'s `gate()` takes
+ * `Math.max(MACHINE_MAX_INFLIGHT, that payer's own tier ceiling)` rather than
+ * using this value alone — so if a tier's `quota.ts` limit is ever raised
+ * past this default without also raising this env var, the billing gate
+ * still tracks it instead of silently rejecting runs the semaphore would
+ * allow. Default 50.
  */
-export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 4);
+export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 50);
 
 /**
  * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
@@ -313,6 +317,20 @@ export function dailyExposureCapForTier(tier: SubscriptionTier): number | null {
   const cap = envInt(`DAILY_CAP_${tier.toUpperCase()}_CENTS`, globalCap);
   return cap > 0 ? cap : null;
 }
+
+/**
+ * Per-user/day ceiling (whole cents) on the day's charged spend, enforced when a run
+ * is forced by a possessed page-webhook secret rather than an authenticated user.
+ * Unlike the tier caps above — which default to 0 = DISABLED — this defaults ON:
+ * the webhook secret is a bearer credential handed to external systems, so an
+ * unconfigured deployment must still have a hard monetary bound on what a leaked
+ * secret can spend. Passed as `dailyCapCeilingCents` to canConsumeAI (effective cap =
+ * min with any configured tier cap). The gate sums the user's TOTAL day spend (all
+ * sources), so a heavy interactive day can push webhook runs over this ceiling — a
+ * deliberate trade-off: only webhook-forced runs are ever denied by it, interactive
+ * use is never blocked. 0 disables (not recommended). Default $5/day.
+ */
+export const WEBHOOK_DAILY_EXPOSURE_CAP_CENTS = envInt('WEBHOOK_DAILY_EXPOSURE_CAP_CENTS', 500);
 
 /**
  * Tolerances for the async OpenRouter cost reconcile (cost-reconcile.ts). A correction

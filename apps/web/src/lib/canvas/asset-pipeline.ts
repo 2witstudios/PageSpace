@@ -318,6 +318,7 @@ export async function rewriteCanvasAssets(params: {
   if (fileIds.length === 0) return { html };
 
   // Batch-query referenced page rows; permission checks below decide which assets can publish.
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = (await db.query.pages.findMany({
     where: inArray(pages.id, fileIds),
     columns: { id: true, driveId: true, contentHash: true, mimeType: true, extractionMetadata: true },
@@ -420,6 +421,7 @@ export async function rewriteInterPageLinksForDrive(params: {
   if (pageIds.length === 0) return { html };
 
   // Drive-scoped: only pages published under THIS drive's site may be linked.
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = (await db.query.publishedPages.findMany({
     where: and(eq(publishedPages.driveId, driveId), inArray(publishedPages.pageId, pageIds)),
     columns: { pageId: true, path: true },

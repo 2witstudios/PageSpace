@@ -14,7 +14,7 @@ import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/cr
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
 import { stripe } from './stripe/client';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
@@ -1139,7 +1139,7 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
     }
   }));
 
-  const counts: Record<SubscriptionTier, number> = { free: 0, pro: 0, founder: 0, business: 0 };
+  const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
   for (const r of rows) {
     counts[getTierFromPrice(r.stripePriceId, amountByPriceId.get(r.stripePriceId))] += 1;
   }

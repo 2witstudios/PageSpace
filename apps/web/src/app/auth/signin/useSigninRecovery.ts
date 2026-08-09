@@ -2,44 +2,105 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { refreshAuthSession } from '@/lib/auth/auth-fetch';
-import { isCapacitorApp } from '@/lib/capacitor-bridge';
+import { fetchWithAuth, refreshAuthSession } from '@/lib/auth/auth-fetch';
+import { getPlatformStorage } from '@/lib/auth/platform-storage';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { decideSigninRecovery, type SigninRecoveryInput } from './signin-recovery';
 
 const DEFAULT_NEXT = '/dashboard';
 
-function detectNativeShell(): boolean {
-  if (typeof window === 'undefined') return false;
-  return !!window.electron?.isDesktop || isCapacitorApp();
-}
+// Matches AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS (auth-fetch.ts) — same underlying Keychain
+// round-trip, same "can hang during app launch on iOS" hazard. Exported so the regression test
+// can assert against it directly instead of a hardcoded duplicate that could silently drift.
+export const DEVICE_TOKEN_TIMEOUT_MS = 3000;
 
-function hasDeviceToken(): boolean {
-  return typeof localStorage !== 'undefined' && !!localStorage.getItem('deviceToken');
-}
+// Bounds checkMeAuthenticated's fetchWithAuth call — long enough to cover a legitimate
+// refresh-and-retry cycle happening inside that same call, short enough to bound the loading
+// screen against a true network stall (no rejection, no resolution).
+export const CHECK_ME_TIMEOUT_MS = 8000;
 
-async function checkMeAuthenticated(): Promise<boolean> {
+// Backstop for the whole recovery driver — longer than the worst-case BOUNDED chain, so it
+// never fires while a legitimate (merely slow, not hung) recovery is still in flight. On the
+// bearer platforms (iOS/Android) this is sequential: hasDeviceToken, then checkMeAuthenticated,
+// then (if needed) refreshBearerSession's own two-stage timeout in AuthFetch (its Keychain
+// read, then its refresh POST) — roughly 22s at today's per-step timeouts (DEVICE_TOKEN_TIMEOUT_MS,
+// CHECK_ME_TIMEOUT_MS, and AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS + REFRESH_FETCH_TIMEOUT_MS,
+// summed by hand here since the AuthFetch constants are private and this value can't reference
+// them directly — re-check this sum if any of those change). Guards against a hang anywhere in
+// the chain we haven't found or bounded yet — notably the web and desktop device-token refresh
+// paths, which remain unbounded (deferred follow-up) — without misfiring mid-chain on the
+// platform this recovery flow exists for.
+export const RECOVERY_FAILSAFE_TIMEOUT_MS = 25000;
+
+/**
+ * Whether a device token exists to recover an expired session from — read from PLATFORM storage
+ * (D1): desktop reads safeStorage over IPC (window.electron.auth) via DesktopStorage, web reads
+ * localStorage via WebStorage. The old localStorage-only check saw nothing on desktop, which is
+ * why native shells could never self-recover. Async because the desktop read is an IPC round-trip.
+ *
+ * Raced against a timeout because the underlying native call can hang indefinitely (iOS
+ * Keychain access during app launch) — same hazard `getSessionTokenWithTimeout` guards
+ * against in auth-fetch.ts. Without this, a hung call leaves `recovering` stuck `true`
+ * forever, stranding the user on the loading screen.
+ */
+async function hasDeviceToken(): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => resolve(null), DEVICE_TOKEN_TIMEOUT_MS);
+  });
+
   try {
-    const response = await fetch('/api/auth/me', { credentials: 'include' });
+    const session = await Promise.race([
+      getPlatformStorage().getStoredSession(),
+      timeoutPromise,
+    ]);
+    return !!session?.deviceToken;
+  } catch {
+    // Storage unavailable (IPC failure / SSR) — treat as no token and fall through to the form.
+    return false;
+  } finally {
+    clearTimeout(timeoutId!);
+  }
+}
+
+/**
+ * Observe the current session via GET /api/auth/me through `fetchWithAuth` (D1): it attaches the
+ * Bearer token on native shells and, crucially, its own refresh-on-401 IS the recovery — a 401
+ * here transparently mints a fresh session from the device token before we ever decide to show
+ * the form. A raw `fetch` would have skipped both.
+ */
+async function checkMeAuthenticated(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CHECK_ME_TIMEOUT_MS);
+
+  try {
+    const response = await fetchWithAuth('/api/auth/me', {
+      credentials: 'include',
+      signal: controller.signal,
+    });
     return response.ok;
   } catch {
-    // Network error — treat as unauthenticated and fall through to the device-token path.
+    // Network error (including an abort on timeout) — treat as unauthenticated and fall
+    // through to the device-token path.
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
 /**
  * Imperative shell for silent session recovery on the signin page.
  *
- * Runs the effects — GET /api/auth/me, reading the device token, the AuthFetch refresh,
- * the router navigation — and defers every decision to the pure `decideSigninRecovery`
- * core. See ./signin-recovery.ts for why this exists (the 2026-07-07 middleware change
- * that started bouncing recoverable sessions to the signin form).
+ * Runs the effects — GET /api/auth/me (via fetchWithAuth), reading the device token from
+ * platform storage, the AuthFetch refresh, the router navigation — and defers every decision to
+ * the pure `decideSigninRecovery` core. See ./signin-recovery.ts for why this exists (the
+ * 2026-07-07 middleware change that started bouncing recoverable sessions to the signin form,
+ * and the D1 fix that lets native shells recover too).
  *
  * Returns `recovering`: while true, the page shows a minimal loading state instead of the
  * form, so a user who is about to be redirected never sees the form flash. It flips to
- * false only when recovery lands on the form (or is skipped in a native shell); on a
- * redirect it stays true through the navigation.
+ * false only when recovery lands on the form; on a redirect it stays true through the
+ * navigation.
  *
  * READINESS. Recovery must not begin until `ready` is true. The signin page resolves the
  * post-recovery destination (`nextPath`) from the browser URL in a mount effect, so on the
@@ -67,16 +128,32 @@ export function useSigninRecovery(
 
     let cancelled = false;
 
+    // Unconditional backstop: whatever hangs anywhere in the chain below, the loading screen
+    // cannot outlive this timer. Cleared on every terminal path (show-form, redirect, the
+    // fail-open catch, and unmount) so it never fires after a normal completion.
+    //
+    // Also marks the run cancelled, same as unmount: an unbounded step still pending when the
+    // failsafe fires (e.g. the web/desktop device-token refresh paths, which have no timeout
+    // of their own yet) must not be allowed to act on the page later — without this, a refresh
+    // that eventually resolves `redirect` after the form is already showing would yank the
+    // user away from it with no warning.
+    const failsafeTimer = setTimeout(() => {
+      if (!cancelled) {
+        cancelled = true;
+        setRecovering(false);
+      }
+    }, RECOVERY_FAILSAFE_TIMEOUT_MS);
+
     const run = async () => {
       const observed: SigninRecoveryInput = {
-        isNativeShell: detectNativeShell(),
         // Read fresh from the store rather than subscribing: this effect runs once and must
         // see the flag's value when recovery starts, not restart when it later changes.
         authFailedPermanently: useAuthStore.getState().authFailedPermanently,
         meAuthenticated: undefined,
-        hasDeviceToken: hasDeviceToken(),
+        hasDeviceToken: await hasDeviceToken(),
         refreshSucceeded: undefined,
       };
+      if (cancelled) return;
 
       // Drive the pure machine: perform each action, feed the result back, repeat until
       // a terminal action. The machine never loops back to an earlier step, and every
@@ -86,13 +163,14 @@ export function useSigninRecovery(
         const action = decideSigninRecovery(observed);
 
         switch (action.type) {
-          case 'skip':
           case 'show-form':
+            clearTimeout(failsafeTimer);
             if (!cancelled) setRecovering(false);
             return;
 
           case 'redirect':
             // Keep `recovering` true through the navigation so the form never flashes.
+            clearTimeout(failsafeTimer);
             router.replace(nextPath ?? DEFAULT_NEXT);
             return;
 
@@ -111,14 +189,17 @@ export function useSigninRecovery(
 
     // Fail open: recovery is best-effort, so an unexpected rejection anywhere in the driver
     // must fall back to showing the form — never strand the page on the loading state (this
-    // is the app's primary auth entry point). `refreshAuthSession` resolves a result today,
-    // but its type makes no never-throw guarantee, and neither does a dynamic import inside it.
+    // is the app's primary auth entry point). `refreshAuthSession`/`fetchWithAuth` resolve a
+    // result today, but their types make no never-throw guarantee, and neither does a dynamic
+    // import inside them.
     void run().catch(() => {
+      clearTimeout(failsafeTimer);
       if (!cancelled) setRecovering(false);
     });
 
     return () => {
       cancelled = true;
+      clearTimeout(failsafeTimer);
     };
     // Starts once, when `ready` flips true; `nextPath` is fully resolved by then and stable
     // thereafter (browserPath is set a single time), so it is intentionally not a dependency.

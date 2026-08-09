@@ -5,8 +5,18 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { favorites } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+
+/**
+ * lockedBatchReorder's batched `UPDATE ... FROM (VALUES ...)` binds 2
+ * parameters per row plus 1 scope parameter, so an unbounded orderedIds
+ * array can cross PostgreSQL's 65,535-parameter-per-statement ceiling and
+ * 500 instead of failing cleanly. Favorites lists are never legitimately
+ * this large — reject oversized requests up front.
+ */
+const MAX_REORDER_BATCH = 5000;
 
 export async function PATCH(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
@@ -23,7 +33,12 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'orderedIds must be an array' }, { status: 400 });
     }
 
+    if (orderedIds.length > MAX_REORDER_BATCH) {
+      return NextResponse.json({ error: `orderedIds must not exceed ${MAX_REORDER_BATCH} entries` }, { status: 400 });
+    }
+
     // Verify all favorites belong to this user
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const userFavorites = await db.query.favorites.findMany({
       where: and(eq(favorites.userId, userId), inArray(favorites.id, orderedIds)),
       columns: { id: true },
@@ -36,15 +51,18 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'Some favorite IDs do not belong to this user' }, { status: 403 });
     }
 
-    // Update positions in a transaction
-    await db.transaction(async tx => {
-      for (let i = 0; i < orderedIds.length; i++) {
-        await tx
-          .update(favorites)
-          .set({ position: i })
-          .where(and(eq(favorites.id, orderedIds[i]), eq(favorites.userId, userId)));
-      }
-    });
+    const plan = computeReorderPlan(orderedIds.map((id, i) => ({ id, position: i })));
+    if (plan.orderedIds.length > 0) {
+      await db.transaction(async (tx) => {
+        await lockedBatchReorder(tx, {
+          table: favorites,
+          idColumn: favorites.id,
+          positionColumn: favorites.position,
+          scopeWhere: eq(favorites.userId, userId),
+          plan,
+        });
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

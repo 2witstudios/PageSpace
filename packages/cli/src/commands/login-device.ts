@@ -23,6 +23,7 @@ import { createPollDeviceToken } from '../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../auth/request-device-authorization.js';
 import { resolveEnvKeyName } from '../auth/legacy-token-env.js';
 import { resolveKeyName } from '../auth/resolve.js';
+import { createSigintFlag } from '../auth/sigint.js';
 import { waitMs } from '../auth/wait.js';
 import { runDeviceLogin } from '../auth/device-flow.js';
 import type { DeviceAuthorization, PollDeviceToken, RequestDeviceAuthorization } from '../auth/device-flow.js';
@@ -37,7 +38,14 @@ export interface LoginDeviceHandlerDeps {
   readonly waitMs: WaitMs;
   readonly confirmIdentity: ConfirmIdentity;
   readonly now: () => number;
-  readonly isInterrupted: () => boolean;
+  /**
+   * Creates the interrupt flag. A factory, not a flag: calling it installs a
+   * `process.once('SIGINT')` listener, which replaces Node's default
+   * terminate-on-Ctrl-C. `run.ts` imports this module for every invocation, so
+   * calling it at module scope would impose that on unrelated commands. The
+   * handler calls it only once a device login is actually starting.
+   */
+  readonly createIsInterrupted: () => () => boolean;
   readonly timeoutMs?: number;
 }
 
@@ -74,7 +82,7 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
       pollDeviceToken: deps.pollDeviceToken,
       waitMs: deps.waitMs,
       now: deps.now,
-      isInterrupted: deps.isInterrupted,
+      isInterrupted: deps.createIsInterrupted(),
       timeoutMs: deps.timeoutMs,
       credentialStore: store,
       confirmIdentity: deps.confirmIdentity,
@@ -126,14 +134,6 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
   };
 }
 
-function createSigintFlag(): () => boolean {
-  let interrupted = false;
-  process.once('SIGINT', () => {
-    interrupted = true;
-  });
-  return () => interrupted;
-}
-
 export const loginDeviceHandler: CommandHandler = createLoginDeviceHandler({
   createCredentialStore,
   discoverMetadata: createDiscoverMetadata(),
@@ -145,5 +145,5 @@ export const loginDeviceHandler: CommandHandler = createLoginDeviceHandler({
   waitMs,
   confirmIdentity,
   now: Date.now,
-  isInterrupted: createSigintFlag(),
+  createIsInterrupted: createSigintFlag,
 });

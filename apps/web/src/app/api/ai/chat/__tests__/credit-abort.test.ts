@@ -17,7 +17,7 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   RESERVE_FLOOR_CENTS: 25,
 }));
 
-import { makeOnStepFinishHandler } from '../step-finish-handler';
+import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 
 beforeEach(() => vi.clearAllMocks());
 

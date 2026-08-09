@@ -53,6 +53,14 @@ vi.mock('../../validators', () => ({
   parsePageId: vi.fn(),
 }));
 
+const { mockFetchCustomRolePermissions } = vi.hoisted(() => ({
+  mockFetchCustomRolePermissions: vi.fn(),
+}));
+vi.mock('../membership-queries', () => ({
+  fetchCustomRolePermissions: mockFetchCustomRolePermissions,
+  resolveCustomRolePermissions: vi.fn(),
+}));
+
 import { getUserDrivePermissions, getUserDriveAccess } from '../permissions';
 import { db } from '@pagespace/db/db';
 import { isNotNull } from '@pagespace/db/operators';
@@ -75,7 +83,7 @@ function stubDriveLookup(rows: Array<{ id: string; ownerId: string }>) {
   } as unknown as ReturnType<typeof db.select>;
 }
 
-function stubMembershipLookup(rows: Array<{ role?: string; id?: string }>) {
+function stubMembershipLookup(rows: Array<{ role?: string; id?: string; customRoleId?: string | null }>) {
   return {
     from: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({
@@ -120,6 +128,65 @@ describe('getUserDrivePermissions', () => {
       isMember: false,
       canEdit: true,
     });
+  });
+
+  it('given a MEMBER with a custom role granting drive-wide edit, keeps canEdit true', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_1' }]));
+    mockFetchCustomRolePermissions.mockResolvedValueOnce({
+      permissions: {},
+      driveWidePermissions: { canView: true, canEdit: true, canShare: false },
+    });
+
+    const result = await getUserDrivePermissions(USER, DRIVE);
+    expect(result).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
+  });
+
+  it('given a MEMBER with a view-only custom role, denies drive-wide edit (codex round 12)', async () => {
+    // The custom role bounds the member: driveWidePermissions.canEdit false
+    // (or absent) must read as canEdit false here, or a view-only member
+    // passes the sandbox/compute gate and drive-root upload gates.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_1' }]));
+    mockFetchCustomRolePermissions.mockResolvedValueOnce({
+      permissions: {},
+      driveWidePermissions: { canView: true, canEdit: false, canShare: false },
+    });
+
+    const result = await getUserDrivePermissions(USER, DRIVE);
+    expect(result).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
+  });
+
+  it('given a MEMBER whose custom role has no drive-wide permissions, denies drive-wide edit', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_1' }]));
+    mockFetchCustomRolePermissions.mockResolvedValueOnce({ permissions: {}, driveWidePermissions: null });
+
+    const result = await getUserDrivePermissions(USER, DRIVE);
+    expect(result?.canEdit).toBe(false);
+  });
+
+  it('given a MEMBER with an UNRESOLVABLE custom role, fails closed on edit', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_stale' }]));
+    mockFetchCustomRolePermissions.mockResolvedValueOnce(null);
+
+    const result = await getUserDrivePermissions(USER, DRIVE);
+    expect(result?.canEdit).toBe(false);
+  });
+
+  it('given an ADMIN with a custom role, ignores the role — admins bypass custom roles', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'ADMIN', customRoleId: 'role_1' }]));
+
+    const result = await getUserDrivePermissions(USER, DRIVE);
+    expect(result?.canEdit).toBe(true);
+    expect(mockFetchCustomRolePermissions).not.toHaveBeenCalled();
   });
 
   it('given an accepted ADMIN member, returns { isAdmin: true, isMember: true, canEdit: true }', async () => {

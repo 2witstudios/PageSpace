@@ -96,7 +96,6 @@ ${task.description}
         pageId: taskPageId,
         status: task.status,
         priority: task.priority,
-        position: index,
         dueDate,
         createdAt: now,
         updatedAt: now,

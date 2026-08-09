@@ -19,12 +19,30 @@ const {
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveGlobalAssistantMessageToDatabase,
+  mockConversation,
+  mockUserProfile,
+  mockAuthUser,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  // Hoisted (not a plain top-level const) because the `@pagespace/db/db` mock
+  // factory below references these eagerly (`.mockResolvedValue(...)` needs
+  // its argument immediately) — and #2153's new stream-takeover ->
+  // materialize-interrupted-stream -> global-conversation-repository import
+  // chain can now trigger that factory before a plain const would have run.
+  mockConversation: {
+    id: 'conv-1',
+    userId: 'user-1',
+    title: 'Test Conversation',
+    type: 'global',
+    contextId: null,
+    isActive: true,
+  },
+  mockUserProfile: { displayName: 'Display User' },
+  mockAuthUser: { name: 'Auth User', subscriptionTier: 'free' },
 }));
 
 interface MockUIStreamOptions {
@@ -58,6 +76,9 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -72,17 +93,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
-
-const mockConversation = {
-  id: 'conv-1',
-  userId: 'user-1',
-  title: 'Test Conversation',
-  type: 'global',
-  contextId: null,
-  isActive: true,
-};
-const mockUserProfile = { displayName: 'Display User' };
-const mockAuthUser = { name: 'Auth User', subscriptionTier: 'free' };
 
 vi.mock('@pagespace/db/db', () => {
   const select = vi.fn(() => ({
@@ -122,14 +132,20 @@ vi.mock('@pagespace/db/db', () => {
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
+  // globalConversationRepository's module-scope `hasMessages` query (and its
+  // new #2153 recomputeLastMessageAt helper, now reachable transitively via
+  // stream-takeover -> materialize-interrupted-stream) both use `sql` — this
+  // mock must cover it or the module throws on import.
+  sql: Object.assign(vi.fn(), { join: vi.fn() }),
 }));
 
-vi.mock('../resolve-or-create-conversation', () => ({
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
     conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
     isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
@@ -185,6 +201,9 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),
@@ -265,7 +284,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
@@ -290,7 +309,7 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
-import { resolveOrCreateConversation } from '../resolve-or-create-conversation';
+import { resolveOrCreateConversation, ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -338,5 +357,16 @@ describe('POST /api/ai/global/[id]/messages — conversation identity resolution
     await POST(makeRequest({}), makeContext());
 
     expect(resolveOrCreateConversation).toHaveBeenCalledWith('user-1', 'url-conv-id');
+  });
+
+  // The lazy-create race fallback can resolve to a history-deleted row (see
+  // resolve-or-create-conversation.test.ts for the mechanism) — the route must
+  // translate that into the same 404 an ownership mismatch gets, not a 500.
+  it('given resolveOrCreateConversation rejects with ConversationHistoryDeletedError, should 404', async () => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ConversationHistoryDeletedError());
+
+    const response = await POST(makeRequest({}), makeContext());
+
+    expect(response.status).toBe(404);
   });
 });

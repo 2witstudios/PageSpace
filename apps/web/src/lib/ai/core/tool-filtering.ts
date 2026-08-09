@@ -5,6 +5,7 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { SANDBOX_CORE_TOOL_NAMES } from '../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 
@@ -113,10 +114,152 @@ export const WRITE_TOOLS = new Set([
   'gh_issue_reopen',
   'gh_repo_fork',
   'gh_repo_create',
+  // Session/shell-family MUTATIONS. list_sessions, read_session and read_shell
+  // are reads and stay available; the rest spawn, drive and kill sessions and
+  // shells — and spawn_session/send_session run a full agent loop in the
+  // target, which can execute arbitrary shell commands. A read-only
+  // conversation that could still call them would be read-only in name only.
+  'spawn_session',
+  'send_session',
+  'kill_session',
+  'spawn_shell',
+  'send_shell',
+  'kill_shell',
 ]);
 
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
+
+/**
+ * The SESSION + SHELL families — the agent-session orchestration surface
+ * (spawn/send/read/kill workers; spawn/send/read/kill PTY shells in the
+ * caller's own session's sandbox). `buildPageSpaceTools` registers the
+ * chat-only session subfamily unconditionally (sessions are free on every
+ * plan and every deployment) and the shell subfamily alongside bash/git
+ * behind the CODE_EXECUTION kill-switch; the tools resolve the caller's
+ * SESSION from its conversation at call time, so there is no binding to
+ * gate registration on.
+ *
+ * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
+ * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
+ * and write through it, defeating the read-only promise), and every read verb
+ * must NOT (or a read-only agent could not even observe its own sessions). A
+ * tenth tool added to the family without a matching WRITE_TOOLS decision fails
+ * that test rather than silently picking the wrong default.
+ */
+export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
+  'list_sessions',
+  'spawn_session',
+  'send_session',
+  'read_session',
+  'kill_session',
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
+];
+
+/**
+ * The DISPATCH-DEPENDENT subset of the session family: these two relay the
+ * caller's own credentials through the chat pipeline
+ * (`dispatchThroughChatPipeline` forwards cookie/CSRF from the live request),
+ * so they only function inside an authenticated USER request. Background
+ * surfaces with no user cookie (cron/webhook/calendar/task workflow fires)
+ * must strip them rather than advertise tools whose dispatch always refuses
+ * (review #2326). list/read/kill_session stay out of this set — they are
+ * direct DB/stream operations with no dispatch hop.
+ */
+export const DISPATCH_DEPENDENT_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'spawn_session',
+  'send_session',
+]);
+
+/**
+ * Strip the dispatch-dependent session pair when the current execution cannot
+ * dispatch as the user — i.e. it does not run inside that user's own
+ * authenticated browser request (MCP/API-key surfaces, background workflow
+ * fires, a manual workflow run by someone other than the workspace owner).
+ * Advertising a tool whose dispatch unconditionally refuses is the failure
+ * mode this prevents.
+ */
+export function filterToolsForDispatchCredentials<T>(
+  tools: Record<string, T>,
+  hasUserDispatchCredentials: boolean
+): Record<string, T> {
+  if (hasUserDispatchCredentials) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name))
+  );
+}
+
+/**
+ * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
+ * agent must not see: core execution (bash/files), the git+gh CLI toolkit, and
+ * session/shell orchestration (whose entire point is the sandbox a session
+ * lazily owns). The per-agent settings switch (`pages.sandboxEnabled`,
+ * successor to the old machineAccess toggle + MACHINE_TOOL_NAMES filter) gates
+ * these BOTH at listing time (the settings tab's Default Tools) and at request
+ * time (`filterToolsForSandboxEnablement` below) — hiding a tool from a picker
+ * is not a gate. The env kill-switch and per-call `canRunCode` remain the
+ * security boundaries underneath; this is agent configuration, not authz.
+ */
+export const SANDBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  ...SESSION_FAMILY_TOOL_NAMES,
+]);
+
+/**
+ * Apply the per-agent sandbox switch: `sandboxEnabled: false` (the default —
+ * code execution is opt-in per agent, as machineAccess was) strips every
+ * sandbox-family tool from the set. Provisioning stays lazy and automatic for
+ * an ENABLED agent — this filter is the only thing the switch controls.
+ */
+export function filterToolsForSandboxEnablement<T>(
+  tools: Record<string, T>,
+  sandboxEnabled: boolean
+): Record<string, T> {
+  if (sandboxEnabled) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_TOOL_NAMES.has(name))
+  );
+}
+
+/**
+ * The COMPUTE subset of the sandbox surface — what a free-tier payer must not
+ * see: core execution (bash/files), the git+gh CLI toolkit, and the PTY shell
+ * tools (a shell IS the sandbox). The chat-side session tools
+ * (list/spawn/send/read/kill_session) are deliberately NOT here: sessions and
+ * chat workers are free on every plan (review #2326) — only the machine is
+ * tier-gated — so the TIER filter below must preserve them where the
+ * per-agent switch (`filterToolsForSandboxEnablement` above, which strips all
+ * three families) would not.
+ */
+export const SANDBOX_COMPUTE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
+]);
+
+/**
+ * Apply the PAYER-tier gate: an ineligible (free-tier) payer loses the
+ * compute tools but keeps the chat-only session orchestration family —
+ * showing bash/git/shell tools that hard-fail `tier_ineligible` is the UX
+ * bug this prevents, while removing `spawn_session` and friends would gate
+ * the free session surface this release explicitly opens (review #2326).
+ */
+export function filterToolsForSandboxTier<T>(
+  tools: Record<string, T>,
+  tierEligible: boolean
+): Record<string, T> {
+  if (tierEligible) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_COMPUTE_TOOL_NAMES.has(name))
+  );
+}
 
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).
@@ -237,6 +380,26 @@ export function filterToolsForMcpScope<T>(
 }
 
 /**
+ * Apply a page's saved per-agent tool allowlist (`page.enabledTools`).
+ *
+ * null = unconfigured page, no restriction; [] = every listed PageSpace tool
+ * blocked. The session/shell family gets NO exemption: it is part of the
+ * sandbox tool group like bash/git, and an operator who restricted an agent's
+ * tools restricted these too — the old exemption existed only because the
+ * family used to be registered by machine binding, outside the allowlist's
+ * sight.
+ */
+export function filterToolsForAgentAllowlist<T>(
+  tools: Record<string, T>,
+  allowlist: string[] | null
+): Record<string, T> {
+  if (allowlist == null) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => allowlist.includes(name))
+  );
+}
+
+/**
  * Filter tools based on web search toggle
  * Returns all tools if web search enabled, or excludes web_search if disabled
  */
@@ -249,26 +412,6 @@ export function filterToolsForWebSearch<T>(
   return Object.fromEntries(
     Object.entries(tools).filter(([name]) => !isWebSearchTool(name))
   );
-}
-
-/**
- * Combined tool filtering - applies both read-only and web search filters
- */
-export function filterTools<T>(
-  tools: Record<string, T>,
-  options: { isReadOnly?: boolean; webSearchEnabled?: boolean }
-): Record<string, T> {
-  let filtered = tools;
-
-  if (options.isReadOnly) {
-    filtered = filterToolsForReadOnly(filtered, true);
-  }
-
-  if (options.webSearchEnabled === false) {
-    filtered = filterToolsForWebSearch(filtered, false);
-  }
-
-  return filtered;
 }
 
 /**
@@ -287,66 +430,3 @@ export function buildPageAITools<T>(
   return filterToolsForWebSearch(afterReadOnly, options.webSearchEnabled);
 }
 
-/**
- * Get list of allowed tools for display purposes
- */
-export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
-  allowed: string[];
-  denied: string[];
-} {
-  const allTools = [
-    // Read tools
-    'list_drive_members',
-    'list_collaborators',
-    'list_drive_roles',
-    'get_drive_role',
-    'list_drives',
-    'list_pages',
-    'read_page',
-    'list_trash',
-    'list_conversations',
-    'read_conversation',
-    'list_agents',
-    'multi_drive_list_agents',
-    'get_activity',
-    'get_assigned_tasks',
-    // Calendar read tools
-    'list_calendar_events',
-    'get_calendar_event',
-    'check_calendar_availability',
-    // Search tools
-    'regex_search',
-    'glob_search',
-    'multi_drive_search',
-    'web_search',
-    'web_fetch',
-    // Agent communication
-    'ask_agent',
-    // Model catalog (read-only)
-    'list_models',
-    // Command read
-    'list_commands',
-    // Workflow read
-    'list_workflows',
-    // Write tools
-    ...Array.from(WRITE_TOOLS),
-  ];
-
-  if (!isReadOnly && webSearchEnabled) {
-    return { allowed: allTools, denied: [] };
-  }
-
-  const allowed = allTools.filter((name) => {
-    if (isReadOnly && isWriteTool(name)) return false;
-    if (!webSearchEnabled && isWebSearchTool(name)) return false;
-    return true;
-  });
-
-  const denied = allTools.filter((name) => {
-    if (isReadOnly && isWriteTool(name)) return true;
-    if (!webSearchEnabled && isWebSearchTool(name)) return true;
-    return false;
-  });
-
-  return { allowed, denied };
-}

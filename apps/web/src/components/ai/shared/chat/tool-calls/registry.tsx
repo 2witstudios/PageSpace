@@ -22,6 +22,8 @@ import { CalendarEventListRenderer } from './calendar/CalendarEventListRenderer'
 import { CalendarAvailabilityRenderer, type FreeSlot } from './calendar/CalendarAvailabilityRenderer';
 import { WorkflowListRenderer } from './workflow/WorkflowListRenderer';
 import { WorkflowCard, type WorkflowData } from './workflow/WorkflowCard';
+import { OpenPagePaneRenderer } from './OpenPagePaneRenderer';
+import { PlanBindingRenderer } from './PlanBindingRenderer';
 
 /**
  * Tool-call renderer registry.
@@ -430,6 +432,30 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       pageType={parsedOutput.type as string | undefined}
       message={parsedOutput.message as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  open_page_pane: ({ parsedOutput }) => (
+    <OpenPagePaneRenderer
+      pageId={parsedOutput.pageId as string | undefined}
+      title={parsedOutput.title as string | undefined}
+    />
+  ),
+
+  set_plan: ({ parsedOutput }) => (
+    <PlanBindingRenderer
+      bound
+      success={parsedOutput.success !== false}
+      title={parsedOutput.title as string | undefined}
+      error={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  clear_plan: ({ parsedOutput }) => (
+    <PlanBindingRenderer
+      bound={false}
+      success={parsedOutput.success !== false}
+      error={parsedOutput.error as string | undefined}
     />
   ),
 
@@ -1060,6 +1086,20 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         title="Commands"
       />
     );
+  },
+
+  // load_skill returns the instruction body as a plain string (`output`;
+  // `parsedOutput` is {}). Render a collapsed "Loaded skill" acknowledgement
+  // like pi's [skill] row rather than dumping the full instruction pack —
+  // soft errors (which don't carry <skill_instructions>) fall through to the
+  // generic renderer so the failure text stays visible.
+  load_skill: ({ parsedInput, output }) => {
+    const name = typeof parsedInput?.name === 'string' ? parsedInput.name : undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!name || !content || !content.includes('<skill_instructions')) return null;
+    const lines = content.split('\n');
+    const preview = lines.slice(0, 12).join('\n') + (lines.length > 12 ? '\n…' : '');
+    return <RichContentRenderer title={`Skill: ${name}`} content={preview} />;
   },
 
 

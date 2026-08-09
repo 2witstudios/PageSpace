@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
+import { atomicDeviceTokenRotation, type DeviceRotationResult } from '@pagespace/db/transactions/auth-transactions';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { shouldAllowDeviceRefresh } from '@pagespace/lib/auth/token-lifecycle-policy';
@@ -16,6 +16,14 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie, getSessionFromCookies } from '@/lib/auth';
 import { retireReplacedSession } from '@/lib/auth/session-retirement';
+import { selectDeviceTokenForResponse } from '@/lib/auth/device-refresh-token-selection';
+
+// Grace window for retiring the session a device refresh replaces. The old
+// session is expired ~60s out (not hard-revoked) so in-flight requests carrying
+// the old Bearer token — notably the 1s active-streams poll — keep validating
+// until the client has switched to the new token. 60s comfortably outlasts the
+// client token switch plus the 5s post-refresh cooldown.
+const REPLACED_SESSION_GRACE_MS = 60 * 1000;
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -48,7 +56,8 @@ export async function POST(req: Request) {
         getSessionOwnerId: async (token) =>
           (await sessionService.validateSession(token))?.userId ?? null,
         hashToken,
-        revokeByHash: (tokenHash, reason) => sessionService.revokeSessionByHash(tokenHash, reason),
+        graceExpireByHash: (tokenHash) =>
+          sessionService.expireSessionByHashSoon(tokenHash, REPLACED_SESSION_GRACE_MS),
         logWarn: (message, meta) => loggers.auth.warn(message, meta),
       });
 
@@ -77,7 +86,10 @@ export async function POST(req: Request) {
 
     const deviceRecord = await validateDeviceToken(deviceToken);
     if (!deviceRecord) {
-      return Response.json({ error: 'Invalid or expired device token.' }, { status: 401 });
+      return Response.json(
+        { error: 'Invalid or expired device token.', reason: 'invalid_device_token' },
+        { status: 401 }
+      );
     }
 
     // SECURITY (L4): strict device-binding check. A stored deviceId that is
@@ -94,7 +106,7 @@ export async function POST(req: Request) {
           userId: deviceRecord.userId,
         });
         return Response.json(
-          { error: 'Device must be re-registered. Please sign in again.' },
+          { error: 'Device must be re-registered. Please sign in again.', reason: 'unknown_stored_device' },
           { status: 401 }
         );
       }
@@ -105,7 +117,10 @@ export async function POST(req: Request) {
         providedDeviceId: deviceId,
         userId: deviceRecord.userId,
       });
-      return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
+      return Response.json(
+        { error: 'Device token does not match this device.', reason: 'device_id_mismatch' },
+        { status: 401 }
+      );
     }
 
     const user = await authRepository.findUserById(deviceRecord.userId);
@@ -116,14 +131,13 @@ export async function POST(req: Request) {
 
     // Rotate device token if it is within 60 days of expiration
     // Increased from 30 to 60 days to ensure proactive rotation with overlap
-    let activeDeviceToken = deviceToken;
-    let activeDeviceTokenId = deviceRecord.id;
     const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+    let rotation: DeviceRotationResult | null = null;
 
     if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < sixtyDaysMs) {
       // SECURITY: Atomic device token rotation with FOR UPDATE locking
       // Prevents race conditions in concurrent rotation attempts
-      const rotated = await atomicDeviceTokenRotation(
+      rotation = await atomicDeviceTokenRotation(
         deviceToken,
         {
           userAgent: userAgent ?? req.headers.get('user-agent') ?? undefined,
@@ -134,25 +148,26 @@ export async function POST(req: Request) {
         generateDeviceToken
       );
 
-      if (!rotated.success) {
+      if (!rotation.success) {
         // SECURITY: Rotation failed - do not continue with potentially revoked token
         // Token may have been revoked, expired, or already rotated by concurrent request
         loggers.auth.warn('Device token rotation failed - aborting refresh', {
           userId: deviceRecord.userId,
           deviceId: deviceRecord.deviceId,
-          error: rotated.error,
+          error: rotation.error,
         });
         return Response.json(
-          { error: rotated.error ?? 'Device token rotation failed. Please re-authenticate.' },
+          { error: rotation.error ?? 'Device token rotation failed. Please re-authenticate.', reason: 'rotation_failed' },
           { status: 401 }
         );
       }
-
-      if (rotated.newToken && rotated.deviceTokenId) {
-        activeDeviceToken = rotated.newToken;
-        activeDeviceTokenId = rotated.deviceTokenId;
-      }
     }
+
+    // Choose which token to return to the client. On a grace-period rotation
+    // retry this yields NO token (the old one is revoked; the client keeps its
+    // good token) — the fix for the device-token grace-clobber logout.
+    const { deviceToken: activeDeviceToken, activeDeviceTokenId } =
+      selectDeviceTokenForResponse(deviceToken, deviceRecord.id, rotation);
 
     const normalizedIP = clientIP === 'unknown' ? undefined : clientIP;
 

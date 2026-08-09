@@ -11,17 +11,20 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 const API_DIR = join(__dirname, '..');
 
 /**
  * Regex matching any form of security audit call used across the codebase.
  * Covers: direct securityAudit.* calls, logAuditEvent helper, logAuthEvent
- * adapter, logSecurityEvent adapter, and withAdminAuth wrapper.
+ * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
+ * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
+ * (`workspace-unavailable-response.ts`, review #2261/5) — both call
+ * `auditRequest` internally, one hop removed from the route file.
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.
@@ -48,7 +51,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
 
   // --- Dev/debug endpoints ---
-  ['debug/*', 'Development-only debug endpoints'],
+  // (none: `api/debug/**` went with `GET /api/debug/chat-messages`, the last
+  // one, when Phase 4 PR 15 dropped the table it inspected. Re-add the
+  // `debug/*` wildcard here if a debug endpoint ever comes back.)
 
   // --- Monitoring (read-only system metrics) ---
   ['pulse', 'Internal engagement monitoring'],
@@ -67,9 +72,13 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
   ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
+  ['webhooks/[token]', 'Signature-verified inbound page-webhook intake — no user session, authenticated by per-webhook HMAC secret; minting/managing the webhook is audited in the /api/pages/[pageId]/webhooks routes'],
 
   // --- Draft persistence (personal, ephemeral, own-user-only) ---
   ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
+
+  // --- Agent-session history (read-only, own-data listing) ---
+  ['agent-workspaces/conversations', 'GET-only listing of the requester\'s OWN conversations (ownerId rides every filter) — open to every authenticated user since the sessions surface opened up (#2326, which removed the admin gate that carried this route\'s only audit call); rows the requester can no longer see are dropped/masked by design (silent, to avoid a drive-membership oracle), so there is no denial path to audit and no shared data written'],
 
   // --- Direct-to-S3 attachment uploads (thin routes; audit lives in the shared
   //     orchestrator) — presign/complete emit data.write via attachment-direct.ts
@@ -87,6 +96,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],
   ['notifications/read-all', 'Bulk notification read receipt, low-risk'],
+  ['credits/concurrency', 'Polled every 5s by ConcurrencyCard for as long as the usage page stays open — auditing every poll would write ~720 rows/hour per open tab into the audit table for a non-sensitive advisory count (own in-flight credit-hold count + configured tier ceiling, no spend/balance detail)'],
 
   // --- Model discovery (no user data, no external calls) ---
   ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],
@@ -144,7 +154,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/tasks/[taskId]', 'Individual task CRUD — follow-up'],
   ['pages/[pageId]/tasks/reorder', 'Task reorder — follow-up'],
   ['pages/[pageId]/tasks/statuses', 'Task status list — follow-up'],
-  ['pages/[pageId]/versions/compare', 'Version comparison — follow-up'],
   ['pages/[pageId]/view', 'Page view endpoint — follow-up'],
   ['pages/tree', 'Page tree navigation — follow-up'],
 
@@ -156,18 +165,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Monitoring with admin auth (already audited via withAdminAuth wrapper) ---
   ['monitoring/[metric]', 'Uses withAdminAuth which includes audit — verify after merge'],
 
-  // --- Machine sandbox routes (audited via the shared writeCodeExecutionAudit
-  // pipeline deep in the machines orchestration layer, not directly in route.ts) ---
-  ['machines/branches', 'Audited via writeCodeExecutionAudit in machine-branches.ts (git clone/checkout on the branch Sprite)'],
-  ['machines/projects', 'Audited via writeCodeExecutionAudit in machine-projects.ts (git clone on the owning Machine)'],
-  ['machines/agent-terminals', 'Reserves/kills a named PTY session tracking row; the PTY itself is audited via writeCodeExecutionAudit when opened (see apps/realtime/src/index.ts)'],
-  ['machines/files', 'Read-only working-tree browse (fixed `ls` + single file read on an already-provisioned branch Sprite) — no data write, no code execution/provisioning, no git; GET-only, view-gated by canViewMachine and path-confined to the branch checkout root, consistent with the other read-only machines/* and drive/page read sub-routes'],
-  ['machines/git-blob', 'Audited via writeCodeExecutionAudit inside runGitInSandbox (machine-git-blob.ts\'s `git show <ref>:<path>` on the branch Sprite) — same deep audit path as machines/branches and machines/projects, not a direct route.ts call'],
-  ['machines/diff', 'Audited via writeCodeExecutionAudit inside runGitInSandbox (machine-diff.ts\'s status/diff/merge-base/`git show` calls on the branch Sprite — same deep audit path as machines/git-blob); its only non-git read is the same read-only, path-confined working-tree file read machines/files documents'],
-
-  // --- Integration-tool UI routes (audited via the shared executeToolSaga
-  // audit path deep in the integrations engine, not directly in route.ts) ---
-  ['integrations/github/repos', 'Audited via logAuditEntry inside the shared executeToolSaga (packages/lib/src/integrations/saga/execute-tool.ts) — the same integration-tool-call audit path AI-agent tool-calling routes use for this saga'],
 ]);
 
 function collectRouteFiles(dir: string): string[] {
@@ -182,6 +179,39 @@ function collectRouteFiles(dir: string): string[] {
     }
   }
   return results;
+}
+
+
+/**
+ * A route's auditable surface: its own text PLUS any sibling module in the same
+ * directory that it imports and re-exports handlers from.
+ *
+ * A `route.ts` is a URL binding, not necessarily where the behaviour lives. When
+ * a route delegates (`export { getFoo as GET } from './foo-handlers'`), the
+ * audit calls are in the sibling — and a scan of `route.ts` alone reports a
+ * coverage gap that does not exist. The two ways to silence that are adding a
+ * meaningless `auditRequest` to the binding, or an exemption entry that would
+ * then hide a REAL gap later. Following the delegation is the only reading that
+ * keeps the guard honest about thin routes.
+ *
+ * Deliberately one level and same-directory only: enough for a route split,
+ * not a general import graph that would eventually swallow the whole app and
+ * pass everything.
+ */
+function auditableSurface(routeFile: string): string {
+  const own = readFileSync(routeFile, 'utf-8');
+  const dir = dirname(routeFile);
+  let combined = own;
+  for (const match of own.matchAll(/from\s+'\.\/([\w.-]+)'/g)) {
+    const sibling = join(dir, `${match[1]}.ts`);
+    try {
+      combined += '\n' + readFileSync(sibling, 'utf-8');
+    } catch {
+      // Not a local .ts module (a directory index, a .tsx, a type-only path) —
+      // nothing to add, and a missing sibling is the compiler's problem.
+    }
+  }
+  return combined;
 }
 
 function toLogicalPath(absolutePath: string): string {
@@ -213,7 +243,7 @@ describe('Security Audit Route Coverage', () => {
     for (const route of routes) {
       if (isExempt(route.path)) continue;
 
-      const content = readFileSync(route.file, 'utf-8');
+      const content = auditableSurface(route.file);
       if (!AUDIT_CALL_PATTERN.test(content)) {
         violations.push(route.path);
       }
@@ -302,7 +332,7 @@ describe('Security Audit Route Coverage', () => {
         violations.push(`${routePath} (route file not found)`);
         continue;
       }
-      const content = readFileSync(file, 'utf-8');
+      const content = auditableSurface(file);
       if (!/authz\.access\.denied/.test(content)) {
         violations.push(routePath);
       }

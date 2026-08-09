@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { tierRank, toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 /**
  * Query-param parsing + in-memory search/sort helpers for the paginated
@@ -57,8 +58,6 @@ export function matchesSearch(user: SortableUser, normalizedQuery: string): bool
   );
 }
 
-const TIER_RANK: Record<string, number> = { free: 0, pro: 1, founder: 2, business: 3 };
-
 /** Ascending comparator for the given sort key. Callers negate for desc. */
 export function compareUsers(sort: ListUsersParams['sort']): (a: SortableUser, b: SortableUser) => number {
   switch (sort) {
@@ -70,7 +69,8 @@ export function compareUsers(sort: ListUsersParams['sort']): (a: SortableUser, b
       // Never-active users sort as oldest.
       return (a, b) => (a.lastActiveAt?.getTime() ?? 0) - (b.lastActiveAt?.getTime() ?? 0);
     case 'tier':
-      return (a, b) => (TIER_RANK[a.subscriptionTier] ?? 0) - (TIER_RANK[b.subscriptionTier] ?? 0);
+      return (a, b) =>
+        tierRank(toSubscriptionTier(a.subscriptionTier)) - tierRank(toSubscriptionTier(b.subscriptionTier));
     case 'name':
     default:
       return (a, b) => (a.name ?? '').localeCompare(b.name ?? '');

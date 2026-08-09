@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { eq, and, ne, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
-import { pages, chatMessages } from '@pagespace/db/schema/core'
+import { pages } from '@pagespace/db/schema/core'
+// Aliased: `conversations` and `messages` are both used as local variable
+// names inside the tools below.
+import { conversations as conversationsTable, messages } from '@pagespace/db/schema/conversations'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
@@ -18,6 +21,7 @@ import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-pag
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
+import { resolveDriveScope } from './drive-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -44,20 +48,25 @@ export const pageReadTools = {
     description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further. Pass include: "content" to batch each page\'s content into the response instead of calling read_page per page — capped at ' + MAX_CONTENT_INCLUDE_PAGES + ' pages per call.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
-      driveId: z.string().describe('The unique ID of the drive (used for operations)'),
+      driveId: z.string().optional().describe('The unique ID of the drive (used for operations). Omit to list the workspace currently in view (see LOCATION context).'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
       include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
     }),
-    execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId: driveIdArg, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
+
+      const normalizedParentId = parentId ? parentId : undefined;
+
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
-          return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
+          // driveSlug is absent whenever driveId was defaulted from location.
+          return { success: false, error: `You don't have access to the "${driveSlug ?? driveId}" workspace` };
         }
         const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
@@ -66,8 +75,8 @@ export const pageReadTools = {
 
         const pageMap = new Map(visiblePages.map(p => [p.id, p]));
 
-        if (parentId && !pageMap.has(parentId)) {
-          return { success: false, error: `Page "${parentId}" not found or not accessible in this workspace` };
+        if (normalizedParentId && !pageMap.has(normalizedParentId)) {
+          return { success: false, error: `Page "${normalizedParentId}" not found or not accessible in this workspace` };
         }
 
         // Get task-linked page IDs to mark them
@@ -113,7 +122,7 @@ export const pageReadTools = {
         let resultPages: PageEntry[];
 
         if (!recursive) {
-          const target = parentId ?? null;
+          const target = normalizedParentId ?? null;
           const children = visiblePages.filter(p => p.parentId === target);
           resultPages = children.map(p => ({
             id: p.id,
@@ -142,7 +151,7 @@ export const pageReadTools = {
             }
             return result;
           };
-          resultPages = collectSubtree(parentId ?? null);
+          resultPages = collectSubtree(normalizedParentId ?? null);
         }
 
         // Batch content onto the result set in one additional query, rather than
@@ -195,13 +204,15 @@ export const pageReadTools = {
         }
 
         const driveLabel = driveSlug || driveId;
-        const breadcrumb = buildBreadcrumb(parentId);
-        const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
+        const breadcrumb = buildBreadcrumb(normalizedParentId);
+        const location = normalizedParentId ? buildPath(normalizedParentId) : `/${driveLabel}`;
         const locationLabel = breadcrumb.length > 0 ? breadcrumb.map(c => c.title).join(' / ') : driveLabel;
 
         return {
           success: true,
           driveSlug: driveLabel,
+          driveId,
+          scopeSource,
           location,
           breadcrumb,
           pages: resultPages,
@@ -386,14 +397,15 @@ export const pageReadTools = {
             },
           });
 
-          // Get all non-trashed tasks ordered by position. Title lives on the linked page.
+          // Get all non-trashed tasks ordered by pages.position — the single ordering
+          // rail users reorder against (#2143). Title lives on the linked page too.
           const tasks = await db
             .select({
               id: taskItems.id,
               title: pages.title,
               status: taskItems.status,
               priority: taskItems.priority,
-              position: taskItems.position,
+              position: pages.position,
               assigneeId: taskItems.assigneeId,
               dueDate: taskItems.dueDate,
               completedAt: taskItems.completedAt,
@@ -405,11 +417,12 @@ export const pageReadTools = {
               eq(pages.parentId, taskList.pageId!),
               eq(pages.isTrashed, false),
             ))
-            .orderBy(asc(taskItems.position));
+            .orderBy(asc(pages.position), asc(taskItems.id));
 
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the
           // AI always sees a concrete list.
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const statusConfigs = await db.query.taskStatusConfigs.findMany({
             where: eq(taskStatusConfigs.taskListId, taskList.id),
             orderBy: [asc(taskStatusConfigs.position)],
@@ -572,6 +585,7 @@ export const pageReadTools = {
 
         // Handle CHANNEL pages - return message transcript (lineStart/lineEnd map to message numbers)
         if (page.type === 'CHANNEL') {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const messagesRaw = await db.query.channelMessages.findMany({
             where: and(
               eq(channelMessages.pageId, page.id),
@@ -975,48 +989,57 @@ export const pageReadTools = {
           return { success: false, error: 'Insufficient permissions to access this agent' };
         }
 
-        // Query conversations grouped by conversationId
+        // Query conversations grouped by conversationId.
+        //
+        // Reads the unified `messages` table since the message-table merge
+        // (epic "Agent-Session Single Source of Truth", Phase 4 / D6). Page
+        // scope is the JOIN (`conversations.type = 'page'` AND
+        // `conversations.contextId = pageId`), not `messages.pageId` — the
+        // former is the end-state authority and indexed, the latter is
+        // transitional and dropped at the contract PR.
         const conversationData = await db
           .select({
-            conversationId: chatMessages.conversationId,
-            messageCount: count(chatMessages.id),
-            lastActivity: max(chatMessages.createdAt),
-            firstMessageTime: min(chatMessages.createdAt),
+            conversationId: messages.conversationId,
+            messageCount: count(messages.id),
+            lastActivity: max(messages.createdAt),
+            firstMessageTime: min(messages.createdAt),
           })
-          .from(chatMessages)
+          .from(messages)
+          .innerJoin(conversationsTable, eq(conversationsTable.id, messages.conversationId))
           .where(and(
-            eq(chatMessages.pageId, pageId),
-            eq(chatMessages.isActive, true)
+            eq(conversationsTable.type, 'page'),
+            eq(conversationsTable.contextId, pageId),
+            eq(messages.isActive, true)
           ))
-          .groupBy(chatMessages.conversationId);
+          .groupBy(messages.conversationId);
 
         // Get first message preview for each conversation
         const conversations = await Promise.all(
           conversationData.map(async (conv) => {
-            // Get first message for preview - include pageId to use composite index
-            const firstMessage = await db.query.chatMessages.findFirst({
-              where: and(
-                eq(chatMessages.pageId, pageId),
-                eq(chatMessages.conversationId, conv.conversationId),
-                eq(chatMessages.isActive, true)
-              ),
-              orderBy: asc(chatMessages.createdAt),
-              columns: {
-                content: true,
-                role: true,
-                userId: true,
-              },
-            });
-
-            // Get unique participants - include pageId to use composite index
-            const participants = await db
-              .selectDistinct({ userId: chatMessages.userId })
-              .from(chatMessages)
+            // Get first message for preview — scoped by conversationId, which
+            // is globally unique (cuid2) and already implies the page.
+            const [firstMessage] = await db
+              .select({
+                content: messages.content,
+                role: messages.role,
+                userId: messages.userId,
+              })
+              .from(messages)
               .where(and(
-                eq(chatMessages.pageId, pageId),
-                eq(chatMessages.conversationId, conv.conversationId),
-                eq(chatMessages.isActive, true),
-                isNotNull(chatMessages.userId)
+                eq(messages.conversationId, conv.conversationId),
+                eq(messages.isActive, true)
+              ))
+              .orderBy(asc(messages.createdAt), asc(messages.id))
+              .limit(1);
+
+            // Get unique participants
+            const participants = await db
+              .selectDistinct({ userId: messages.userId })
+              .from(messages)
+              .where(and(
+                eq(messages.conversationId, conv.conversationId),
+                eq(messages.isActive, true),
+                isNotNull(messages.userId)
               ));
 
             // Extract preview text - prefer originalContent, then parts, then textParts
@@ -1137,25 +1160,37 @@ export const pageReadTools = {
         // Get all messages for this conversation. Excludes 'streaming' placeholders — this
         // is delivered straight to the model as a tool result. See Server Stream Durability
         // epic PR 2.
-        const messages = await db
-          .select()
-          .from(chatMessages)
+        //
+        // Unified `messages` table since the merge (Phase 4 / D6). The page
+        // predicate is kept — it is what stops a caller pairing someone else's
+        // conversation id with a page they can see — but it is now
+        // `conversations.contextId`, the end-state authority, rather than the
+        // transitional `messages.pageId`.
+        const conversationMessages = await db
+          .select({
+            role: messages.role,
+            content: messages.content,
+            sourceAgentId: messages.sourceAgentId,
+          })
+          .from(messages)
+          .innerJoin(conversationsTable, eq(conversationsTable.id, messages.conversationId))
           .where(and(
-            eq(chatMessages.conversationId, conversationId),
-            eq(chatMessages.pageId, pageId),
-            eq(chatMessages.isActive, true),
-            ne(chatMessages.status, 'streaming')
+            eq(messages.conversationId, conversationId),
+            eq(conversationsTable.type, 'page'),
+            eq(conversationsTable.contextId, pageId),
+            eq(messages.isActive, true),
+            ne(messages.status, 'streaming')
           ))
-          .orderBy(asc(chatMessages.createdAt));
+          .orderBy(asc(messages.createdAt), asc(messages.id));
 
-        if (messages.length === 0) {
+        if (conversationMessages.length === 0) {
           return {
             success: false,
             error: `Conversation "${conversationId}" not found or has no messages`,
           };
         }
 
-        const totalMessages = messages.length;
+        const totalMessages = conversationMessages.length;
 
         // Calculate effective range (1-indexed, inclusive)
         const effectiveStart = lineStart ?? 1;
@@ -1177,7 +1212,7 @@ export const pageReadTools = {
         }
 
         // Extract messages in range (convert to 0-indexed for slice)
-        const selectedMessages = messages.slice(effectiveStart - 1, effectiveEnd);
+        const selectedMessages = conversationMessages.slice(effectiveStart - 1, effectiveEnd);
 
         // Batch fetch all source agent names upfront to avoid N+1 queries
         const uniqueSourceAgentIds = [...new Set(
@@ -1188,6 +1223,7 @@ export const pageReadTools = {
 
         const sourceAgentMap = new Map<string, string>();
         if (uniqueSourceAgentIds.length > 0) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const sourceAgents = await db.query.pages.findMany({
             where: inArray(pages.id, uniqueSourceAgentIds),
             columns: { id: true, title: true },

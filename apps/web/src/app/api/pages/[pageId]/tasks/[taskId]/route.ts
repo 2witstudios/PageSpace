@@ -82,6 +82,7 @@ export async function PATCH(
   if (status !== undefined) {
     // Validate against task list's custom status configs
     const validStatuses = taskList
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? await db.query.taskStatusConfigs.findMany({
           where: eq(taskStatusConfigs.taskListId, taskList.id),
           columns: { slug: true, group: true },
@@ -239,6 +240,7 @@ export async function PATCH(
 
   // Fetch existing assignees before the transaction (for notification comparison)
   const existingAssignees = Array.isArray(assigneeIds)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     ? await db.query.taskAssignees.findMany({
         where: eq(taskAssignees.taskId, taskId),
         columns: { userId: true, agentPageId: true },
@@ -354,10 +356,10 @@ export async function PATCH(
     throw error;
   }
 
-  // Clamp + re-densify positions (0..n-1), matching the reorder_task tool — replaces
-  // the previous raw, unclamped position write that could leave duplicate/gapped positions.
+  // Clamp to a slot in the list and move the task's page, matching the reorder_task
+  // tool. The write lands on pages.position — the single ordering rail (#2143).
   if (position !== undefined) {
-    await reorderTaskPeers(pageId, taskId, position);
+    await reorderTaskPeers(pageId, taskId, position, { userId });
   }
 
   // Create the agent trigger workflow after the transaction commits, mirroring update_task.
@@ -401,7 +403,7 @@ export async function PATCH(
         columns: { id: true, name: true, image: true },
       },
       page: {
-        columns: { id: true, title: true },
+        columns: { id: true, title: true, position: true },
       },
       assignees: {
         with: {
@@ -457,6 +459,8 @@ export async function PATCH(
   const responseBody = {
     ...taskWithRelations,
     title: responseTitle,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: taskWithRelations.page?.position ?? 0,
     ...(agentTriggerResult ? { agentTrigger: agentTriggerResult } : {}),
   };
 
