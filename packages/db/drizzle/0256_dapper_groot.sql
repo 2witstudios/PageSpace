@@ -50,6 +50,34 @@
 -- Both must be 0. A non-zero count is a workspace, or a thread, whose only
 -- record of itself is about to be dropped.
 
+-- THE CHECKS ABOVE, MADE EXECUTABLE.
+--
+-- They were comments. A comment does not stop a deploy, and migrations apply
+-- automatically — so the instruction "check before applying" was addressed to a
+-- human who, on the path that actually loses data (a restored snapshot, a
+-- long-lived branch database, a tenant image that skipped the 0255 window), is
+-- not in the room. This block refuses instead of trusting.
+--
+-- DELIBERATE EXCEPTION to "never hand-edit generated SQL". A precondition is not
+-- expressible in the Drizzle schema, so `db:generate` cannot emit one; the rule
+-- exists to keep schema and migration in step, and this adds no schema. Nothing
+-- below this block was hand-written.
+DO $$
+DECLARE orphan_panes bigint; orphan_threads bigint;
+BEGIN
+  SELECT count(*) INTO orphan_panes FROM agent_workspace_panes p
+   WHERE NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                      WHERE n."rootId" = p."workspaceId");
+  SELECT count(*) INTO orphan_threads FROM conversations c
+   WHERE c."workspaceId" IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                      WHERE n."targetKind" = 'chat' AND n."targetId" = c.id);
+  IF orphan_panes > 0 OR orphan_threads > 0 THEN
+    RAISE EXCEPTION
+      'Node backfill has not run on this database: % pane row(s) and % thread(s) have no node. Applying 0256 would delete their only record. Run scripts/backfill-agent-workspace-nodes.ts, verify both counts are 0, then re-apply.',
+      orphan_panes, orphan_threads;
+  END IF;
+END $$;--> statement-breakpoint
 ALTER TABLE "agent_workspace_layout_ops" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "agent_workspace_layout_revs" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "agent_workspace_pane_columns" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
