@@ -45,7 +45,7 @@ import {
   type ShellReadResult,
   type ShellSendPayload,
   type ShellSendResult,
-} from '@pagespace/lib/agent-workspaces/contract';
+} from '@pagespace/lib/agent-workspaces/shells-contract';
 import { resumeBillingClock } from './shell-handler';
 import {
   MAX_SCROLLBACK_TAIL_BYTES,

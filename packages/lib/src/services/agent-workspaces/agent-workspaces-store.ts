@@ -25,7 +25,7 @@
  */
 
 import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
 /** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
 export interface AgentSessionRecord {

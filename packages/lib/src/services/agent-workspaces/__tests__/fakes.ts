@@ -21,7 +21,7 @@ import type {
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type { AgentSessionRecord, AgentSessionStore } from '../agent-workspaces-store';
 import { stampColumns } from '../agent-workspaces-store';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
 import type { SessionShellRecord, SessionShellStore } from '../workspace-shells-store';
 
 export const NOW = new Date('2026-07-28T12:00:00.000Z');

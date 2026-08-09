@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { stampColumns, revivedAgentSessionColumns } from '../agent-workspaces-store';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
 import { NOW, OWNER_ID, makeAgentSessionStore, makeSessionRecord } from './fakes';
 
 /**

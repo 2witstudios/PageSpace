@@ -64,7 +64,9 @@ import {
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
-import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { PaneKind } from '@pagespace/lib/agent-workspaces/contract';
+import type { SandboxStatus } from '@pagespace/lib/agent-workspaces/session-contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { MAX_GRID_COLUMNS } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { ToolExecutionContext } from '../core/types';
 

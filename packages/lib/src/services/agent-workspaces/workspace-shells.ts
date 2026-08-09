@@ -23,7 +23,7 @@
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-worker';
-import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/contract';
+import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/shells-contract';
 import { isShellAgentType, isValidShellCommand } from './shell-types';
 import {
   isUniqueViolation,

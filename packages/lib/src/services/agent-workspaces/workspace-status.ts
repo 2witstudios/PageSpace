@@ -28,7 +28,7 @@
  * flight, and the answer that request returns is one of the three above.
  */
 
-import type { SandboxStatus } from '../../agent-workspaces/contract';
+import type { SandboxStatus } from '../../agent-workspaces/session-contract';
 
 /** The only columns the status depends on — so any row shape can be classified. */
 export interface SandboxStatusColumns {

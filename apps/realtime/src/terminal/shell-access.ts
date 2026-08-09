@@ -29,7 +29,7 @@
 
 import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-workspaces/shell-types';
 import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
-import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import type { ShellCheckAuthFn } from './shell-handler';

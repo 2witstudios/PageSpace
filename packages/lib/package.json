@@ -77,6 +77,16 @@
       "import": "./dist/agent-workspaces/contract.js",
       "require": "./dist/agent-workspaces/contract.js"
     },
+    "./agent-workspaces/session-contract": {
+      "types": "./dist/agent-workspaces/session-contract.d.ts",
+      "import": "./dist/agent-workspaces/session-contract.js",
+      "require": "./dist/agent-workspaces/session-contract.js"
+    },
+    "./agent-workspaces/shells-contract": {
+      "types": "./dist/agent-workspaces/shells-contract.d.ts",
+      "import": "./dist/agent-workspaces/shells-contract.js",
+      "require": "./dist/agent-workspaces/shells-contract.js"
+    },
     "./agent-workspaces/workspace-layout-verbs": {
       "types": "./dist/agent-workspaces/workspace-layout-verbs.d.ts",
       "import": "./dist/agent-workspaces/workspace-layout-verbs.js",
