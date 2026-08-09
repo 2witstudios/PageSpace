@@ -42,15 +42,39 @@
  * not a member; materialising it as a detached node would reopen, for every
  * user at once, every thread they ever dismissed.
  *
+ * **AND THE SAME PREDICATE GOVERNS THE PANE ROWS**, which is the harder half
+ * and was for a long time the missing one. Closing a thread out of a workspace
+ * stamped `closedInWorkspaceAt` and **nothing on the server removed its pane
+ * row**, so "a live pane bound to a dismissed thread" is not a corruption, it
+ * is ordinary production data. Reading membership carefully and panes carelessly
+ * would therefore have put every dismissed thread back — not merely in the
+ * sidebar, which is what the membership path refuses, but ON THE GRID, which is
+ * strictly worse. So a chat pane whose target is absent from
+ * {@link DeriveOptions.openConversationIds} is **not materialised at all**: not
+ * as a bound pane, and not as an unbound rectangle either, because an empty
+ * picker sitting where a dismissed thread used to be is still a slot the user
+ * did not ask for. Its siblings RENUMBER (`position` is assigned from the
+ * sort's index and never copied), a column the removal empties disappears, and
+ * a column it reduces to one collapses — all of which the derivation already
+ * did for other reasons, so nothing new decides where the hole goes.
+ *
  * **It refuses; it never re-homes.** Every node this emits carries the `rootId`
  * of the workspace it was derived FROM, asserted per node rather than assumed
  * from the loop. Nothing here ever moves a row into another workspace to
  * satisfy a constraint, and nothing here repairs an invalid derivation: a
- * workspace whose node set does not pass `validateTree` is REPORTED and left
- * on the old tables, which still work. Writing an invalid tree is strictly
- * worse than not writing one — the old rows are a read-only shadow and
- * rollback is a redeploy, but a wrong node set is somebody's panes in somebody
- * else's session.
+ * workspace whose node set does not pass `validateTree` is REPORTED and
+ * SKIPPED, and writing an invalid tree would be strictly worse, because a wrong
+ * node set is somebody's panes in somebody else's session.
+ *
+ * **A SKIP IS NOT A SAFE OUTCOME, and it used to be described as one.** This
+ * docblock said a skipped workspace was "left on the old tables, which still
+ * work". That was true only inside the migration window: migration `0256` drops
+ * the four layout tables and the two `conversations` membership columns
+ * outright, so after cutover a skipped workspace has no grid and no membership
+ * anywhere — it opens empty, and its threads, belonging to no node, read as
+ * homeless and become claimable into a DIFFERENT workspace. The run's exit code
+ * is the gate: `scripts/backfill-agent-workspace-nodes.ts` exits non-zero if a
+ * single workspace is skipped, and `0256` must not be applied until it exits 0.
  */
 
 import { FRACTION_EPSILON, readFraction } from './workspace-fractions';
@@ -221,8 +245,28 @@ export type DerivationNoteCode =
   | 'chat_target_foreign'
   /** A pane naming a conversation an earlier run already bound. */
   | 'chat_target_already_bound'
-  /** A pane naming a conversation row that does not exist. Carried anyway — the binding has no FK by design. */
+  /**
+   * A pane naming a conversation row that does not exist, and no membership set
+   * was supplied to judge it against. Carried — the binding has no FK by design.
+   * With {@link DeriveOptions.openConversationIds} supplied, this pane is
+   * `chat_pane_no_conversation` instead, and is dropped.
+   */
   | 'chat_target_missing_row'
+  /**
+   * DROPPED: a pane bound to a conversation whose row is alive but which is no
+   * longer a member — dismissed out of the workspace's listing
+   * (`closedInWorkspaceAt`), or history-deleted (`isActive = false`).
+   * Materialising it would put a thread the user closed back on their grid.
+   */
+  | 'chat_pane_not_a_member'
+  /**
+   * DROPPED: a pane bound to a conversation with no row at all, hard-deleted
+   * with its page or drive. `expelConversationFromSession` is what removes such
+   * a thread's node and it runs at DELETION time, so it will never run for
+   * anything deleted before the cutover: the node would be a permanent member
+   * holding a cap slot that nothing can ever release.
+   */
+  | 'chat_pane_no_conversation'
   /** An open conversation whose chat node exists elsewhere, so this workspace emits none. */
   | 'membership_claim_lost'
   /** A sibling group whose stored shares were mixed, non-positive or did not sum to 1. */
@@ -248,10 +292,26 @@ export interface DerivationNote {
 export interface WorkspaceCensus {
   workspaceId: string;
   columnsIn: number;
+  /** Pane ROWS READ. Not the number materialised — see `panesDroppedNotMember`. */
   panesIn: number;
   conversationsIn: number;
   shellsIn: number;
-  /** panes + conversations with no pane and a claim + shells with no pane. Equals `paneNodesOut`. */
+  /**
+   * Pane rows NOT materialised because the thread they show is not a member:
+   * dismissed, history-deleted, or gone entirely.
+   *
+   * This is the number an operator has to see before an irreversible run, and
+   * it is deliberately counted apart from `panesIn` rather than subtracted out
+   * of it: `panesIn → panesIn - panesDroppedNotMember` is the difference
+   * between what production holds and what the cutover keeps, and a census that
+   * printed only the second number would show a clean migration of a workspace
+   * that just lost half its grid.
+   */
+  panesDroppedNotMember: number;
+  /**
+   * MATERIALISED panes + conversations with no pane and a claim + shells with
+   * no pane. Equals `paneNodesOut`.
+   */
   membersIn: number;
   nodesOut: number;
   paneNodesOut: number;
@@ -428,14 +488,17 @@ interface OrderedColumn {
  * the sort's index, never copied. `id` breaks ties, so two rows that somehow
  * share an `orderIndex` still order the same way on every run.
  */
-function orderColumns(source: WorkspaceBackfillSource): OrderedColumn[] {
+function orderColumns(
+  columns: readonly LegacyPaneColumn[],
+  panes: readonly LegacyPane[],
+): OrderedColumn[] {
   const panesByColumn = new Map<string, LegacyPane[]>();
-  for (const pane of source.panes) {
+  for (const pane of panes) {
     const bucket = panesByColumn.get(pane.columnId) ?? [];
     bucket.push(pane);
     panesByColumn.set(pane.columnId, bucket);
   }
-  return [...source.columns]
+  return [...columns]
     .sort((left, right) => left.orderIndex - right.orderIndex || left.id.localeCompare(right.id))
     .map((column) => ({
       column,
@@ -443,6 +506,66 @@ function orderColumns(source: WorkspaceBackfillSource): OrderedColumn[] {
         (left, right) => left.orderIndex - right.orderIndex || left.id.localeCompare(right.id),
       ),
     }));
+}
+
+/** A pane row the derivation refuses to materialise, and the reason to report. */
+interface DroppedPane {
+  pane: LegacyPane;
+  code: 'chat_pane_not_a_member' | 'chat_pane_no_conversation';
+  conversationId: string;
+}
+
+/**
+ * Separate the pane rows that show a MEMBER from the ones that show a thread
+ * nobody can reach any more.
+ *
+ * This runs BEFORE anything else reads `source.panes` — before ids are
+ * reserved, before columns are ordered, before bindings are resolved — so
+ * everything downstream sees a workspace in which the row simply does not
+ * exist. That is what makes the consequences fall out of rules the derivation
+ * already had rather than out of new ones: positions come from the sort's index
+ * so the survivors renumber, an emptied column is dropped like any other empty
+ * column, a column reduced to one pane collapses like any other single-pane
+ * column, and a sibling group whose remaining shares no longer sum to 1 reads
+ * as unsized. `validateTree`'s contiguity requirement is therefore met by
+ * construction, and no hole is ever representable.
+ *
+ * Only CHAT panes can be dropped. Terminals and pages carry no membership —
+ * opening the same page in two panes is a legitimate thing a user does — and a
+ * half-bound or unknown-kind row never resolves to a chat binding in the first
+ * place, so it survives as the picker pane it already renders as.
+ */
+function partitionPanesByMembership(
+  panes: readonly LegacyPane[],
+  openConversationIds: ReadonlySet<string> | undefined,
+  knownConversationIds: ReadonlySet<string> | undefined,
+): { kept: LegacyPane[]; dropped: DroppedPane[] } {
+  // Nobody asked. Behave exactly as this derivation did before the predicate
+  // existed — see `DeriveOptions.openConversationIds`.
+  if (openConversationIds === undefined) return { kept: [...panes], dropped: [] };
+
+  const kept: LegacyPane[] = [];
+  const dropped: DroppedPane[] = [];
+  for (const pane of panes) {
+    const { binding } = readBinding(pane);
+    if (binding === null || binding.kind !== 'chat' || openConversationIds.has(binding.targetId)) {
+      kept.push(pane);
+      continue;
+    }
+    dropped.push({
+      pane,
+      // Both are dropped for one reason — not a member — but an operator
+      // reading the census needs them apart: a dismissal is a user's own past
+      // decision being honoured, while a missing row is data the migration is
+      // the last chance to notice.
+      code:
+        knownConversationIds === undefined || knownConversationIds.has(binding.targetId)
+          ? 'chat_pane_not_a_member'
+          : 'chat_pane_no_conversation',
+      conversationId: binding.targetId,
+    });
+  }
+  return { kept, dropped };
 }
 
 /** Parked members order oldest-first; `id` breaks ties so a re-run agrees with itself. */
@@ -463,6 +586,24 @@ export interface DeriveOptions {
   claimedChatTargets?: ReadonlySet<string>;
   /** Conversation ids known to exist. Absence is reported, never acted on — the binding has no FK. */
   knownConversationIds?: ReadonlySet<string>;
+  /**
+   * THE MEMBERSHIP PREDICATE, resolved over every conversation any PANE row of
+   * this batch names: `isActive` and `closedInWorkspaceAt IS NULL`.
+   *
+   * Spelled the same way as the `conversations` load the caller already
+   * performs, and that is the entire point — the two loads used to disagree,
+   * membership filtering carefully and panes not at all, which meant a thread
+   * the user dismissed came back attached to the grid.
+   *
+   * This is the caller's fact to establish, not this module's: it needs the
+   * `conversations` rows for targets that belong to OTHER workspaces, which a
+   * per-workspace derivation never sees. **Absence of the option is not
+   * "everything is open"** — it means "nobody asked", and the derivation then
+   * behaves as it did before, carrying every pane. The one production caller,
+   * `scripts/backfill-agent-workspace-nodes.ts`, always supplies it; a caller
+   * that does not must not be used for a real migration.
+   */
+  openConversationIds?: ReadonlySet<string>;
 }
 
 /**
@@ -498,12 +639,36 @@ export function deriveWorkspaceNodes(
     notes.push({ code, subject, detail });
   };
 
+  // ---------------------------------------------------------------------
+  // THE ROWS THAT SHOW A THREAD NOBODY IS A MEMBER OF — removed FIRST, so no
+  // rule below ever sees them. This is answered before the claim rules on
+  // purpose: a dismissed thread is not a thread another workspace owns, and
+  // reporting it as `chat_target_foreign` would send an operator looking for a
+  // contention that does not exist.
+  // ---------------------------------------------------------------------
+  const { kept: livePanes, dropped: droppedPanes } = partitionPanesByMembership(
+    source.panes,
+    options.openConversationIds,
+    knownConversationIds,
+  );
+  for (const entry of droppedPanes) {
+    note(
+      entry.code,
+      entry.pane.id,
+      entry.code === 'chat_pane_not_a_member'
+        ? `conversation "${entry.conversationId}" is not a member (dismissed, or history-deleted); the pane is not materialised`
+        : `conversation "${entry.conversationId}" has no row at all; the pane is not materialised`,
+    );
+  }
+
   const ids = new NodeIdAllocator();
   // Panes first and verbatim: a pane id is the one a client holds and the one a
-  // chat binding is addressed through, so it never yields to a column's.
-  for (const pane of source.panes) ids.reserve(pane.id);
+  // chat binding is addressed through, so it never yields to a column's. Only
+  // the LIVE ones — a dropped row is not in this derivation, so it reserves
+  // nothing and cannot rename a column that happens to share its id.
+  for (const pane of livePanes) ids.reserve(pane.id);
 
-  const ordered = orderColumns(source);
+  const ordered = orderColumns(source.columns, livePanes);
   const populated: OrderedColumn[] = [];
   for (const entry of ordered) {
     if (entry.panes.length === 0) {
@@ -745,9 +910,10 @@ export function deriveWorkspaceNodes(
     workspaceId,
     columnsIn: source.columns.length,
     panesIn: source.panes.length,
+    panesDroppedNotMember: droppedPanes.length,
     conversationsIn: source.conversations.length,
     shellsIn: source.shells.length,
-    membersIn: source.panes.length + seated.length,
+    membersIn: livePanes.length + seated.length,
     nodesOut: nodes.length,
     paneNodesOut: paneNodes.length,
     splitNodesOut: nodes.filter((node) => node.nodeType === 'split').length,

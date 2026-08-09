@@ -28,6 +28,13 @@
  * is the rehearsal: it produces the same per-workspace census a live run does,
  * having derived and validated every workspace, without an INSERT anywhere.
  *
+ * **It reads a schema the application no longer has.** The four layout tables
+ * and `conversations."workspaceId"` / `"closedInWorkspaceAt"` are gone from
+ * `@pagespace/db/schema`, dropped along with the model they belonged to, so
+ * this script describes them itself in `scripts/lib/legacy-workspace-layout.ts`
+ * — see that file's header. A migration's subject is the schema it is migrating
+ * FROM, which by definition stops existing the moment it succeeds.
+ *
  * Usage:
  *   bun scripts/backfill-agent-workspace-nodes.ts                 # dry run (default)
  *   bun scripts/backfill-agent-workspace-nodes.ts --workspace ID  # one workspace
@@ -37,22 +44,24 @@
  *
  * ─── Production procedure ──────────────────────────────────────────────────
  * 1. Deploy migration 0255 (the node tables — additive and inert on arrival).
- * 2. Run this DRY and read the census. Any workspace reported as SKIPPED is one
- *    a human looks at before cutover; it stays on the old tables until then.
- * 3. Run with `--apply` as a one-off machine on the migrate image.
- * 4. Only then deploy the app image that reads nodes. DO NOT run this against
- *    production yourself — document only.
+ * 2. Run this DRY and read the census. **It must exit 0.** A non-zero exit is
+ *    one of: a workspace SKIPPED, a write that failed, or members ≠ pane nodes.
+ * 3. Run with `--apply` as a one-off machine on the migrate image, and require
+ *    exit 0 from that too.
+ * 4. Deploy the app image that reads nodes.
+ * 5. ONLY THEN apply migration 0256, which drops the tables this script read.
+ *
+ * **Step 2's exit code is the gate on step 5, and this is the whole reason the
+ * order matters.** A skipped workspace does NOT stay safely on the old model —
+ * 0256 deletes the old model. It loses its grid outright, and its threads,
+ * belonging to no node, read as homeless and become claimable into a DIFFERENT
+ * workspace. DO NOT run this against production yourself — document only.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
 import { getMigrationDb } from '@pagespace/db/db';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
-import {
-  agentWorkspacePaneColumns,
-  agentWorkspacePanes,
-} from '@pagespace/db/schema/agent-workspace-layout';
-import { agentWorkspaceNodes, agentWorkspaceNodeRevs } from '@pagespace/db/schema';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes, agentWorkspaceNodeRevs } from '@pagespace/db/schema/agent-workspace-nodes';
 import { and, asc, eq, gt, inArray, isNotNull, isNull } from '@pagespace/db/operators';
 import {
   deriveWorkspaceNodes,
@@ -60,8 +69,23 @@ import {
   type ChatPaneReference,
   type WorkspaceBackfillSource,
   type WorkspaceDerivation,
-  type WorkspaceCensus,
 } from '@pagespace/lib/agent-workspaces/workspace-node-backfill';
+import {
+  legacyConversations,
+  legacyPaneColumns,
+  legacyPanes,
+} from './lib/legacy-workspace-layout';
+import {
+  censusLine,
+  emptyTotals,
+  formatReport,
+  recordNotWritten,
+  recordWritten,
+  runIsClean,
+  type BackfillTotals,
+} from './lib/backfill-census';
+
+export type { BackfillTotals };
 
 // One-shot ops script — runs on the unthrottled migration pool, not the
 // app-throttled `db` (see getMigrationDb()'s doc comment in packages/db), so a
@@ -124,16 +148,16 @@ function chunked<T>(items: readonly T[], size: number): T[][] {
 async function loadChatClaims(dbInstance: Db): Promise<Map<string, string>> {
   const paneRows = await dbInstance
     .select({
-      workspaceId: agentWorkspacePanes.workspaceId,
-      conversationId: agentWorkspacePanes.targetId,
+      workspaceId: legacyPanes.workspaceId,
+      conversationId: legacyPanes.targetId,
     })
-    .from(agentWorkspacePanes)
-    .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, agentWorkspacePanes.workspaceId))
+    .from(legacyPanes)
+    .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, legacyPanes.workspaceId))
     .where(
       and(
         isNull(agentWorkspaces.endedAt),
-        eq(agentWorkspacePanes.kind, 'chat'),
-        isNotNull(agentWorkspacePanes.targetId),
+        eq(legacyPanes.kind, 'chat'),
+        isNotNull(legacyPanes.targetId),
       ),
     );
 
@@ -150,14 +174,14 @@ async function loadChatClaims(dbInstance: Db): Promise<Map<string, string>> {
   const membershipOwner = new Map<string, string>();
   for (const chunk of chunked(targetIds, CHUNK_SIZE)) {
     const owners = await dbInstance
-      .select({ conversationId: conversations.id, workspaceId: conversations.workspaceId })
-      .from(conversations)
-      .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, conversations.workspaceId))
+      .select({ conversationId: legacyConversations.id, workspaceId: legacyConversations.workspaceId })
+      .from(legacyConversations)
+      .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, legacyConversations.workspaceId))
       .where(
         and(
-          inArray(conversations.id, chunk),
-          eq(conversations.isActive, true),
-          isNull(conversations.closedInWorkspaceAt),
+          inArray(legacyConversations.id, chunk),
+          eq(legacyConversations.isActive, true),
+          isNull(legacyConversations.closedInWorkspaceAt),
           isNull(agentWorkspaces.endedAt),
         ),
       );
@@ -207,41 +231,50 @@ async function loadSources(dbInstance: Db, workspaceIds: string[]): Promise<Work
   const [columnRows, paneRows, conversationRows, shellRows] = await Promise.all([
     dbInstance
       .select({
-        workspaceId: agentWorkspacePaneColumns.workspaceId,
-        id: agentWorkspacePaneColumns.id,
-        orderIndex: agentWorkspacePaneColumns.orderIndex,
-        widthFraction: agentWorkspacePaneColumns.widthFraction,
+        workspaceId: legacyPaneColumns.workspaceId,
+        id: legacyPaneColumns.id,
+        orderIndex: legacyPaneColumns.orderIndex,
+        widthFraction: legacyPaneColumns.widthFraction,
       })
-      .from(agentWorkspacePaneColumns)
-      .where(inArray(agentWorkspacePaneColumns.workspaceId, workspaceIds)),
+      .from(legacyPaneColumns)
+      .where(inArray(legacyPaneColumns.workspaceId, workspaceIds)),
+    // EVERY pane row of the workspace, unfiltered — deliberately, and it is not
+    // the loophole it looks like. Which panes may be materialised is decided by
+    // `loadOpenConversationIds` below and applied inside the derivation, where
+    // dropping one also renumbers its siblings, empties or collapses its column
+    // and re-settles the shares. Filtering here instead would delete the row
+    // from the geometry without any of that, and `panesIn` would then count
+    // only the survivors — leaving the census unable to show an operator the
+    // difference between a workspace that had two panes and a workspace that
+    // lost two.
     dbInstance
       .select({
-        workspaceId: agentWorkspacePanes.workspaceId,
-        id: agentWorkspacePanes.id,
-        columnId: agentWorkspacePanes.columnId,
-        orderIndex: agentWorkspacePanes.orderIndex,
-        kind: agentWorkspacePanes.kind,
-        targetId: agentWorkspacePanes.targetId,
-        heightFraction: agentWorkspacePanes.heightFraction,
+        workspaceId: legacyPanes.workspaceId,
+        id: legacyPanes.id,
+        columnId: legacyPanes.columnId,
+        orderIndex: legacyPanes.orderIndex,
+        kind: legacyPanes.kind,
+        targetId: legacyPanes.targetId,
+        heightFraction: legacyPanes.heightFraction,
       })
-      .from(agentWorkspacePanes)
-      .where(inArray(agentWorkspacePanes.workspaceId, workspaceIds)),
+      .from(legacyPanes)
+      .where(inArray(legacyPanes.workspaceId, workspaceIds)),
     // The membership predicate, identical to `countOpenConversations`': bound,
     // history-alive, and not closed out of the session's listing. A thread the
     // user dismissed is deliberately NOT a member — materialising it as a
     // detached node would reopen every thread everyone ever closed.
     dbInstance
       .select({
-        workspaceId: conversations.workspaceId,
-        id: conversations.id,
-        createdAt: conversations.createdAt,
+        workspaceId: legacyConversations.workspaceId,
+        id: legacyConversations.id,
+        createdAt: legacyConversations.createdAt,
       })
-      .from(conversations)
+      .from(legacyConversations)
       .where(
         and(
-          inArray(conversations.workspaceId, workspaceIds),
-          eq(conversations.isActive, true),
-          isNull(conversations.closedInWorkspaceAt),
+          inArray(legacyConversations.workspaceId, workspaceIds),
+          eq(legacyConversations.isActive, true),
+          isNull(legacyConversations.closedInWorkspaceAt),
         ),
       ),
     dbInstance
@@ -318,50 +351,6 @@ export interface BackfillOptions {
   quiet?: boolean;
 }
 
-export type BackfillTotals = {
-  workspacesScanned: number;
-  alreadyMigrated: number;
-  written: number;
-  skipped: number;
-  failed: number;
-  /**
-   * DERIVED from `WorkspaceCensus`, not restated. These counters were declared
-   * here by hand, and when the lib renamed `detachedOut` to `seatedOut` this
-   * file kept the old name: `census.detachedOut` read `undefined`, every total
-   * became `NaN`, and the operator's per-workspace readout — the one thing
-   * standing between a bad derivation and an irreversible one-shot migration —
-   * printed `panes 2→NaN`. Nothing caught it, because `scripts/` is in no
-   * tsconfig. Deriving the shape is what makes the next rename a compile error
-   * rather than a silent `NaN`.
-   */
-} & Pick<
-  WorkspaceCensus,
-  'panesIn' | 'conversationsIn' | 'shellsIn' | 'membersIn' | 'nodesOut' | 'paneNodesOut' | 'seatedOut' | 'membershipDropped'
-> & {
-  notes: Record<string, number>;
-  skips: Record<string, number>;
-}
-
-function emptyTotals(): BackfillTotals {
-  return {
-    workspacesScanned: 0,
-    alreadyMigrated: 0,
-    written: 0,
-    skipped: 0,
-    failed: 0,
-    panesIn: 0,
-    conversationsIn: 0,
-    shellsIn: 0,
-    membersIn: 0,
-    nodesOut: 0,
-    paneNodesOut: 0,
-    seatedOut: 0,
-    membershipDropped: 0,
-    notes: {},
-    skips: {},
-  };
-}
-
 export async function backfill(
   options: BackfillOptions,
   dbInstance: Db = db,
@@ -420,8 +409,9 @@ export async function backfill(
           ...sources.flatMap((entry) => entry.conversations.map((thread) => thread.id)),
         ]),
       ];
-      const [knownConversationIds, claimedChatTargets] = await Promise.all([
+      const [knownConversationIds, openConversationIds, claimedChatTargets] = await Promise.all([
         loadKnownConversationIds(dbInstance, batchChatTargets),
+        loadOpenConversationIds(dbInstance, batchChatTargets),
         loadClaimedChatTargets(dbInstance, batchChatTargets),
       ]);
 
@@ -430,12 +420,21 @@ export async function backfill(
           chatClaims,
           claimedChatTargets,
           knownConversationIds,
+          openConversationIds,
         });
-        recordCensus(totals, derived);
 
+        // NOTHING is counted into the headline totals until it has actually
+        // been written. `recordCensus` used to run here, before the skip check,
+        // so a workspace that wrote nothing still contributed its members and
+        // its nodes — and since the defect assertion compares two of those same
+        // numbers, a skip inflated both sides equally and hid itself from the
+        // one automated check the run makes.
         if (derived.skipped !== null) {
-          totals.skipped += 1;
-          totals.skips[derived.skipped.code] = (totals.skips[derived.skipped.code] ?? 0) + 1;
+          recordNotWritten(totals, derived, {
+            reason: 'skipped',
+            code: derived.skipped.code,
+            detail: derived.skipped.detail,
+          });
           console.log(`   ⚠️  ${entry.workspaceId} SKIPPED (${derived.skipped.code}): ${derived.skipped.detail}`);
           continue;
         }
@@ -447,15 +446,18 @@ export async function backfill(
             // One workspace's write failing is not a reason to abandon the
             // rest: the run is resumable, so the survivors are progress and
             // this one is a line in the report somebody reads afterwards.
-            totals.failed += 1;
-            console.log(
-              `   ❌ ${entry.workspaceId} WRITE FAILED: ${error instanceof Error ? error.message : String(error)}`,
-            );
+            const message = error instanceof Error ? error.message : String(error);
+            recordNotWritten(totals, derived, {
+              reason: 'write_failed',
+              code: error instanceof Error ? error.name : 'Error',
+              detail: message,
+            });
+            console.log(`   ❌ ${entry.workspaceId} WRITE FAILED: ${message}`);
             continue;
           }
           await sleep(SLEEP_MS);
         }
-        totals.written += 1;
+        recordWritten(totals, derived);
         if (!quiet) console.log(`   ${censusLine(derived)}`);
       }
     }
@@ -464,7 +466,7 @@ export async function backfill(
     if (batch.length < remaining) break;
   }
 
-  report(totals, dryRun);
+  for (const reportLine of formatReport(totals, dryRun)) console.log(reportLine);
   return totals;
 }
 
@@ -476,68 +478,54 @@ async function loadKnownConversationIds(
   const known = new Set<string>();
   for (const chunk of chunked(conversationIds, CHUNK_SIZE)) {
     const rows = await dbInstance
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(inArray(conversations.id, chunk));
+      .select({ id: legacyConversations.id })
+      .from(legacyConversations)
+      .where(inArray(legacyConversations.id, chunk));
     for (const row of rows) known.add(row.id);
   }
   return known;
 }
 
-function recordCensus(totals: BackfillTotals, derived: WorkspaceDerivation): void {
-  const census = derived.census;
-  totals.panesIn += census.panesIn;
-  totals.conversationsIn += census.conversationsIn;
-  totals.shellsIn += census.shellsIn;
-  totals.membersIn += census.membersIn;
-  totals.nodesOut += census.nodesOut;
-  totals.paneNodesOut += census.paneNodesOut;
-  totals.seatedOut += census.seatedOut;
-  totals.membershipDropped += census.membershipDropped;
-  for (const note of derived.notes) {
-    totals.notes[note.code] = (totals.notes[note.code] ?? 0) + 1;
+/**
+ * Which of these conversations are MEMBERS of anything — the same predicate
+ * `loadSources` applies to the membership load, spelled the same way, and
+ * resolved over the conversations the PANE rows name as well.
+ *
+ * This is the query that was missing, and it is the only finding on this
+ * migration's list that could not have been corrected afterwards. Closing a
+ * thread out of a workspace stamped `closedInWorkspaceAt` and nothing on the
+ * server ever removed its pane row, so a live pane bound to a dismissed thread
+ * is ordinary production data — and post-cutover, membership IS the node. The
+ * membership load filtered; the pane load did not; so at the moment of
+ * migration every thread every user had ever dismissed would have become a
+ * member again AND been placed on the grid. After the run there is no way to
+ * tell such a thread from one that was genuinely open, because the column that
+ * knew is dropped by 0256.
+ *
+ * NOT scoped to any workspace. A pane may name a conversation in another
+ * session (the old rows carry no constraint against it), so the question is
+ * "is this thread a member anywhere", not "is it a member here" — and the claim
+ * pre-pass has already decided who may bind it if it is.
+ */
+async function loadOpenConversationIds(
+  dbInstance: Db,
+  conversationIds: readonly string[],
+): Promise<Set<string>> {
+  const open = new Set<string>();
+  for (const chunk of chunked(conversationIds, CHUNK_SIZE)) {
+    const rows = await dbInstance
+      .select({ id: legacyConversations.id })
+      .from(legacyConversations)
+      .where(
+        and(
+          inArray(legacyConversations.id, chunk),
+          eq(legacyConversations.isActive, true),
+          isNull(legacyConversations.closedInWorkspaceAt),
+        ),
+      );
+    for (const row of rows) open.add(row.id);
   }
-}
-
-function censusLine(derived: WorkspaceDerivation): string {
-  const c = derived.census;
-  const notes = derived.notes.length === 0 ? '' : ` · ${derived.notes.map((note) => note.code).join(',')}`;
-  return (
-    `${c.workspaceId}: panes ${c.panesIn}→${c.paneNodesOut - c.seatedOut}, ` +
-    `threads ${c.conversationsIn}, shells ${c.shellsIn}, ` +
-    `members ${c.membersIn}→${c.paneNodesOut}, seated ${c.seatedOut}, nodes ${c.nodesOut}${notes}`
-  );
-}
-
-function report(totals: BackfillTotals, dryRun: boolean): void {
-  console.log('');
-  console.log(`── census ${dryRun ? '(dry run)' : ''} ─────────────────────────────`);
-  console.log(`  live workspaces scanned : ${totals.workspacesScanned}`);
-  console.log(`  already migrated (skip) : ${totals.alreadyMigrated}`);
-  console.log(`  ${dryRun ? 'would write' : 'written'.padEnd(11)}            : ${totals.written}`);
-  console.log(`  skipped (not derivable) : ${totals.skipped}`);
-  console.log(`  write failures          : ${totals.failed}`);
-  console.log('');
-  console.log(`  pane rows in            : ${totals.panesIn}`);
-  console.log(`  open conversations in   : ${totals.conversationsIn}`);
-  console.log(`  shells in               : ${totals.shellsIn}`);
-  console.log(`  members in              : ${totals.membersIn}`);
-  console.log(`  pane nodes out          : ${totals.paneNodesOut}`);
-  console.log(`  of which seated         : ${totals.seatedOut}`);
-  console.log(`  total nodes out         : ${totals.nodesOut}`);
-  console.log(`  membership dropped      : ${totals.membershipDropped}`);
-  console.log('');
-  console.log(`  anomalies : ${JSON.stringify(totals.notes)}`);
-  console.log(`  skips     : ${JSON.stringify(totals.skips)}`);
-
-  // The defect condition, stated where a human reading the run will see it.
-  // Every member of a workspace becomes exactly one pane node; a difference
-  // means a thread lost its node or grew a second one, and neither is a
-  // rounding difference.
-  if (totals.membersIn !== totals.paneNodesOut) {
-    console.log('');
-    console.log(`❌ DEFECT: members in (${totals.membersIn}) ≠ pane nodes out (${totals.paneNodesOut})`);
-  }
+  return open;
 }
 
 if (import.meta.main) {
@@ -554,7 +542,10 @@ if (import.meta.main) {
     only: valueOf('--workspace'),
     quiet: argv.includes('--quiet'),
   })
-    .then((totals) => process.exit(totals.membersIn === totals.paneNodesOut ? 0 : 1))
+    // `runIsClean` is the gate on migration 0256 — one definition, read by the
+    // report and by the exit code, so the banner a human sees and the status an
+    // automation checks can never disagree.
+    .then((totals) => process.exit(runIsClean(totals) ? 0 : 1))
     .catch((error) => {
       console.error('❌ Backfill failed:', error);
       process.exit(1);
