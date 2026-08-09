@@ -86,7 +86,7 @@ function refuse(code: CommandCode, detail: string): CommandResult {
 }
 
 /** One edit in a compiled command, applied to whatever the edits before it produced. */
-type Step = (nodes: readonly WorkspaceNode[]) => NodeOperationResult;
+export type Step = (nodes: readonly WorkspaceNode[]) => NodeOperationResult;
 
 /**
  * Run a command's operations in order and return ONE write for all of them.
@@ -109,8 +109,15 @@ type Step = (nodes: readonly WorkspaceNode[]) => NodeOperationResult;
  *
  * A drop of an id the caller never had is discarded: a node minted by one step
  * and removed by a later one never existed as far as the caller is concerned.
+ *
+ * EXPORTED, because atomicity is not a property only the five commands need. An
+ * agent's "reorder these four containers" is four `move`s and exactly one write:
+ * a caller that applied them as four writes would publish three intermediate
+ * trees nobody asked for, and would leave the grid half-rearranged if the third
+ * were refused. The alternative — a second composer beside this one — is the
+ * duplication this epic exists to remove.
  */
-function compile(nodes: readonly WorkspaceNode[], steps: readonly Step[]): CommandResult {
+export function compile(nodes: readonly WorkspaceNode[], steps: readonly Step[]): CommandResult {
   const put = new Map<string, WorkspaceNode>();
   const drop = new Set<string>();
   let current: readonly WorkspaceNode[] = nodes;

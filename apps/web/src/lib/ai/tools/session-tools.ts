@@ -19,13 +19,14 @@
  *  - **Shells** — PTYs in the caller's session's ONE sandbox, addressed by
  *    shellId: `spawn_shell` → shellId · `send_shell` (keystrokes) ·
  *    `read_shell` (scrollback) · `kill_shell`.
- *  - **Layout** (issue #2208) — the caller's own workspace's PANE GRID,
- *    addressed by paneId/columnId: `list_panes` (the grid, with its ids and
- *    size shares) · `resize_pane` · `move_pane` · `arrange_panes` (column
- *    order). These write through `applyWorkspaceLayoutVerb`, the same single
- *    writer the browser's verb POST uses, so an agent rearranging its
- *    workspace lands in the pane ROWS and broadcasts live rather than
- *    reaching only whichever browsers happen to be rendering the grid. They
+ *  - **Layout** (issue #2208) — the caller's own workspace's LAYOUT, one flat
+ *    tree addressed by nodeId: `list_panes` (the nodes, with their bindings
+ *    and size shares) · `resize_pane` · `move_pane` · `arrange_panes`. These
+ *    write through the same single writer the browser's `/nodes` POST uses, so
+ *    an agent rearranging its workspace lands in the node ROWS and broadcasts
+ *    live rather than reaching only whichever browsers happen to be rendering
+ *    it. The COMMAND is resolved server-side against the tree under the lock,
+ *    so there is no rev for a model to hold and no idempotency key to mint. They
  *    were blocked until the grid became relational entities with a verb API
  *    (epic Phase 3) — as blob writes they would have been yet another writer
  *    of a client-authored JSONB.
@@ -65,7 +66,6 @@ import {
 } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
 import { MAX_GRID_COLUMNS } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 import type { ToolExecutionContext } from '../core/types';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
@@ -159,10 +159,19 @@ export const readShellInputSchema = z
 export const killShellInputSchema = z.object({ shellId: z.string().min(1) }).strict();
 
 // --- Layout (issue #2208) ---------------------------------------------------
-// The workspace's PANE GRID, addressed by the paneId/columnId `list_panes`
-// returns. Vocabulary: "pane" and "column" are the environment's furniture, so
-// these sit on the WORKSPACE side of the frozen split — never "session", which
-// on this wire always means a worker you talk to.
+// The workspace's LAYOUT, addressed by the nodeIds `list_panes` returns.
+// Vocabulary: "pane" and "container" are the environment's furniture, so these
+// sit on the WORKSPACE side of the frozen split — never "session", which on
+// this wire always means a worker you talk to.
+//
+// THE SHAPE CHANGED WITH THE MODEL. These tools used to address a
+// `columnId` + a `paneId`, because the layout was literally two levels:
+// columns of panes. It is now ONE FLAT TREE in which `parentId` decides both
+// where a node is and whether it is on screen at all, so "column" is no longer
+// a kind of thing — it is a container that happens to sit directly in the root.
+// Keeping the old two-level vocabulary would have meant either a lossy
+// projection (a nested split has no column to be reported as) or a model
+// addressing furniture the server does not have.
 
 export const listPanesInputSchema = z.object({}).strict();
 
@@ -171,29 +180,33 @@ const fraction = z.number().gt(0).lt(1);
 
 export const resizePaneInputSchema = z
   .object({
-    /** A paneId from list_panes. Give this to set the pane's height within its column. */
-    paneId: z.string().min(1).optional(),
-    /** A columnId from list_panes. Give this to set the column's width in the grid. */
-    columnId: z.string().min(1).optional(),
-    /** The new share of the container, 0..1. Siblings absorb the difference. */
+    /** A nodeId from list_panes — a pane or a container. */
+    nodeId: z.string().min(1),
+    /** The new share of its parent, 0..1. Siblings absorb the difference. */
     size: fraction,
   })
   .strict();
 
 export const movePaneInputSchema = z
   .object({
-    paneId: z.string().min(1),
-    /** The columnId to move it into — its own column reorders it in place. */
-    toColumnId: z.string().min(1),
-    /** 0-based position in the destination. Omit to append. Out-of-range values clamp. */
+    nodeId: z.string().min(1),
+    /**
+     * The container to move it into, from list_panes. `null` PARKS it: out of
+     * the layout, still in the workspace and still in the sidebar. That is what
+     * "close" means now — a location, not a deletion.
+     */
+    toParentId: z.string().min(1).nullable(),
+    /** 0-based slot in the destination. Omit to append. Out of range is REFUSED, never clamped. */
     toIndex: z.number().int().min(0).max(MAX_GRID_COLUMNS).optional(),
   })
   .strict();
 
 export const arrangePanesInputSchema = z
   .object({
-    /** columnIds in the left-to-right order you want. Unlisted columns keep their order behind these. */
-    columnIds: z.array(z.string().min(1)).min(1).max(MAX_GRID_COLUMNS),
+    /** The container whose children are being reordered. Omit for the root's own children. */
+    parentId: z.string().min(1).optional(),
+    /** nodeIds in the order you want. Unlisted children keep their order behind these. */
+    nodeIds: z.array(z.string().min(1)).min(1).max(MAX_GRID_COLUMNS),
   })
   .strict();
 
@@ -485,57 +498,76 @@ export interface SessionToolsDeps {
     send: (input: { shellId: string; keystrokes: string; userId: string }) => Promise<ShellSendOutcome>;
   };
   /**
-   * The caller's workspace's PANE GRID, as `list_panes` reports it (issue
-   * #2208) — the ids the three rearrange tools address, plus enough of each
-   * pane's binding for the model to tell one rectangle from another. `null`
-   * for a workspace with no grid at all.
+   * The caller's workspace's LAYOUT, as `list_panes` reports it (issue #2208) —
+   * the nodeIds the three rearrange tools address, plus enough of each pane's
+   * binding for the model to tell one rectangle from another. `null` for a
+   * workspace whose layout has never been opened.
    */
   readPaneGrid?: (workspaceId: string, viewerId: string) => Promise<PaneGridListing | null>;
   /**
-   * Apply ONE layout verb to the caller's workspace grid, through the same
-   * single writer (`applyWorkspaceLayoutVerb`) the verbs route uses — same
-   * per-workspace lock, same op memory, same broadcast. `opId` is derived
-   * from the tool call id, so an SDK retry of one call replays rather than
-   * rearranging twice.
+   * Apply ONE layout command to the caller's workspace, through the same single
+   * writer the `/nodes` route uses — same per-workspace lock, same validation,
+   * same broadcast.
    *
-   * `applied: false` is a real, successful answer: the reducer is total, so a
-   * stale pane id or a resize that resolves to the size already in force
-   * changes nothing rather than failing. OPTIONAL — a harness with no grid
-   * simply omits it and the tools say so.
+   * The command is resolved BY THE SERVER against the tree it holds under the
+   * lock, which is what retired both the `opId` and the rebase loop the verb
+   * seam needed: there is no snapshot for the caller to be stale against, and a
+   * retried call re-derives the same command against the same tree and finds
+   * nothing to do.
+   *
+   * `changed: false` is a real, successful answer — a stale node id or a resize
+   * that resolves to the size already in force writes nothing. OPTIONAL: a
+   * harness with no layout simply omits it and the tools say so.
    */
-  applyLayoutVerb?: (input: {
+  applyLayoutCommand?: (input: {
     workspaceId: string;
-    opId: string;
-    verb: WorkspaceLayoutVerb;
-  }) => Promise<{ ok: true; applied: boolean } | { ok: false; reason: string }>;
+    actingUserId: string;
+    command: LayoutCommand;
+  }) => Promise<{ ok: true; changed: boolean } | { ok: false; reason: string }>;
   /** Fresh conversation ids (client-mint discipline: the id exists before the row). */
   newId: () => string;
 }
 
-/** One pane of the caller's grid, as `list_panes` reports it. */
-export interface PaneGridPaneEntry {
-  paneId: string;
-  /** `'chat' | 'terminal' | 'page'`, or null for an unbound pane still showing the picker. */
+/**
+ * What a rearrange tool asks for, named in the MODEL's terms and compiled to the
+ * node algebra by the runtime.
+ *
+ * A discriminated union rather than three deps, so a harness wires one seam and
+ * a new rearrange is a new member rather than a new injection point — and so
+ * the tools stay free of any import that would drag the database in.
+ */
+export type LayoutCommand =
+  | { type: 'resize'; nodeId: string; fraction: number }
+  | { type: 'move'; nodeId: string; parentId: string | null; index?: number }
+  | { type: 'arrange'; parentId?: string; nodeIds: string[] };
+
+/** One node of the caller's layout, as `list_panes` reports it. */
+export interface PaneGridNodeEntry {
+  nodeId: string;
+  /** `'root' | 'split' | 'pane'`. Only a pane shows anything. */
+  nodeType: 'root' | 'split' | 'pane';
+  /**
+   * The container this node sits in. `null` on the root, and — on a pane —
+   * PARKED: in the workspace, out of the layout, still listed in the sidebar.
+   */
+  parentId: string | null;
+  /** 0-based slot among its siblings. */
+  position: number;
+  /** A container's split direction; null on a pane. */
+  axis: 'row' | 'column' | null;
+  /** `'chat' | 'terminal' | 'page'`, or null for an unbound pane showing the picker. */
   kind: PaneKind | null;
-  /** The conversationId / shellId / pageId this pane shows, or null when unbound or still minting. */
+  /** The conversationId / shellId / pageId this pane shows, or null when unbound. */
   targetId: string | null;
-  /** Display label only — never an address. */
+  /** Display label only — never an address. Empty when the target resolves to nothing. */
   name: string;
-  /** This pane's share of its column's height (0..1), or null when the column is evenly split. */
-  heightFraction: number | null;
+  /** This node's share of its parent (0..1), or null when the parent splits evenly. */
+  fraction: number | null;
 }
 
-/** One column of the caller's grid — a vertical stack of panes. */
-export interface PaneGridColumnEntry {
-  columnId: string;
-  /** This column's share of the grid width (0..1), or null when the grid is evenly split. */
-  widthFraction: number | null;
-  panes: PaneGridPaneEntry[];
-}
-
-/** The caller's whole pane grid: a left-to-right row of columns. */
+/** The caller's whole layout: one flat list, in which `parentId` says everything. */
 export interface PaneGridListing {
-  columns: PaneGridColumnEntry[];
+  nodes: PaneGridNodeEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -779,48 +811,50 @@ export function createSessionTools(deps: SessionToolsDeps): {
   };
 
   /**
-   * Every rearrange tool's tail: derive the idempotency key from the tool call
-   * id, apply the verb through the single writer, and map the outcome to an
-   * answer that never overstates what happened. `applied: false` reports
-   * `changed: false` and SAYS why it might be — a total reducer's no-op is not
-   * an error, but a model told "success" after nothing moved would keep
-   * arranging a grid it has already lost track of.
+   * Every rearrange tool's tail: apply the command through the single writer and
+   * map the outcome to an answer that never overstates what happened.
+   *
+   * `changed: false` reports `changed: false` and SAYS why it might be. An
+   * operation that resolves to the state already in force is not an error, but a
+   * model told "success" after nothing moved would keep arranging a layout it
+   * has already lost track of.
+   *
+   * There is no `toolCallId` here any more, and the tool no longer silently
+   * degrades when the SDK gives none. The old tail bailed to NO_GRID without a
+   * call id — a rearrange that vanished for a reason having nothing to do with
+   * the workspace — because it needed one to build an idempotency key. The
+   * server resolves the command against the tree it holds, so a retry re-derives
+   * the same command and finds nothing left to do.
    */
-  const runLayoutVerb = async (
+  const runLayoutCommand = async (
     context: ToolExecutionContext | undefined,
-    options: unknown,
-    toolName: string,
-    verb: WorkspaceLayoutVerb,
+    command: LayoutCommand,
   ): Promise<Record<string, unknown>> => {
     const opened = await openOwnGrid(context);
     if (!opened.ok) return opened.error;
-    if (!deps.applyLayoutVerb) return NO_GRID;
+    if (!deps.applyLayoutCommand) return NO_GRID;
 
-    const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
-    if (!toolCallId) return NO_GRID;
-
-    const result = await deps.applyLayoutVerb({
+    const result = await deps.applyLayoutCommand({
       workspaceId: opened.workspaceId,
-      // `toolCallId` is stable across the SDK's own retries of one call, so a
-      // retried rearrange replays through the verb engine's op memory instead
-      // of moving the pane twice.
-      opId: `${toolName}:${toolCallId}`,
-      verb,
+      // The ACTING USER, whose own authority gates any binding this touches —
+      // never the model's word for who is asking.
+      actingUserId: opened.viewerId,
+      command,
     });
     if (!result.ok) {
       return {
         success: false,
-        error: `Could not rearrange the panes (${result.reason}). Call list_panes to re-read the grid and try again.`,
+        error: `Could not rearrange the layout (${result.reason}). Call list_panes to re-read it and try again.`,
         reason: result.reason,
       };
     }
     return {
       success: true,
-      changed: result.applied,
-      ...(result.applied
+      changed: result.changed,
+      ...(result.changed
         ? {}
         : {
-            note: 'Nothing changed — the pane or column id may no longer exist, or the layout was already exactly this. Call list_panes to see the grid as it is now.',
+            note: 'Nothing changed — the nodeId may no longer exist, or the layout was already exactly this. Call list_panes to see it as it is now.',
           }),
     };
   };
@@ -1294,15 +1328,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
     }),
 
     // --- Layout (issue #2208) --------------------------------------------
-    // An agent arranging its OWN workspace. Every one of these goes through
-    // `applyWorkspaceLayoutVerb` — the same single writer, lock, and op memory
-    // a browser's verb POST uses — so a rearrange lands in the pane ROWS and
-    // broadcasts live, instead of reaching only whichever browsers happen to
-    // be rendering the grid.
+    // An agent arranging its OWN workspace. Every one of these goes through the
+    // same single writer, lock and validation a browser's `/nodes` POST uses,
+    // so a rearrange lands in the node ROWS and broadcasts live, instead of
+    // reaching only whichever browsers happen to be rendering the layout.
 
     list_panes: tool({
       description:
-        'Show the pane grid of THIS conversation\'s workspace: a left-to-right row of columns, each a top-to-bottom stack of panes. Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address, what each pane is showing, and the current size shares (null means that container is split evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session with an open pane grid.',
+        'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). A pane with parentId null is PARKED — in the workspace and in the sidebar, but not on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
       inputSchema: listPanesInputSchema,
       execute: async (_input, options) => {
         const opened = await openOwnGrid(readContext(options));
@@ -1311,65 +1344,51 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         // Labels are a permissioned join (review HIGH 1) — the read says who
         // is reading, so the model sees exactly what this user's own GET would.
-        const grid = await deps.readPaneGrid(opened.workspaceId, opened.viewerId);
-        // A workspace whose grid has never been opened is a real, reportable
+        const layout = await deps.readPaneGrid(opened.workspaceId, opened.viewerId);
+        // A workspace whose layout has never been opened is a real, reportable
         // state — not an error, and not the same as having no workspace.
-        if (!grid) {
+        if (!layout) {
           return {
             success: true,
             workspaceId: opened.workspaceId,
-            columns: [],
-            note: 'This workspace has no pane grid open yet — there is nothing laid out to rearrange.',
+            nodes: [],
+            note: 'This workspace has no layout yet — there is nothing laid out to rearrange.',
           };
         }
-        return { success: true, workspaceId: opened.workspaceId, columns: grid.columns };
+        return { success: true, workspaceId: opened.workspaceId, nodes: layout.nodes };
       },
     }),
 
     resize_pane: tool({
       description:
-        'Resize part of this workspace\'s pane grid: pass a columnId to set that column\'s width, or a paneId to set that pane\'s height within its own column. size is a share of the container from 0 to 1, and the siblings absorb the difference in proportion. A size that would squeeze a sibling below its minimum is clamped rather than refused. Heights are always column-local — a pane\'s height says nothing about panes in other columns. Get the ids from list_panes. A container with only one member cannot be resized: it already fills its space.',
+        'Set one node\'s share of its parent container. size is 0 to 1, and the siblings absorb the difference in proportion; a size that would squeeze a sibling below its minimum is clamped to that minimum rather than refused. Works on a pane or on a container — a container\'s share is its width or height depending on which way its own parent splits. Get the nodeId from list_panes. A node alone in its parent cannot be resized: it already fills it.',
       inputSchema: resizePaneInputSchema,
-      execute: async ({ paneId, columnId, size }, options) => {
-        const context = readContext(options);
-        // Exactly one target. Accepting both and silently preferring one would
-        // make a model's ambiguous call look like it worked on the axis it
-        // did not mean.
-        if ((paneId === undefined) === (columnId === undefined)) {
-          return {
-            success: false,
-            error: 'Pass exactly one of paneId (to set a pane\'s height in its column) or columnId (to set a column\'s width).',
-          };
-        }
-        const verb: WorkspaceLayoutVerb =
-          columnId !== undefined
-            ? { type: 'resize_column', columnId, widthFraction: size }
-            : { type: 'resize_pane', paneId: paneId!, heightFraction: size };
-        return runLayoutVerb(context, options, 'resize_pane', verb);
-      },
+      execute: async ({ nodeId, size }, options) =>
+        runLayoutCommand(readContext(options), { type: 'resize', nodeId, fraction: size }),
     }),
 
     move_pane: tool({
       description:
-        'Move a pane to a different column in this workspace\'s grid, or to a different position within its own column. Pass toColumnId (from list_panes) and, optionally, toIndex — the 0-based slot in the destination stack; omit it to append at the bottom, and out-of-range values clamp to the ends. The pane keeps showing exactly what it was showing; only its position changes. A column left empty by the move is removed.',
+        'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes), or null to PARK it — out of the layout, still in the workspace and still listed in the sidebar, which is what closing a pane means here. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
       inputSchema: movePaneInputSchema,
-      execute: async ({ paneId, toColumnId, toIndex }, options) =>
-        runLayoutVerb(readContext(options), options, 'move_pane', {
-          type: 'move_pane',
-          paneId,
-          toColumnId,
-          ...(toIndex === undefined ? {} : { toIndex }),
+      execute: async ({ nodeId, toParentId, toIndex }, options) =>
+        runLayoutCommand(readContext(options), {
+          type: 'move',
+          nodeId,
+          parentId: toParentId,
+          ...(toIndex === undefined ? {} : { index: toIndex }),
         }),
     }),
 
     arrange_panes: tool({
       description:
-        'Reorder this workspace\'s columns left to right. Pass columnIds (from list_panes) in the order you want them; you do NOT have to list them all — the ones you name go first, in your order, and every column you leave out keeps its current relative position behind them. Ids that no longer exist are skipped rather than failing the call. Panes and sizes travel with their column.',
+        'Reorder a container\'s children. Pass nodeIds (from list_panes) in the order you want them, and parentId for the container that holds them — omit parentId to reorder the root\'s own children, which is the top-level left-to-right (or top-to-bottom) order. You do NOT have to list them all: the ones you name go first, in your order, and every child you leave out keeps its current relative position behind them. Ids that are not children of that container are skipped rather than failing the call. Sizes and whole subtrees travel with their node.',
       inputSchema: arrangePanesInputSchema,
-      execute: async ({ columnIds }, options) =>
-        runLayoutVerb(readContext(options), options, 'arrange_panes', {
-          type: 'reorder_columns',
-          columnIds,
+      execute: async ({ parentId, nodeIds }, options) =>
+        runLayoutCommand(readContext(options), {
+          type: 'arrange',
+          ...(parentId === undefined ? {} : { parentId }),
+          nodeIds,
         }),
     }),
   };

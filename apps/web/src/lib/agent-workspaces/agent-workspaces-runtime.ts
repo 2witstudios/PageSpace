@@ -76,7 +76,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
-import { placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
+import { placeWorkerPane } from '@/lib/agent-workspaces/workspace-node-placement';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import {
   closeConversationInSessionWith,
@@ -457,12 +457,12 @@ export async function createConversationInSession(input: {
 
   if (!input.placeInGrid) return;
 
-  // The opId derives from the CONVERSATION id, not a caller-supplied
-  // `toolCallId`. The old gate in `spawn_session` was
-  // `if (deps.placeWorkerPane && toolCallId)`, which silently skipped placement
-  // whenever the SDK handed it no call id. A conversation-keyed op is always
-  // available and idempotent on the fact that matters: one pane per thread,
-  // however many times creation is retried.
+  // There is no idempotency key any more, and nothing was lost with it. The
+  // conversation-keyed opId existed to make a retried creation place one pane
+  // rather than two; the placement command now leaves a conversation that is
+  // already on screen exactly where it is and writes nothing, so "one pane per
+  // thread, however many times creation is retried" holds because the POLICY
+  // says so rather than because a memory row remembered.
   //
   // Best-effort, and AFTER the listing lock: a grid that cannot be written must
   // not fail a conversation that already exists. Degrading is safe because the
@@ -471,9 +471,11 @@ export async function createConversationInSession(input: {
     await placeWorkerPane({
       workspaceId: input.workspaceId,
       conversationId: input.conversationId,
-      name: input.title ?? 'New conversation',
-      agentPageId: input.agentPageId,
-      opId: `create_conversation:${input.conversationId}`,
+      // The thread's owner is the acting user here: this is reached from
+      // `spawn_session`, where the human whose turn it is owns both the
+      // spawning conversation and the worker it mints. The binding gate needs a
+      // human's authority, never a model's word.
+      actingUserId: input.userId,
       ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
     });
   } catch (error) {
