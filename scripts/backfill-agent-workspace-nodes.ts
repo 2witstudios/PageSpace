@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 /**
- * Backfill Script: every live workspace's pane grid and membership → the flat
- * node model (`agent_workspace_nodes`, migration `0255_boring_leo.sql`).
+ * Backfill Script: every workspace's pane grid and membership → the flat node
+ * model (`agent_workspace_nodes`, migration `0255_boring_leo.sql`).
+ *
+ * EVERY workspace, ended ones included — see the scan loop for why an ended
+ * workspace is neither finished nor a safe thing to skip.
  *
  * This is the thin I/O shell. Every decision the migration makes lives in
  * `@pagespace/lib/agent-workspaces/workspace-node-backfill` — a pure function
@@ -17,12 +20,14 @@
  * `agent_workspace_panes` or `conversations` — those stay live as a read-only
  * shadow, which is what makes rollback a redeploy rather than a restore.
  *
- * **Idempotent and resumable.** A workspace that already holds any node row is
- * skipped whole, so a second run writes nothing and a run resumed after a
- * partial failure continues from where it stopped rather than restarting or
- * skipping ahead. Chat targets an earlier run already bound are read back and
- * withheld from this one, so a resume cannot fight the unique index it
- * half-filled.
+ * **Idempotent and resumable.** A workspace that already holds an
+ * `agent_workspace_node_revs` row is skipped whole, so a second run writes
+ * nothing and a run resumed after a partial failure continues from where it
+ * stopped rather than restarting or skipping ahead. The rev row and not the
+ * nodes, because a migrated workspace can legitimately hold zero nodes and must
+ * still count as done — see `loadAlreadyMigrated`. Chat targets an earlier run
+ * already bound are read back and withheld from this one, so a resume cannot
+ * fight the unique index it half-filled.
  *
  * **Dry-run by default.** `--apply` is the only thing that writes. The dry run
  * is the rehearsal: it produces the same per-workspace census a live run does,
@@ -38,7 +43,7 @@
  * Usage:
  *   bun scripts/backfill-agent-workspace-nodes.ts                 # dry run (default)
  *   bun scripts/backfill-agent-workspace-nodes.ts --workspace ID  # one workspace
- *   bun scripts/backfill-agent-workspace-nodes.ts --limit 100     # first N live workspaces
+ *   bun scripts/backfill-agent-workspace-nodes.ts --limit 100     # first N workspaces
  *   bun scripts/backfill-agent-workspace-nodes.ts --quiet         # totals only
  *   bun scripts/backfill-agent-workspace-nodes.ts --apply         # live write
  *
@@ -166,8 +171,8 @@ async function loadChatClaims(dbInstance: Db): Promise<Map<string, string>> {
 
   const targetIds = [...new Set(references.map((reference) => reference.conversationId))];
 
-  // Who has an UNCONDITIONAL claim: a conversation that a live workspace will
-  // emit a membership node for. "Open" is `countOpenConversations`' predicate,
+  // Who has an UNCONDITIONAL claim: a conversation whose workspace still exists
+  // and will emit a membership node for it. "Open" is `countOpenConversations`' predicate,
   // spelled the same way here on purpose — bound, `isActive`, and not closed
   // out of the session's listing.
   const membershipOwner = new Map<string, string>();
@@ -302,12 +307,34 @@ async function loadSources(dbInstance: Db, workspaceIds: string[]): Promise<Work
   }));
 }
 
-/** Workspaces that already hold nodes — a previous run got to them. */
+/**
+ * Workspaces a run has ALREADY been through — by the rev row, not by the nodes.
+ *
+ * The question is "has the backfill been here", and it has to be MONOTONIC: a
+ * workspace that has been migrated must never read as outstanding again, or a
+ * re-run does the work twice. `agent_workspace_node_revs` answers it and the
+ * node rows do not. `writeWorkspace` mints the rev in the same transaction as
+ * the nodes, `writeWorkspaceNodes` only ever increments it, and nothing deletes
+ * it — a `destroy` takes the nodes and leaves the rev standing. So every
+ * workspace that holds a node holds a rev, and the reverse does not follow.
+ *
+ * Asking "does it hold nodes?" is the same non-monotonic mistake `awaitsBackfill`
+ * made on the other side of this cutover, and the divergence is not exotic:
+ * `endSession` empties a tree, which is an ordinary thing for a live workspace
+ * to be. Keyed on nodes, a re-run then finds a migrated workspace with none,
+ * calls it outstanding, and re-derives it from legacy rows that are still
+ * there — nothing writes `conversations.workspaceId` or `closedInWorkspaceAt`
+ * any more, so no node-model action can retire them. The census (step 2 in the
+ * procedure above, and the gate on the destructive 0256) reports a workspace it
+ * has already done as outstanding, and `--apply` resurrects the tree the user
+ * ended — without bumping the rev, since that insert is `onConflictDoNothing`,
+ * so no live client learns the rows came back.
+ */
 async function loadAlreadyMigrated(dbInstance: Db, workspaceIds: string[]): Promise<Set<string>> {
   const rows = await dbInstance
-    .selectDistinct({ rootId: agentWorkspaceNodes.rootId })
-    .from(agentWorkspaceNodes)
-    .where(inArray(agentWorkspaceNodes.rootId, workspaceIds));
+    .select({ rootId: agentWorkspaceNodeRevs.rootId })
+    .from(agentWorkspaceNodeRevs)
+    .where(inArray(agentWorkspaceNodeRevs.rootId, workspaceIds));
   return new Set(rows.map((row) => row.rootId));
 }
 
@@ -341,7 +368,7 @@ async function writeWorkspace(dbInstance: Db, derived: WorkspaceDerivation): Pro
 
 export interface BackfillOptions {
   dryRun: boolean;
-  /** Stop after this many live workspaces. Omitted means all of them. */
+  /** Stop after this many workspaces. Omitted means all of them. */
   limit?: number;
   /** Derive exactly one workspace, by id — the shape a post-mortem needs. */
   only?: string;
