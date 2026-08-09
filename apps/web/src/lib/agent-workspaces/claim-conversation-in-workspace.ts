@@ -35,6 +35,16 @@ export type AdmitConversationOutcome =
   | 'already_a_member'
   | 'session_full'
   | 'bound_elsewhere'
+  /**
+   * The workspace is waiting for the backfill. Kept distinct for the same
+   * reason `session_full` and `bound_elsewhere` are — except more so: those two
+   * are recoverable by the caller, and this one is not recoverable by anybody
+   * except an operator running the backfill. Folding it into `refused` made the
+   * unrecoverable case the ONLY refusal on this path that arrived disguised, as
+   * `not_found` — telling a user their conversation does not exist, and giving
+   * the operator a log line with no mention of the backfill.
+   */
+  | 'awaiting_backfill'
   | 'refused';
 
 export type ClaimConversationOutcome =
@@ -42,7 +52,9 @@ export type ClaimConversationOutcome =
   | 'already_in_session'
   | 'not_found'
   | 'cross_drive_denied'
-  | 'session_full';
+  | 'session_full'
+  /** The workspace has not been backfilled. Never `not_found`: it exists. */
+  | 'awaiting_backfill';
 
 /**
  * The membership deps every path into a workspace shares.
@@ -153,6 +165,13 @@ export async function claimConversationInSessionWith<Tx>(
       return 'already_in_session';
     case 'session_full':
       return 'session_full';
+    // Distinct from `not_found` on purpose. The conversation exists, it is the
+    // caller's, and the workspace is real — the server simply has not migrated
+    // it yet, and only an operator can change that. Answering "no such
+    // conversation" would be false and would send the user looking for a thread
+    // that is sitting right there.
+    case 'awaiting_backfill':
+      return 'awaiting_backfill';
     // The world changed between the reads above and the write: another request
     // claimed it first, or the tree refused the shape. Both collapse to the
     // same answer a stale read would have produced — an id-guessing caller

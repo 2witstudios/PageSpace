@@ -57,7 +57,7 @@ vi.mock('@/lib/websocket/agent-workspace-events', () => ({
   broadcastWorkspaceNodesUpdated: vi.fn(),
 }));
 
-const { applyWorkspaceNodeWrite } = await import('../workspace-node-runtime');
+const { applyWorkspaceNodeWrite, destroyWorkspaceTree } = await import('../workspace-node-runtime');
 
 /** Everything this file minted; the owning users cascade the rest away. */
 const ownerIds: string[] = [];
@@ -365,9 +365,15 @@ describe('moving a conversation between nodes that BOTH survive the write', () =
     await writeWorkspaceNodes(db, {
       workspaceId,
       write: {
+        // ORDER MATTERS IN THIS ARRAY, which is why the taker is first. A
+        // per-row unique index is satisfied by luck when the releasing node
+        // happens to be written before the taking one, and this test passed
+        // with the release disabled until the entries were swapped — so as
+        // written before, it guarded nothing. Taker first is the order that can
+        // only succeed because the release ran.
         put: [
-          { nodeType: 'pane', id: 'n1', parentId: 'root', position: 0, target: null },
           chatPane('n2', 1, conv),
+          { nodeType: 'pane', id: 'n1', parentId: 'root', position: 0, target: null },
         ],
         drop: [],
       },
@@ -503,6 +509,97 @@ describe('a workspace the backfill has not reached yet', () => {
       workspaceId,
       baseRev: before.rev,
       put: [{ nodeType: 'pane', id: 'n2', parentId: 'root', position: 1, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+  it('ALLOWS an ENDED workspace — the backfill will never visit it, so there is nothing to strand (F1)', async () => {
+    // `backfill()` paginates `endedAt IS NULL`. A workspace outside that scope
+    // is one no backfill run will ever migrate, so refusing its writes prevents
+    // a loss that was never going to be prevented — and blocks a write the
+    // product supports, since a thread can be claimed into an ended workspace
+    // (issue #2335). The guard's scope has to be the backfill's scope, or
+    // "refused" and "the backfill will fix it" stop being the same set.
+    const workspaceId = await createWorkspace();
+    await legacyMember(workspaceId);
+    await db.update(agentWorkspaces).set({ endedAt: new Date() }).where(eq(agentWorkspaces.id, workspaceId));
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('ALLOWS a backfilled workspace whose tree was later DESTROYED by endSession (F2)', async () => {
+    // The regression that made this predicate wrong. `endSession` destroys the
+    // whole tree, so a correctly-migrated workspace drops to zero nodes and the
+    // old predicate — "is there a legacy row with no node" — flipped back to
+    // true and refused every subsequent write. On a perfectly migrated
+    // database, with no legacy data involved in the failure at all.
+    //
+    // The rev row is what makes the answer monotonic: the backfill writes it in
+    // the same transaction as the nodes, and `destroy` never deletes it.
+    const workspaceId = await createWorkspace();
+    const conversationId = await legacyMember(workspaceId);
+    await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
+
+    await destroyWorkspaceTree({ workspaceId, actingUserId: ownerIds[0] });
+    const emptied = await readWorkspaceNodeSnapshot(db, workspaceId);
+    expect(emptied.nodes).toEqual([]);
+
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: emptied.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('ALLOWS when the only legacy member is DISMISSED — the backfill mints it no node either (F4)', async () => {
+    // `closedInWorkspaceAt IS NULL` is not decoration. The backfill does not
+    // give dismissed threads a node, so counting one would make the predicate
+    // permanently true and no backfill run could ever clear it — every
+    // workspace in which a user once closed a thread, refused forever.
+    const workspaceId = await createWorkspace();
+    const conversationId = await legacyMember(workspaceId);
+    await db
+      .update(conversations)
+      .set({ closedInWorkspaceAt: new Date() })
+      .where(eq(conversations.id, conversationId));
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('ALLOWS when the only legacy member is HISTORY-DELETED — same reason (F4)', async () => {
+    const workspaceId = await createWorkspace();
+    const conversationId = await legacyMember(workspaceId);
+    await db.update(conversations).set({ isActive: false }).where(eq(conversations.id, conversationId));
+
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'p1', parentId: rootSeedFor(workspaceId).id, position: 0, target: null }],
       drop: [],
       viewerId: ownerIds[0],
     });

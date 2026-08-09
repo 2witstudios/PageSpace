@@ -63,7 +63,7 @@ import {
   isChatTargetUniqueViolation,
 } from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
 import {
-  hasUnmigratedLegacyMembership,
+  awaitsBackfill,
   readChatTargetHolders,
   readWorkspaceNodeSnapshot,
   readWorkspaceNodeSnapshots,
@@ -174,7 +174,7 @@ async function readWorkspaceOwnerId(executor: DbExecutor, workspaceId: string): 
  * TEMPORARY BY CONSTRUCTION: it exists only while the old membership columns
  * are still in the schema, which is only until the follow-up migration drops
  * them. It refuses the first write to a workspace whose membership the backfill
- * has not moved yet — see `hasUnmigratedLegacyMembership`, and the seed path in
+ * has not moved yet — see `awaitsBackfill`, and the seed path in
  * `commitUnderLock` for why writing to such a workspace is unrecoverable.
  */
 export type NodeWriteRefusal =
@@ -375,7 +375,7 @@ async function commitUnderLock(input: {
      * and neither can be stranded by a further write.
      */
     if (seedIfMissing && rootOf(before.nodes) === undefined) {
-      if (await hasUnmigratedLegacyMembership(tx, workspaceId)) {
+      if (await awaitsBackfill(tx, workspaceId)) {
         return {
           kind: 'refused' as const,
           code: 'awaiting_backfill' as const,

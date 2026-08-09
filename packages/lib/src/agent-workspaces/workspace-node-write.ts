@@ -185,9 +185,23 @@ export function decideNodeWrite(request: NodeWriteRequest): NodeWriteDecision {
 
   const incoming = put.map(nodeOfWire);
 
-  // 3. VALIDITY OF THE RESULT. Drop first, then upsert — a node is never in
-  //    both, and this is `applyNodeWrite`'s order, so the tree judged here is
-  //    exactly the tree the algebra would have produced.
+  // 3. VALIDITY OF THE RESULT. Drop then upsert, so an id named in BOTH
+  //    resolves as PUT WINS — which is the decision `persistedWrite` below
+  //    depends on: it strips such an id from the DELETE so the table's cascade
+  //    cannot take the children of a node the validated tree still holds.
+  //
+  //    NOT `applyNodeWrite`'s order, and the difference is worth stating
+  //    because an earlier comment here claimed it was. The algebra folds
+  //    put-then-drop (see its docblock: the order is load-bearing for the
+  //    cascade), so on the one input where the two orders differ — an id in
+  //    both — the algebra drops the node and this keeps it. The algebra's
+  //    docblock states the assumption that makes them agree everywhere else:
+  //    "a node is never in both", true of every write the algebra BUILDS.
+  //    A hand-assembled payload can break it, and then an optimistic client
+  //    shows the node gone while the server stores it — corrected by the next
+  //    broadcast, which carries the server's tree. Benign, and left alone
+  //    deliberately: making the two agree means changing one of two orders that
+  //    each exist for a reason, on the rarest input either will ever see.
   const next = upsertNodes(removeNodes(nodes, drop), incoming);
   const validation = validateTree(next);
   if (!validation.ok) return { status: 'invalid', code: validation.code, detail: validation.detail };

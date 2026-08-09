@@ -59,6 +59,17 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
 
+  if (outcome === 'awaiting_backfill') {
+    // 503, matching `POST /nodes`. The conversation exists and is the caller's;
+    // the SERVER has not migrated this workspace yet and no action by the
+    // caller changes that. A 404 here would be a lie about a thread the user
+    // can see, and would send them looking for it.
+    return NextResponse.json(
+      { error: 'This session is not ready yet. Its data is still being migrated.', code: 'awaiting_backfill' },
+      { status: 503 },
+    );
+  }
+
   if (outcome === 'session_full') {
     // 409, not 404: the thread exists and is the caller's, and the workspace is
     // simply full. This is the one refusal on this path a user can resolve —

@@ -334,43 +334,83 @@ export async function readChatTargetHolders(
  * later commit silently drops the earlier one's change.
  */
 /**
- * Does this workspace still hold membership that only the OLD model records?
+ * Is this workspace still WAITING FOR THE BACKFILL — membership the old model
+ * records and the node model has never been given?
  *
- * True exactly when a conversation names this workspace through
- * `conversations.workspaceId`, is live by the old model's own reckoning
- * (`isActive`, never closed out of the workspace), and has no chat node. That
- * is the definition of "the backfill has not reached this workspace yet", and
- * it is the same predicate `scripts/backfill-agent-workspace-nodes.ts` derives
- * from — which is the reason those two columns are still in the schema at all.
+ * Three conditions, and each one is here because leaving it out bricks a
+ * workspace permanently. The refusal this feeds is unrecoverable by design, so
+ * every clause is chosen to make the predicate STOP being true once the backfill
+ * has done its job — and to never become true again afterwards.
  *
- * **Why this question has to be asked before a root is minted.** Membership is
- * read only from `agent_workspace_nodes`; there is no fallback. On a database
- * the backfill has not run against, an un-backfilled workspace opens EMPTY —
- * which is recoverable, because running the backfill fills it in. What is not
- * recoverable is what happens if anything WRITES to it first: the backfill
- * skips any workspace that already holds a node row (`loadAlreadyMigrated` is a
- * bare `SELECT DISTINCT rootId`, with no notion of how many nodes it should
- * have found), so a single seeded root permanently strands that workspace's
- * real membership — and the backfill then counts it as `alreadyMigrated`, so
- * the census that gates the whole rollout reports the run clean.
+ *  1. **The workspace is live.** `backfill()` paginates `endedAt IS NULL`, so an
+ *     ENDED workspace is one it will never visit. Its legacy rows are not going
+ *     to be migrated by anybody, which means there is no stranding left to
+ *     prevent and refusing only blocks a write the product supports (a thread
+ *     can be claimed into an ended workspace — see
+ *     `claim-conversation-in-workspace.ts`). Matching the backfill's own scope
+ *     is what keeps "the guard refuses" and "the backfill will fix it" the same
+ *     set.
+ *  2. **The workspace has no rev row**, which is the MIGRATION MARKER and the
+ *     whole reason this function is not simply "are there nodes?". The backfill
+ *     writes `agent_workspace_node_revs (rev = 0)` in the same transaction as
+ *     the nodes, `writeWorkspaceNodes` only ever increments it, and NOTHING
+ *     deletes it — `destroy` removes nodes and leaves the rev standing. So it
+ *     answers "has this workspace ever been through the node model" monotonically
+ *     and cannot un-answer itself.
  *
- * Silent, permanent, and invisible to the gate built to catch it. Hence a
- * refusal rather than a warning.
+ *     An earlier cut of this predicate asked "is there a legacy row with no
+ *     node", which is a different question that happens to coincide during the
+ *     migration window and diverges the moment a tree is legitimately emptied.
+ *     `endSession` destroys the whole tree, so ending a session and later
+ *     reusing it made a correctly-backfilled workspace look un-backfilled and
+ *     refused every subsequent write — on a perfectly migrated database, with no
+ *     legacy data involved in the failure at all.
+ *  3. **A live legacy conversation has no chat node anywhere.** This is what
+ *     separates "never backfilled" from "brand new": a fresh deployment has no
+ *     conversation naming a workspace through the old column, so the predicate
+ *     is false and nothing changes for it.
  *
- * Costs one indexed lookup, and only on the seed path — the first write to a
- * workspace that has no tree. A workspace that already has nodes is never
- * asked, and on any deployment with no legacy rows at all the answer is always
- * false. After the follow-up migration drops the columns, this function and its
- * call site go with them.
+ *     `isActive` and `closedInWorkspaceAt IS NULL` are the old model's own
+ *     definition of live membership, and they are the backfill's: it does not
+ *     mint nodes for dismissed or history-deleted threads. Counting one would
+ *     make every workspace in which a user ever closed a thread refuse forever,
+ *     because no backfill run would ever satisfy it. The `NOT EXISTS` is
+ *     deliberately unscoped by `rootId` — a thread claimed into another
+ *     workspace has moved, not been stranded, and the chat index is global.
+ *
+ * Costs two indexed lookups, and only on the seed path — a workspace's first
+ * write while it has no tree. After the follow-up migration drops the old
+ * columns, this function and its call site go with them.
  */
-export async function hasUnmigratedLegacyMembership(
+export async function awaitsBackfill(
   executor: DbExecutor,
   workspaceId: string,
 ): Promise<boolean> {
   const { conversations } = await import('@pagespace/db/schema/conversations');
-  const { agentWorkspaceNodes } = await import('@pagespace/db/schema/agent-workspace-nodes');
+  const { agentWorkspaces } = await import('@pagespace/db/schema/agent-workspaces');
+  const { agentWorkspaceNodes, agentWorkspaceNodeRevs } = await import(
+    '@pagespace/db/schema/agent-workspace-nodes'
+  );
 
-  const [row] = await executor
+  // (1) and (2) together: live, and never marked as migrated.
+  const [unmarked] = await executor
+    .select({ id: agentWorkspaces.id })
+    .from(agentWorkspaces)
+    .where(
+      and(
+        eq(agentWorkspaces.id, workspaceId),
+        sql`${agentWorkspaces.endedAt} IS NULL`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${agentWorkspaceNodeRevs} r WHERE r."rootId" = ${workspaceId}
+        )`,
+      ),
+    )
+    .limit(1);
+
+  if (unmarked === undefined) return false;
+
+  // (3) is there anything left to strand?
+  const [stranded] = await executor
     .select({ id: conversations.id })
     .from(conversations)
     .where(
@@ -386,7 +426,7 @@ export async function hasUnmigratedLegacyMembership(
     )
     .limit(1);
 
-  return row !== undefined;
+  return stranded !== undefined;
 }
 
 export async function writeWorkspaceNodes(

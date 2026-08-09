@@ -222,6 +222,14 @@ export async function createConversationInSessionWith<Tx>(
 
   if (outcome === 'admitted' || outcome === 'already_a_member') return;
   if (outcome === 'session_full') throw new SessionFullError();
+  // Named in the `cause` rather than collapsed into the generic refusal below,
+  // because this is the one outcome here that no caller and no retry can clear
+  // — and the operator reading the boundary's log is the only person who can.
+  // "The tree would not stand up" and "this database has not been migrated" are
+  // not the same incident and must not share a log line.
+  if (outcome === 'awaiting_backfill') {
+    throw new ConversationUnavailableError({ cause: new Error('awaiting_backfill') });
+  }
   // 'bound_elsewhere' (the unique index refused: this thread already has a
   // home) and 'refused' (the tree would not stand up) collapse to the same
   // generic refusal — an id-guessing caller learns nothing either way; the

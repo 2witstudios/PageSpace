@@ -282,9 +282,15 @@ describe('a fraction that is not a share of anything', () => {
 
 describe('a node named in BOTH put and drop', () => {
   it('resolves as "put wins", and the storage instruction agrees with the tree', () => {
-    // `applyNodeWrite` is drop-then-upsert, so the node survives. The DELETE
+    // `decideNodeWrite` is drop-then-upsert, so the node survives. The DELETE
     // must therefore not name it — otherwise the cascade would take its
     // children while the validated tree still holds them.
+    //
+    // The name in that first sentence used to be `applyNodeWrite`, which folds
+    // the other way (put-then-drop, so the node would be GONE). The decision
+    // asserted here is right and load-bearing; only the attribution was wrong,
+    // and it mattered because it made the algebra look like the authority for a
+    // resolution the algebra does not share.
     const nodes = [root(), split('col', 'root', 0, 'column'), pane('p1', 'col', 0), pane('p2', 'col', 1)];
     const decision = decide(nodes, { drop: ['col'], put: [split('col', 'root', 0, 'column')] });
     expect(decision.status).toBe('ok');

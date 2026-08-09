@@ -295,6 +295,11 @@ async function admitConversationNode(input: {
   if (result.status === 'refused') {
     if (result.code === 'session_full') return 'session_full';
     if (result.code === 'bound_elsewhere') return 'bound_elsewhere';
+    // The unrecoverable one, and therefore the one that must NOT arrive as a
+    // generic refusal: every caller below turns `refused` into "no such
+    // conversation", which is both untrue and unactionable when the real answer
+    // is "this workspace has not been migrated yet".
+    if (result.code === 'awaiting_backfill') return 'awaiting_backfill';
     return 'refused';
   }
   // Unreachable: a membership write's `baseRev` IS the rev the lock read.
@@ -592,6 +597,8 @@ export async function reopenConversationInSession(input: {
           // the one refusal on this path a user can actually resolve.
           case 'session_full':
             return 'session_full';
+          case 'awaiting_backfill':
+            return 'awaiting_backfill';
           case 'bound_elsewhere':
           case 'refused':
             return 'refused';
