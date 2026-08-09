@@ -38,7 +38,16 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
     ...actual,
     // The lock collapses to a passthrough: lock semantics belong to the store's
     // own surface, not to this wiring test.
-    withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
+    // The transaction the funnel is handed is used for two things: the store
+    // reads above (mocked wholesale), and `readWorkspaceOwnerId`'s own SELECT —
+    // which runs INSIDE the lock deliberately, so the broadcast can reach the
+    // owner's directory plane without a second query on the hot path.
+    withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        select: () => ({
+          from: () => ({ where: () => ({ limit: async () => labelRows.workspaces }) }),
+        }),
+      }),
     readWorkspaceNodeSnapshot: async () => ({ rev: store.rev, nodes: structuredClone(store.nodes) }),
     readWorkspaceNodeSnapshots: async (_tx: unknown, ids: string[]) =>
       new Map(ids.map((id) => [id, { rev: store.rev, nodes: structuredClone(store.nodes) }])),
@@ -85,7 +94,7 @@ vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaces: { __name: 'workspaces' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
-vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}) }));
+vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}), eq: () => ({}) }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
@@ -248,9 +257,15 @@ describe('the broadcast', () => {
 
     expect(mockBroadcast).toHaveBeenCalledTimes(1);
     const payload = mockBroadcast.mock.calls[0][0] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(['nodes', 'rev', 'workspaceId']);
-    // `session:<id>` is a ROOM — one payload reaches every member at once, so
-    // there is no viewer to redact for and a title has no business on this wire.
+    // `ownerId` is routing, not content: it names the second ROOM the event
+    // goes to (the owner's own directory plane, so a workspace nobody has open
+    // still updates its sidebar rows) and is stripped before the payload is
+    // emitted — see `broadcastWorkspaceNodesUpdated`.
+    expect(Object.keys(payload).sort()).toEqual(['nodes', 'ownerId', 'rev', 'workspaceId']);
+    expect(payload.ownerId).toBe(VIEWER);
+    // Both rooms carry the same STRUCTURAL payload — one reaches every member
+    // of a shared workspace at once, so there is no viewer to redact for and a
+    // title has no business on this wire.
     expect(JSON.stringify(payload)).not.toContain('Q3 layoffs');
   });
 });
@@ -263,7 +278,16 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     ];
     const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
     expect(snapshot.targets).toEqual([
-      { id: 'conv-1', kind: 'chat', title: 'Planning', lastMessageAt: '2026-01-02T03:04:05.000Z' },
+      {
+        id: 'conv-1',
+        kind: 'chat',
+        title: 'Planning',
+        lastMessageAt: '2026-01-02T03:04:05.000Z',
+        // Derived by the SHARED `conversationPageId` rule, behind the same gate
+        // the title passed — the pane header's only route to its agent now that
+        // there is no `PaneScope` to carry one.
+        agentPageId: 'page-9',
+      },
     ]);
   });
 
@@ -275,7 +299,7 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     ];
     const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
     expect(snapshot.targets).toEqual([
-      { id: 'conv-1', kind: 'chat', title: '(private thread)', lastMessageAt: null },
+      { id: 'conv-1', kind: 'chat', title: '(private thread)', lastMessageAt: null, agentPageId: null },
     ]);
   });
 

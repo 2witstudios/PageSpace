@@ -6,10 +6,31 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { PaneNode, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import { paneNodesOf } from '@/stores/agent-workspace/workspace-tree-view';
 
+const WS = 'ses-1';
 const store = () => useAgentWorkspaceStore.getState();
-const grid = (id = 'ses-1') => store().workspaces[id];
+const grid = (id = WS) => store().workspaces[id];
+/** Every pane in the workspace — attached or parked. */
+const panesOf = (tree = grid()): PaneNode[] => paneNodesOf(tree?.nodes ?? []);
+
+const rootNode: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
+const chatNode = (id: string, position: number, conversationId: string): WorkspaceNode => ({
+  nodeType: 'pane',
+  id,
+  parentId: WS,
+  position,
+  target: { kind: 'chat', id: conversationId },
+});
+
+/**
+ * Seat a workspace's tree directly. There is no client-side grid seed any more
+ * — a root is minted server-side by whatever write first needs one — so a
+ * fixture states the tree it wants instead of driving a reducer to it.
+ */
+const seat = (nodes: WorkspaceNode[]) =>
+  store().hydrateFromServer(WS, { rev: 1, nodes, targets: [] });
 
 const toolPart = (toolCallId: string, state: string, output?: unknown) => ({
   type: 'tool-open_page_pane',
@@ -28,11 +49,10 @@ beforeEach(() => {
 
 describe('useOpenPagePane', () => {
   it('opens a page pane for a NEWLY streamed completed call', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    // Split first so the lone chat pane isn't the only replaceable candidate —
-    // isolates "does it act on a new call" from the invoker-exclusion behavior
-    // covered separately below.
-    store().splitRight('ses-1', panesOf(grid())[0].id);
+    // Two panes, so the invoking conversation's own pane isn't the only
+    // replaceable candidate — isolates "does it act on a new call" from the
+    // invoker-exclusion behaviour covered separately below.
+    seat([rootNode, chatNode('n1', 0, 'conv-1'), chatNode('n2', 1, 'conv-9')]);
 
     const { rerender } = renderHook(
       ({ messages }: { messages: UIMessage[] }) =>
@@ -48,16 +68,14 @@ describe('useOpenPagePane', () => {
       ],
     });
 
-    const panes = panesOf(grid());
-    const pagePane = panes.find((p) => p.scope?.kind === 'page');
-    expect(pagePane?.scope?.targetId).toBe('page-1');
-    expect(pagePane?.scope?.name).toBe('My Doc');
+    const panes = panesOf();
+    const pagePane = panes.find((p) => p.target?.kind === 'page');
+    expect(pagePane?.target?.id).toBe('page-1');
   });
 
   it('does NOT act on a completed call already present on the FIRST render (history replay guard)', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    store().splitRight('ses-1', panesOf(grid())[0].id);
-    const before = panesOf(grid()).map((p) => p.scope);
+    seat([rootNode, chatNode('n1', 0, 'conv-1'), chatNode('n2', 1, 'conv-9')]);
+    const before = panesOf().map((p) => p.target);
 
     renderHook(() =>
       useOpenPagePane({
@@ -73,7 +91,7 @@ describe('useOpenPagePane', () => {
 
     // A reopened/remounted conversation's own loaded history must not
     // re-trigger the pane it already opened last time.
-    expect(panesOf(grid()).map((p) => p.scope)).toEqual(before);
+    expect(panesOf().map((p) => p.target)).toEqual(before);
   });
 
   it('does NOT replay a DIFFERENT conversation\'s already-completed call when the same pane switches to it (no remount)', () => {
@@ -81,8 +99,7 @@ describe('useOpenPagePane', () => {
     // SessionChat/AssistantSessionChat are never keyed by conversationId, so
     // this hook's refs must not treat conv-2's own history as "new" just
     // because they were already seeded (by conv-1) before the switch.
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    store().splitRight('ses-1', panesOf(grid())[0].id);
+    seat([rootNode, chatNode('n1', 0, 'conv-1'), chatNode('n2', 1, 'conv-9')]);
 
     const { rerender } = renderHook(
       ({ conversationId, messages }: { conversationId: string; messages: UIMessage[] }) =>
@@ -98,7 +115,7 @@ describe('useOpenPagePane', () => {
         ]),
       ],
     });
-    const before = panesOf(grid()).map((p) => p.scope);
+    const before = panesOf().map((p) => p.target);
 
     // Switch the SAME pane to conv-2, whose own last message already ends in
     // a completed call — must be seeded as conv-2's history, not fired.
@@ -111,12 +128,11 @@ describe('useOpenPagePane', () => {
       ],
     });
 
-    expect(panesOf(grid()).map((p) => p.scope)).toEqual(before);
+    expect(panesOf().map((p) => p.target)).toEqual(before);
   });
 
   it('still fires a genuinely NEW call after switching to a different conversation', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    store().splitRight('ses-1', panesOf(grid())[0].id);
+    seat([rootNode, chatNode('n1', 0, 'conv-1'), chatNode('n2', 1, 'conv-9')]);
 
     const { rerender } = renderHook(
       ({ conversationId, messages }: { conversationId: string; messages: UIMessage[] }) =>
@@ -135,13 +151,12 @@ describe('useOpenPagePane', () => {
       ],
     });
 
-    const pagePane = panesOf(grid()).find((p) => p.scope?.kind === 'page');
-    expect(pagePane?.scope?.targetId).toBe('page-2');
+    const pagePane = panesOf().find((p) => p.target?.kind === 'page');
+    expect(pagePane?.target?.id).toBe('page-2');
   });
 
   it('never double-fires the same toolCallId across rerenders', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    store().splitRight('ses-1', panesOf(grid())[0].id);
+    seat([rootNode, chatNode('n1', 0, 'conv-1'), chatNode('n2', 1, 'conv-9')]);
 
     const { rerender } = renderHook(
       ({ messages }: { messages: UIMessage[] }) =>
@@ -154,19 +169,20 @@ describe('useOpenPagePane', () => {
       ]),
     ];
     rerender({ messages: completed });
-    // Manually re-target the pane the tool call opened, then rerender with the
-    // SAME messages again — a naive re-scan would reopen/refocus page-1 and
-    // undo the user's own subsequent action.
-    const pagePane = panesOf(grid()).find((p) => p.scope?.kind === 'page')!;
-    store().assignPane('ses-1', pagePane.id, { kind: 'page', name: 'Other', targetId: 'page-2', agentPageId: null });
+    // The user moves on: they close the pane the tool call opened, then the
+    // SAME messages rerender. A naive re-scan would reopen page-1 and undo it.
+    // A binding is for life, so "the user retargeted this pane" is spelled as
+    // closing the node rather than as a rebind of it.
+    const pagePane = panesOf().find((p) => p.target?.kind === 'page')!;
+    store().closePane('ses-1', pagePane.id);
     rerender({ messages: completed });
 
-    expect(panesOf(grid()).find((p) => p.id === pagePane.id)?.scope?.targetId).toBe('page-2');
+    expect(panesOf().find((p) => p.id === pagePane.id)?.parentId).toBeNull();
   });
 
   it('never evicts the invoking chat pane — splits beside it instead (excludeTargetId)', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    const chatPane = panesOf(grid())[0];
+    seat([rootNode, chatNode('n1', 0, 'conv-1')]);
+    const chatPane = panesOf()[0];
 
     const { rerender } = renderHook(
       ({ messages }: { messages: UIMessage[] }) =>
@@ -181,15 +197,15 @@ describe('useOpenPagePane', () => {
       ],
     });
 
-    const panes = panesOf(grid());
+    const panes = panesOf();
     expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
-    expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+    expect(panes.find((p) => p.id === chatPane.id)?.target?.id).toBe('conv-1');
+    expect(panes.find((p) => p.target?.id === 'page-1')).toBeDefined();
   });
 
   it('ignores tool parts that are not yet output-available', () => {
-    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
-    const before = panesOf(grid()).map((p) => p.scope);
+    seat([rootNode, chatNode('n1', 0, 'conv-1')]);
+    const before = panesOf().map((p) => p.target);
 
     const { rerender } = renderHook(
       ({ messages }: { messages: UIMessage[] }) =>
@@ -198,7 +214,7 @@ describe('useOpenPagePane', () => {
     );
     rerender({ messages: [msg('a1', 'assistant', [toolPart('tc1', 'input-available')])] });
 
-    expect(panesOf(grid()).map((p) => p.scope)).toEqual(before);
+    expect(panesOf().map((p) => p.target)).toEqual(before);
   });
 
   it('no-ops when sessionId is null (a plain, session-less conversation)', () => {

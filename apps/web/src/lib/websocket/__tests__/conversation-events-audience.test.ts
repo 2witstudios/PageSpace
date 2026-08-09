@@ -367,10 +367,20 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     // mirror event appears in source.
     'apps/web/src/lib/websocket/conversation-events.ts': ['chat:stream_start'],
     // --- the agent-session layout plane -------------------------------------
-    // Audience: the `session:<id>` room — every member of a shared workspace
-    // at once. Its grid is LABEL-FREE for exactly that reason (security review
-    // HIGH 1); see workspace-layout-runtime.ts.
-    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:updated'],
+    // TWO audiences, and both are deliberate:
+    //   `session:<id>` — every member of a shared workspace at once, joined
+    //     only while that workspace's grid is mounted;
+    //   `user:<ownerId>:sessions` — the OWNER's own directory plane, joined
+    //     automatically at connect, so a pane placed in a workspace nobody is
+    //     looking at still reaches their sidebar instead of waiting for a poll.
+    // Both payloads are LABEL-FREE for the same reason (security review HIGH 1):
+    // a room has no viewer to redact for. There is deliberately no third room —
+    // `drive:<id>` would be a workspace-enumeration oracle, since drive members
+    // may reach a workspace they are never shown in a listing.
+    'apps/web/src/lib/websocket/agent-workspace-events.ts': [
+      'workspace:nodes-updated',
+      'workspace:updated',
+    ],
     // --- the pre-epic surfaces ----------------------------------------------
     'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
     'apps/web/src/lib/websocket/socket-utils.ts': [

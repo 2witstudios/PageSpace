@@ -33,13 +33,14 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells, agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
+import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import type { PaneTargetKind, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type {
   WireWorkspaceNode,
@@ -47,6 +48,7 @@ import type {
   WorkspaceNodeTarget,
 } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { decideNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-write';
+import { seedRoot } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import type { CommandCode, CommandResult } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import type { TreeViolationCode } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import {
@@ -54,6 +56,7 @@ import {
   readWorkspaceNodeSnapshots,
   withWorkspaceLayoutLock,
   writeWorkspaceNodes,
+  type DbExecutor,
   type WorkspaceNodeSnapshot,
 } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
 import { broadcastWorkspaceNodesUpdated } from '@/lib/websocket/agent-workspace-events';
@@ -88,17 +91,61 @@ export async function readWorkspaceNodes(
   };
 }
 
-/*
- * MANY workspaces at once — the sessions-list read's shape — is deliberately
- * NOT here yet. The bulk READ exists and is the same statement
- * (`readWorkspaceNodeSnapshots`, one query for one workspace and for fifty),
- * and `resolveTargetsByWorkspace` below already takes a list of subjects and
- * authorizes each one against its OWN workspace's owner. What is missing is the
- * consumer: the sessions list still reads the old grid, and it moves in the
- * phase that moves the sidebar. Adding the wrapper now would be a dead export
- * that nothing exercises — the shape is proven by the store's own suite, and
- * the wrapper is two lines when its caller arrives.
+/**
+ * MANY workspaces at once — THE SESSIONS-LIST READ.
+ *
+ * The consumer the previous phase was waiting for has arrived: the sidebar
+ * renders the live tree out of the store, so the listing has to deliver one per
+ * session. Underneath it is the same statement as the single read
+ * (`readWorkspaceNodeSnapshots` — one query for one workspace and for fifty),
+ * and the target resolution is one pass per KIND across every workspace at once,
+ * authorized per workspace against its OWN owner. A shared listing therefore
+ * cannot borrow the viewer's authority in their own workspace to unmask a title
+ * in someone else's.
+ *
+ * Every workspace ASKED FOR gets an entry, including one that has never been
+ * written — `{rev: 0, nodes: [], targets: []}`. "Never written" and "you did not
+ * ask" have to stay different answers, because the client seats what it is given
+ * and a missing entry would read as "keep whatever you had".
  */
+export async function readWorkspaceNodesBulk(
+  workspaceIds: readonly string[],
+  viewerId: TargetViewerId,
+): Promise<Map<string, WorkspaceNodeSnapshotResponse>> {
+  const answer = new Map<string, WorkspaceNodeSnapshotResponse>();
+  if (workspaceIds.length === 0) return answer;
+
+  const snapshots = await readWorkspaceNodeSnapshots(db, [...workspaceIds]);
+  const subjects = [...snapshots].map(([workspaceId, snapshot]) => ({ workspaceId, nodes: snapshot.nodes }));
+  const targetsByWorkspace = await resolveTargetsByWorkspace(subjects, viewerId);
+
+  for (const [workspaceId, snapshot] of snapshots) {
+    answer.set(workspaceId, {
+      rev: snapshot.rev,
+      nodes: snapshot.nodes,
+      targets: targetsByWorkspace.get(workspaceId) ?? [],
+    });
+  }
+  return answer;
+}
+
+/**
+ * The workspace's owner, or `null` when the row is not there.
+ *
+ * Takes the EXECUTOR it is given, so the write funnel can run it on the
+ * transaction that already holds the lock rather than opening a second
+ * connection while that lock is held. Fails closed: an owner that cannot be read
+ * simply means the broadcast does not reach the owner's plane, never that it
+ * reaches somebody else's.
+ */
+async function readWorkspaceOwnerId(executor: DbExecutor, workspaceId: string): Promise<string | null> {
+  const rows = await executor
+    .select({ ownerId: agentWorkspaces.ownerId })
+    .from(agentWorkspaces)
+    .where(eq(agentWorkspaces.id, workspaceId))
+    .limit(1);
+  return rows[0]?.ownerId ?? null;
+}
 
 /** Why a write was refused. Every one of these writes NOTHING. */
 export type NodeWriteRefusal = TreeViolationCode | 'foreign_scope' | 'forbidden_target' | CommandCode;
@@ -154,7 +201,20 @@ async function commitUnderLock(input: {
   const outcome = await withWorkspaceLayoutLock(workspaceId, async (tx) => {
     const before = await readWorkspaceNodeSnapshot(tx, workspaceId);
 
-    const wanted = produce(before.nodes, before.rev);
+    // THE WORKSPACE'S BIRTH, folded into the first write that needs it. A
+    // workspace row can exist with no node rows (a fresh spawn, or one the
+    // backfill has not reached), and every command needs a root to place into.
+    // The browser used to fill that gap with an `ensure` verb on mount — the
+    // create-then-attach shape this model exists to delete. See `seedRoot`.
+    //
+    // The producer is handed the tree WITH the root, so a command resolves
+    // against what will actually be stored; the seed itself rides in `put`
+    // ahead of the caller's nodes, so a pane parented to it is never
+    // `dangling_parent`. Its id is derived from the workspace, so two clients
+    // racing to seed produce the identical write and converge on the upsert.
+    const { nodes: seatedNodes, seed } = seedRoot(before.nodes, workspaceId);
+
+    const wanted = produce(seatedNodes, before.rev);
     if (wanted.status === 'refused') {
       return { kind: 'refused' as const, code: wanted.code, detail: wanted.detail };
     }
@@ -164,7 +224,7 @@ async function commitUnderLock(input: {
       rev: before.rev,
       nodes: before.nodes,
       baseRev: wanted.baseRev,
-      put: wanted.put,
+      put: seed === null ? wanted.put : [seed, ...wanted.put],
       drop: wanted.drop,
     });
 
@@ -199,11 +259,17 @@ async function commitUnderLock(input: {
     // nothing — which is what makes a retried POST observably, and not merely
     // structurally, a no-op.
     if (!decision.changed) {
-      return { kind: 'ok' as const, snapshot: before, changed: false };
+      return { kind: 'ok' as const, snapshot: before, changed: false, ownerId: null };
     }
 
     const rev = await writeWorkspaceNodes(tx, { workspaceId, write: decision.persist });
-    return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true };
+    // The owner, read HERE — inside the transaction that already holds this
+    // workspace's advisory lock and is already touching its tables — and not as
+    // a second query on the hot path once the lock is released. The broadcast
+    // needs it to reach the owner's own sessions room; see
+    // `broadcastWorkspaceNodesUpdated` for why that room and no other.
+    const ownerId = await readWorkspaceOwnerId(tx, workspaceId);
+    return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true, ownerId };
   });
 
   if (outcome.kind === 'refused') {
@@ -218,11 +284,14 @@ async function commitUnderLock(input: {
   if (outcome.kind === 'stale') return { status: 'stale', snapshot };
 
   if (outcome.changed) {
-    // Structural only, and to a ROOM. See the payload's own doc.
+    // Structural only, and to TWO rooms — the workspace's own, and the owner's
+    // directory plane. See the payload's own doc, including why there is not a
+    // third.
     broadcastWorkspaceNodesUpdated({
       workspaceId,
       rev: outcome.snapshot.rev,
       nodes: outcome.snapshot.nodes,
+      ownerId: outcome.ownerId,
     });
   }
   return { status: 'ok', snapshot, changed: outcome.changed };
@@ -384,6 +453,11 @@ async function resolveTargetsByWorkspace(
             userId: conversations.userId,
             isShared: conversations.isShared,
             workspaceId: conversations.workspaceId,
+            // Read for `conversationPageId`, which needs a column of its own
+            // for `type='client'` (whose `contextId` is a DRIVE). Selecting it
+            // is what keeps this derivation the shared rule rather than the
+            // page-only half of it.
+            agentPageId: conversations.agentPageId,
             // The ordering fact the sidebar needs once it stops reading
             // `session.conversations` — carried here rather than fetched a
             // second time, because it is authorized by exactly the gate the
@@ -433,9 +507,15 @@ async function resolveTargetsByWorkspace(
       if (node.nodeType === 'pane' && node.target !== null) wanted.add(`${node.target.kind}:${node.target.id}`);
     }
     const targets: WorkspaceNodeTarget[] = [];
-    const push = (kind: PaneTargetKind, id: string, title: string, lastMessageAt: Date | null): void => {
+    const push = (
+      kind: PaneTargetKind,
+      id: string,
+      title: string,
+      lastMessageAt: Date | null,
+      agentPageId: string | null,
+    ): void => {
       if (!wanted.has(`${kind}:${id}`)) return;
-      targets.push({ id, kind, title, lastMessageAt: lastMessageAt?.toISOString() ?? null });
+      targets.push({ id, kind, title, lastMessageAt: lastMessageAt?.toISOString() ?? null, agentPageId });
     };
 
     for (const row of chatRows) {
@@ -446,15 +526,18 @@ async function resolveTargetsByWorkspace(
         workspaceOwnerId,
         conversation: { ownerId: row.userId, isShared: row.isShared === true, title: row.title },
       });
-      push('chat', row.id, title ?? '', row.lastMessageAt);
+      // Behind the SAME gate the title just passed — a target that fails it has
+      // no entry at all, so this can never name the agent of a thread the
+      // viewer could not otherwise name.
+      push('chat', row.id, title ?? '', row.lastMessageAt, conversationPageId(row));
     }
     for (const row of shellRows) {
       if (row.workspaceId !== subject.workspaceId) continue;
-      push('terminal', row.id, row.name, null);
+      push('terminal', row.id, row.name, null, null);
     }
     for (const row of pageRows) {
       if (!readablePages.has(row.id)) continue;
-      push('page', row.id, row.title, null);
+      push('page', row.id, row.title, null, null);
     }
 
     resolved.set(subject.workspaceId, targets);

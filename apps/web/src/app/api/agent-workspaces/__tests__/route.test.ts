@@ -8,6 +8,7 @@ const {
   mockListShellsBulk,
   mockListSessionConversationsBulk,
   mockReadWorkspaceGridsBulk,
+  mockReadWorkspaceNodesBulk,
   mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
@@ -27,6 +28,7 @@ const {
   mockListShellsBulk: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
   mockReadWorkspaceGridsBulk: vi.fn(),
+  mockReadWorkspaceNodesBulk: vi.fn(),
   mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
@@ -83,6 +85,9 @@ vi.mock('@/lib/agent-workspaces/workspace-layout-runtime', async (importOriginal
   ...(await importOriginal<typeof import('@/lib/agent-workspaces/workspace-layout-runtime')>()),
   readWorkspaceGridsBulk: (...args: unknown[]) => mockReadWorkspaceGridsBulk(...args),
 }));
+vi.mock('@/lib/agent-workspaces/workspace-node-runtime', () => ({
+  readWorkspaceNodesBulk: (...args: unknown[]) => mockReadWorkspaceNodesBulk(...args),
+}));
 
 import { GET, POST } from '../route';
 
@@ -124,6 +129,7 @@ beforeEach(() => {
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
   mockReadWorkspaceGridsBulk.mockResolvedValue(new Map());
+  mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
 
@@ -141,6 +147,9 @@ describe('GET /api/agent-workspaces', () => {
           shells: [SHELL_DTO],
           conversations: [{ ...CONVERSATION_ENTRY, pane: null }],
           workspace: null,
+          rev: 0,
+          nodes: [],
+          targets: [],
         },
       ],
     });
@@ -215,6 +224,38 @@ describe('GET /api/agent-workspaces', () => {
     const placedPaneId = conversations[0].pane.paneId;
     expect(body.sessions[0].workspace.columns[0].panes[0].id).toBe(placedPaneId);
     expect(body.sessions[0].workspace.columns[0].id).toBe(conversations[0].pane.columnId);
+  });
+
+  /**
+   * THE TREE, per session — the sidebar's own source now that it renders the
+   * live tree out of the store instead of this snapshot. The legacy `workspace`
+   * grid above stays for the rolling-deploy window; nothing client-side reads it.
+   */
+  it('attaches each session\'s node tree, so the sidebar can seat it', async () => {
+    const nodes = [
+      { nodeType: 'root', id: 'ses-1', parentId: null, position: 0, axis: 'row' },
+      { nodeType: 'pane', id: 'n1', parentId: 'ses-1', position: 0, target: { kind: 'chat', id: 'conv-1' } },
+    ];
+    const targets = [
+      { id: 'conv-1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: 'agent-1' },
+    ];
+    mockReadWorkspaceNodesBulk.mockResolvedValue(new Map([['ses-1', { rev: 7, nodes, targets }]]));
+
+    const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+
+    expect(body.sessions[0].rev).toBe(7);
+    expect(body.sessions[0].nodes).toEqual(nodes);
+    expect(body.sessions[0].targets).toEqual(targets);
+    // Resolved once per VIEWER, so the read is authorized for whoever asked.
+    expect(mockReadWorkspaceNodesBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
+  });
+
+  it('answers an empty tree at rev 0 for a workspace the node read did not return', async () => {
+    // "Never written" and "vanished between the two reads" get the same honest
+    // answer — the client seats both identically rather than keeping stale nodes.
+    mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
+    const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+    expect(body.sessions[0]).toMatchObject({ rev: 0, nodes: [], targets: [] });
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
