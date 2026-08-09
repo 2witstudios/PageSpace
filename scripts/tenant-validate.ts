@@ -198,6 +198,17 @@ export async function validateData(
       `SELECT id FROM agent_workspace_shells WHERE "ownerId" IN (${exportedUserIn})`
       + ` AND "workspaceId" IN (SELECT id FROM agent_workspaces WHERE ${workspaceSelectionWhere(exportedUserIn, convoIn)})`,
     ),
+    // The trees of those same sessions — every row, since the exporter takes a
+    // workspace's nodes whole. Identity here is the COMPOUND key: node ids are
+    // client-minted and unique per workspace only, so two sessions may
+    // legitimately hold the same `id` and comparing on `id` alone would report
+    // one of them missing. Rendering `rootId:id` as the compared value keeps
+    // this a per-ROW comparison rather than the weaker count check the other
+    // composite-key tables settle for.
+    agent_workspace_nodes: sql.raw(
+      `SELECT "rootId" || ':' || id AS id FROM agent_workspace_nodes`
+      + ` WHERE "rootId" IN (SELECT id FROM agent_workspaces WHERE ${workspaceSelectionWhere(exportedUserIn, convoIn)})`,
+    ),
     // The same shared predicate the exporter and `convoIn` above both use, so
     // these three can no longer disagree about what the bundle contains.
     conversations: sql.raw(
