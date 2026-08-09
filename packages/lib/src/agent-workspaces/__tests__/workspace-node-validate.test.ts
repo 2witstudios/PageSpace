@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { validateTree, MAX_DEPTH, MAX_NODES } from '../workspace-node-validate';
-import type { PaneNode, RootNode, SplitNode, WorkspaceNode } from '../workspace-node';
+import type { PaneNode, PaneTarget, RootNode, SplitNode, WorkspaceNode } from '../workspace-node';
 
 function root(): RootNode {
   return { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row' };
@@ -26,6 +26,20 @@ function split(id: string, parentId: string, position: number): SplitNode {
 
 function pane(id: string, parentId: string | null, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
+}
+
+/**
+ * A pane bound to a target the caller names. `pane` derives a chat target from
+ * the node id, which is what keeps every other fixture's bindings distinct — so
+ * the tests about two nodes naming ONE target have to spell the target out.
+ */
+function showing(
+  id: string,
+  parentId: string | null,
+  position: number,
+  target: PaneTarget,
+): PaneNode {
+  return { nodeType: 'pane', id, parentId, position, target };
 }
 
 /**
@@ -368,6 +382,65 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
+  it('should reject two panes showing one conversation, the rule the chat unique index states', () => {
+    // `UNIQUE (targetId) WHERE targetKind = 'chat'`, in the model. One
+    // conversation belongs to exactly one workspace and renders in at most one
+    // pane, so a set naming it twice is a set the storage will refuse — and a
+    // write path that only learned that from the database would have to unwind
+    // an already-applied optimistic edit out of a raw constraint error.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'chat', id: 'conv-1' }),
+      showing('b', 'root-1', 1, { kind: 'chat', id: 'conv-1' }),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_chat_target' });
+  });
+
+  it('should count a PARKED node as showing its conversation, because the index does not read parentId', () => {
+    // A detached node is off the grid and still a member of the workspace,
+    // still holding its binding, still one row under the unique index. Letting
+    // a parked conversation be shown again would be the algebra permitting
+    // exactly what the table goes on rejecting.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('onscreen', 'root-1', 0, { kind: 'chat', id: 'conv-1' }),
+      showing('parked', null, 0, { kind: 'chat', id: 'conv-1' }),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_chat_target' });
+  });
+
+  it('should accept two panes showing one page, which the storage deliberately permits', () => {
+    // The index is partial on `targetKind = 'chat'`, and that is a decision:
+    // opening the same page in two panes is an ordinary thing a user does.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'page', id: 'page-1' }),
+      showing('b', 'root-1', 1, { kind: 'page', id: 'page-1' }),
+    ];
+    expect(validateTree(nodes)).toEqual({ ok: true });
+  });
+
+  it('should accept two panes showing one terminal, for the same reason', () => {
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'terminal', id: 'shell-1' }),
+      showing('b', 'root-1', 1, { kind: 'terminal', id: 'shell-1' }),
+    ];
+    expect(validateTree(nodes)).toEqual({ ok: true });
+  });
+
+  it('should not read one id across two kinds as a collision', () => {
+    // `targetId` is polymorphic — a conversation id and a page id are drawn
+    // from different spaces and may coincide. The index is predicated on the
+    // KIND, so a check that keyed on the id alone would refuse a legal tree.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'chat', id: 'shared-id' }),
+      showing('b', 'root-1', 1, { kind: 'page', id: 'shared-id' }),
+    ];
+    expect(validateTree(nodes)).toEqual({ ok: true });
+  });
+
   it('should reject an unresolvable parentId rather than repairing it by re-parenting to the root', () => {
     // THE failure mode this model exists to make unspellable: a pane silently
     // relocating into a container the user never put it in. A pending move
@@ -442,6 +515,19 @@ describe('validateTree', () => {
       pane('gap', 'root-1', 2),
     ];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'fraction_mixed' });
+  });
+
+  it('should report an ordering fault ahead of a duplicated conversation', () => {
+    // The binding rule is the one DOMAIN invariant here and it runs last, after
+    // the tree is known to be well formed. A set that is both misnumbered and
+    // double-bound has a structural fault, and "your positions are wrong" is
+    // the truer thing to say about a tree nothing can render correctly.
+    const nodes: WorkspaceNode[] = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'chat', id: 'conv-1' }),
+      showing('b', 'root-1', 2, { kind: 'chat', id: 'conv-1' }),
+    ];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'position_contiguity' });
   });
 
   it('should leave its input untouched, whether it accepts or rejects', () => {
