@@ -148,16 +148,63 @@ failed** — every failure is an `*.integration.test.ts` aborting on
 `could not reach DATABASE_URL`, the known worktree env gap. Both decider suites are in the passing
 set (close 14, reopen 13).
 
-**E2E — NOT RUN HERE, and that is the verification that matters.**
+**E2E — RUN, BUT NOT OBSERVED TO PASS OR FAIL ON ITS ASSERTION. No pass is claimed.**
 
-`18-sidebar-directory-live.spec.ts` needs a running app (`playwright.config.ts` `webServer`,
-`baseURL` :3000) and a migrated database, neither of which this worktree has. The unit coverage
-added above spans the seam in both directions and dies when either half is reverted — but the
-defect was found by E2E, and only E2E exercises the realtime event against a network-blocked
-listing fetch end to end.
+This section supersedes an earlier draft that said "NOT RUN HERE". A stack was brought up and the
+spec was executed; it never reached the assertion under test. What was actually done, in order:
 
-`ci / E2E (agent-session user stories)` on the cutover PR is the authority. This fix is unverified
-against the failing spec until that job is read.
+| Step | Result |
+|---|---|
+| `docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres -d` | healthy, `5432` reachable |
+| `bun run db:migrate` against it | `Migrations finished.`, exit **0** (includes `0256`) |
+| realtime on host, `PORT=3001` | up; `/socket.io/?EIO=4&transport=polling` answers a `sid` |
+| web in **dev** mode | client never boots — `[pageerror] Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script`. Next dev needs `unsafe-eval`; this app's CSP forbids it. Page body stays `Loading...`. |
+| `bun run --filter web build` (production, as CI does) | exit **0** |
+| `next start` + `bunx playwright test tests/18-sidebar-directory-live.spec.ts` | **3 failed** |
+
+Verbatim, the production-build run:
+
+```
+  1) [chromium] › tests/18-sidebar-directory-live.spec.ts:341:7 › session directory —
+       a server-spawned conversation reaches the sidebar off the directory plane, not off the backstop poll
+
+    TimeoutError: page.waitForEvent: Timeout 60000ms exceeded while waiting for event "websocket"
+    =========================== logs ===========================
+    waiting for event "websocket"
+    ============================================================
+
+      314 |   // directory plane can reach this page", which the assertions below would
+      315 |   // otherwise be silently racing.
+    > 316 |   const socketConnected = page.waitForEvent('websocket', { timeout: 60_000 });
+          |                                ^
+        at openConsole (.../18-sidebar-directory-live.spec.ts:316:32)
+
+  2) [chromium] › tests/18-sidebar-directory-live.spec.ts:400:7 › session directory —
+       a server-side close removes the row with the listing fetch cut off at the network
+
+    TimeoutError: page.waitForEvent: Timeout 60000ms exceeded while waiting for event "websocket"
+        at openConsole (.../18-sidebar-directory-live.spec.ts:316:32)
+
+  3) [chromium] › tests/18-sidebar-directory-live.spec.ts:440:7 › session directory —
+       the row lands in the spawning session only, not in every session listing
+
+    Error: worker process exited unexpectedly (code=1, signal=null)
+
+  3 failed
+```
+
+**Read this as an environment result, not a verdict on the fix.** All three tests die in
+`openConsole` — the shared `beforeEach`-style helper at line 316, which runs *before* any
+conversation is closed. The failure is upstream of every assertion this change affects, and it
+takes down two tests that have nothing to do with closing. The reported symptom in CI was a
+`toHaveCount` failure at line 424; nothing here reached line 424. One earlier local misconfiguration
+was found and fixed along the way (`CORS_ORIGIN=https://pagespace.team` in `.env` makes realtime
+reject `http://localhost:3000`, so the browser can never open a socket — the compose file overrides
+it to `http://localhost:3000`); after fixing it the socket endpoint answered but the browser still
+opened none, and that residual cause was not run to ground.
+
+**`ci / E2E (agent-session user stories)` remains the authority.** This fix is unverified against
+the failing spec until that job is read on a head SHA containing `7346dccdb`.
 
 ---
 
@@ -168,4 +215,18 @@ against the failing spec until that job is read.
 - `conversation:deleted` still answers with a re-read. That is a deliberate, stated choice rather
   than an oversight — see the listener's doc.
 
-Nothing was merged and no PR was opened.
+## Provenance correction
+
+An earlier draft of this report ended "Nothing was merged and no PR was opened." The second half
+holds — **no PR was opened**. The first half does not, and the record should say so plainly: while
+the E2E verification above was still in progress, the orchestrator committed the working tree as
+`7346dccdb` and merged it into `pu/workspace-node-model` as `bea23a7b2` (11:30), then removed the
+worktree `wt-vp1gbf7v` and the branch `pu/fix-close-row` (11:34). The merge was not performed by
+the agent that wrote the change, and it landed **before** the E2E section above was filled in — which
+is why the committed version of this file carried a placeholder-derived "NOT RUN HERE" claim that
+the run described above contradicts.
+
+The merged code at `bea23a7b2` was re-read afterwards and is byte-for-byte the intended fix
+(`handleClosed` + `forgetConversationInCache(mutate, null, …)` in the listener, `deps.announceClosed(row)`
+in the decider, both `emitConversationLifecycle` wirings in the runtime). Nothing was merged to
+`master`.
