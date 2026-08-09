@@ -21,7 +21,7 @@
  * no dangling parent, depth and count caps, fractions that settle.
  *
  * **Why `position` and not `orderIndex`.** PageSpace already has a tree — the
- * page tree — and it names this field `position` (`pages.position` in
+ * page tree — and it already names this field `position` (`pages.position` in
  * `packages/db/src/schema/core.ts`). More to the point, the repo already has a
  * GENERIC builder in `packages/lib/src/content/tree-utils.ts`:
  *
@@ -29,18 +29,20 @@
  *
  * Under that name a `WorkspaceNode` satisfies the constraint STRUCTURALLY, so
  * the kinship with the page tree is visible in the types instead of being
- * something a reader has to notice. Calling one concept two names in one
- * codebase is the drift this model exists to delete.
+ * something a reader has to notice. One concept called two names in one
+ * codebase is the drift this model exists to remove.
  *
- * The value stays a CONTIGUOUS INTEGER — deliberately not pages' fractional
+ * **Why it stays a contiguous integer.** Deliberately NOT pages' fractional
  * `real` positioning. Sibling groups here are tiny, so renumbering is
- * O(siblings) inside the same locked transaction, and contiguity is then an
- * invariant `validateTree` can assert. Fractional ordering gives that
- * assertion up to avoid a renumbering cost this model does not have.
+ * O(siblings) inside the same locked transaction that made the edit — and
+ * contiguity is an invariant `validateTree` can assert, which is exactly what
+ * fractional ordering gives up in exchange for avoiding a renumbering cost
+ * this model does not have.
  *
  * Successor to the two-level `columns[].panes[]` model in
- * `workspace-layout-verbs.ts`; both exist during the migration window, and the
- * old model keeps its own `orderIndex` on its way out.
+ * `workspace-layout-verbs.ts`, which keeps its own `orderIndex` — it is on its
+ * way out, and renaming there would be churn. Both exist during the migration
+ * window.
  */
 
 /** A container's split direction. A row of columns; a column of stacked panes. */
@@ -169,8 +171,11 @@ export function descendantsOf(nodes: readonly WorkspaceNode[], id: string): Work
   const collected: WorkspaceNode[] = [];
   const seen = new Set<string>([id]);
   const queue = [id];
-  while (queue.length > 0) {
-    const parentId = queue.shift() as string;
+  // Drained by the `undefined` `shift()` actually returns when empty, rather
+  // than by a length check plus a cast that asserts what the check implied —
+  // this model's whole thesis is that a cast is a lie the type checker vouches
+  // for, and the boundary should not spend one on its own loop.
+  for (let parentId = queue.shift(); parentId !== undefined; parentId = queue.shift()) {
     for (const child of childrenOf(nodes, parentId)) {
       if (seen.has(child.id)) continue;
       seen.add(child.id);
