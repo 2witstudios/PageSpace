@@ -246,6 +246,25 @@ export type WithinNodeWrite = (tx: DbExecutor) => Promise<void>;
  * `{status: 'refused'}` answer. It exists so that "refused" and "wrote nothing"
  * stay the same sentence at every point in the funnel.
  */
+/**
+ * A conflict raised from INSIDE the transaction, so the rollback unwinds
+ * whatever `within` wrote before it is re-formed as the caller's answer.
+ *
+ * Separate from `NodeWriteRefused` because the two answer differently: a
+ * refusal is a 400-shaped "you cannot do that", a conflict is a 409 carrying
+ * the snapshot the client rebases from. Folding them together would cost the
+ * client its rebase body, which is the entire point of the conflict path.
+ */
+class NodeWriteConflicted extends Error {
+  constructor(
+    readonly detail: string,
+    readonly snapshot: { rev: number; nodes: WorkspaceNode[] },
+  ) {
+    super('target_already_shown');
+    this.name = 'NodeWriteConflicted';
+  }
+}
+
 class NodeWriteRefused extends Error {
   constructor(
     readonly code: NodeWriteRefusal,
@@ -403,7 +422,19 @@ async function commitUnderLock(input: {
       const holders = await readChatTargetHolders(tx, attemptedChatBindings);
       const taken = conflictingChatTargets({ workspaceId, wanted: attemptedChatBindings, holders });
       if (taken.length > 0) {
-        return { kind: 'conflict' as const, snapshot: before, detail: chatHeldElsewhereDetail(taken) };
+        // THROWN, not returned — and that distinction is the whole bug this
+        // replaces. A conflict discovered here has the same shape as
+        // `forbidden_target` above: the write does not happen, and anything
+        // `within` already wrote in this transaction must not survive it.
+        // RETURNING committed those rows and reported success, because every
+        // membership call site narrows away `refused` and `stale` and then
+        // reads `.changed`, which a `conflict` does not carry — so it read
+        // `undefined`, took the falsy branch, and answered "already a member"
+        // for a conversation whose node was never written. That is the ghost
+        // this epic exists to delete, produced by the epic's own code.
+        // TypeScript said so at all three call sites; a package-scoped
+        // typecheck is why nobody heard it.
+        throw new NodeWriteConflicted(chatHeldElsewhereDetail(taken), before);
       }
     }
 
@@ -432,6 +463,9 @@ async function commitUnderLock(input: {
     //
     // Everything that is not a `NodeWriteRefused` keeps throwing — including
     // the chat-target index violation the BACKSTOP below is here to read.
+    if (error instanceof NodeWriteConflicted) {
+      return { kind: 'conflict' as const, snapshot: error.snapshot, detail: error.detail };
+    }
     if (!(error instanceof NodeWriteRefused)) throw error;
     return { kind: 'refused' as const, code: error.code, detail: error.detail };
   });

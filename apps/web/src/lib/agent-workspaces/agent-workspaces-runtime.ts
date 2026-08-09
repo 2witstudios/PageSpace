@@ -302,6 +302,10 @@ async function admitConversationNode(input: {
   // Named rather than folded in, so a `stale` appearing here reads as "the
   // funnel stopped deciding under the lock", which is a bug.
   if (result.status === 'stale') return 'refused';
+  // The chat is held by a node in ANOTHER workspace. Not a server fault and not
+  // a stale rev — the global chat index refusing a second holder, which is
+  // exactly what `bound_elsewhere` already names here.
+  if (result.status === 'conflict') return 'bound_elsewhere';
 
   if (!result.changed) return 'already_a_member';
 
@@ -542,6 +546,7 @@ export async function closeConversationInSession(input: {
           return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
         }
         if (result.status === 'stale') return 'refused';
+        if (result.status === 'conflict') return 'refused';
         return result.changed ? 'dismissed' : 'already_parked';
       },
     },
@@ -574,6 +579,7 @@ export async function reopenConversationInSession(input: {
           return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
         }
         if (result.status === 'stale') return 'refused';
+        if (result.status === 'conflict') return 'refused';
         return result.changed ? 'readmitted' : 'already_attached';
       },
     },
