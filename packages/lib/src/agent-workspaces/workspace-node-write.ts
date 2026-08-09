@@ -40,7 +40,7 @@
  * from the OLD shape of the tree at all.
  */
 
-import { readFraction } from './workspace-layout-verbs';
+import { readFraction } from './workspace-fractions';
 import { descendantsOf, upsertNodes, removeNodes, type WorkspaceNode } from './workspace-node';
 import { validateTree, type TreeViolationCode } from './workspace-node-validate';
 import { nodeOfWire, type WireWorkspaceNode } from './workspace-node-wire';

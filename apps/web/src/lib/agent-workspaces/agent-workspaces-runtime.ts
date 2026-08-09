@@ -249,7 +249,7 @@ export async function checkSessionEndAccess(
  *
  * Membership is one table now, and the cap is a count over the tree inside the
  * transaction that writes the tree — so the serialization is the lock that
- * write already takes (`withWorkspaceLayoutLock`, per workspace, in the
+ * write already takes (`withWorkspaceLock`, per workspace, in the
  * transaction). One lock for one invariant, and no call site can forget it
  * because there is no call site: it is inside the funnel.
  */
@@ -396,7 +396,7 @@ async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
  *
  * No `withSessionListingLock` any more, and that is not an omission. That lock
  * existed to serialize the cap's count-then-write against other creates and
- * closes; the count now happens inside `withWorkspaceLayoutLock`'s transaction,
+ * closes; the count now happens inside `withWorkspaceLock`'s transaction,
  * against the tree the same transaction writes, so the serialization is the
  * lock the write already takes. Two locks for one invariant was the shape that
  * let a node write and a membership write touch one workspace at once.

@@ -53,7 +53,7 @@
  * else's session.
  */
 
-import { FRACTION_EPSILON, readFraction } from './workspace-layout-verbs';
+import { FRACTION_EPSILON, readFraction } from './workspace-fractions';
 import {
   nodesFromRows,
   rowFromNode,

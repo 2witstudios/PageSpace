@@ -40,10 +40,10 @@
  * no test can hold across every future construction site, and a guarantee
  * nothing enforces is worse than none: it invites exactly the code below.
  *
- * The consequence is concrete and adjacent. `workspace-layout-verbs.ts:152-155`
- * documents the existing store's change detection as "a `JSON.stringify`
- * comparison of the grid it just read against the grid it is about to write". A
- * store that reuses that idiom on NODES sees every write as a change: no
+ * The consequence is concrete and adjacent. The deleted layout store's change
+ * detection was "a `JSON.stringify` comparison of the grid it just read against
+ * the grid it is about to write", and it worked because a grid was a plain blob.
+ * A store that reuses that idiom on NODES sees every write as a change: no
  * idempotence, a rev bump per retry, a re-broadcast per unrelated edit. Change
  * detection over nodes compares fields — the algebra's own `sameNode` is the
  * shape of it — never bytes.
@@ -82,8 +82,9 @@ import {
  *
  * Written out rather than inferred from the schema below. The schema carries
  * transforms, and `z.infer` through a transform degrades to `any` at a consumer
- * reading this package's emitted `.d.ts` — the same trap
- * `workspace-layout-wire.ts` documents.
+ * reading this package's emitted `.d.ts` — the same trap the deleted
+ * `workspace-layout-wire.ts` documented, and the reason it declared its own
+ * interfaces rather than inferring them.
  */
 export interface WorkspaceNodeRow {
   id: string;

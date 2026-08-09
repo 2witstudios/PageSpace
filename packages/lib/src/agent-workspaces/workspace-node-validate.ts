@@ -62,7 +62,7 @@
  * workspace whose rows lost their root, which is a fault. Nothing is there to
  * be faulty about an empty one.
  */
-import { FRACTION_EPSILON } from './workspace-layout-verbs';
+import { FRACTION_EPSILON } from './workspace-fractions';
 import { childrenOf, descendantsOf, rootOf, type WorkspaceNode } from './workspace-node';
 
 /**
@@ -84,6 +84,19 @@ export const MAX_NODES = 2048;
  * user builds by hand. The cap is a runaway guard, not a design limit.
  */
 export const MAX_DEPTH = 8;
+
+/**
+ * The most members one container may hold — the bound the LAYOUT TOOLS quote
+ * when they accept a sibling index or a re-ordering list.
+ *
+ * Not enforced by {@link validateTree}: {@link MAX_NODES} already bounds the
+ * whole tree, and a container's width is a rendering judgement rather than a
+ * structural one. It exists so the tool surface has a number to refuse at, and
+ * it is 64 because that is exactly what it was as `MAX_GRID_COLUMNS` in the
+ * two-level model — the same ceiling, re-homed rather than re-chosen, since the
+ * node tools were already borrowing it from the model they replaced.
+ */
+export const MAX_SIBLINGS = 64;
 
 /**
  * The result. A discriminated union rather than a boolean or a throw: the

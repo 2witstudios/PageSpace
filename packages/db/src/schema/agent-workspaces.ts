@@ -73,12 +73,12 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   /** Display label only (auto-named at spawn). Deliberately NOT unique and never an address. */
   name: text('name'),
 
-  // The session's pane grid lives in `agent_workspace_pane_columns` /
-  // `agent_workspace_panes` behind `agent_workspace_layout_revs` — see
-  // `agent-workspace-layout.ts`. It used to be a `workspaceState` jsonb blob
-  // here; that column was dropped at the agent-session SSoT epic's Phase 3
-  // contract step, because a client-authored blob with three writers is the
-  // membership-drift bug class the relational promotion exists to kill.
+  // The session's pane tree lives in `agent_workspace_nodes` behind
+  // `agent_workspace_node_revs` — see `agent-workspace-nodes.ts`. It was a
+  // `workspaceState` jsonb blob here, then four `agent_workspace_pane_*` /
+  // `_layout_*` tables; all of it is gone, because a client-authored blob with
+  // three writers, and then a grid reconciled with a membership column by
+  // convention, are the same drift bug class stated twice.
 
   // ---------------------------------------------------------------------------
   // Per-session Sprite identity. All NULLABLE: a row exists from the moment a

@@ -5,8 +5,10 @@
  *
  * One statement: `SET rev = rev + 1 [, lastMessageAt = ...] RETURNING *` —
  * so the counter, the timestamp, and the row facts the emitter needs
- * (owner, isShared, scope, workspace binding) come back atomically with the
- * write that bumped them. Runs on the CALLER's transaction so a rollback
+ * (owner, isShared, scope) come back atomically with the write that bumped
+ * them. WORKSPACE MEMBERSHIP is deliberately not among them: it is a row in
+ * `agent_workspace_nodes`, not a column here, and the write that changes it
+ * broadcasts the tree itself. Runs on the CALLER's transaction so a rollback
  * takes the bump with it and no event is ever emitted for an uncommitted
  * write.
  */
@@ -32,13 +34,11 @@ export interface BumpedConversationRow {
   rev: number;
   userId: string;
   isShared: boolean;
-  workspaceId: string | null;
   type: string;
   contextId: string | null;
   title: string | null;
   lastMessageAt: Date | null;
   createdAt: Date;
-  closedInWorkspaceAt: Date | null;
   isActive: boolean;
 }
 
@@ -47,13 +47,11 @@ const BUMP_RETURNING = {
   rev: conversations.rev,
   userId: conversations.userId,
   isShared: conversations.isShared,
-  workspaceId: conversations.workspaceId,
   type: conversations.type,
   contextId: conversations.contextId,
   title: conversations.title,
   lastMessageAt: conversations.lastMessageAt,
   createdAt: conversations.createdAt,
-  closedInWorkspaceAt: conversations.closedInWorkspaceAt,
   isActive: conversations.isActive,
 };
 
@@ -63,9 +61,8 @@ const BUMP_RETURNING = {
  * legacy page conversations; the caller still emits its content event with
  * rev 0 but skips directory events (no owner fact to target them with).
  *
- * `extraSet` lets a lifecycle write (title, isShared, workspaceId claim,
- * closedInWorkspaceAt) fold its own column change into the SAME statement as
- * the bump.
+ * `extraSet` lets a lifecycle write (title, isShared, plan binding) fold its
+ * own column change into the SAME statement as the bump.
  */
 export async function bumpConversationRev(
   executor: DbExecutor,
@@ -116,7 +113,6 @@ export function emitConversationLifecycle(
         title: row.title,
         type: row.type,
         contextId: row.contextId,
-        workspaceId: row.workspaceId,
         isShared: row.isShared,
         createdAt: row.createdAt.toISOString(),
         lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
@@ -144,7 +140,6 @@ export function emitContextFromRow(
     conversationId: row.id,
     rev: row.rev,
     scope: scopeFromRow(row),
-    workspaceId: row.workspaceId,
     ownerId: row.userId,
     isShared: row.isShared,
     triggeredBy: triggeredBy ?? {

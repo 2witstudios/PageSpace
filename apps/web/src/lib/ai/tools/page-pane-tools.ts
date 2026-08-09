@@ -52,12 +52,12 @@ export interface PagePaneToolDeps {
  * the page tools, so the user sees the result without hunting for it in the
  * sidebar.
  *
- * **Two paths, deliberately.** `execute` applies a real `open_conversation`
- * layout verb server-side (epic Phase 3 — placement the blob era could not
- * express: the blob's only writer was client→PUT, so an agent's tool call
- * reached exactly the browsers that happened to be rendering that grid, and
- * nothing else). That write lands in the pane ROWS and broadcasts
- * `workspace:updated`, so the pane appears live in an open grid AND is
+ * **Two paths, deliberately.** `execute` applies a real placement server-side
+ * (placement the blob era could not express: the blob's only writer was
+ * client→PUT, so an agent's tool call reached exactly the browsers that
+ * happened to be rendering that grid, and nothing else). That write lands in
+ * the node ROWS and broadcasts
+ * `workspace:nodes-updated`, so the pane appears live in an open grid AND is
  * simply there in a grid opened an hour later. The client reaction
  * (`useOpenPagePane`) is kept as the FAST path — it fires off the streamed
  * tool result without waiting for a socket round-trip — and cannot

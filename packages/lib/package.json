@@ -72,10 +72,10 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
-    "./agent-workspaces/contract": {
-      "types": "./dist/agent-workspaces/contract.d.ts",
-      "import": "./dist/agent-workspaces/contract.js",
-      "require": "./dist/agent-workspaces/contract.js"
+    "./agent-workspaces/workspace-fractions": {
+      "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
+      "import": "./dist/agent-workspaces/workspace-fractions.js",
+      "require": "./dist/agent-workspaces/workspace-fractions.js"
     },
     "./agent-workspaces/session-contract": {
       "types": "./dist/agent-workspaces/session-contract.d.ts",
@@ -86,11 +86,6 @@
       "types": "./dist/agent-workspaces/shells-contract.d.ts",
       "import": "./dist/agent-workspaces/shells-contract.js",
       "require": "./dist/agent-workspaces/shells-contract.js"
-    },
-    "./agent-workspaces/workspace-layout-verbs": {
-      "types": "./dist/agent-workspaces/workspace-layout-verbs.d.ts",
-      "import": "./dist/agent-workspaces/workspace-layout-verbs.js",
-      "require": "./dist/agent-workspaces/workspace-layout-verbs.js"
     },
     "./agent-workspaces/workspace-sprite-key": {
       "types": "./dist/agent-workspaces/workspace-sprite-key.d.ts",
@@ -752,11 +747,6 @@
       "import": "./dist/services/agent-workspaces/agent-workspaces-store.js",
       "require": "./dist/services/agent-workspaces/agent-workspaces-store.js"
     },
-    "./services/agent-workspaces/workspace-layout-store": {
-      "types": "./dist/services/agent-workspaces/workspace-layout-store.d.ts",
-      "import": "./dist/services/agent-workspaces/workspace-layout-store.js",
-      "require": "./dist/services/agent-workspaces/workspace-layout-store.js"
-    },
     "./services/agent-workspaces/shell-scrollback": {
       "types": "./dist/services/agent-workspaces/shell-scrollback.d.ts",
       "import": "./dist/services/agent-workspaces/shell-scrollback.js",
@@ -766,6 +756,11 @@
       "types": "./dist/services/agent-workspaces/workspace-shells.d.ts",
       "import": "./dist/services/agent-workspaces/workspace-shells.js",
       "require": "./dist/services/agent-workspaces/workspace-shells.js"
+    },
+    "./services/agent-workspaces/workspace-lock": {
+      "types": "./dist/services/agent-workspaces/workspace-lock.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-lock.js",
+      "require": "./dist/services/agent-workspaces/workspace-lock.js"
     },
     "./services/agent-workspaces/workspace-shells-store": {
       "types": "./dist/services/agent-workspaces/workspace-shells-store.d.ts",
@@ -1646,11 +1641,6 @@
       "types": "./dist/realtime/rooms.d.ts",
       "import": "./dist/realtime/rooms.js",
       "require": "./dist/realtime/rooms.js"
-    },
-    "./agent-workspaces/workspace-layout-wire": {
-      "types": "./dist/agent-workspaces/workspace-layout-wire.d.ts",
-      "import": "./dist/agent-workspaces/workspace-layout-wire.js",
-      "require": "./dist/agent-workspaces/workspace-layout-wire.js"
     },
     "./realtime/conversation-event-names": {
       "types": "./dist/realtime/conversation-event-names.d.ts",

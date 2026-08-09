@@ -4,7 +4,7 @@
  *
  * One request shape, one response shape, and both declared HERE rather than
  * beside the route — the browser cannot import the route's module (it pulls in
- * `@pagespace/db`), and `workspace-layout-wire.ts` exists for exactly the
+ * `@pagespace/db`), and the deleted `workspace-layout-wire.ts` existed for exactly the
  * reason its docblock gives: a wire declared twice is a wire that drifts.
  *
  * **The write is `{baseRev, put, drop}` and nothing else.** No `opId`, and

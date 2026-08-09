@@ -246,7 +246,7 @@ describe('conversationRepository.createConversation', () => {
     expect(onConflictDoNothing).toHaveBeenCalled();
   });
 
-  it('carries title inside the INSERT (workspaceId is never a param here — binding is claimed separately, never at creation)', async () => {
+  it('carries title inside the INSERT, and no workspace at all — membership is a node write, never a column here', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -258,11 +258,16 @@ describe('conversationRepository.createConversation', () => {
 
     expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-bound', workspaceId: null, title: 'Worker: research' })
+      expect.objectContaining({ id: 'conv-bound', title: 'Worker: research' })
     );
+    // Stronger than the `workspaceId: null` this used to assert: the column is
+    // GONE, so the honest claim is that the insert names no workspace at all.
+    // A drizzle insert carrying an unknown key would be a runtime error, not a
+    // silently-ignored one, which is exactly why it is worth pinning.
+    expect(Object.keys(valuesMock.mock.calls[0][0])).not.toContain('workspaceId');
   });
 
-  it('defaults title to null when opts omit it, always inserting workspaceId: null', async () => {
+  it('defaults title to null when opts omit it, and still names no workspace', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -271,8 +276,9 @@ describe('conversationRepository.createConversation', () => {
     await conversationRepository.createConversation('conv-unbound', 'user-1', 'agent-1');
 
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-unbound', workspaceId: null, title: null })
+      expect.objectContaining({ id: 'conv-unbound', title: null })
     );
+    expect(Object.keys(valuesMock.mock.calls[0][0])).not.toContain('workspaceId');
   });
 
   it("reports 'exists' when RETURNING yields no row — a concurrent first-write won and this caller's insert did NOT persist", async () => {

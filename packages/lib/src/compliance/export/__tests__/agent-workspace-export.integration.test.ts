@@ -153,14 +153,12 @@ beforeAll(async () => {
       id: subjectConversationId,
       userId: subjectId,
       type: 'global',
-      workspaceId: sharedWorkspaceId,
       title: 'subject thread',
     },
     {
       id: otherConversationId,
       userId: otherId,
       type: 'global',
-      workspaceId: foreignWorkspaceId,
       title: 'other thread',
     },
   ]);

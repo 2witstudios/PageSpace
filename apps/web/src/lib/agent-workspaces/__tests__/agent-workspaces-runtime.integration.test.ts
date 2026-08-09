@@ -463,8 +463,8 @@ describe('a conversation and its membership are one transaction', () => {
 
     const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
     expect(row.isActive).toBe(true);
-    // Membership lives HERE now, and nowhere else — the column is untouched.
-    expect(row.workspaceId).toBeNull();
+    // Membership lives HERE, and nowhere else — there is no second witness left
+    // for it to disagree with.
     expect((await nodeFor(conversationId))?.rootId).toBe(workspace.id);
   }, 20_000);
 });

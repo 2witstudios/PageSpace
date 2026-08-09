@@ -3,7 +3,7 @@
  * `resize`, `destroy`.
  *
  * Written against the decision that these five describe THE DATA MODEL, not
- * the UI's vocabulary. The twelve wire verbs of `workspace-layout-verbs.ts`
+ * the UI's vocabulary. The twelve wire verbs of the deleted `workspace-layout-verbs.ts`
  * named ergonomic gestures (`split_right`, `close_pane`, `reorder_columns`),
  * which is why that reducer reads like a description of the toolbar. The
  * ergonomic gestures become commands COMPOSED from these five; none of them

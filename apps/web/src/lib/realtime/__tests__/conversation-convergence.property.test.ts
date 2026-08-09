@@ -29,7 +29,7 @@
  *
  * **Reproducibility.** No fast-check in this repo (checked); the house
  * precedent is a seeded LCG — `packages/lib/src/agent-workspaces/__tests__/
- * workspace-layout-verbs.test.ts`'s blob≡rows drift guard. Every schedule is a
+ * the deleted workspace-layout-verbs.test.ts`'s blob≡rows drift guard. Every schedule is a
  * pure function of one integer seed, and every assertion names the seed that
  * produced it, so a counterexample reproduces by pinning `SEEDS` to that one
  * number. The generators are shrinking-friendly by construction: schedule

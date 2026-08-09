@@ -55,10 +55,6 @@
       "types": "./dist/schema/agent-workspace-nodes.d.ts",
       "default": "./dist/schema/agent-workspace-nodes.js"
     },
-    "./schema/agent-workspace-layout": {
-      "types": "./dist/schema/agent-workspace-layout.d.ts",
-      "default": "./dist/schema/agent-workspace-layout.js"
-    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

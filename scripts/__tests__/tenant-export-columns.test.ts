@@ -162,7 +162,11 @@ describe('tenant export column registry', () => {
       drives: ['publishSubdomain', 'homePageId', 'not_found_page_id', 'publish_default_og_image_url', 'publish_favicon_url'],
       pages: ['toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'description', 'isPrivate', 'createdBy'],
       channel_messages: ['editedAt', 'parentId', 'replyCount', 'lastReplyAt', 'mirroredFromId', 'quotedMessageId'],
-      conversations: ['workspaceId', 'closedInWorkspaceAt', 'rev', 'isShared', 'agentPageId'],
+      // `workspaceId` and `closedInWorkspaceAt` were pinned here too. Both
+      // columns are dropped: a thread's workspace is an `agent_workspace_nodes`
+      // row, so the pin moved off this table and the decision about the table
+      // that replaced it is the one the registry now records as open.
+      conversations: ['rev', 'isShared', 'agentPageId'],
       messages: ['sourceAgentId'],
       // The terminal half of a session. `coldTail` is the one carried column
       // that is irreplaceable user OUTPUT rather than configuration: it is

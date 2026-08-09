@@ -26,7 +26,7 @@
 
 import { and, eq, isNotNull, sql } from '@pagespace/db/operators';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
-import type { DbExecutor } from './workspace-layout-store';
+import type { DbExecutor } from './workspace-lock';
 
 /** The slice of a Drizzle client these reads need — satisfied by `db` and by a transaction alike. */
 export type MembershipReadExecutor = Pick<DbExecutor, 'select'>;

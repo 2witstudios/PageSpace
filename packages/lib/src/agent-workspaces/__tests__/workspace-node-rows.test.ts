@@ -463,7 +463,7 @@ describe('buildRenderTree', () => {
 // The round-trip property
 //
 // No fast-check in this repo; the house precedent is a seeded LCG
-// (`workspace-layout-verbs.test.ts`'s blob≡rows drift guard, and the verb-queue
+// (the deleted `workspace-layout-verbs.test.ts`'s blob≡rows drift guard, and the verb-queue
 // convergence suite in apps/web). Same discipline: every run is a pure function
 // of one integer seed, every assertion names its seed, and the generator's own
 // coverage is asserted at the end so a property cannot quietly pass by

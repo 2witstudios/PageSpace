@@ -24,8 +24,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * The rev bump, as a statement fragment — for the LIFECYCLE writes here that
  * cannot use `bumpConversationRev`.
  *
- * Those writes carry guarded WHEREs (`isDistinctFrom`, `isNull(title)`,
- * `isNull(closedInWorkspaceAt)`) and `.returning()` the full row, where
+ * Those writes carry guarded WHEREs (`isDistinctFrom`, `isNull(title)`) and
+ * `.returning()` the full row, where
  * `bumpConversationRev` matches on id alone; one of them is an upsert. So they
  * stay hand-written, and this at least makes the bump ONE spelling rather than
  * nine copies of `sql`...``.
@@ -65,8 +65,6 @@ export interface ConversationStats {
   lastMessageContent: string | null;
   conversationUserId: string | null;
   isShared: boolean | null;
-  /** The session (workspace) this thread was born into — null for a plain page chat. */
-  workspaceId: string | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -205,9 +203,8 @@ export const conversationRepository = {
    * so every caller — including pre-existing ones — gets this guarantee.
    *
    * Returns WHAT HAPPENED rather than void, because the difference is
-   * load-bearing for session binding: `workspaceId` is written ONLY on the
-   * INSERT (a thread is BORN into its session — contract invariant 1), so a
-   * caller that needed the binding must know the insert did not happen.
+   * load-bearing for session binding: a caller that needed the thread to be
+   * admitted into a workspace must know whether its own insert happened.
    * Callers that only need idempotent ensure-exists semantics can ignore the
    * result exactly as before.
    */
@@ -223,11 +220,9 @@ export const conversationRepository = {
    * nothing — routes never decide whether to broadcast (SSoT §3), and a fourth
    * creator appearing later should not have to rediscover that.
    *
-   * The emit is a genuine no-op for today's sidebars: `session-directory-
-   * listener` drops a `created` event carrying no `workspaceId`, and these rows
-   * always have `workspaceId: null`. Emitting anyway costs one broadcast and
-   * buys consistency across all three creators — the alternative is a silent
-   * exception that the next in-app viewer for API threads would have to find.
+   * Emitting costs one broadcast and buys consistency across all three
+   * creators — the alternative is a silent exception that the next in-app
+   * viewer for API threads would have to find.
    */
   async createApiConversation(values: {
     id: string;
@@ -258,7 +253,8 @@ export const conversationRepository = {
        * workspace commit together or not at all — see
        * `create-conversation-in-workspace.ts`. Everything here is already
        * session-agnostic (there is no `workspaceId` parameter and no column
-       * left to write), so the executor is the ONLY thing this option changes.
+       * anywhere to write), so the executor is the ONLY thing this option
+       * changes.
        */
       executor?: ConversationWriteExecutor;
     }
@@ -285,7 +281,6 @@ export const conversationRepository = {
         type: 'page',
         contextId: pageId,
         isShared: opts?.isShared ?? false,
-        workspaceId: null,
         title: opts?.title ?? null,
         updatedAt: new Date(),
       })
@@ -408,9 +403,10 @@ export const conversationRepository = {
   /*
    * `claimConversation` USED TO BE HERE, and its deletion is the point of this
    * change rather than a side effect of it. It was the only UPDATE of
-   * `conversations.workspaceId` anywhere, carefully guarded (`workspaceId IS
-   * NULL AND userId = :caller`) so a binding could never be re-pointed. That
-   * guard is not weakened, it is SUPERSEDED: membership is a row in
+   * `conversations.workspaceId` (a column that is itself now gone), carefully
+   * guarded (`workspaceId IS NULL AND userId = :caller`) so a binding could
+   * never be re-pointed. That guard is not weakened, it is SUPERSEDED:
+   * membership is a row in
    * `agent_workspace_nodes`, whose global `UNIQUE (targetId) WHERE targetKind
    * = 'chat'` states "a thread has one workspace" as a database constraint
    * rather than as a WHERE clause a future writer could forget. Nothing in this
@@ -520,8 +516,7 @@ export const conversationRepository = {
         lm.last_message_role as "lastMessageRole",
         lm.last_message_content as "lastMessageContent",
         conv."userId" as "conversationUserId",
-        conv."isShared" as "isShared",
-        conv."workspaceId" as "workspaceId"
+        conv."isShared" as "isShared"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"
@@ -713,7 +708,8 @@ export const conversationRepository = {
 
   /*
    * `closeConversationListing` / `reopenConversationListing` USED TO BE HERE.
-   * They stamped and cleared `conversations.closedInWorkspaceAt`, which meant
+   * They stamped and cleared `conversations.closedInWorkspaceAt` — a column
+   * that is itself now gone — which meant
    * "not in the workspace's listing" while a pane row meant "on screen" — two
    * facts about one thread, written by two paths, and the reason a thread could
    * be in a workspace and invisible in it.

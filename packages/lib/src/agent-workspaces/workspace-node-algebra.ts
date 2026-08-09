@@ -2,7 +2,7 @@
  * THE STATE ALGEBRA of the flat node model — `create`, `move`, `bind`,
  * `resize`, `destroy`.
  *
- * These five replace the twelve wire verbs of `workspace-layout-verbs.ts`
+ * These five replace the twelve wire verbs of the deleted `workspace-layout-verbs.ts`
  * (`split_right`, `split_down`, `close_pane`, `reset_pane`, `open_conversation`,
  * `replace_conversation`, `resize_column`, `resize_pane`, `move_pane`,
  * `reorder_columns`, `assign_pane`, `ensure`). Those twelve named ERGONOMIC
@@ -48,7 +48,7 @@ import {
   FRACTION_EPSILON,
   rebalanceFractions,
   resizeShare,
-} from './workspace-layout-verbs';
+} from './workspace-fractions';
 import {
   childrenOf,
   descendantsOf,

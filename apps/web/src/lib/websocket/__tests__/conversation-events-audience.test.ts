@@ -65,7 +65,6 @@ const ctxFor = (isShared: boolean): ConversationEmitContext => ({
   conversationId: CONVERSATION,
   rev: 7,
   scope: { kind: 'page', pageId: PAGE },
-  workspaceId: null,
   ownerId: OWNER,
   isShared,
   triggeredBy: { userId: OWNER, browserSessionId: 'bs-1' },
@@ -75,7 +74,6 @@ const globalCtx: ConversationEmitContext = {
   conversationId: CONVERSATION,
   rev: 3,
   scope: { kind: 'global', ownerId: OWNER },
-  workspaceId: 'wsabc123',
   ownerId: OWNER,
   isShared: false,
   triggeredBy: { userId: OWNER, browserSessionId: 'bs-1' },
@@ -134,7 +132,6 @@ const EMITTERS: Record<string, (ctx: ConversationEmitContext) => Promise<void>> 
       title: null,
       type: 'page',
       contextId: PAGE,
-      workspaceId: null,
       isShared: ctx.isShared,
       createdAt: new Date().toISOString(),
       lastMessageAt: null,
@@ -341,7 +338,7 @@ describe('a delete reports the surviving sort key, not null', () => {
  * MEDIUM).
  *
  * The old scan matched `event: 'conversation:...'` and walked `apps/web/src`
- * only. `workspace:updated` (agent-workspace-events.ts) and the `chat:*`
+ * only. The agent-workspace broadcasts and the `chat:*`
  * literals in socket-utils.ts were therefore outside its universe entirely —
  * which is precisely why HIGH 1's labelled-grid broadcast was never
  * audience-reviewed. A scan whose universe excludes the emitters that matter
@@ -377,10 +374,7 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     // a room has no viewer to redact for. There is deliberately no third room —
     // `drive:<id>` would be a workspace-enumeration oracle, since drive members
     // may reach a workspace they are never shown in a listing.
-    'apps/web/src/lib/websocket/agent-workspace-events.ts': [
-      'workspace:nodes-updated',
-      'workspace:updated',
-    ],
+    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:nodes-updated'],
     // --- the pre-epic surfaces ----------------------------------------------
     'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
     'apps/web/src/lib/websocket/socket-utils.ts': [

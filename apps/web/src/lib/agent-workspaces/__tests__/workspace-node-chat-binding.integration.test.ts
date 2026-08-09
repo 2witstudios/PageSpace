@@ -70,15 +70,17 @@ async function createWorkspace(): Promise<string> {
   return row.id;
 }
 
-/** A conversation owned by the acting user and bound to `workspaceId`. */
-async function createConversation(workspaceId: string | null): Promise<string> {
+/**
+ * A conversation owned by the acting user. It carries no workspace of its own:
+ * membership is the node this suite writes, and there is no column to seed.
+ */
+async function createConversation(): Promise<string> {
   const id = createId();
   await db.insert(conversations).values({
     id,
     userId: ownerIds[0],
     type: 'page',
     contextId: agentPageId,
-    workspaceId,
     isActive: true,
     updatedAt: new Date(),
   });
@@ -132,7 +134,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
   it('readChatTargetHolders finds the holder across the whole table, not just one workspace', async () => {
     const workspaceA = await createWorkspace();
     const workspaceB = await createWorkspace();
-    const conversationId = await createConversation(workspaceA);
+    const conversationId = await createConversation();
     await seedTree(workspaceA, [root, chatPane('pane-a', 0, conversationId)]);
     await seedTree(workspaceB, [root]);
 
@@ -150,7 +152,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
     const workspaceB = await createWorkspace();
     // Owned by the acting user, so the ACL gate passes and the ONLY thing left
     // standing between this write and a raw index violation is the pre-flight.
-    const conversationId = await createConversation(workspaceA);
+    const conversationId = await createConversation();
     await seedTree(workspaceA, [root, chatPane('pane-a', 0, conversationId)]);
     await seedTree(workspaceB, [root]);
 
@@ -185,7 +187,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
 
   it('lets an UNCLAIMED conversation through, so the refusal is about the binding and not the kind', async () => {
     const workspaceB = await createWorkspace();
-    const conversationId = await createConversation(workspaceB);
+    const conversationId = await createConversation();
     await seedTree(workspaceB, [root]);
 
     const before = await readWorkspaceNodeSnapshot(db, workspaceB);
@@ -215,7 +217,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
     // the test and the code agree on a string.
     const workspaceA = await createWorkspace();
     const workspaceB = await createWorkspace();
-    const conversationId = await createConversation(workspaceA);
+    const conversationId = await createConversation();
     await seedTree(workspaceA, [root, chatPane('pane-a', 0, conversationId)]);
     await seedTree(workspaceB, [root]);
 
@@ -248,7 +250,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
     // takes it — a change to the store's write, reported rather than smuggled in
     // here. Whoever makes it should expect this test to need updating.
     const workspaceId = await createWorkspace();
-    const conversationId = await createConversation(workspaceId);
+    const conversationId = await createConversation();
     await seedTree(workspaceId, [
       root,
       chatPane('holder', 0, conversationId),

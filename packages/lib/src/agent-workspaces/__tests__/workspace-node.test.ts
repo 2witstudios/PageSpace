@@ -12,8 +12,8 @@
  * "which panes are in the workspace but nowhere in it", a question that could
  * only be asked while a pane could be in one and not the other.
  *
- * Sibling of `workspace-layout-verbs.test.ts`, which covers the two-level
- * column/pane model this replaces. Both exist during the migration window.
+ * Successor to the deleted `workspace-layout-verbs.test.ts`, which covered the
+ * two-level column/pane model this replaces.
  */
 import { describe, it, expect } from 'vitest';
 import {

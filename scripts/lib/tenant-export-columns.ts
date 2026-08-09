@@ -180,15 +180,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   channel_read_status: { columns: ['userId', 'channelId', 'lastReadAt'] },
 
-  // The pane grid used to ride along in this table's `workspaceState` jsonb.
-  // That column was dropped at the agent-session SSoT epic's Phase 3 contract
-  // step and the grid now lives in `agent_workspace_pane_columns` /
-  // `agent_workspace_panes` — which are deliberately not carried, with the
-  // reasoning recorded in `TENANT_EXPORT_EXCLUDED_TABLES` below rather than
-  // in this comment. Nothing is orphaned by that: every conversation and
-  // every shell in the session is carried and still bound, so the migrated
-  // user gets their threads and their terminals with a fresh default grid
-  // instead of their arrangement.
+  // The pane grid used to ride along in this table's `workspaceState` jsonb,
+  // then in four `agent_workspace_pane_*` / `_layout_*` tables. All of it is
+  // gone: a workspace's tree is `agent_workspace_nodes`, and that table is
+  // where BOTH its arrangement and its MEMBERSHIP now live. It is not yet
+  // registered either way — see the note above
+  // `TENANT_EXPORT_EXCLUDED_TABLES`.
   agent_workspaces: {
     columns: [
       'id', 'driveId', 'ownerId', 'name',
@@ -223,8 +220,8 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   conversations: {
     columns: [
-      'id', 'userId', 'title', 'type', 'contextId', 'agentPageId', 'workspaceId',
-      'closedInWorkspaceAt', 'rev', 'planPageId', 'lastMessageAt',
+      'id', 'userId', 'title', 'type', 'contextId', 'agentPageId',
+      'rev', 'planPageId', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
     ],
     // `planPageId` travels, but like `agentPageId` it is nulled by the exporter
@@ -302,17 +299,33 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   ai_stream_sessions:
     'A per-instance STREAMING CHECKPOINT, not a durable record: `parts` is the debounced replay buffer a reconnecting client resumes from, and a completed turn is committed to `messages`, which the bundle carries. Every other column names SOURCE-instance runtime — `stream_id` (the in-process abort-registry key, UNIQUE-indexed, so a carried duplicate also collides), `browser_session_id`, `last_heartbeat_at`, `abort_requested_at`, `raw_parts_count` (a replay cursor with no live multicast to count against). Carrying a `status = streaming` row would manufacture a phantom live stream in the tenant that no worker will ever finish and no abort can reach.',
 
-  agent_workspace_pane_columns:
-    'Pane LAYOUT — which columns the grid has and how wide. Deliberately not carried: the arrangement is per-device ergonomics, not content, and every artefact it arranges (conversations, shells) travels on its own and stays bound to the session. The migrated user opens their session on a fresh default grid holding all of their work rather than none of it.',
-
-  agent_workspace_panes:
-    'The other half of the pane layout, and the reason carrying half would be worse than carrying neither: `targetId` is polymorphic with NO foreign key (conversationId | shellId | pageId by `kind`), so a pane naming a page or conversation outside the bundle would import cleanly and then render an unresolvable pane. See `agent_workspace_pane_columns`.',
-
-  agent_workspace_layout_revs:
-    'The per-workspace monotonic rev counter for the pane grid. With no grid carried there is nothing for a rev to describe, and a carried non-zero rev would make the tenant reject its own first layout verb as stale until the client rebased through a 409.',
-
-  agent_workspace_layout_ops:
-    'The layout verb route\'s idempotency memory — one row per recently-processed (workspaceId, opId), pruned on a 24h window. It exists to short-circuit a retry that is seconds old; a migrated copy could only ever suppress a genuinely new op in the tenant that happened to reuse a client-minted id.',
+  /*
+   * `agent_workspace_pane_columns`, `agent_workspace_panes`,
+   * `agent_workspace_layout_revs` and `agent_workspace_layout_ops` WERE
+   * EXCLUDED HERE. All four tables are dropped — the two-level pane grid they
+   * held is replaced by `agent_workspace_nodes` — so there is nothing left to
+   * decide about them.
+   *
+   * **`agent_workspace_nodes` and `agent_workspace_node_revs` are UNDECIDED,
+   * and the table guard below is red because of it.** That is deliberate, and
+   * it predates the column drop above: the node model landed without
+   * registering its own tables here, and nobody has since chosen whether a
+   * tenant bundle carries a workspace's tree.
+   *
+   * The choice is not the formality it was for the pane tables. Those held
+   * ARRANGEMENT only, so dropping them cost a user their column widths. This
+   * table holds MEMBERSHIP — a conversation is in a workspace exactly when a
+   * node of that workspace is bound to it — so a bundle without it hands the
+   * migrated user workspaces that list no threads at all, with the threads
+   * themselves present but reachable only through past-conversation history.
+   * Carrying it is not a copy either: `targetId` is polymorphic with NO foreign
+   * key, so every node naming a conversation, page or shell outside the bundle
+   * has to be pruned or unbound on the way out, and the table's global
+   * `UNIQUE (targetId) WHERE targetKind = 'chat'` turns a mistake there into a
+   * failed import rather than a bad row. That is a real piece of export logic,
+   * not a registry line, which is why this note names the decision instead of
+   * pretending to have made it.
+   */
 };
 
 /** The columns emitted inline in `table`'s INSERT. */

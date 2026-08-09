@@ -129,18 +129,21 @@ describe('runImport', () => {
       });
     }
 
-    it('restores the conversation⇄session binding, rev, closed-listing stamp and shared flag', async () => {
+    it('restores the conversation rev and shared flag', async () => {
       await reimport('conversation');
 
       const rows = (await db.execute(sql.raw(
-        `SELECT "workspaceId", rev, "closedInWorkspaceAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
+        `SELECT rev, "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
       ))).rows as Record<string, unknown>[];
 
       expect(rows).toHaveLength(1);
-      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
       expect(Number(rows[0].rev)).toBe(FIXTURES.conversations.pageChat.rev);
-      expect(rows[0].closedInWorkspaceAt).not.toBeNull();
       expect(rows[0].isShared).toBe(true);
+      // The conversation⇄session BINDING used to be asserted here, off
+      // `conversations."workspaceId"` and `"closedInWorkspaceAt"`. Both columns
+      // are dropped — a thread's workspace is an `agent_workspace_nodes` row —
+      // and whether a bundle carries that table is an open decision, so there
+      // is nothing to assert about a binding travelling until it is made.
     });
 
     it('carries the agent session the conversation is bound to, without its source-fleet Sprite identity', async () => {
