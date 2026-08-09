@@ -31,14 +31,15 @@
  * location is its parent, and the two are never allowed to become confusable.
  *
  * Violations are reported in a FIXED order, so one bad tree always yields one
- * code: node cap, duplicate ids, root count, dangling parent, cycle,
- * reachability, depth, split arity, pane leafness, fractions, ordering, chat
- * bindings. The order is not arbitrary — each check assumes what the ones
- * before it established. Everything that resolves a node needs ids to be unique;
- * everything that walks a parent pointer needs the dangling check to have
- * passed; the depth walk needs the cycle check to have passed, which is what
- * lets it run without a visited set; and the fraction SUM needs its terms
- * proven finite, because a NaN loses every comparison it is given.
+ * code: node cap, blank ids, duplicate ids, root count, dangling parent, cycle,
+ * reachability, depth, split arity, pane leafness, fraction finiteness, the
+ * per-container fraction rules, ordering, chat bindings. The order is not
+ * arbitrary — each check assumes what the ones before it established. Nothing
+ * that resolves a node by id can mean anything until ids are known to be real
+ * strings and unique; everything that walks a parent pointer needs the dangling
+ * check to have passed; the depth walk needs the cycle check to have passed,
+ * which is what lets it run without a visited set; and the fraction SUM needs
+ * its terms proven finite, because a NaN loses every comparison it is given.
  */
 import { FRACTION_EPSILON } from './workspace-layout-verbs';
 import { childrenOf, descendantsOf, detachedOf, rootOf, type WorkspaceNode } from './workspace-node';
@@ -72,6 +73,7 @@ export const MAX_DEPTH = 8;
 export type TreeValidation = { ok: true } | { ok: false; code: TreeViolationCode; detail: string };
 
 export type TreeViolationCode =
+  | 'blank_id'
   | 'duplicate_id'
   | 'no_root'
   | 'multiple_roots'
@@ -138,7 +140,42 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     return violation('max_nodes_exceeded', `${nodes.length} nodes; the cap is ${MAX_NODES}`);
   }
 
-  // Second, because every check below this line resolves nodes BY ID and none
+  // Second, and ahead of uniqueness, because a blank id is not an id that is
+  // taken — it is not an id at all, and every check below resolves nodes by
+  // one. The SHAPE of an id is exactly as invariant as its uniqueness, and this
+  // is the gate every write path runs: the wire's primitive is `put(nodes[])`,
+  // a node SET, so a client that assembled its own nodes never goes through the
+  // algebra's operations at all.
+  //
+  // It is stated here because nothing downstream can state it. Postgres takes
+  // `''` without complaint (`text NOT NULL` is satisfied), and the row parse
+  // then refuses it on the way back — and `nodesFromRows` rejects the WHOLE set
+  // rather than filtering, deliberately, because dropping the row would be
+  // indistinguishable from the user having closed the pane. So one such row
+  // makes the workspace permanently unreadable, and the read is the only way
+  // in: repair takes a hand-written DELETE against production.
+  //
+  // `trim()`, not a length test. `z.string().min(1)` at the row boundary is
+  // satisfied by `'   '`, so the whitespace-only case is the one that survives
+  // the read and lands as a node nothing can address — and `trim()` is already
+  // how `bind` and `create` spell the same rule.
+  //
+  // `targetId` is held to it too, and for the identical reason: the column is
+  // `z.string().min(1)` on the way back, a binding is for life, and nothing
+  // later corrects a pane bound to nothing.
+  for (const node of nodes) {
+    if (node.id.trim() === '') {
+      return violation('blank_id', 'a node carries a blank id; an id addresses a node, and this one addresses nothing');
+    }
+    if (node.nodeType === 'pane' && node.target !== null && node.target.id.trim() === '') {
+      return violation(
+        'blank_id',
+        `node "${node.id}" is bound to a ${node.target.kind} with a blank id; a binding is for life, so nothing later corrects it`,
+      );
+    }
+  }
+
+  // Third, because every check below this line resolves nodes BY ID and none
   // of them can mean anything while an id names two nodes. Ids are minted on
   // the client, so a collision is reachable rather than theoretical, and every
   // resolver in the model is a `find` or a `Map` — each silently keeps one of
@@ -227,9 +264,14 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // Depth is measured in EDGES from the root, so the root itself is 0 and a
   // pane sitting directly in it is 1. Terminates without a visited set: the
   // tree is already known to be acyclic.
+  //
+  // Drained by the `undefined` `shift()` actually returns when empty, rather
+  // than by a length check plus a cast that asserts what the check implied —
+  // the idiom `descendantsOf` uses, and for the reason it states there: this
+  // model's whole thesis is that a cast is a lie the type checker vouches for.
   const queue: Array<{ id: string; depth: number }> = [{ id: root.id, depth: 0 }];
-  while (queue.length > 0) {
-    const { id, depth } = queue.shift() as { id: string; depth: number };
+  for (let step = queue.shift(); step !== undefined; step = queue.shift()) {
+    const { id, depth } = step;
     if (depth > MAX_DEPTH) {
       return violation(
         'max_depth_exceeded',
@@ -278,6 +320,39 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     }
   }
 
+  // Finiteness, over EVERY node and outside the group loop, because it has no
+  // group-level precondition: `fraction_mixed` and `fraction_sum` are questions
+  // about a container, and this is a question about one number.
+  //
+  // It sat inside the loop below, under the skip that exempts the parked panes
+  // — so a NaN or an Infinity on a DETACHED pane was exempted by position
+  // rather than by intent, and passed. That exemption is right for the two
+  // container rules (parked panes share no container, so there is nothing for a
+  // share to be a share OF) and wrong for this one.
+  //
+  // BEFORE the sum, and the ordering is the whole point. `Math.abs(NaN - 1) >=
+  // FRACTION_EPSILON` is FALSE — every comparison against NaN is — so a group
+  // holding one waves itself through the very check written to stop it. The sum
+  // can only be trusted once its terms are known to be numbers.
+  //
+  // Not a hypothetical value. The client's optimistic resize divides a drag
+  // offset by its container's extent, and a container that has not laid out yet
+  // has an extent of 0. Worse, it is self-propagating: a persisted NaN poisons
+  // every future total that includes it, so the sum check would never fire on
+  // that container again. An infinity is the same division one signed step
+  // away, and just as much not a share of anything. Parking the pane it landed
+  // on does not make it a number — Postgres `real` takes both, and the row
+  // parse throws on the way back.
+  for (const node of nodes) {
+    const fraction = fractionOf(node);
+    if (fraction !== undefined && !Number.isFinite(fraction)) {
+      return violation(
+        'fraction_not_finite',
+        `node "${node.id}" carries a fraction of ${fraction}; a share is a finite number`,
+      );
+    }
+  }
+
   const groups = siblingGroups(nodes);
 
   // Fractions, per container. The parked panes are skipped: they share no
@@ -294,27 +369,10 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     }
     if (sized.length === 0) continue;
 
-    // BEFORE the sum, and the ordering is the whole point. `Math.abs(NaN - 1)
-    // >= FRACTION_EPSILON` is FALSE — every comparison against NaN is — so a
-    // group holding one waves itself through the very check written to stop
-    // it. The sum can only be trusted once its terms are known to be numbers.
+    // Every term is already known to be finite — the sweep above the loop
+    // settled that for every node in the set, which is what makes the
+    // comparison below mean anything at all.
     //
-    // Not a hypothetical value. The client's optimistic resize divides a drag
-    // offset by its container's extent, and a container that has not laid out
-    // yet has an extent of 0. Worse, it is self-propagating: a persisted NaN
-    // poisons every future total that includes it, so the sum check would
-    // never fire on that container again. An infinity is the same division one
-    // signed step away, and just as much not a share of anything.
-    for (const member of group.members) {
-      const fraction = fractionOf(member);
-      if (fraction !== undefined && !Number.isFinite(fraction)) {
-        return violation(
-          'fraction_not_finite',
-          `node "${member.id}" carries a fraction of ${fraction}; a share is a finite number`,
-        );
-      }
-    }
-
     // Every producer settles its own residual, so real drift stays far below
     // the epsilon; this catches shares that were never rebalanced, not float
     // noise.

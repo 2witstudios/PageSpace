@@ -60,6 +60,20 @@ import { validateTree, type TreeViolationCode } from './workspace-node-validate'
  * state a node is already in writes nothing — the "declined" convention the
  * model this replaces spelled as `next !== state`, kept honest here so a
  * re-sent request does not bump a rev or broadcast.
+ *
+ * **TWO THINGS A PERSISTING WRITER OWES THIS TYPE**, neither of them visible
+ * from memory, both of them consequences of the composite self-FK
+ * `(rootId, parentId) → (rootId, id)`:
+ *
+ *  - **`put` before `drop`.** The FK is `ON DELETE cascade`, and `drop` names
+ *    containers whose children are being REPARENTED rather than deleted. See
+ *    {@link applyNodeWrite}.
+ *  - **`put` is ONE statement, not a loop.** Its order is whatever
+ *    `upsertNodes` produced — replace in place, then append — and nothing
+ *    establishes that a parent precedes its children in it. A multi-row
+ *    `INSERT … ON CONFLICT DO UPDATE` is immune, because FK triggers fire at
+ *    the end of the statement; a row-at-a-time loop is not, and would refuse a
+ *    child whose parent has not landed yet.
  */
 export interface NodeWrite {
   put: WorkspaceNode[];
@@ -85,6 +99,7 @@ export type NodeOperationCode =
   | 'already_bound'
   | 'duplicate_id'
   | 'invalid_fraction'
+  | 'invalid_id'
   | 'invalid_index'
   | 'invalid_target'
   | 'not_a_container'
@@ -111,14 +126,31 @@ function reject(code: NodeOperationCode, detail: string): NodeOperationResult {
 }
 
 /**
- * Apply a write-set. Drop first, then upsert: an operation names the nodes it
- * removes and the nodes it writes, and a node is never in both.
+ * Apply a write-set. **PUT FIRST, THEN DROP, and the order is load-bearing
+ * BECAUSE OF THE CASCADE.** Do not tidy it back.
+ *
+ * In memory the order cannot be observed: an operation names the nodes it
+ * removes and the nodes it writes, a node is never in both, and `removeNodes`
+ * removes exactly the ids it is given. In the TABLE it is the difference
+ * between a reorder and a data loss. `agent_workspace_nodes` carries a
+ * composite self-FK `(rootId, parentId) → (rootId, id)` that is
+ * `ON DELETE cascade` — deleting a container takes its whole subtree with it,
+ * which the schema documents as a feature — and the collapse path in `move`
+ * and `destroy` drops a split whose children are being REPARENTED, not
+ * deleted. Those children are correctly absent from `put`, because nothing
+ * about them changed. Drop first and the cascade takes them; `put` cannot
+ * resurrect what it never named.
+ *
+ * Applying `put` first re-parents every survivor onto a node that is staying,
+ * so by the time the delete runs the dropped container has no children left
+ * for the cascade to reach. A write that genuinely destroys a subtree names
+ * every row of it in `drop`, so it is unaffected.
  *
  * Idempotent, because `upsertNodes` is: a retried request or a duplicate
  * delivery re-applies to the same state.
  */
 export function applyNodeWrite(nodes: readonly WorkspaceNode[], write: NodeWrite): WorkspaceNode[] {
-  return upsertNodes(removeNodes(nodes, write.drop), write.put);
+  return removeNodes(upsertNodes(nodes, write.put), write.drop);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +175,11 @@ function fractionOf(node: WorkspaceNode): number | undefined {
  * Re-seat a member's share. An unsized member carries NO key at all rather than
  * an explicit null — the absence IS the state, so a tree this algebra built and
  * one rehydrated from rows compare equal instead of merely rendering the same.
+ *
+ * DEEP-equal, not byte-equal, and this spread is why: `fraction` is appended,
+ * so it lands after `target`, while the row transform emits it before. Same
+ * keys, same values, different bytes — so change detection over nodes compares
+ * fields and never `JSON.stringify`. Stated in full at `workspace-node-rows.ts`.
  */
 function withFraction(node: MemberNode, fraction: number | null): MemberNode {
   if (fraction === null) {
@@ -294,21 +331,26 @@ function shownElsewhere(
  * The one exit every operation takes: the result is validated, and an operation
  * that would produce an invalid tree is REFUSED, never repaired.
  *
- * The three checks ahead of `validateTree` are not duplicates of it — they are
- * invariants it does not state, all three reachable through this algebra:
+ * The three checks ahead of `validateTree` state faults it also states, and
+ * they are here for the ORDER and the VOCABULARY rather than for the coverage.
+ * `validateTree` reports one code per bad tree in a fixed sequence chosen for a
+ * reader of a whole tree; an OPERATION was asked to do one thing, and a caller
+ * rebasing on the answer needs the fault that is about what it asked:
  *
- *  - **Two nodes sharing an id.** Every helper resolves an id to the FIRST
- *    match, so a collision does not corrupt a tree, it makes one node invisible.
- *  - **A pane holding children.** `nodeType` says a pane is a leaf; nothing
- *    below it enforces that, and such a pane renders as a pane whose subtree
- *    simply never appears.
- *  - **A non-finite share.** `Math.abs(NaN - 1) >= FRACTION_EPSILON` is FALSE,
- *    so a NaN walks straight through the validator's sum check and into a
- *    `real` column.
+ *  - **Two nodes sharing an id** — named before the root count and the parent
+ *    pointers, because every helper resolves an id to the FIRST match, so a
+ *    collision does not corrupt a tree, it makes one node invisible.
+ *  - **A pane holding children** — `not_a_container`, the operation's word for
+ *    "you named a leaf as a destination", ahead of the validator's
+ *    `unreachable`, which is the truer thing to say about the resulting SET and
+ *    the less useful thing to say to the caller.
+ *  - **A non-finite share** — `invalid_fraction`, the same code `resize`
+ *    returns for a share the caller supplied, so one operation does not answer
+ *    with two vocabularies depending on whose share was bad.
  *
- * They live here rather than inside `validateTree` because that module is
- * merged and its violation ORDER is load-bearing — each of its checks assumes
- * what the ones before it established — so extending it is its own change.
+ * Nothing is added to `validateTree` lightly, because its violation order is
+ * load-bearing — each of its checks assumes what the ones before it
+ * established — so extending it is its own change with its own reasoning.
  */
 function accept(next: readonly WorkspaceNode[], write: NodeWrite): NodeOperationResult {
   const seen = new Set<string>();
@@ -372,9 +414,28 @@ export interface CreateInput {
 export function create(nodes: readonly WorkspaceNode[], input: CreateInput): NodeOperationResult {
   const { nodeId, target, parentId, index } = input;
 
-  // First, because an id already in the set would be UPSERTED over its sitting
-  // node rather than minted beside it — a create that reads as a success and
-  // quietly ate a pane.
+  // FIRST, ahead of the conflict checks, because a blank id is not an id that
+  // is taken — it is not an id at all, and everything below resolves nodes by
+  // one. Ids are minted on the CLIENT, so this is a defaulted variable or an
+  // off-by-one in id generation, not a hypothetical.
+  //
+  // It has to be refused HERE because nothing downstream can. `''` satisfies
+  // `text NOT NULL`, so the row lands; `nodeFromRow` then refuses it, and
+  // `nodesFromRows` rejects the whole set rather than filtering — deliberately,
+  // since dropping the row would be indistinguishable from the user having
+  // closed the pane. The workspace becomes permanently unreadable, and the read
+  // is the only way in: repair takes a hand-written DELETE against production.
+  //
+  // `trim()`, not a length test, and the same rule `bind` spells: an id of
+  // spaces addresses nothing, and it is the one the row parse's
+  // `z.string().min(1)` would carry all the way through.
+  if (nodeId.trim() === '') {
+    return reject('invalid_id', 'a node needs an id; a blank one is stored once and readable never');
+  }
+
+  // Then an id already in the set, because it would be UPSERTED over its
+  // sitting node rather than minted beside it — a create that reads as a
+  // success and quietly ate a pane.
   if (findNode(nodes, nodeId) !== undefined) {
     return reject('duplicate_id', `the workspace already holds a node "${nodeId}"`);
   }
@@ -384,6 +445,15 @@ export function create(nodes: readonly WorkspaceNode[], input: CreateInput): Nod
   // so this is the only moment the conflict can be refused rather than
   // discovered from the index.
   if (target !== null) {
+    // The blank-target rule `bind` states at the fill, stated here at the mint.
+    // `create` binds at the mint — that is the entire reason `CreateInput`
+    // carries a target — so this is the other place a pane can be bound to
+    // nothing, and it lands as the same unreadable row a blank node id does.
+    // Ahead of `shownElsewhere`, so two panes minted onto nothing are answered
+    // with the fault rather than with each other.
+    if (target.id.trim() === '') {
+      return reject('invalid_target', `pane "${nodeId}" would be minted onto a ${target.kind} target with no id`);
+    }
     const taken = shownElsewhere(nodes, target, nodeId);
     if (taken !== undefined) {
       return reject(
@@ -614,7 +684,13 @@ export function bind(nodes: readonly WorkspaceNode[], input: BindInput): NodeOpe
   // A blank id is the one bad target that does not announce itself. The pane
   // stops being unbound the moment this lands, so it never renders the picker
   // again — and since a binding is for life, there is no second chance to
-  // notice. This is the only place it can be caught.
+  // notice.
+  //
+  // This is one of TWO places it can be caught, and both are needed: a pane
+  // reaches a target either by being filled here or by being minted already
+  // carrying one, and `create` states the identical rule for the second. Only
+  // `validateTree` sees both, plus the `put(nodes[])` write that goes through
+  // neither.
   if (target.id.trim() === '') {
     return reject('invalid_target', `pane "${nodeId}" was given a ${target.kind} target with no id`);
   }
