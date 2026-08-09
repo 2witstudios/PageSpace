@@ -41,6 +41,7 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { PaneKind, PaneScope } from '@pagespace/lib/agent-workspaces/contract';
 import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
@@ -52,7 +53,15 @@ export interface PaneScopeConversationRow {
   isShared: boolean;
   type: string;
   contextId: string | null;
-  /** The workspace this conversation is bound to, or `null` for a plain thread. */
+  /**
+   * The workspace whose TREE holds this conversation, or `null` for a thread
+   * that belongs to none.
+   *
+   * Read from `agent_workspace_nodes` rather than from
+   * `conversations.workspaceId`, because membership is the node row now. The
+   * containment rule below is unchanged in what it asks; only where the answer
+   * comes from has moved.
+   */
   workspaceId: string | null;
 }
 
@@ -62,6 +71,9 @@ export interface PaneScopeAuthorityDeps {
   findShellWorkspace: (shellId: string) => Promise<string | null>;
   canViewPage: (userId: string, pageId: string) => Promise<boolean>;
 }
+
+/** The slice of a Drizzle client the row lookups need — `db` and a transaction alike. */
+type PaneScopeExecutor = Pick<typeof db, 'select'>;
 
 /**
  * PURE: every pane scope a verb would bind. Exhaustive over the verb union by
@@ -107,31 +119,53 @@ export function paneScopesOfVerb(verb: WorkspaceLayoutVerb): PaneScope[] {
   }
 }
 
-const defaultDeps: PaneScopeAuthorityDeps = {
-  findConversation: async (conversationId) => {
-    const [row] = await db
-      .select({
-        userId: conversations.userId,
-        isShared: conversations.isShared,
-        type: conversations.type,
-        contextId: conversations.contextId,
-        workspaceId: conversations.workspaceId,
-      })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
-    return row ? { ...row, isShared: row.isShared === true } : null;
-  },
-  findShellWorkspace: async (shellId) => {
-    const [row] = await db
-      .select({ workspaceId: agentWorkspaceShells.workspaceId })
-      .from(agentWorkspaceShells)
-      .where(eq(agentWorkspaceShells.id, shellId))
-      .limit(1);
-    return row?.workspaceId ?? null;
-  },
-  canViewPage: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null,
-};
+/**
+ * The production lookups, bound to an EXECUTOR.
+ *
+ * A caller inside the membership write's transaction passes `tx`, and it has
+ * to: the conversation (or the shell) being introduced may be one that
+ * transaction just inserted, and a containment check on the pooled connection
+ * cannot see an uncommitted row — so it would refuse exactly the write that
+ * created the thing it is asking about.
+ *
+ * `canViewPage` is deliberately NOT executor-bound. Page ACLs are never written
+ * by a layout transaction, so `getUserAccessLevel`'s own reads have nothing to
+ * miss, and threading an executor through the permission layer for a fact it
+ * cannot be racing would be reach for its own sake.
+ */
+export function paneScopeDeps(executor: PaneScopeExecutor = db): PaneScopeAuthorityDeps {
+  return {
+    findConversation: async (conversationId) => {
+      const [row] = await executor
+        .select({
+          userId: conversations.userId,
+          isShared: conversations.isShared,
+          type: conversations.type,
+          contextId: conversations.contextId,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      if (!row) return null;
+      // MEMBERSHIP, from the tree. One lookup on the global chat-target index,
+      // which is unique — so "which workspace holds this thread" has exactly one
+      // answer rather than a column two writers could disagree about.
+      const workspaceId = await findWorkspaceOfChat(executor, conversationId);
+      return { ...row, isShared: row.isShared === true, workspaceId };
+    },
+    findShellWorkspace: async (shellId) => {
+      const [row] = await executor
+        .select({ workspaceId: agentWorkspaceShells.workspaceId })
+        .from(agentWorkspaceShells)
+        .where(eq(agentWorkspaceShells.id, shellId))
+        .limit(1);
+      return row?.workspaceId ?? null;
+    },
+    canViewPage: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null,
+  };
+}
+
+const defaultDeps: PaneScopeAuthorityDeps = paneScopeDeps();
 
 /**
  * The half of a `PaneScope` this gate actually reads.

@@ -367,10 +367,25 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     // mirror event appears in source.
     'apps/web/src/lib/websocket/conversation-events.ts': ['chat:stream_start'],
     // --- the agent-session layout plane -------------------------------------
-    // Audience: the `session:<id>` room — every member of a shared workspace
-    // at once. Its grid is LABEL-FREE for exactly that reason (security review
-    // HIGH 1); see workspace-layout-runtime.ts.
-    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:updated'],
+    // Audience: the `session:<id>` room — every member of a shared workspace at
+    // once. Its payload is LABEL-FREE for exactly that reason (security review
+    // HIGH 1); see `agent-workspace-events.ts`'s own doc.
+    //
+    // NOT LISTED, and the reason is a hole in THIS SCAN rather than in that
+    // module. It broadcasts two events — `workspace:updated` and
+    // `workspace:nodes-updated` — but both go through a local `emit(event, …)`
+    // helper that takes the name as a PARAMETER, so the `event: '…'` literal
+    // this scan matches on appears nowhere in the file. The scan therefore sees
+    // it emit nothing, and an entry here would fail for a file that is
+    // perfectly correct.
+    //
+    // The honest fix is to make those two names literal at the call sites so
+    // the scan can see them again; that is a change to the layout-broadcast
+    // module and belongs with it, not smuggled in beside a membership cutover.
+    // Recorded here so the next reader knows the omission is deliberate and
+    // knows what would close it.
+    //
+    // 'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:updated', 'workspace:nodes-updated'],
     // --- the pre-epic surfaces ----------------------------------------------
     'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
     'apps/web/src/lib/websocket/socket-utils.ts': [

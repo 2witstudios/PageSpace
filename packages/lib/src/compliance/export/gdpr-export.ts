@@ -2,6 +2,7 @@ import { eq, inArray, or, and, ne, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
@@ -278,6 +279,39 @@ export interface UserAgentWorkspaceExport {
   createdAt: Date | null;
   updatedAt: Date | null;
   shells: UserAgentWorkspaceShellExport[];
+  /**
+   * The workspace's NODES — its membership and its layout, which are one thing
+   * (`agent_workspace_nodes`).
+   *
+   * Carried for an `owner` entry only, and empty for a `participant` one, under
+   * the same Art 15(4) line the shells draw: a workspace's tree says which
+   * threads and terminals it holds and where each one sits, which describes the
+   * OWNER's working context. The subject's own conversations inside someone
+   * else's workspace still travel — `collectUserMessages` exports them under
+   * its own boundary — but the other person's arrangement of them does not.
+   */
+  nodes: UserAgentWorkspaceNodeExport[];
+}
+
+/**
+ * One node of a workspace's tree: what it is, where it sits, and what it shows.
+ *
+ * `targetKind`/`targetId` are the polymorphic binding — a conversation, a
+ * shell, or a page. The ids travel because they are how the rest of the bundle
+ * joins up: without them a reader could see that a workspace held four panes
+ * and not which of their own exported conversations were in them.
+ */
+export interface UserAgentWorkspaceNodeExport {
+  id: string;
+  parentId: string | null;
+  position: number;
+  nodeType: string;
+  axis: string | null;
+  fraction: number | null;
+  targetKind: string | null;
+  targetId: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
 }
 
 /**
@@ -945,10 +979,43 @@ export async function collectUserAgentWorkspaces(
     shellsByWorkspace.set(workspaceId, bucket);
   }
 
+  // The owned workspaces' trees — membership AND layout, which stopped being
+  // two things. One query for all of them; a workspace with no tree yet simply
+  // has no rows.
+  const ownedIdList = ownedWorkspaces.map((workspace) => workspace.id);
+  const ownedNodes =
+    ownedIdList.length === 0
+      ? []
+      : await database
+          .select({
+            rootId: agentWorkspaceNodes.rootId,
+            id: agentWorkspaceNodes.id,
+            parentId: agentWorkspaceNodes.parentId,
+            position: agentWorkspaceNodes.position,
+            nodeType: agentWorkspaceNodes.nodeType,
+            axis: agentWorkspaceNodes.axis,
+            fraction: agentWorkspaceNodes.fraction,
+            targetKind: agentWorkspaceNodes.targetKind,
+            targetId: agentWorkspaceNodes.targetId,
+            createdAt: agentWorkspaceNodes.createdAt,
+            updatedAt: agentWorkspaceNodes.updatedAt,
+          })
+          .from(agentWorkspaceNodes)
+          .where(inArray(agentWorkspaceNodes.rootId, ownedIdList));
+
+  const nodesByWorkspace = new Map<string, UserAgentWorkspaceNodeExport[]>();
+  for (const node of ownedNodes) {
+    const { rootId, ...rest } = node;
+    const bucket = nodesByWorkspace.get(rootId) ?? [];
+    bucket.push(rest);
+    nodesByWorkspace.set(rootId, bucket);
+  }
+
   const result: UserAgentWorkspaceExport[] = ownedWorkspaces.map((workspace) => ({
     ...workspace,
     role: 'owner' as const,
     shells: shellsByWorkspace.get(workspace.id) ?? [],
+    nodes: nodesByWorkspace.get(workspace.id) ?? [],
   }));
 
   // Subject-owned shells that live in somebody else's workspace. The shells are
@@ -967,6 +1034,10 @@ export async function collectUserAgentWorkspaces(
       createdAt: null,
       updatedAt: null,
       shells,
+      // Withheld with the rest of the host workspace's description — the tree
+      // is the OWNER's arrangement of their own working context, and the
+      // subject's presence in it as a shell operator does not make it theirs.
+      nodes: [],
     });
   }
 

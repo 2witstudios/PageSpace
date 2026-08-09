@@ -59,19 +59,32 @@ vi.mock('@/lib/websocket/agent-workspace-events', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
-      from: (table: { __name: keyof typeof rows }) => ({
-        where: async () => rows[table.__name],
-      }),
+      from: (table: { __name: keyof typeof rows }) => {
+        // `leftJoin` returns the same builder: the fake's rows already carry
+        // whatever the join would have supplied, so the join is shape, not
+        // behaviour, as far as this suite is concerned.
+        const builder = {
+          leftJoin: () => builder,
+          where: async () => rows[table.__name],
+        };
+        return builder;
+      },
     }),
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ inArray: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ and: vi.fn(), eq: vi.fn(), inArray: vi.fn() }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { __name: 'conversations' } }));
 vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaceShells: { __name: 'shells' },
   agentWorkspaces: { __name: 'workspaces' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
+// The membership table. It is JOINED onto the conversation read rather than
+// selected from, so the query fake below has to answer `leftJoin` — the label
+// resolver's containment rule reads a thread's workspace off its node now.
+vi.mock('@pagespace/db/schema/agent-workspace-nodes', () => ({
+  agentWorkspaceNodes: { __name: 'nodes' },
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: async (userId: string, pageId: string) =>
     pageAccess.has(`${userId}:${pageId}`) ? 'VIEW' : null,

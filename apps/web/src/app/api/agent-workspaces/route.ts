@@ -45,8 +45,8 @@ import {
   type AgentSessionListFilter,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
+import { findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
-import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
@@ -127,25 +127,22 @@ export async function GET(request: Request) {
       return {
         ...session,
         shells: shellsBySession.get(session.workspaceId) ?? [],
-        // THE list of threads in this workspace — one collection, every thread,
-        // each annotated with where it sits in the grid if it is placed at all
-        // (issue #2373).
+        // THE list of threads in this workspace, and there is nothing left to
+        // annotate it with (issue #2373). Membership IS the node row, so each
+        // entry already carries its `nodeId` and whether it is `attached` —
+        // read off the same row that decided the thread is here at all.
         //
-        // This and `workspace` below used to be two lists the client chose
-        // between, and the choice was wrong in the common case: an open
-        // workspace always has a grid, so `AgentsSidebar` always rendered the
-        // pane branch, and a thread with no pane row was invisible. Placement
-        // is best-effort by design, and a thread created without `placeInGrid`
-        // is never placed at all, so "created but not placed" is a resting
-        // state this list must serve, not a transient to wait out.
-        conversations: annotateConversationsWithPanes(
-          conversationsBySession.get(session.workspaceId) ?? [],
-          grid,
-        ),
+        // `annotateConversationsWithPanes` existed to reconcile this listing
+        // with a separate grid, and it is deleted rather than ported: a listing
+        // and a grid that come from one table cannot disagree, so there is no
+        // correspondence left to maintain. A thread with `attached: false` is a
+        // RESTING STATE — created without a placement, or closed — and it is in
+        // this list either way, which is the guarantee the annotation was
+        // reaching for.
+        conversations: conversationsBySession.get(session.workspaceId) ?? [],
         // The grid's GEOMETRY — column widths, pane heights, ordering — for the
-        // pane surface to render. Deliberately no longer the sidebar's source
-        // for "which threads exist": that question has exactly one answer now,
-        // and it is the list above.
+        // pane surface to render, still off the legacy grid for the migration
+        // window (the node tree has its own route, `[workspaceId]/nodes`).
         workspace: workspaceListEntryFromGrid(session.workspaceId, grid),
       };
     });
@@ -287,7 +284,11 @@ export async function POST(request: Request) {
       // else, or was history-deleted — an id-guessing caller learns nothing.
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
-    if (row.workspaceId !== null) {
+    // MEMBERSHIP, from the tree — one lookup on the node table's global
+    // chat-target index. An ADVISORY preflight: the claim's own decision asks
+    // the same question, and the unique index settles the racing case, so this
+    // exists to answer the ordinary one before a workspace row is minted.
+    if ((await findWorkspaceOfConversation(conversationId)) !== null) {
       return NextResponse.json(
         { error: 'That conversation already belongs to a session' },
         { status: 409 },

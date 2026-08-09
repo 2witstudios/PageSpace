@@ -21,9 +21,11 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, ne, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
+import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
@@ -368,16 +370,22 @@ async function listWorkspaceWorkers({
         ownerId: conversations.userId,
         isShared: conversations.isShared,
       })
-      .from(conversations)
+      // MEMBERSHIP IS THE JOIN — the node that binds the thread says which
+      // workspace holds it and whether it is on screen, in one row.
+      .from(agentWorkspaceNodes)
+      .innerJoin(conversations, eq(conversations.id, agentWorkspaceNodes.targetId))
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(conversations.workspaceId, workspaceId),
+          eq(agentWorkspaceNodes.rootId, workspaceId),
+          eq(agentWorkspaceNodes.targetKind, 'chat'),
           eq(conversations.isActive, true),
-          // A closed listing is gone from the human's sidebar — `list_sessions`
-          // must agree, or an agent keeps seeing (and dispatching to) a
-          // sibling the user believes they already closed.
-          isNull(conversations.closedInWorkspaceAt),
+          // A thread the human took OFF THE GRID is gone from their pane
+          // surface — `list_sessions` must agree, or an agent keeps seeing
+          // (and dispatching to) a sibling the user believes they closed. It
+          // is the node's own `parentId` now, so the tool's listing and the
+          // grid cannot disagree about which threads are showing.
+          isNotNull(agentWorkspaceNodes.parentId),
         ),
       )
       .orderBy(desc(conversations.createdAt))
@@ -933,22 +941,27 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // bound + not closed) rather than by workspace membership — the old
       // workspace comparison incidentally masked deleted rows.
       if (!conversation.isActive) return null;
+      // MEMBERSHIP, from the tree: which workspace holds this thread, and
+      // whether it is on screen there. Two facts off ONE row, where they used
+      // to be two columns nothing kept in correspondence.
+      const membership = await findChatMembership(db, conversationId);
       return {
         conversationId,
         ownerId: conversation.userId,
         agentPageId: conversationPageId(conversation),
         name: conversation.title ?? '',
-        // The WORKSPACE this conversation is bound to (conversations.workspaceId
-        // — the agent_workspaces.id FK), or null for a workspace-less thread.
+        // The WORKSPACE whose tree holds this thread — the membership read,
+        // through the node's global chat-target index rather than a column.
         // `openOwnSession` requires it non-null (a plain thread is not a
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
-        workspaceId: conversation.workspaceId,
-        // The human closed this conversation's LISTING (it no longer shows in
-        // their sidebar) — `openOwnSession` refuses on this, so a worker verb
-        // can never dispatch new work into, read, or kill a worker the user
-        // has already closed.
-        isClosed: conversation.closedInWorkspaceAt !== null,
+        workspaceId: membership?.workspaceId ?? null,
+        // The human took this conversation OFF THE GRID (its node is parked).
+        // `openOwnSession` refuses on this, so a worker verb can never
+        // dispatch new work into, read, or kill a worker the user has already
+        // closed. It is one row's `parentId` now, rather than a second column
+        // that had to be kept in step with where the pane was.
+        isClosed: membership !== null && !membership.attached,
       };
     },
 
@@ -981,9 +994,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           // the caller's own workspace — never evicted by its own spawn.
           excludeTargetId: callerConversationId,
           // An agent minting a worker has no browser pane waiting to be filled,
-          // so the server places it. The pane-picker routes deliberately do not
-          // ask for this — see `placeInGrid`'s doc.
-          placeInGrid: true,
+          // so the membership write places it. The pane-picker routes
+          // deliberately leave it parked — see `attach`'s doc.
+          attach: true,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then

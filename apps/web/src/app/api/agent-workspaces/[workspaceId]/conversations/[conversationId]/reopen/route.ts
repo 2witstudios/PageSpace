@@ -1,17 +1,17 @@
 /**
- * Reopen ONE conversation back INTO its session's listing — the undo of the
- * sibling `[conversationId]` route's DELETE.
+ * Put ONE conversation back on its workspace's grid — the undo of the sibling
+ * `[conversationId]` route's DELETE.
  *
- * POST → 200 { ok: true } — the console's "History" affordance: a closed
- * listing is invisible to `GET /api/agent-workspaces` (see
- * `listSessionConversationsBulk`'s doc) but its transcript is untouched, so
- * this is how a user gets back to a conversation they closed a pane on. It
- * never touches history — same as the close route, this stamps/clears
- * `conversations.closedInWorkspaceAt` only.
+ * POST → 200 { ok: true } — a `move` of the thread's node back into the tree.
+ * It mints nothing: the node never stopped existing, because a close only
+ * changed where it was.
  *
- * Subject to the same `MAX_SESSION_CONVERSATIONS` ceiling the create route
- * enforces (`session_full` → the shared 429), because reopening occupies an
- * open-listing slot exactly like minting a new conversation does.
+ * **No `session_full` any more.** The old version was bounded by
+ * `MAX_SESSION_CONVERSATIONS`, because reopening restored a listing slot the
+ * close had freed. A member that never stopped being a member frees no slot
+ * when it is closed and consumes none when it returns, so the ceiling has
+ * nothing to say here — it bounds MEMBERSHIP, and is enforced where membership
+ * is created.
  *
  * Gated by the same ordinary session access check the close route uses —
  * this is a routine write, not a capability-gated act.
@@ -23,7 +23,6 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionAccess, reopenConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
-import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -58,10 +57,6 @@ export async function POST(request: Request, context: RouteContext) {
     // conversation some OTHER session owns, or was history-deleted — an
     // id-guessing caller learns nothing either way.
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  }
-
-  if (outcome === 'session_full') {
-    return sessionConversationLimitExceeded(request, auth.userId, workspaceId, ROUTE);
   }
 
   if (outcome === 'reopened') {

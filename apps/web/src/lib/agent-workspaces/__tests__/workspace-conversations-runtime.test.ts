@@ -23,6 +23,13 @@ vi.mock('@pagespace/db/db', () => {
     leftJoin: vi.fn(() => chain),
     where: vi.fn(() => chain),
     orderBy: vi.fn(() => chain),
+    // A subquery ALIAS, not a terminal: the drive-scoped listing joins the
+    // membership relation (`agent_workspace_nodes` narrowed to chat targets),
+    // and building one is pure query construction that never touches the
+    // queue. It returns a plain object rather than the chain so a stray
+    // `.limit()` on an alias would blow up here instead of quietly eating a
+    // canned response.
+    as: vi.fn((name: string) => ({ __alias: name, targetId: {}, rootId: {} })),
     limit: vi.fn(() => Promise.resolve(responses.shift() ?? [])),
   };
   return { db: chain, __queueResponse: (rows: unknown[]) => responses.push(rows) };

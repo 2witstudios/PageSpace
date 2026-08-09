@@ -87,6 +87,13 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   agent_workspace_shells: 'agentWorkspaces',
+  // The subject's workspace MEMBERSHIP and layout. It arrived unregistered
+  // with the node model, and it became load-bearing when membership moved into
+  // it: which threads a workspace holds, and where each one sits, is a fact
+  // about the subject's own working context that used to live in
+  // `conversations.workspaceId` (exported under `collectUserMessages`'s
+  // boundary) and now lives only here.
+  agent_workspace_nodes: 'agentWorkspaces',
   ai_stream_sessions: 'streamState',
 };
 
@@ -241,6 +248,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     DERIVED_OR_EPHEMERAL,
     'agent_workspace_layout_ops',
     'agent_workspace_layout_revs',
+    // A monotonic per-workspace mutation counter and nothing else — one bigint
+    // whose only job is to let a client tell a stale snapshot from a fresh one.
+    // The rows it counts ARE exported (`agent_workspace_nodes`).
+    'agent_workspace_node_revs',
     'agent_workspace_pane_columns',
     'agent_workspace_panes',
     'ai_pending_abort_intents',

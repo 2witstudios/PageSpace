@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { expelConversationFromSession, findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -247,30 +247,31 @@ export async function DELETE(
     // previous round's open-only guard). Re-reading inside the lock also
     // means a stale pre-lock snapshot can never smuggle a since-reopened
     // conversation past the never-empty guard.
-    if (conversationRow?.workspaceId) {
-      const workspaceId = conversationRow.workspaceId;
-      const outcome = await withSessionListingLock(workspaceId, async () => {
-        const fresh = await conversationRepository.getConversation(conversationId);
-        if (!fresh || !fresh.isActive) {
-          // Already history-deleted by a concurrent request — nothing left
-          // to guard or delete.
-          return 'already_deleted' as const;
-        }
-        // A row whose session was cleared (`conversations.workspaceId` is
-        // `ON DELETE SET NULL`) is still an active conversation that must
-        // be deleted — it's merely detached from `workspaceId`'s cap, not
-        // history-deleted. Only weigh the never-empty guard when the row is
-        // STILL bound to the session this lock is keyed on (review finding
-        // — coderabbitai on PR #2296: the prior version folded "detached"
-        // into "already deleted" and silently skipped the soft-delete).
-        if (fresh.workspaceId === workspaceId && fresh.closedInWorkspaceAt === null) {
-          // Still open — occupies a listing slot, so the never-empty guard applies.
-          const openCount = await countOpenConversationsForSession(workspaceId);
-          if (openCount <= 1) return 'last_conversation' as const;
-        }
-        await conversationRepository.softDeleteConversation(agentId, conversationId);
-        return 'deleted' as const;
+    const membership = await findWorkspaceOfConversation(conversationId);
+    if (membership) {
+      const workspaceId = membership;
+      // EXPEL FIRST, THEN DELETE. The membership write takes the workspace's
+      // own lock, reads the tree inside it, and refuses when this is the last
+      // conversation — so the never-empty guard is a count over the very tree
+      // the same transaction is about to change. It also closes the reopen race
+      // by construction: a concurrent reopen is a write to this same tree under
+      // this same lock, so the two serialize rather than interleaving
+      // arbitrarily as two operations under two different locks could.
+      const outcome = await expelConversationFromSession({
+        conversationId,
+        workspaceId,
+        actingUserId: auth.userId,
+        requireSurvivor: true,
       });
+
+      if (outcome === 'refused') {
+        return NextResponse.json({ error: 'Could not delete this conversation' }, { status: 500 });
+      }
+      if (outcome === 'expelled') {
+        // Ordered deliberately — see `expelConversationFromSession`'s doc for
+        // why the survivable failure is the one that can happen here.
+        await conversationRepository.softDeleteConversation(agentId, conversationId);
+      }
 
       if (outcome === 'last_conversation') {
         auditRequest(request, {
@@ -283,17 +284,14 @@ export async function DELETE(
         });
         return NextResponse.json(
           {
-            error: 'This is the only open conversation in its session — close the pane (or end the session) instead of deleting it from History.',
+            error: 'This is the only conversation in its session — close the pane (or end the session) instead of deleting it from History.',
             reason: 'last_conversation',
           },
           { status: 409 },
         );
       }
-      // 'already_deleted' falls through to the success response below —
-      // idempotent from the caller's point of view, since the end state
-      // (isActive: false) is exactly what a DELETE asks for.
     } else {
-      // Not session-bound at all — no listing to protect, no lock needed.
+      // Not a member of any workspace — no listing to protect, no lock needed.
       await conversationRepository.softDeleteConversation(agentId, conversationId);
     }
 

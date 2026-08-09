@@ -18,8 +18,14 @@ const WORKSPACE = 'ws-1';
 const VIEWER = 'user-1';
 
 const { store, mockBroadcast, authorize, labelRows } = vi.hoisted(() => ({
-  /** A workspace's nodes and rev, mutated by the write exactly as the DB would be. */
-  store: { rev: 0, nodes: [] as WorkspaceNode[], writes: [] as PersistedNodeWrite[] },
+  /**
+   * A workspace's nodes and rev, mutated by the write exactly as the DB would
+   * be — plus `rows`, which stands for whatever `within` writes on the same
+   * transaction (a conversation, a shell). The lock stub below rolls ALL of it
+   * back on a throw, so "the membership write unwound" and "it returned a
+   * refusal" are distinguishable states rather than the same empty `writes`.
+   */
+  store: { rev: 0, nodes: [] as WorkspaceNode[], writes: [] as PersistedNodeWrite[], rows: [] as string[] },
   mockBroadcast: vi.fn(),
   authorize: { allow: true, seen: [] as unknown[] },
   labelRows: {
@@ -36,9 +42,25 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
   );
   return {
     ...actual,
-    // The lock collapses to a passthrough: lock semantics belong to the store's
-    // own surface, not to this wiring test.
-    withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
+    // A TRANSACTION, not a passthrough. The lock's mutual exclusion belongs to
+    // the store's own surface, but its ROLLBACK is exactly what this wiring
+    // depends on: a refusal raised after `within` has written must take those
+    // writes with it, and a fake that could not roll back would make an
+    // unwinding refusal and a returning one indistinguishable.
+    withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => {
+      const snapshot = {
+        rev: store.rev,
+        nodes: structuredClone(store.nodes),
+        writes: [...store.writes],
+        rows: [...store.rows],
+      };
+      try {
+        return await fn({});
+      } catch (error) {
+        Object.assign(store, snapshot);
+        throw error;
+      }
+    },
     readWorkspaceNodeSnapshot: async () => ({ rev: store.rev, nodes: structuredClone(store.nodes) }),
     readWorkspaceNodeSnapshots: async (_tx: unknown, ids: string[]) =>
       new Map(ids.map((id) => [id, { rev: store.rev, nodes: structuredClone(store.nodes) }])),
@@ -89,7 +111,9 @@ vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}) }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
-const { applyWorkspaceNodeWrite, readWorkspaceNodes } = await import('../workspace-node-runtime');
+const { applyWorkspaceMembershipWrite, applyWorkspaceNodeWrite, readWorkspaceNodes } = await import(
+  '../workspace-node-runtime',
+);
 
 const root: WorkspaceNode = { nodeType: 'root', id: 'root', parentId: null, position: 0, axis: 'row' };
 const pane = (
@@ -104,6 +128,7 @@ beforeEach(() => {
   store.rev = 3;
   store.nodes = [root, pane('pane-a', 'root', 0), pane('pane-b', 'root', 1)];
   store.writes = [];
+  store.rows = [];
   authorize.allow = true;
   authorize.seen = [];
   labelRows.conversations = [];
@@ -307,5 +332,191 @@ describe('the 409 body', () => {
     expect(stale.status).toBe('stale');
     if (stale.status !== 'stale') return;
     expect(stale.snapshot).toEqual(fresh);
+  });
+});
+
+
+/**
+ * THE MEMBERSHIP WRITE'S SHARED TRANSACTION — the chokepoint's whole contract.
+ *
+ * `within` receives the transaction the node write runs on, and the funnel is
+ * what guarantees the two cannot land apart. The store fake above mutates its
+ * state only inside `writeWorkspaceNodes`, so "the node was written" is
+ * observable as `store.writes`, and "the row was written" is observable as the
+ * callback having run — which is exactly the pair a ghost breaks.
+ */
+describe('the membership write', () => {
+  it('runs `within` BEFORE the binding gate — the gate asks about a row `within` just created', async () => {
+    // Ordering, and it is load-bearing rather than incidental: the gate reads
+    // the conversation to decide containment, and for a spawn that conversation
+    // does not exist until `within` inserts it. A gate that ran first would
+    // refuse every legitimate spawn.
+    const order: string[] = [];
+    authorize.allow = true;
+    const before = authorize.seen.length;
+
+    await applyWorkspaceMembershipWrite({
+      workspaceId: WORKSPACE,
+      actingUserId: VIEWER,
+      run: () => ({
+        ok: true,
+        write: { put: [pane('pane-new', 'root', 2, { kind: 'chat', id: 'conv-new' })], drop: [] },
+      }),
+      within: async () => {
+        order.push('within');
+        store.rows.push('conv-new');
+      },
+    });
+
+    expect(order).toEqual(['within']);
+    expect(store.rows).toEqual(['conv-new']);
+    // The gate ran, and it ran on the target this write INTRODUCED.
+    expect(authorize.seen.length).toBe(before + 1);
+    expect(store.writes).toHaveLength(1);
+  });
+
+  it('a REFUSED binding gate writes no node AND unwinds `within`', async () => {
+    // The gate refuses after `within` has already written into the transaction,
+    // so it has to THROW rather than return — otherwise the transaction commits
+    // a conversation with no membership, which is the ghost this funnel exists
+    // to make unrepresentable. The unwind is observable here as: no node write,
+    // and the caller still gets an ordinary refusal rather than an exception.
+    authorize.allow = false;
+
+    const result = await applyWorkspaceMembershipWrite({
+      workspaceId: WORKSPACE,
+      actingUserId: VIEWER,
+      run: () => ({
+        ok: true,
+        write: { put: [pane('pane-new', 'root', 2, { kind: 'chat', id: 'conv-new' })], drop: [] },
+      }),
+      within: async () => {
+        store.rows.push('conv-new');
+      },
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('forbidden_target');
+    expect(store.writes).toEqual([]);
+    expect(store.rev).toBe(3);
+    // THE LOAD-BEARING ASSERTION. `within` already inserted by the time the
+    // gate refused, so a refusal that merely RETURNED would commit this row
+    // with no node beside it — a conversation that is a member of nothing.
+    // Only an unwind takes it back.
+    expect(store.rows).toEqual([]);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('a REFUSED command never reaches `within` at all', async () => {
+    // Refusals decided before the transaction has written anything return
+    // rather than throw — but they must still not run the creator, or a
+    // workspace at its cap would mint conversations it then refused to admit.
+    let ran = false;
+
+    const result = await applyWorkspaceMembershipWrite({
+      workspaceId: WORKSPACE,
+      actingUserId: VIEWER,
+      run: () => ({ ok: false, code: 'session_full', detail: 'full' }),
+      within: async () => {
+        ran = true;
+      },
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('session_full');
+    expect(ran).toBe(false);
+    expect(store.writes).toEqual([]);
+  });
+
+  it('a throw from `within` takes the node write with it', async () => {
+    class Refused extends Error {}
+    await expect(
+      applyWorkspaceMembershipWrite({
+        workspaceId: WORKSPACE,
+        actingUserId: VIEWER,
+        run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
+        within: async () => {
+          store.rows.push('conv-new');
+          throw new Refused('the conversation could not be created');
+        },
+      }),
+    ).rejects.toBeInstanceOf(Refused);
+
+    // Nothing persisted — not the node, and not the half-written row either —
+    // and the caller's own error reaches them unchanged, which is what lets the
+    // conversation layer keep its error vocabulary.
+    expect(store.writes).toEqual([]);
+    expect(store.rows).toEqual([]);
+    expect(store.rev).toBe(3);
+  });
+
+  it('runs `within` even when the TREE does not change — a retry re-checks its own gates', async () => {
+    // A re-sent create finds the node already there, so the membership write is
+    // a no-op on the tree. The conversation-level idempotency gates (is this id
+    // really the thread the caller described?) still have to run, or a request
+    // nobody checked would be answered "yes" because the layout happened not to
+    // move.
+    let ran = false;
+    const result = await applyWorkspaceMembershipWrite({
+      workspaceId: WORKSPACE,
+      actingUserId: VIEWER,
+      run: () => ({ ok: true, write: { put: [], drop: [] } }),
+      within: async () => {
+        ran = true;
+      },
+    });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.changed).toBe(false);
+    expect(ran).toBe(true);
+    expect(store.writes).toEqual([]);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('reports a chat-target unique violation as `bound_elsewhere`, not as a fault', async () => {
+    // The one database answer this layer translates: two workspaces raced for
+    // one conversation, and only the global index was in a position to settle
+    // it. Matched on the constraint NAME rather than the message, because the
+    // message is a Postgres locale string.
+    const conflict = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'agent_workspace_nodes_chat_target_idx',
+    });
+
+    const result = await applyWorkspaceMembershipWrite({
+      workspaceId: WORKSPACE,
+      actingUserId: VIEWER,
+      run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
+      within: async () => {
+        throw conflict;
+      },
+    });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('bound_elsewhere');
+  });
+
+  it('lets a unique violation from ANY OTHER index keep throwing', async () => {
+    // A `23505` on the primary key or the single-root index is a genuine fault
+    // and must not be reported to a user as "already bound".
+    const conflict = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'agent_workspace_nodes_one_root_idx',
+    });
+
+    await expect(
+      applyWorkspaceMembershipWrite({
+        workspaceId: WORKSPACE,
+        actingUserId: VIEWER,
+        run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
+        within: async () => {
+          throw conflict;
+        },
+      }),
+    ).rejects.toBe(conflict);
   });
 });

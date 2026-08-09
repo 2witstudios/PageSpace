@@ -1,130 +1,94 @@
 /**
- * The session→conversation listing-reopen decision — the property under test
- * is the cap guard (a session already at `MAX_SESSION_CONVERSATIONS` open
- * listings refuses a reopen) plus idempotency (reopening an already-open
- * listing, or racing another reopen, is success, never an error), mirroring
- * `close-conversation-in-session.test.ts`.
+ * REOPENING IS A `move` BACK, SO IT MINTS NOTHING AND CONSUMES NO SLOT.
+ *
+ * The cap is the interesting deletion here. The previous version refused a
+ * reopen when the workspace held `MAX_SESSION_CONVERSATIONS` open listings,
+ * because reopening restored a listing slot the close had freed. Under a `move`
+ * the node never stopped existing: closing frees no slot and reopening consumes
+ * none, so `session_full` is not a thing this decision can say — and there is no
+ * `countOpenConversations` dep to mock, which is the assertion.
+ *
+ * `history_deleted` survives, and only to give an answer a name. A deleted
+ * thread has no node either (the delete removes it), so the membership write
+ * would say `not_a_member` — but "you deleted this" is something a caller can
+ * act on and "there is no such thread here" is not.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   reopenConversationInSessionWith,
   type ReopenConversationInSessionDeps,
 } from '../reopen-conversation-in-workspace';
 
-let deps: {
+interface MockDeps extends ReopenConversationInSessionDeps {
   findConversation: ReturnType<typeof vi.fn>;
-  countOpenConversations: ReturnType<typeof vi.fn>;
-  reopenConversation: ReturnType<typeof vi.fn>;
-};
+  readmitConversation: ReturnType<typeof vi.fn>;
+}
 
 const OWNER = 'user-1';
-const input = { conversationId: 'conv-1', userId: OWNER, workspaceId: 'ses-1' };
-const run = () => reopenConversationInSessionWith(deps as ReopenConversationInSessionDeps, input);
+const input = { conversationId: 'conv-1', userId: OWNER, workspaceId: 'ws-1' };
 
-beforeEach(() => {
-  deps = {
-    findConversation: vi.fn(async () => ({
-      userId: OWNER,
-      workspaceId: 'ses-1',
-      closedInWorkspaceAt: new Date('2026-01-01'),
-      isActive: true,
-    })),
-    countOpenConversations: vi.fn(async () => 1),
-    reopenConversation: vi.fn(async () => 'reopened' as const),
-  };
-});
+function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): MockDeps {
+  return {
+    findConversation: vi.fn(async () => ({ userId: OWNER, isActive: true })),
+    readmitConversation: vi.fn(async () => 'readmitted' as const),
+    ...overrides,
+  } as MockDeps;
+}
 
 describe('reopenConversationInSessionWith', () => {
-  it('reopens a closed conversation when the session has room', async () => {
-    await expect(run()).resolves.toBe('reopened');
-    expect(deps.reopenConversation).toHaveBeenCalledWith('conv-1');
+  let deps: MockDeps;
+  beforeEach(() => {
+    deps = makeDeps();
   });
 
-  it('given no such row, should answer not_in_session', async () => {
+  it('moves the thread back onto the grid', async () => {
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('reopened');
+    expect(deps.readmitConversation).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      workspaceId: 'ws-1',
+    });
+  });
+
+  it('reopens into a FULL workspace — a member returning consumes no new slot', async () => {
+    // There is nothing to arrange: the cap bounds membership, and this thread
+    // never stopped being a member. The previous shape needed a count stub here
+    // and answered `session_full`.
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('reopened');
+  });
+
+  it('refuses a conversation this user does not own, as "not there"', async () => {
+    deps.findConversation.mockResolvedValue({ userId: 'user-2', isActive: true });
+
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
+    expect(deps.readmitConversation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a conversation that does not exist', async () => {
     deps.findConversation.mockResolvedValue(null);
-    await expect(run()).resolves.toBe('not_in_session');
-    expect(deps.countOpenConversations).not.toHaveBeenCalled();
-    expect(deps.reopenConversation).not.toHaveBeenCalled();
+
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
+    expect(deps.readmitConversation).not.toHaveBeenCalled();
   });
 
-  it("given the row belongs to a DIFFERENT session, should answer not_in_session — same shape as no such row", async () => {
-    deps.findConversation.mockResolvedValue({
-      userId: OWNER,
-      workspaceId: 'ses-other',
-      closedInWorkspaceAt: new Date('2026-01-01'),
-      isActive: true,
-    });
-    await expect(run()).resolves.toBe('not_in_session');
-    expect(deps.reopenConversation).not.toHaveBeenCalled();
+  it('names a history-deleted thread rather than folding it into "not there"', async () => {
+    deps.findConversation.mockResolvedValue({ userId: OWNER, isActive: false });
+
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('history_deleted');
+    expect(deps.readmitConversation).not.toHaveBeenCalled();
   });
 
-  it('given a row bound to no session at all (workspaceId null), should answer not_in_session', async () => {
-    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: null, closedInWorkspaceAt: new Date('2026-01-01'), isActive: true });
-    await expect(run()).resolves.toBe('not_in_session');
+  it('is idempotent on a thread already on the grid', async () => {
+    deps.readmitConversation.mockResolvedValue('already_attached');
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('already_open');
   });
 
-  // The mirror of the close side's gate: the session check on the route admits
-  // every drive member, so only this keeps a listing its owner deliberately
-  // dismissed from being pushed back into their sidebar by someone else.
-  describe('the ownership gate', () => {
-    it("refuses a conversation the caller does not own — same shape as no such row", async () => {
-      deps.findConversation.mockResolvedValue({
-        userId: 'mallory',
-        workspaceId: 'ses-1',
-        closedInWorkspaceAt: new Date('2026-01-01'),
-        isActive: true,
-      });
-      await expect(run()).resolves.toBe('not_in_session');
-      expect(deps.reopenConversation).not.toHaveBeenCalled();
-    });
-
-    it('is checked BEFORE the history-deleted and idempotency branches, so a foreign row leaks no state', async () => {
-      // `history_deleted` or `already_open` on a foreign id would each reveal
-      // that the row exists and what state it is in.
-      deps.findConversation.mockResolvedValue({
-        userId: 'mallory',
-        workspaceId: 'ses-1',
-        closedInWorkspaceAt: null,
-        isActive: false,
-      });
-      await expect(run()).resolves.toBe('not_in_session');
-      expect(deps.countOpenConversations).not.toHaveBeenCalled();
-    });
+  it('reports a thread this workspace does not hold as "not there"', async () => {
+    deps.readmitConversation.mockResolvedValue('not_a_member');
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
   });
 
-  it('given a history-deleted target (isActive false), should answer history_deleted WITHOUT weighing the cap', async () => {
-    deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: new Date('2026-01-01'), isActive: false });
-    await expect(run()).resolves.toBe('history_deleted');
-    expect(deps.countOpenConversations).not.toHaveBeenCalled();
-    expect(deps.reopenConversation).not.toHaveBeenCalled();
-  });
-
-  describe('the cap guard', () => {
-    it('refuses to reopen when the session already holds MAX_SESSION_CONVERSATIONS open listings', async () => {
-      deps.countOpenConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
-      await expect(run()).resolves.toBe('session_full');
-      expect(deps.reopenConversation).not.toHaveBeenCalled();
-    });
-
-    it('allows reopening with room for exactly one more', async () => {
-      deps.countOpenConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS - 1);
-      await expect(run()).resolves.toBe('reopened');
-    });
-  });
-
-  describe('idempotency', () => {
-    it('reopening an already-open conversation is a no-op success, not an error', async () => {
-      deps.findConversation.mockResolvedValue({ userId: OWNER, workspaceId: 'ses-1', closedInWorkspaceAt: null, isActive: true });
-      await expect(run()).resolves.toBe('already_open');
-      // Already open — no need to weigh the cap or write anything.
-      expect(deps.countOpenConversations).not.toHaveBeenCalled();
-      expect(deps.reopenConversation).not.toHaveBeenCalled();
-    });
-
-    it('a race that reopens the row between the check and the write folds into already_open', async () => {
-      deps.reopenConversation.mockResolvedValue('noop');
-      await expect(run()).resolves.toBe('already_open');
-    });
+  it('collapses a tree refusal — a workspace with no root — into the same answer', async () => {
+    deps.readmitConversation.mockResolvedValue('refused');
+    expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
   });
 });

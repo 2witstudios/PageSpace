@@ -23,6 +23,7 @@
  */
 
 import { isUniqueViolation } from '../subdomain-allocation';
+import type { DbExecutor } from './workspace-layout-store';
 
 /** One `agent_workspace_shells` row. `id` IS the shellId — the wire address. */
 export interface SessionShellRecord {
@@ -45,6 +46,17 @@ export interface SessionShellRecord {
 }
 
 export interface NewSessionShellInput {
+  /**
+   * The row's id, supplied by the CALLER.
+   *
+   * Optional, and the column keeps its own `$defaultFn` for every caller that
+   * omits it. It exists because a shell's membership node has to name the shell
+   * it binds, and that node is decided against the workspace's tree BEFORE the
+   * row is inserted — inside the same transaction, so a server-minted id here
+   * would not be knowable in time. Minting it one step earlier is the same
+   * convention the node model already runs on: ids come from the caller.
+   */
+  id?: string;
   workspaceId: string;
   ownerId: string;
   name: string;
@@ -95,12 +107,25 @@ export { isUniqueViolation };
  * table and operators so callers that inject a fake (in tests) never load the DB
  * module graph.
  */
-export async function createDbSessionShellStore(): Promise<SessionShellStore> {
-  const [{ db }, { eq, and, or, lt, isNull }, { agentWorkspaceShells }] = await Promise.all([
+export async function createDbSessionShellStore(
+  /**
+   * Run every statement on THIS executor rather than the pooled `db`.
+   *
+   * The membership write passes the transaction its node write runs in, so a
+   * shell row and the node that puts that shell in the workspace commit
+   * together or not at all — the same property the conversation path gets from
+   * the same funnel. A shell whose row landed and whose node did not is a
+   * terminal the workspace holds and cannot show, which is the ghost this epic
+   * deletes wearing a different hat.
+   */
+  executor?: DbExecutor,
+): Promise<SessionShellStore> {
+  const [{ db: pooled }, { eq, and, or, lt, isNull }, { agentWorkspaceShells }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/agent-workspaces'),
   ]);
+  const db = executor ?? pooled;
 
   return {
     async list(workspaceId) {
@@ -117,6 +142,7 @@ export async function createDbSessionShellStore(): Promise<SessionShellStore> {
       const [row] = await db
         .insert(agentWorkspaceShells)
         .values({
+          ...(input.id === undefined ? {} : { id: input.id }),
           workspaceId: input.workspaceId,
           ownerId: input.ownerId,
           name: input.name,

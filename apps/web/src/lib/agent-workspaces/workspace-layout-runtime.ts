@@ -42,7 +42,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells, agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { pages } from '@pagespace/db/schema/core';
@@ -387,9 +388,22 @@ async function resolvePaneLabels(
             // decides whether this conversation belongs in the grid at all.
             userId: conversations.userId,
             isShared: conversations.isShared,
-            workspaceId: conversations.workspaceId,
+            // MEMBERSHIP, from the node that binds the thread. This read the
+            // conversation's own `workspaceId` column until membership moved
+            // into the tree; the containment rule below is unchanged in what it
+            // asks, only in where the answer comes from. A LEFT join, so a
+            // thread that belongs to no workspace still resolves (as null) —
+            // an inner one would silently drop it and take its title with it.
+            workspaceId: agentWorkspaceNodes.rootId,
           })
           .from(conversations)
+          .leftJoin(
+            agentWorkspaceNodes,
+            and(
+              eq(agentWorkspaceNodes.targetId, conversations.id),
+              eq(agentWorkspaceNodes.targetKind, 'chat'),
+            ),
+          )
           .where(inArray(conversations.id, [...chatIds]))
       : Promise.resolve([]),
     shellIds.size > 0
