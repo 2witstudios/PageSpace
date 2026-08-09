@@ -13,11 +13,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { PersistedNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-write';
+import {
+  CHAT_TARGET_UNIQUE_INDEX,
+  type ChatTargetHolder,
+} from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
 
 const WORKSPACE = 'ws-1';
 const VIEWER = 'user-1';
 
-const { store, mockBroadcast, authorize, labelRows } = vi.hoisted(() => ({
+const { store, mockBroadcast, authorize, labelRows, chatBindings } = vi.hoisted(() => ({
   /** A workspace's nodes and rev, mutated by the write exactly as the DB would be. */
   store: { rev: 0, nodes: [] as WorkspaceNode[], writes: [] as PersistedNodeWrite[] },
   mockBroadcast: vi.fn(),
@@ -27,6 +31,19 @@ const { store, mockBroadcast, authorize, labelRows } = vi.hoisted(() => ({
     shells: [] as unknown[],
     pages: [] as unknown[],
     workspaces: [] as unknown[],
+  },
+  /**
+   * The GLOBAL half of the one-node-per-conversation rule, which no workspace's
+   * own rows can answer: `holders` is what the whole table says, `asked` is
+   * every id the write path actually looked up (so a test can pin that it did
+   * NOT look, which is how the ordering against the ACL gate is asserted), and
+   * `throwOnWrite` is a constraint violation the persist raises after the
+   * pre-flight has already passed — the TOCTOU window.
+   */
+  chatBindings: {
+    holders: [] as ChatTargetHolder[],
+    asked: [] as string[][],
+    throwOnWrite: null as Error | null,
   },
 }));
 
@@ -42,7 +59,12 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
     readWorkspaceNodeSnapshot: async () => ({ rev: store.rev, nodes: structuredClone(store.nodes) }),
     readWorkspaceNodeSnapshots: async (_tx: unknown, ids: string[]) =>
       new Map(ids.map((id) => [id, { rev: store.rev, nodes: structuredClone(store.nodes) }])),
+    readChatTargetHolders: async (_tx: unknown, targetIds: readonly string[]) => {
+      chatBindings.asked.push([...targetIds]);
+      return chatBindings.holders.filter((holder) => targetIds.includes(holder.targetId));
+    },
     writeWorkspaceNodes: async (_tx: unknown, input: { write: PersistedNodeWrite }) => {
+      if (chatBindings.throwOnWrite !== null) throw chatBindings.throwOnWrite;
       store.writes.push(input.write);
       const dropping = new Set(input.write.drop);
       const byId = new Map(input.write.put.map((node) => [node.id, node]));
@@ -110,6 +132,9 @@ beforeEach(() => {
   labelRows.shells = [];
   labelRows.pages = [];
   labelRows.workspaces = [{ id: WORKSPACE, ownerId: VIEWER }];
+  chatBindings.holders = [];
+  chatBindings.asked = [];
+  chatBindings.throwOnWrite = null;
 });
 
 function write(over: { baseRev?: number; put?: WorkspaceNode[]; drop?: string[] } = {}) {
@@ -293,6 +318,152 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     // No entry at all, so refusing to resolve is indistinguishable from "gone"
     // and the read is not an existence oracle. The NODE still renders.
     expect((await readWorkspaceNodes(WORKSPACE, VIEWER)).targets).toEqual([]);
+  });
+});
+
+/**
+ * The constraint whose key is `targetId` ALONE — the only one on the node table
+ * that reaches past the workspace being written, and therefore the only one
+ * `validateTree` structurally cannot settle. Everything here is about the two
+ * places that gap is closed and about the SHAPE of the refusal, which is the
+ * whole point: a 502 tells an optimistic client nothing it can act on.
+ */
+describe('a chat target already bound in ANOTHER workspace', () => {
+  const held = (target: string, rootId = 'ws-somewhere-else'): ChatTargetHolder => ({
+    rootId,
+    nodeId: 'their-pane',
+    targetId: target,
+  });
+
+  it('is a typed refusal, not a raw constraint error — and writes nothing', async () => {
+    chatBindings.holders = [held('conv-1')];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('conflict');
+    if (result.status !== 'conflict') return;
+    expect(result.code).toBe('target_already_shown');
+    expect(result.detail).toContain('conv-1');
+    expect(store.writes).toEqual([]);
+    expect(store.rev).toBe(3);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('CARRIES THE TRUTH TO REBASE AGAINST — the same body a GET answers', async () => {
+    // This is the finding, not a nicety. The client applied optimistically; a
+    // body with no `rev` and no `nodes` leaves its rebase path — which is driven
+    // by the snapshot — with nothing to run on, and the phantom pane stays on
+    // screen until an unrelated poll happens to correct it.
+    store.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-mine' })];
+    labelRows.conversations = [
+      { id: 'conv-mine', title: 'Planning', type: 'page', contextId: null, userId: VIEWER, isShared: false, workspaceId: WORKSPACE, lastMessageAt: null },
+    ];
+    chatBindings.holders = [held('conv-1')];
+
+    const result = await write({
+      put: [pane('pane-new', 'root', 1, { kind: 'chat', id: 'conv-1' })],
+    });
+    const fresh = await readWorkspaceNodes(WORKSPACE, VIEWER);
+
+    expect(result.status).toBe('conflict');
+    if (result.status !== 'conflict') return;
+    expect(result.snapshot).toEqual(fresh);
+    expect(result.snapshot.rev).toBe(3);
+    expect(result.snapshot.nodes.map((node) => node.id)).toEqual(['root', 'pane-a']);
+    expect(result.snapshot.targets).toEqual([
+      { id: 'conv-mine', kind: 'chat', title: 'Planning', lastMessageAt: null },
+    ]);
+  });
+
+  it('asks the table only about CHAT targets — pages and terminals carry no such index', async () => {
+    // `UNIQUE (targetId) WHERE targetKind = 'chat'` is predicated on the kind,
+    // and opening one page in two panes is a thing users do. Asking about a page
+    // id would be a query with no constraint behind it.
+    await write({
+      put: [
+        pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' }),
+        pane('pane-b', 'root', 1, { kind: 'terminal', id: 'shell-1' }),
+      ],
+    });
+    expect(chatBindings.asked).toEqual([]);
+  });
+
+  it('does not ask about a conversation THIS workspace already holds', async () => {
+    // Held here means it passed this gate when it arrived, and the global index
+    // guarantees nobody else can be holding it. Re-asking would also make a
+    // resize of a bound pane cost a table-wide query.
+    store.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' }), pane('pane-z', 'root', 1)] });
+    expect(result.status).toBe('ok');
+    expect(chatBindings.asked).toEqual([]);
+  });
+
+  it('runs AFTER the ACL gate, so a refusal never confirms a conversation the caller may not touch', async () => {
+    // Reversed, the pre-flight would be an existence oracle: "already shown
+    // elsewhere" about a conversation id the caller has no authority over tells
+    // them it exists and is in use. The 403 has to win.
+    authorize.allow = false;
+    chatBindings.holders = [held('conv-1')];
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.code).toBe('forbidden_target');
+    expect(chatBindings.asked).toEqual([]);
+  });
+
+  it('lets the bind through when the only holder is in THIS workspace', async () => {
+    // The row exists, and it is ours. `validateTree` and the store's
+    // delete-before-upsert own that case; a second refusal here would give one
+    // fault two codes.
+    store.nodes = [root, pane('pane-old', 'root', 0, { kind: 'chat', id: 'conv-1' })];
+    chatBindings.holders = [held('conv-1', WORKSPACE)];
+    const result = await write({
+      drop: ['pane-old'],
+      put: [pane('pane-new', 'root', 0, { kind: 'chat', id: 'conv-1' })],
+    });
+    expect(result.status).toBe('ok');
+  });
+});
+
+describe('the TOCTOU backstop', () => {
+  /** What node-postgres raises, wrapped the way drizzle wraps it. */
+  const indexViolation = (constraint: string) =>
+    Object.assign(new Error('Failed query'), {
+      cause: Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint,
+      }),
+    });
+
+  it('maps the index violation to the SAME typed refusal, with the same rebase body', async () => {
+    // The pre-flight cannot close this: the advisory lock serializes writes to
+    // ONE workspace, and two writers racing for one conversation are in two
+    // different ones by definition. Without this, the pre-flight would make the
+    // 502 rarer rather than gone.
+    chatBindings.throwOnWrite = indexViolation(CHAT_TARGET_UNIQUE_INDEX);
+    const result = await write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] });
+
+    expect(result.status).toBe('conflict');
+    if (result.status !== 'conflict') return;
+    expect(result.code).toBe('target_already_shown');
+    expect(result.detail).toContain('conv-1');
+    expect(result.snapshot.rev).toBe(3);
+    expect(result.snapshot.nodes.map((node) => node.id)).toEqual(['root', 'pane-a', 'pane-b']);
+    expect(store.rev).toBe(3);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does NOT swallow a violation of the single-root index — a different fault, and not this code', async () => {
+    // Widening the catch to every 23505 would report a structurally broken
+    // workspace as "that conversation is shown elsewhere". It stays a thrown
+    // error, which the route answers as 502.
+    chatBindings.throwOnWrite = indexViolation('agent_workspace_nodes_one_root_idx');
+    await expect(write({ put: [pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })] })).rejects.toThrow();
+  });
+
+  it('does not swallow an ordinary failure', async () => {
+    chatBindings.throwOnWrite = new Error('connection terminated');
+    await expect(write({ put: [pane('pane-z', 'root', 2)] })).rejects.toThrow('connection terminated');
   });
 });
 

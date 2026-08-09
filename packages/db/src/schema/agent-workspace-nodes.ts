@@ -216,10 +216,20 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    * CONSTRAINT 6 of 6 — a conversation is bound to at most one node ANYWHERE.
    * Global on purpose, not per-workspace: a conversation belongs to exactly
    * one workspace (`conversations.workspaceId`, set at creation and permanent
-   * — "moving a thread elsewhere is a FORK, never a rebind"), so one
-   * conversation → one workspace → at most one pane. Scoping this per
+   * — "moving a thread elsewhere is a FORK, never a rebind"). Scoping this per
    * workspace would permit the very state that rule forbids, in which the same
    * thread renders in two sessions and each believes it owns the history.
+   *
+   * **It is the only constraint here whose key omits `rootId`, and that has a
+   * consequence one layer up.** A pane's `targetId` is free-form in the write
+   * payload and is NOT held to `conversations.workspaceId` by anything — a pane
+   * naming a conversation in another session is reachable, which is why the
+   * backfill arbitrates chat claims across the whole table. So `validateTree`,
+   * which is handed one workspace's nodes, can only settle the within-workspace
+   * half; the global half is a pre-flight lookup plus a catch on THIS index by
+   * name, in `apps/web/src/lib/agent-workspaces/workspace-node-runtime.ts`.
+   * Every other constraint above carries `rootId` and is therefore settled by
+   * the validator alone.
    *
    * Pages and terminals carry NO such constraint, deliberately: opening the
    * same page in two panes is a legitimate thing a user does.

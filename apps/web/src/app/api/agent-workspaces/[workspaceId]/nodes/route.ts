@@ -6,6 +6,9 @@
  *        → 200 { rev, nodes, targets }   the write landed (or was a no-op)
  *        → 409 { rev, nodes, targets }   stale `baseRev`; the body is the truth
  *                                        to rebase against, not an error
+ *        → 409 { rev, nodes, targets,    a conversation the write would show is
+ *                code, detail }          already shown by a node elsewhere; the
+ *                                        same truth, plus which rule refused
  *        → 400 { error, code, detail }   the payload names another workspace, or
  *                                        the tree it would produce is invalid
  *        → 403 { error }                 you may use this workspace, but not
@@ -39,7 +42,10 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { workspaceNodeWriteRequestSchema } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
-import type { WorkspaceNodeSnapshotResponse } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
+import type {
+  WorkspaceNodeConflictResponse,
+  WorkspaceNodeSnapshotResponse,
+} from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { applyWorkspaceNodeWrite, readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
@@ -123,6 +129,27 @@ export async function POST(request: Request, context: RouteContext) {
 
   if (result.status === 'stale') {
     return NextResponse.json(result.snapshot, { status: 409 });
+  }
+
+  // The OTHER 409, and 409 for the same reason: the caller's edit does not
+  // apply and it needs the tree to rebase onto, not an error string. A
+  // conversation is bound to at most one node ACROSS THE WHOLE TABLE
+  // (`UNIQUE (targetId) WHERE targetKind = 'chat'` carries no `rootId`), so a
+  // node in a workspace this caller may not even know exists can be holding the
+  // one they asked for. That is a domain refusal, and answering it as a 502 —
+  // which is what a raw index violation reaching the catch above produces —
+  // tells an optimistically-applied client nothing, leaving its phantom pane on
+  // screen until an unrelated poll corrects it.
+  //
+  // The body is the snapshot PLUS the code, so the existing rebase path fires
+  // unchanged and a client that wants to explain itself can.
+  if (result.status === 'conflict') {
+    const body: WorkspaceNodeConflictResponse = {
+      ...result.snapshot,
+      code: result.code,
+      detail: result.detail,
+    };
+    return NextResponse.json(body, { status: 409 });
   }
 
   if (result.changed) {

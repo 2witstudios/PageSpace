@@ -120,6 +120,44 @@ describe('the answers', () => {
     expect(await response.json()).toEqual(SNAPSHOT);
   });
 
+  it('409 for a conversation shown elsewhere — the SAME rebase body, PLUS the code', async () => {
+    // The conversation index is keyed on `targetId` alone, so a node in a
+    // workspace this caller cannot see can be holding the one they asked for.
+    // Before this branch existed the write reached Postgres, the index refused
+    // it, and the route answered 502 `{error}` — a body with no `rev` and no
+    // `nodes`, which leaves an optimistically-applied client with nothing to
+    // rebase on and a phantom pane on screen. So it must carry everything a
+    // stale 409 carries.
+    mockApply.mockResolvedValue({
+      status: 'conflict',
+      code: 'target_already_shown',
+      detail: 'conversation "conv-1" is already shown in another workspace',
+      snapshot: SNAPSHOT,
+    });
+    const response = await post({ baseRev: 4, put: [], drop: [] });
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    // The rebase half, spelled out rather than folded into the object compare:
+    // these two keys are the entire point of the fix.
+    expect(body.rev).toBe(SNAPSHOT.rev);
+    expect(body.nodes).toEqual(SNAPSHOT.nodes);
+    expect(body.targets).toEqual(SNAPSHOT.targets);
+    expect(body).toEqual({
+      ...SNAPSHOT,
+      code: 'target_already_shown',
+      detail: 'conversation "conv-1" is already shown in another workspace',
+    });
+    // And it is NOT audited: nothing was written.
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('a stale 409 carries no code, which is how a client tells the two apart', async () => {
+    mockApply.mockResolvedValue({ status: 'stale', snapshot: SNAPSHOT });
+    const body = await (await post({ baseRev: 1, put: [], drop: [] })).json();
+    expect(body.code).toBeUndefined();
+  });
+
   it('400 carries the violation own code, so a client knows WHICH invariant it broke', async () => {
     mockApply.mockResolvedValue({ status: 'refused', code: 'dangling_parent', detail: 'node "x" is parented to "y"' });
     const response = await post({ baseRev: 4, put: [], drop: [] });

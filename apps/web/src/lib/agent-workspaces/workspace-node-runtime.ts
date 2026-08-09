@@ -50,8 +50,14 @@ import { decideNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-
 import type { CommandCode, CommandResult } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import type { TreeViolationCode } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import {
+  chatHeldElsewhereDetail,
+  chatIndexRefusalDetail,
+  conflictingChatTargets,
+  isChatTargetUniqueViolation,
+} from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
+import {
+  readChatTargetHolders,
   readWorkspaceNodeSnapshot,
-  readWorkspaceNodeSnapshots,
   withWorkspaceLayoutLock,
   writeWorkspaceNodes,
   type WorkspaceNodeSnapshot,
@@ -103,10 +109,32 @@ export async function readWorkspaceNodes(
 /** Why a write was refused. Every one of these writes NOTHING. */
 export type NodeWriteRefusal = TreeViolationCode | 'foreign_scope' | 'forbidden_target' | CommandCode;
 
-/** What the write answers. `stale` and `ok` carry the same body; the status code differs. */
+/**
+ * What the write answers.
+ *
+ * `stale`, `conflict` and `ok` all carry the SNAPSHOT, and that is the whole
+ * distinction between them and `refused`: a caller holding an optimistic edit
+ * that no longer applies needs the tree to rebase onto, and a caller that sent
+ * an impossible payload needs a code and nothing else. `conflict` is the second
+ * kind of "your edit does not apply" — not because your rev moved, but because
+ * the thing you tried to show is already shown somewhere the write path can see
+ * and you cannot. It answers 409 for exactly that reason.
+ */
 export type ApplyWorkspaceNodeWriteResult =
   | { status: 'ok'; snapshot: WorkspaceNodeSnapshotResponse; changed: boolean }
   | { status: 'stale'; snapshot: WorkspaceNodeSnapshotResponse }
+  | {
+      status: 'conflict';
+      /**
+       * The algebra's own word for this fault, reused rather than re-coined:
+       * `target_already_shown` is already what an operation answers when the
+       * conversation the caller named is on another node. One fault, one code,
+       * however the write path arrived at it.
+       */
+      code: 'target_already_shown';
+      detail: string;
+      snapshot: WorkspaceNodeSnapshotResponse;
+    }
   | { status: 'refused'; code: NodeWriteRefusal; detail: string };
 
 /**
@@ -151,7 +179,17 @@ async function commitUnderLock(input: {
 }): Promise<ApplyWorkspaceNodeWriteResult> {
   const { workspaceId, actingUserId, viewerId, produce } = input;
 
-  const outcome = await withWorkspaceLayoutLock(workspaceId, async (tx) => {
+  /**
+   * The chat targets this write tried to introduce, kept where the BACKSTOP can
+   * read them. It only ever learns that the index refused a statement, never
+   * which row won, so these ids are the best account it can give of what the
+   * write was reaching for. Empty is a real answer, not a missing one — see
+   * `chatIndexRefusalDetail`.
+   */
+  let attemptedChatBindings: readonly string[] = [];
+
+  const commit = () =>
+    withWorkspaceLayoutLock(workspaceId, async (tx) => {
     const before = await readWorkspaceNodeSnapshot(tx, workspaceId);
 
     const wanted = produce(before.nodes, before.rev);
@@ -195,6 +233,35 @@ async function commitUnderLock(input: {
       }
     }
 
+    // THE GLOBAL BINDING, and it is a different question from the one above.
+    // The ACL gate asks whether this caller may show that conversation; this
+    // asks whether the TABLE will let anyone. `UNIQUE (targetId) WHERE
+    // targetKind = 'chat'` carries no `rootId`, so a conversation held by a node
+    // in ANOTHER workspace is invisible to `validateTree` — which sees one
+    // workspace's list — and invisible to `authorizePaneScope`, which waves the
+    // cross-workspace case through whenever the caller may access the thread on
+    // its own footing. Without this the write reaches Postgres, the index
+    // refuses it, and a domain refusal is answered as a 502 carrying nothing the
+    // client can rebase on.
+    //
+    // AFTER the ACL gate, and the order is load-bearing. Reversed, a caller
+    // could learn "that conversation is already shown somewhere" about a
+    // conversation they have no authority over — an existence oracle, and the
+    // exact disclosure the gate above exists to stop. The 403 has to win.
+    //
+    // Only CHAT: the index is predicated on the kind, and showing one page in
+    // two panes is a thing users legitimately do.
+    attemptedChatBindings = introduced.flatMap((target) =>
+      target.kind === 'chat' && target.targetId !== null ? [target.targetId] : [],
+    );
+    if (attemptedChatBindings.length > 0) {
+      const holders = await readChatTargetHolders(tx, attemptedChatBindings);
+      const taken = conflictingChatTargets({ workspaceId, wanted: attemptedChatBindings, holders });
+      if (taken.length > 0) {
+        return { kind: 'conflict' as const, snapshot: before, detail: chatHeldElsewhereDetail(taken) };
+      }
+    }
+
     // A write that produces the tree already stored mints no rev and broadcasts
     // nothing — which is what makes a retried POST observably, and not merely
     // structurally, a no-op.
@@ -206,6 +273,34 @@ async function commitUnderLock(input: {
     return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true };
   });
 
+  let outcome: Awaited<ReturnType<typeof commit>>;
+  try {
+    outcome = await commit();
+  } catch (error) {
+    // THE BACKSTOP, and it is not optional. The pre-flight above reads the table
+    // and then writes, and nothing serializes those two steps against a writer
+    // in a DIFFERENT workspace: the advisory lock is per workspace, and the two
+    // callers racing for one conversation are in two of them by definition. A
+    // pre-flight alone converts a rare 502 into a rarer 502.
+    //
+    // By CONSTRAINT NAME, never by widening to every unique violation — the
+    // single-root index failing is a structurally broken workspace, and
+    // answering that with "the conversation is shown elsewhere" would send a
+    // client rebasing over a fault that has nothing to do with a conversation.
+    // Anything else rethrows and the route answers 502, which is the honest code
+    // for a fault the server cannot name.
+    if (!isChatTargetUniqueViolation(error)) throw error;
+    // The transaction rolled back, so the truth is whatever the winner left
+    // behind — read fresh rather than reconstructed, which is also the newest
+    // base the loser can rebase onto.
+    return {
+      status: 'conflict',
+      code: 'target_already_shown',
+      detail: chatIndexRefusalDetail(attemptedChatBindings),
+      snapshot: await readWorkspaceNodes(workspaceId, viewerId),
+    };
+  }
+
   if (outcome.kind === 'refused') {
     return { status: 'refused', code: outcome.code, detail: outcome.detail };
   }
@@ -216,6 +311,12 @@ async function commitUnderLock(input: {
   const snapshot = await withTargets(workspaceId, outcome.snapshot, viewerId);
 
   if (outcome.kind === 'stale') return { status: 'stale', snapshot };
+  // Through the SAME resolution as `stale`, deliberately. The refusal answers
+  // 409 with the rebase body, and a 409 that told a caller more (or less) than a
+  // GET would tell them is a second read path to keep in step with the first.
+  if (outcome.kind === 'conflict') {
+    return { status: 'conflict', code: 'target_already_shown', detail: outcome.detail, snapshot };
+  }
 
   if (outcome.changed) {
     // Structural only, and to a ROOM. See the payload's own doc.

@@ -206,3 +206,25 @@ export interface WorkspaceNodeSnapshotResponse {
   nodes: WorkspaceNode[];
   targets: WorkspaceNodeTarget[];
 }
+
+/**
+ * The OTHER 409: the write does not apply because the conversation it would
+ * show is already shown by a node the caller cannot see.
+ *
+ * It EXTENDS the snapshot rather than replacing it, and that is the whole
+ * design. `UNIQUE (targetId) WHERE targetKind = 'chat'` has no `rootId` in its
+ * key, so this refusal can only be decided at the write path — but the client
+ * receiving it is in exactly the position a stale one is in: it applied
+ * optimistically, its edit does not apply, and the only thing that clears the
+ * phantom pane off the screen is a tree to rebase onto. A refusal shaped as
+ * `{error}` leaves that pane there until an unrelated poll happens by.
+ *
+ * So a client that already handles 409 handles this one by ignoring two extra
+ * keys, and one that wants to say WHY reads `code`. The stale body carries no
+ * `code`, which is how the two are told apart without a second status.
+ */
+export interface WorkspaceNodeConflictResponse extends WorkspaceNodeSnapshotResponse {
+  /** The algebra's own word for it — see `workspace-node-algebra.ts`'s `NodeOperationCode`. */
+  code: 'target_already_shown';
+  detail: string;
+}

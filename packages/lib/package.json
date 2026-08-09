@@ -1822,6 +1822,11 @@
       "import": "./dist/agent-workspaces/workspace-node-write.js",
       "require": "./dist/agent-workspaces/workspace-node-write.js"
     },
+    "./agent-workspaces/workspace-node-chat-binding": {
+      "types": "./dist/agent-workspaces/workspace-node-chat-binding.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-chat-binding.js",
+      "require": "./dist/agent-workspaces/workspace-node-chat-binding.js"
+    },
     "./services/agent-workspaces/workspace-node-store": {
       "types": "./dist/services/agent-workspaces/workspace-node-store.d.ts",
       "import": "./dist/services/agent-workspaces/workspace-node-store.js",
