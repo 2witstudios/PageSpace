@@ -217,21 +217,46 @@ describe('deriveWorkspaceNodes — the single-pane column collapses', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Detached membership
+// Membership with no pane row — SEATED, never detached
 // ---------------------------------------------------------------------------
 
-describe('deriveWorkspaceNodes — members with no pane land detached', () => {
-  it('parks an open conversation that no pane shows', () => {
+describe('deriveWorkspaceNodes — members with no pane are SEATED under the root', () => {
+  it('seats an open conversation that no pane shows', () => {
+    // These members used to be emitted with `parentId: null` and called
+    // detached. That reproduced, inside the migration, the split the migration
+    // exists to remove: a workspace would arrive in the new model already
+    // holding nodes no renderer would draw.
     const derived = deriveWorkspaceNodes(
       source({ workspaceId: 'w1', conversations: [member('conv-a')] }),
     );
     assertWritable(derived);
-    const parked = derived.rows.filter((row) => row.nodeType === 'pane' && row.parentId === null);
-    expect(parked).toHaveLength(1);
-    expect(parked[0]).toMatchObject({ targetKind: 'chat', targetId: 'conv-a', position: 0 });
+    const seated = derived.rows.filter((row) => row.nodeType === 'pane');
+    expect(seated).toHaveLength(1);
+    expect(seated[0]).toMatchObject({ targetKind: 'chat', targetId: 'conv-a', position: 0 });
+    expect(seated[0].parentId).toBe(derived.rows.find((row) => row.nodeType === 'root')?.id);
   });
 
-  it('parks a shell that no pane shows, and skips one a pane already holds', () => {
+  it('NEVER emits a non-root row with a null parent, whatever the sources hold', () => {
+    // The property, stated over the shape rather than over one fixture. A row
+    // like this is what `nodeFromRow` now refuses and what `validateTree` calls
+    // `null_parent`, so a derivation that produced one would be writing rows the
+    // read path cannot read back.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [pane('p1', 'c1', 0, chat('conv-x')), pane('p2', 'c1', 1, chat('conv-y'))],
+        conversations: [member('conv-a'), member('conv-b')],
+        shells: [member('shell-a')],
+      }),
+    );
+    assertWritable(derived);
+    for (const row of derived.rows) {
+      if (row.nodeType !== 'root') expect(row.parentId, `row ${row.id}`).not.toBeNull();
+    }
+  });
+
+  it('seats a shell that no pane shows, and skips one a pane already holds', () => {
     const derived = deriveWorkspaceNodes(
       source({
         workspaceId: 'w1',
@@ -241,8 +266,9 @@ describe('deriveWorkspaceNodes — members with no pane land detached', () => {
       }),
     );
     assertWritable(derived);
-    expect(derived.census.detachedOut).toBe(1);
-    expect(derived.rows.find((row) => row.targetId === 'shell-b')).toMatchObject({ parentId: null });
+    expect(derived.census.seatedOut).toBe(1);
+    const rootId = derived.rows.find((row) => row.nodeType === 'root')?.id;
+    expect(derived.rows.find((row) => row.targetId === 'shell-b')).toMatchObject({ parentId: rootId });
   });
 
   it('emits ONE node for a conversation that already has a pane — never two', () => {
@@ -261,10 +287,10 @@ describe('deriveWorkspaceNodes — members with no pane land detached', () => {
     const chatNodes = derived.rows.filter((row) => row.targetKind === 'chat' && row.targetId === 'conv-a');
     expect(chatNodes).toHaveLength(1);
     expect(chatNodes[0].id).toBe('p1');
-    expect(derived.census.detachedOut).toBe(0);
+    expect(derived.census.seatedOut).toBe(0);
   });
 
-  it('numbers the parked group contiguously from 0, conversations then shells, oldest first', () => {
+  it('numbers the seated members contiguously, conversations then shells, oldest first', () => {
     const derived = deriveWorkspaceNodes(
       source({
         workspaceId: 'w1',
@@ -273,11 +299,55 @@ describe('deriveWorkspaceNodes — members with no pane land detached', () => {
       }),
     );
     assertWritable(derived);
-    const parked = derived.rows
-      .filter((row) => row.parentId === null && row.nodeType === 'pane')
+    const seated = derived.rows
+      .filter((row) => row.nodeType === 'pane')
       .sort((left, right) => left.position - right.position);
-    expect(parked.map((row) => row.targetId)).toEqual(['conv-a', 'conv-b', 'shell-a', 'shell-b']);
-    expect(parked.map((row) => row.position)).toEqual([0, 1, 2, 3]);
+    expect(seated.map((row) => row.targetId)).toEqual(['conv-a', 'conv-b', 'shell-a', 'shell-b']);
+    expect(seated.map((row) => row.position)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('CONTINUES the root’s own numbering past the columns, rather than starting a second run', () => {
+    // The seated members are children of the root like the columns are, so
+    // their positions carry on from the last column's. A second 0-based run
+    // beside the columns would be `position_contiguity` — and it is what the
+    // parked group used to be, numbered independently because it was a
+    // different bucket.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0), column('c2', 1)],
+        panes: [pane('p1', 'c1', 0, chat('conv-x')), pane('p2', 'c2', 0, chat('conv-y'))],
+        conversations: [member('conv-a')],
+      }),
+    );
+    assertWritable(derived);
+    const rootId = derived.rows.find((row) => row.nodeType === 'root')?.id;
+    const children = derived.rows
+      .filter((row) => row.parentId === rootId)
+      .sort((left, right) => left.position - right.position);
+    expect(children.map((row) => row.position)).toEqual([0, 1, 2]);
+    expect(children[2].targetId).toBe('conv-a');
+  });
+
+  it('reads the grid’s column shares as UNSIZED when a member has to be seated beside them', () => {
+    // A seated member carries no stored share — there was no pane row to carry
+    // one — and a container is sized or unsized, never both. So the root's
+    // group settles as unsized wholesale, which is the rule
+    // `settleGroupShares` already applied to a half-sized column, and the note
+    // says the stored widths were what got given up.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0, 0.7), column('c2', 1, 0.3)],
+        panes: [pane('p1', 'c1', 0, chat('conv-x')), pane('p2', 'c2', 0, chat('conv-y'))],
+        conversations: [member('conv-a')],
+      }),
+    );
+    assertWritable(derived);
+    for (const row of derived.rows) {
+      if (row.nodeType !== 'root') expect(row.fraction, `row ${row.id}`).toBeNull();
+    }
+    expect(derived.notes.map((entry) => entry.code)).toContain('fractions_read_as_unsized');
   });
 });
 
@@ -295,16 +365,16 @@ describe('deriveWorkspaceNodes — what the real data can contain', () => {
       }),
     );
     assertWritable(derived);
-    expect(derived.census.detachedOut).toBe(0);
+    expect(derived.census.seatedOut).toBe(0);
     expect(derived.census.paneNodesOut).toBe(2);
   });
 
-  it('a workspace with conversations but no panes — every one parked, none lost', () => {
+  it('a workspace with conversations but no panes — every one seated, none lost', () => {
     const derived = deriveWorkspaceNodes(
       source({ workspaceId: 'w1', conversations: [member('a'), member('b'), member('c')] }),
     );
     assertWritable(derived);
-    expect(derived.census.detachedOut).toBe(3);
+    expect(derived.census.seatedOut).toBe(3);
     expect(derived.census.membersIn).toBe(3);
   });
 
@@ -469,7 +539,7 @@ describe('deriveWorkspaceNodes — what the real data can contain', () => {
     expect(derived.notes.map((entry) => entry.code)).toContain('column_id_renamed');
   });
 
-  it('a detached member id colliding with a pane id renames the detached node', () => {
+  it('a seated member id colliding with a pane id renames the seated node', () => {
     const derived = deriveWorkspaceNodes(
       source({
         workspaceId: 'w1',
@@ -480,7 +550,8 @@ describe('deriveWorkspaceNodes — what the real data can contain', () => {
     );
     assertWritable(derived);
     expect(nodeById(derived, 'conv-a::pane')).toMatchObject({ target: { kind: 'chat', id: 'other' } });
-    expect(nodeById(derived, 'conv-a::pane#chat')).toMatchObject({ parentId: null, target: { kind: 'chat', id: 'conv-a' } });
+    expect(nodeById(derived, 'conv-a::pane#chat')).toMatchObject({ target: { kind: 'chat', id: 'conv-a' } });
+    expect(nodeById(derived, 'conv-a::pane#chat')?.parentId).not.toBeNull();
   });
 });
 
@@ -538,12 +609,15 @@ describe('deriveWorkspaceNodes — shares', () => {
     expect(derived.notes.map((entry) => entry.code)).toContain('fractions_read_as_unsized');
   });
 
-  it('strips shares from parked panes — there is no container for a share to be a share of', () => {
+  it('leaves seated members unsized — they had no pane row to carry a share', () => {
+    // And because a container is sized or unsized and never both, their arrival
+    // is also what makes the whole root group unsized. See the seating suite for
+    // the case where that discards stored column widths.
     const derived = deriveWorkspaceNodes(
       source({ workspaceId: 'w1', conversations: [member('a'), member('b', 1)] }),
     );
     assertWritable(derived);
-    for (const row of derived.rows.filter((entry) => entry.parentId === null && entry.nodeType === 'pane')) {
+    for (const row of derived.rows.filter((entry) => entry.nodeType === 'pane')) {
       expect(row.fraction).toBeNull();
     }
   });
@@ -771,7 +845,9 @@ describe('the rehearsal census', () => {
 
   it('every conversation that is a member ends up reachable in the workspace', () => {
     // The bug the epic exists to close, restated as an assertion: a thread that
-    // is a member of a session must have a node, whether on the grid or parked.
+    // is a member of a session must have a node, and there is one place a node
+    // can be — so #2373 cannot recur here for the same reason it cannot recur
+    // anywhere else in this model.
     for (const { result } of derived) {
       const targets = new Set(
         result.rows.filter((row) => row.targetKind === 'chat').map((row) => row.targetId),
@@ -803,7 +879,7 @@ describe('the rehearsal census', () => {
       membersIn: 0,
       nodesOut: 0,
       paneNodesOut: 0,
-      detachedOut: 0,
+      seatedOut: 0,
       skipped: 0,
       notes: 0,
     };
@@ -817,13 +893,13 @@ describe('the rehearsal census', () => {
       totals.membersIn += c.membersIn;
       totals.nodesOut += c.nodesOut;
       totals.paneNodesOut += c.paneNodesOut;
-      totals.detachedOut += c.detachedOut;
+      totals.seatedOut += c.seatedOut;
       totals.skipped += result.skipped === null ? 0 : 1;
       totals.notes += result.notes.length;
       lines.push(
-        `${name}: panes ${c.panesIn}→${c.paneNodesOut - c.detachedOut}, ` +
+        `${name}: panes ${c.panesIn}→${c.paneNodesOut - c.seatedOut}, ` +
           `threads ${c.conversationsIn}, shells ${c.shellsIn}, ` +
-          `members ${c.membersIn}→${c.paneNodesOut}, detached ${c.detachedOut}, ` +
+          `members ${c.membersIn}→${c.paneNodesOut}, seated ${c.seatedOut}, ` +
           `nodes ${c.nodesOut}, notes ${result.notes.length}` +
           (result.skipped === null ? '' : ` SKIPPED(${result.skipped.code})`),
       );

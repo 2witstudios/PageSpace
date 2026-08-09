@@ -157,15 +157,15 @@ const treeRoot: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, posi
 
 function paneNode(
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   target: PaneTarget | null,
 ): WorkspaceNode {
   return { nodeType: 'pane', id, parentId, position, target };
 }
-const chatNode = (id: string, parentId: string | null, position: number, conversationId: string) =>
+const chatNode = (id: string, parentId: string, position: number, conversationId: string) =>
   paneNode(id, parentId, position, { kind: 'chat', id: conversationId });
-const pageNode = (id: string, parentId: string | null, position: number, pageId: string) =>
+const pageNode = (id: string, parentId: string, position: number, pageId: string) =>
   paneNode(id, parentId, position, { kind: 'page', id: pageId });
 
 const SESSION: SessionFixture = {
@@ -340,9 +340,22 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('Researcher — Unplaced')).toBeDefined();
     });
 
-    test('renders a PARKED thread — a member that is not on the screen', async () => {
+    test('renders every thread the tree holds, however deeply nested', async () => {
+      // This used to be about a PARKED thread — a member not on the screen,
+      // rendered dimmed and titled "(not open)". There is no such member, so
+      // what is left to hold down is that DEPTH does not hide a row either.
       respondWithSessions([
-        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', null, 0, 'conv-2')] },
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [
+            treeRoot,
+            chatNode('n1', WS, 0, 'conv-1'),
+            { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+            chatNode('n2', 's1', 0, 'conv-2'),
+            pageNode('n4', 's1', 1, 'page-9'),
+          ],
+        },
       ]);
       const user = userEvent.setup();
       renderSidebar();
@@ -351,9 +364,8 @@ describe('AgentsSidebar', () => {
 
       const rows = screen.getAllByTestId('sidebar-conversation-row');
       expect(rows).toHaveLength(2);
-      // Both are listed; the parked one is visibly distinguished.
       expect(within(rows[0]).getByTitle('Researcher — First chat')).toBeDefined();
-      expect(within(rows[1]).getByTitle('Researcher — Second chat (not open)')).toBeDefined();
+      expect(within(rows[1]).getByTitle('Researcher — Second chat')).toBeDefined();
     });
 
     test('lists a PAGE pane as its own row, titled from targets[]', async () => {
@@ -373,12 +385,20 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('Spec doc')).toBeDefined();
     });
 
-    test('lists a PARKED page pane too, rather than only the attached tree', async () => {
+    test('lists a page pane nested inside a split, not only the root’s own children', async () => {
+      // The successor to a test about PARKED page panes. The trap it guarded —
+      // a renderer that shows only part of the membership — is now only
+      // reachable through depth, so that is what it walks.
       respondWithSessions([
         {
           ...SESSION,
           rev: 1,
-          nodes: [...nodes, pageNode('n3', null, 0, 'page-1')],
+          nodes: [
+            treeRoot,
+            { nodeType: 'split', id: 's1', parentId: WS, position: 0, axis: 'column' },
+            chatNode('n1', 's1', 0, 'conv-1'),
+            pageNode('n3', 's1', 1, 'page-1'),
+          ],
           targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
         },
       ]);
@@ -387,7 +407,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      expect(screen.getByTitle('Spec doc (not open)')).toBeDefined();
+      expect(screen.getByTitle('Spec doc')).toBeDefined();
     });
 
     test('falls back to a generic title for a page whose target the viewer cannot resolve', async () => {
@@ -411,7 +431,7 @@ describe('AgentsSidebar', () => {
    * already gone, and the click then meant something else entirely.
    */
   describe('the close decision', () => {
-    test('a thread ON THE GRID offers "Close pane", and closing PARKS its node without a DELETE', async () => {
+    test('a thread ON THE GRID offers "Close pane", and closing DESTROYS its node without a DELETE', async () => {
       respondWithSessions([
         { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
       ]);
@@ -423,9 +443,11 @@ describe('AgentsSidebar', () => {
       fireEvent.contextMenu(row);
       await user.click(await screen.findByText('Close pane'));
 
+      // No DELETE: closing a PANE is a tree write, not a conversation act. The
+      // node is gone rather than left parked with a null parent.
       expect(mockDel).not.toHaveBeenCalled();
-      const parked = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n1');
-      expect(parked?.parentId).toBeNull();
+      const nodes = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes ?? [];
+      expect(nodes.find((node) => node.id === 'n1')).toBeUndefined();
     });
 
     test('a thread with NO node offers "Close conversation", and closing DELETEs the listing', async () => {
@@ -444,9 +466,13 @@ describe('AgentsSidebar', () => {
       );
     });
 
-    test('a PARKED thread offers "Close conversation" — there is nothing left to take off the screen', async () => {
+    test('a thread this workspace does not hold offers "Close conversation"', async () => {
+      // The row comes from the conversation listing, and the tree has no node
+      // for it — so there is no pane to close and the click goes to the listing
+      // route. Under the previous model this case was a PARKED node, which is a
+      // state that no longer exists.
       mockDel.mockResolvedValue({});
-      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', null, 0, 'conv-1')] }]);
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot] }]);
       const user = userEvent.setup();
       renderSidebar();
 
@@ -475,15 +501,17 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByTitle('Researcher — First chat')).toBeDefined();
 
       // Somebody else closed the pane. No poll, no refetch — just the event.
+      // Closing DESTROYS the node, so the broadcast carries a tree without it
+      // and the row falls back to the listing's own "(not in this session)".
       act(() => {
         useAgentWorkspaceStore.getState().applyRemoteUpdate({
           workspaceId: WS,
           rev: 2,
-          nodes: [treeRoot, chatNode('n1', null, 0, 'conv-1')],
+          nodes: [treeRoot],
         });
       });
 
-      expect(await screen.findByTitle('Researcher — First chat (not open)')).toBeDefined();
+      expect(await screen.findByTitle('Researcher — First chat (not in this session)')).toBeDefined();
       const row = screen.getAllByTestId('sidebar-conversation-row')[0];
       fireEvent.contextMenu(row);
       await user.click(await screen.findByText('Close conversation'));
@@ -493,7 +521,7 @@ describe('AgentsSidebar', () => {
       );
     });
 
-    test('closing a page pane row PARKS it rather than destroying it', async () => {
+    test('closing a page pane row DESTROYS its node', async () => {
       respondWithSessions([
         {
           ...SESSION,
@@ -509,17 +537,22 @@ describe('AgentsSidebar', () => {
       fireEvent.contextMenu(screen.getByText('Spec doc').closest('[data-slot="row-menu"]') ?? screen.getByText('Spec doc'));
       await user.click(await screen.findByText('Close'));
 
-      const parked = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
-      expect(parked?.parentId).toBeNull();
+      // The node is gone rather than left with a null parent. The listing route
+      // is untouched: closing a PANE is a tree write, not a conversation act.
+      const destroyed = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
+      expect(destroyed).toBeUndefined();
       expect(mockDel).not.toHaveBeenCalled();
     });
 
-    test('a PARKED page pane offers Show, and clicking it brings the node back onto the grid', async () => {
+    test('clicking a page pane row focuses it and selects the session', async () => {
+      // It used to read "Show" and un-park the node; a row's only affordance
+      // when its node was off the screen. Every row's node is on screen, so the
+      // click is focus.
       respondWithSessions([
         {
           ...SESSION,
           rev: 1,
-          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', null, 0, 'page-1')],
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', WS, 1, 'page-1')],
           targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
         },
       ]);
@@ -527,10 +560,9 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(screen.getByTitle('Spec doc (not open)'));
+      await user.click(screen.getByTitle('Spec doc'));
 
-      const shown = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
-      expect(shown?.parentId).not.toBeNull();
+      expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n3');
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe(WS);
     });
   });

@@ -1,22 +1,28 @@
 /**
- * Reopen a conversation back onto its workspace's grid — the undo of
- * `closeConversationInSessionWith`, and a `move` for the same reason.
+ * Reopen a conversation back into its workspace — the undo of
+ * `closeConversationInSessionWith`, and an ADMISSION for the same reason that
+ * one is a destroy.
  *
- * **It mints nothing.** The node never stopped existing, so reopening carries
- * it back into the grid rather than creating anything. Two consequences follow,
- * and both are simplifications rather than compromises:
+ * **It mints a node.** There was a version of this that moved an existing one:
+ * closing parked a node rather than removing it, so reopening carried the same
+ * node back onto the grid. Parked is gone, so a closed thread has no node at
+ * all, and putting it back is the ordinary act of taking a thread into a
+ * workspace. Two consequences follow, and both are the honest ones:
  *
- *  - **No cap check.** The old version refused a reopen when the workspace held
- *    `MAX_SESSION_CONVERSATIONS` open listings, because reopening restored a
- *    listing slot the close had freed. A member that never stopped being a
- *    member frees no slot when it is closed and consumes none when it returns,
- *    so the ceiling has nothing to say here. The cap now bounds MEMBERSHIP, and
- *    is enforced where membership is created (`admit`).
- *  - **No `history_deleted` special case in the write.** A history-deleted
- *    thread has no node — deletion removes it — so there is nothing to move,
- *    and the membership write says so. The `isActive` gate below survives only
- *    to give that answer its own name, because "you deleted this" is something
- *    a caller can act on and "there is no such thread here" is not.
+ *  - **The cap applies again.** A `move`-based reopen consumed no slot, because
+ *    the member never stopped being one. A closed thread DID stop being one — it
+ *    freed its slot on the way out — so returning consumes a slot like any other
+ *    admission, and a workspace that filled up in the meantime refuses.
+ *  - **A reopened thread is PLACED**, by the same policy every admission runs:
+ *    it fills an unbound pane if there is one and splits rather than evicting if
+ *    there is not. It does not return to where it used to sit; a node carries its
+ *    location, not its history.
+ *
+ * **No `history_deleted` special case in the write.** A history-deleted thread's
+ * node was removed by the deletion, so there is nothing here that would tell it
+ * apart from a thread that was merely closed — which is exactly why the
+ * `isActive` gate below survives: "you deleted this" is something a caller can
+ * act on and "there is no such thread here" is not.
  *
  * Pure decision logic over injected deps, per the repo rule that branching
  * which decides lifecycle/access lives in a testable module —
@@ -30,7 +36,7 @@ export type ReopenConversationOutcome =
   | 'not_in_session'
   | 'history_deleted';
 
-/** How the membership write answered a `move` back into the grid. */
+/** How the membership write answered the re-admission. */
 export type ReadmitConversationOutcome = 'readmitted' | 'already_attached' | 'not_a_member' | 'refused';
 
 export interface ReopenConversationInSessionDeps {
@@ -39,7 +45,7 @@ export interface ReopenConversationInSessionDeps {
     userId: string;
     isActive: boolean;
   } | null>;
-  /** THE MEMBERSHIP WRITE — `move` the thread's node back into the grid. */
+  /** THE MEMBERSHIP WRITE — `admit` the thread back into the workspace. */
   readmitConversation: (input: {
     conversationId: string;
     workspaceId: string;

@@ -22,13 +22,18 @@
  * **The sources, and what each supplies.**
  *
  *     sources = (pane rows          → membership AND position)
- *             ∪ (open conversations → membership, no position: DETACHED)
- *             ∪ (shells             → membership, no position: DETACHED)
+ *             ∪ (open conversations → membership, no position: SEATED under the root)
+ *             ∪ (shells             → membership, no position: SEATED under the root)
  *
- * A pane row is the only thing that carries a location. Everything else lands
- * with `parentId: null`: in the workspace, in the sidebar, not on screen — the
- * state the old model could not spell, which is why threads went missing from
- * the sidebar in the first place (issue #2373).
+ * A pane row is the only thing that carries a location. **Everything else is
+ * PLACED anyway**, at the end of the root's own children — every member is in
+ * the tree, and there is no second place for one to be. An earlier cut of this
+ * derivation emitted those members with `parentId: null` and called it detached;
+ * that reproduced, in the migration, the very split the migration exists to
+ * remove, and it meant a workspace could arrive in the new model already holding
+ * nodes no renderer would draw. Issue #2373 cannot recur here for the reason it
+ * cannot recur anywhere else in this model: a member that is in a workspace is
+ * in its tree.
  *
  * **What "open" means** is not this module's decision to make: it is
  * `countOpenConversations`' single predicate — bound to the workspace,
@@ -251,7 +256,16 @@ export interface WorkspaceCensus {
   nodesOut: number;
   paneNodesOut: number;
   splitNodesOut: number;
-  detachedOut: number;
+  /**
+   * Members that had no legacy pane row and were SEATED under the root.
+   *
+   * Was `detachedOut`, and the rename is the change: those members used to be
+   * emitted with no parent at all, which is the state this correction deletes.
+   * The number still matters for the rehearsal — it is how much of a workspace
+   * the old layout could not account for — but what it counts is now nodes on
+   * the grid rather than nodes beside it.
+   */
+  seatedOut: number;
   boundChatNodesOut: number;
   unboundPaneNodesOut: number;
   /** Open conversations that got no node here because their chat node lives elsewhere. */
@@ -467,7 +481,8 @@ export interface DeriveOptions {
  *     split's PLACE: its parent, its slot and its share"). The old model
  *     allowed a one-pane column, so this is expected to be the COMMON shape,
  *     not an edge;
- *   * every member with no pane row a `pane` with `parentId: null` — detached.
+ *   * every member with no pane row a `pane` UNDER THE ROOT, after the columns,
+ *     in the order it was created.
  */
 export function deriveWorkspaceNodes(
   source: WorkspaceBackfillSource,
@@ -583,14 +598,82 @@ export function deriveWorkspaceNodes(
     { nodeType: 'root', id: rootId, parentId: null, position: 0, axis: 'row' },
   ];
 
-  const rootShares = settleGroupShares(populated.map((entry) => entry.column.widthFraction));
-  if (sharesWereDiscarded(populated.map((entry) => entry.column.widthFraction), rootShares)) {
+  // ---------------------------------------------------------------------
+  // THE MEMBERS THAT HAD NO PANE — resolved BEFORE anything is emitted, because
+  // they are children of the root like the columns are and the root's shares
+  // cannot be settled without knowing how many children it will have.
+  //
+  // They used to be emitted last and PARKED (`parentId: null`): in the
+  // workspace, in the sidebar, not on screen. That was the whole of what
+  // "detached" bought — a member the migration could not place — and it is
+  // exactly the state that made a lost pane and a closed one look alike. Every
+  // member is in the tree now, so a member with no pane row becomes a pane at
+  // the end of the root's own children, which is where `readmit` used to put one
+  // and where a user would look for it.
+  // ---------------------------------------------------------------------
+  interface SeatedMember {
+    id: string;
+    target: PaneNode['target'];
+  }
+  const seated: SeatedMember[] = [];
+  let membershipDropped = 0;
+
+  for (const conversation of orderMembers(source.conversations)) {
+    if (boundChats.has(conversation.id)) continue; // Already on screen — one node, and it has it.
+    if (claimedChatTargets.has(conversation.id)) {
+      note(
+        'membership_claim_lost',
+        conversation.id,
+        `an earlier run bound this conversation to a node elsewhere; no node is emitted here`,
+      );
+      membershipDropped += 1;
+      continue;
+    }
+    const claimant = chatClaims.get(conversation.id);
+    if (claimant !== undefined && claimant !== workspaceId) {
+      note(
+        'membership_claim_lost',
+        conversation.id,
+        `conversation is claimed by workspace "${claimant}"; no node is emitted here`,
+      );
+      membershipDropped += 1;
+      continue;
+    }
+    boundChats.add(conversation.id);
+    seated.push({
+      id: ids.allocate(`${conversation.id}::pane`, 'chat').id,
+      target: { kind: 'chat', id: conversation.id },
+    });
+  }
+
+  for (const shell of orderMembers(source.shells)) {
+    if (boundTerminals.has(shell.id)) continue;
+    boundTerminals.add(shell.id);
+    seated.push({
+      id: ids.allocate(`${shell.id}::pane`, 'term').id,
+      target: { kind: 'terminal', id: shell.id },
+    });
+  }
+
+  // The root's group is the columns AND the newly seated members, so its shares
+  // settle over both. A seated member carries no stored share — there was no
+  // pane row to carry one — and `settleGroupShares` reads a group holding any
+  // unsized member as unsized WHOLESALE, which is the rule it already applied to
+  // a half-sized column. So a workspace with an unplaced member comes out with
+  // an evenly divided root rather than a `fraction_mixed` refusal, and the note
+  // below says the stored column widths were the thing given up.
+  const rootRawShares = [
+    ...populated.map((entry) => entry.column.widthFraction),
+    ...seated.map(() => null),
+  ];
+  const rootShares = settleGroupShares(rootRawShares);
+  if (sharesWereDiscarded(rootRawShares, rootShares)) {
     note('fractions_read_as_unsized', rootId, `the grid's column shares do not settle; read as unsized`);
   }
 
   populated.forEach((entry, position) => {
     const share = rootShares[position];
-    const paneOf = (pane: LegacyPane, parentId: string | null, at: number, fraction: number | null): PaneNode => {
+    const paneOf = (pane: LegacyPane, parentId: string, at: number, fraction: number | null): PaneNode => {
       const binding = bindings.get(pane.id) ?? null;
       return {
         nodeType: 'pane',
@@ -637,50 +720,22 @@ export function deriveWorkspaceNodes(
     });
   });
 
-  // ---------------------------------------------------------------------
-  // The detached: in the workspace, in the sidebar, not on screen.
-  //
-  // Conversations first, then shells; each oldest-first. `position` here is
-  // sidebar order and nothing more, so what matters is that it is contiguous
-  // and that a re-run produces the same list.
-  // ---------------------------------------------------------------------
-  let membershipDropped = 0;
-  let parked = 0;
-  const park = (id: string, target: PaneNode['target']): void => {
-    nodes.push({ nodeType: 'pane', id, parentId: null, position: parked, target });
-    parked += 1;
-  };
-
-  for (const conversation of orderMembers(source.conversations)) {
-    if (boundChats.has(conversation.id)) continue; // Already on screen — one node, and it has it.
-    if (claimedChatTargets.has(conversation.id)) {
-      note(
-        'membership_claim_lost',
-        conversation.id,
-        `an earlier run bound this conversation to a node elsewhere; no node is emitted here`,
-      );
-      membershipDropped += 1;
-      continue;
-    }
-    const claimant = chatClaims.get(conversation.id);
-    if (claimant !== undefined && claimant !== workspaceId) {
-      note(
-        'membership_claim_lost',
-        conversation.id,
-        `conversation is claimed by workspace "${claimant}"; no node is emitted here`,
-      );
-      membershipDropped += 1;
-      continue;
-    }
-    boundChats.add(conversation.id);
-    park(ids.allocate(`${conversation.id}::pane`, 'chat').id, { kind: 'chat', id: conversation.id });
-  }
-
-  for (const shell of orderMembers(source.shells)) {
-    if (boundTerminals.has(shell.id)) continue;
-    boundTerminals.add(shell.id);
-    park(ids.allocate(`${shell.id}::pane`, 'term').id, { kind: 'terminal', id: shell.id });
-  }
+  // The members with no pane row, seated after the columns — conversations
+  // first, then shells, each oldest-first, so a re-run produces the same list.
+  // Their `position` continues the root's own run, which is what makes it
+  // contiguous with the columns rather than a second numbering beside them.
+  seated.forEach((member, index) => {
+    const position = populated.length + index;
+    const share = rootShares[position];
+    nodes.push({
+      nodeType: 'pane',
+      id: member.id,
+      parentId: rootId,
+      position,
+      ...(share === null ? {} : { fraction: share }),
+      target: member.target,
+    });
+  });
 
   // ---------------------------------------------------------------------
   // The gate. Nothing below this line repairs anything.
@@ -692,11 +747,11 @@ export function deriveWorkspaceNodes(
     panesIn: source.panes.length,
     conversationsIn: source.conversations.length,
     shellsIn: source.shells.length,
-    membersIn: source.panes.length + parked,
+    membersIn: source.panes.length + seated.length,
     nodesOut: nodes.length,
     paneNodesOut: paneNodes.length,
     splitNodesOut: nodes.filter((node) => node.nodeType === 'split').length,
-    detachedOut: parked,
+    seatedOut: seated.length,
     boundChatNodesOut: paneNodes.filter((node) => node.target?.kind === 'chat').length,
     unboundPaneNodesOut: paneNodes.filter((node) => node.target === null).length,
     membershipDropped,

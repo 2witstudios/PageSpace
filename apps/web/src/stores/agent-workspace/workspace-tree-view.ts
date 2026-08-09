@@ -18,7 +18,6 @@
 
 import {
   childrenOf,
-  detachedOf,
   findNode,
   rootOf,
   type PaneNode,
@@ -62,7 +61,7 @@ const GENERIC_TITLE: Record<PaneTargetKind, string> = {
   page: 'Page',
 };
 
-/** Every pane in the workspace — attached AND detached. Membership is presence. */
+/** Every pane in the workspace. Membership is presence, and presence is the tree. */
 export function paneNodesOf(nodes: readonly WorkspaceNode[]): PaneNode[] {
   return nodes.filter((node): node is PaneNode => node.nodeType === 'pane');
 }
@@ -93,13 +92,12 @@ export function gridPanesOf(nodes: readonly WorkspaceNode[]): PaneNode[] {
 }
 
 /**
- * The node showing this target, anywhere in the workspace — IN THE GRID OR
- * PARKED.
+ * The node showing this target, anywhere in the workspace.
  *
- * Parked counts, and that is the point: a parked node is off the grid and still
- * a member, still holding its binding. A caller that only looked at the grid
- * would mint a second node for a conversation the workspace already shows,
- * which the table refuses outright for chats.
+ * "Anywhere" is now a statement about DEPTH rather than about a second bucket: a
+ * caller that only looked at the root's own children would mint a second node
+ * for a conversation the workspace already shows two levels down, which the
+ * table refuses outright for chats.
  */
 export function nodeShowing(
   nodes: readonly WorkspaceNode[],
@@ -109,28 +107,40 @@ export function nodeShowing(
   return paneNodesOf(nodes).find((node) => node.target?.kind === kind && node.target.id === id);
 }
 
-/** Is this node in the grid (as opposed to parked, or absent)? */
+/**
+ * Is this node a pane this workspace holds?
+ *
+ * It used to ask something narrower — "in the grid, as opposed to parked" —
+ * because a pane could be one and not the other. It cannot, so the question
+ * collapses to presence, and the name is kept because the callers' question did
+ * not change: they want to know whether the thing is on screen.
+ */
 export function isOnGrid(nodes: readonly WorkspaceNode[], nodeId: string): boolean {
   const node = findNode(nodes, nodeId);
-  return node !== undefined && node.nodeType === 'pane' && node.parentId !== null;
+  return node !== undefined && node.nodeType === 'pane';
 }
 
 // ---------------------------------------------------------------------------
 // The sidebar's rows
 // ---------------------------------------------------------------------------
 
-/** Where a member sits, as the sidebar needs to say it. */
+/**
+ * Where a member sits, as the sidebar needs to say it.
+ *
+ * TWO CASES, and the missing third is the point. `'parked'` — a node in the
+ * workspace with no parent, in the sidebar and off the screen — is gone with the
+ * state it named. A member is in the tree or it is not a member, so the only
+ * question left is whether this workspace holds a node for the thing at all.
+ */
 export type MemberPlacement =
-  /** A node in the grid. Closing the row parks that node. */
+  /** A node in this workspace's tree. Closing the row destroys that node. */
   | 'grid'
-  /** A node in the workspace with no parent — in the sidebar, off the screen. */
-  | 'parked'
-  /** No node at all. In the workspace by its own row, never placed. */
+  /** No node at all — this workspace does not hold it. */
   | 'unplaced';
 
 /** One row under an expanded workspace. */
 export interface WorkspaceMemberRow {
-  /** Stable across a placement change, so a row does not remount when it is parked. */
+  /** Stable across a re-render, so a row does not remount when its tree changes. */
   key: string;
   kind: PaneTargetKind;
   /** The conversation / shell / page this row is about. */
@@ -142,26 +152,26 @@ export interface WorkspaceMemberRow {
 }
 
 /**
- * THE SIDEBAR'S ONE LIST for a workspace's own artifacts — every page and every
- * shell the tree holds, ATTACHED AND DETACHED ALIKE.
+ * THE SIDEBAR'S ONE LIST for a workspace's own artifacts — every page the tree
+ * holds.
  *
- * **Detached rows are the #2373 guard, restated in the model that replaced it.**
- * The sidebar used to choose between the grid and the thread list, the grid
- * always won because an open workspace always had one, and a thread with no pane
- * row was invisible — in production, one workspace showed 2 of its 3 threads and
- * another 4 of its 10. The flat model removes the choice, but it hands back the
- * same trap in a new shape: a renderer that walks from the root sees only what
- * is on screen, and a parked node is precisely a member that is not. Rendering
- * only the attached tree would reintroduce the bug with a better excuse.
+ * **#2373 cannot recur under this model, and that is why there is no second list
+ * here.** The sidebar used to choose between the grid and the thread list, the
+ * grid always won because an open workspace always had one, and a thread with no
+ * pane row was invisible — in production, one workspace showed 2 of its 3 threads
+ * and another 4 of its 10. The node-tree cutover removed the choice and then
+ * handed the same trap back in a new shape: a renderer walking from the root saw
+ * only what was on screen, and a PARKED node was precisely a member that was
+ * not — so this function had to concatenate a second list to stay honest. There
+ * are no unplaced members now, so walking the tree IS enumerating the members,
+ * and there is nothing a caller can forget.
  *
- * Conversations are deliberately NOT here. A thread is a member of a workspace by
- * its own row — `conversations.workspaceId`, which is what "created but never
- * placed" means — so the listing is its membership source and this tree only says
- * where it sits. `conversationPlacement` is that half.
+ * Conversations are deliberately NOT here: they are the conversation listing's
+ * rows, and `conversationPlacement` is what annotates one with this tree.
  */
 export function artifactRowsOf(tree: WorkspaceTree): WorkspaceMemberRow[] {
   const index = indexTargets(tree.targets);
-  const ordered = [...gridPanesOf(tree.nodes), ...detachedOf(tree.nodes)];
+  const ordered = gridPanesOf(tree.nodes);
   const rows: WorkspaceMemberRow[] = [];
   const seen = new Set<string>();
   for (const node of ordered) {
@@ -181,7 +191,7 @@ export function artifactRowsOf(tree: WorkspaceTree): WorkspaceMemberRow[] {
       kind: node.target.kind,
       targetId: node.target.id,
       title: titleOf(index, node),
-      placement: node.parentId === null ? 'parked' : 'grid',
+      placement: 'grid',
       nodeId: node.id,
     });
   }
@@ -205,5 +215,8 @@ export function conversationPlacement(
   if (tree === undefined) return { placement: 'unplaced', nodeId: null };
   const node = nodeShowing(tree.nodes, 'chat', conversationId);
   if (node === undefined) return { placement: 'unplaced', nodeId: null };
-  return { placement: node.parentId === null ? 'parked' : 'grid', nodeId: node.id };
+  // A node that exists is on the grid. The third answer this used to give —
+  // `'parked'`, for a node with no parent — described a state the model no
+  // longer has.
+  return { placement: 'grid', nodeId: node.id };
 }

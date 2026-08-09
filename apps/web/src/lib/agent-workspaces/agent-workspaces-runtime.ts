@@ -78,11 +78,12 @@ import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap'
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import { createId } from '@paralleldrive/cuid2';
-import { admit, dismiss, expel, readmit } from '@pagespace/lib/agent-workspaces/workspace-membership';
+import { admit, expel } from '@pagespace/lib/agent-workspaces/workspace-membership';
 import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import type { DbExecutor } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
 import {
   applyWorkspaceMembershipWrite,
+  destroyWorkspaceTree,
   type WithinNodeWrite,
 } from '@/lib/agent-workspaces/workspace-node-runtime';
 import {
@@ -271,7 +272,6 @@ async function admitConversationNode(input: {
   workspaceId: string;
   /** The acting HUMAN, for the binding gate inside the write. */
   actingUserId: string;
-  attach: boolean;
   excludeTargetId?: string;
   within?: WithinNodeWrite;
 }): Promise<AdmitConversationOutcome> {
@@ -287,7 +287,6 @@ async function admitConversationNode(input: {
         newNodeId: createId(),
         newSplitId: createId(),
         newRootId: createId(),
-        attach: input.attach,
         ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
       }),
     ...(input.within === undefined ? {} : { within: input.within }),
@@ -302,6 +301,10 @@ async function admitConversationNode(input: {
   // Named rather than folded in, so a `stale` appearing here reads as "the
   // funnel stopped deciding under the lock", which is a bug.
   if (result.status === 'stale') return 'refused';
+  // The chat-target index refused it: the conversation is bound to a node in
+  // another workspace. Answered as the refusal it is rather than folded into
+  // `refused`, because a caller can act on the difference.
+  if (result.status === 'conflict') return 'bound_elsewhere';
 
   if (!result.changed) return 'already_a_member';
 
@@ -402,8 +405,6 @@ export async function claimConversationInSession(input: {
   conversationId: string;
   userId: string;
   workspaceId: string;
-  /** Put it on screen, or leave it parked. Parked is still membership. */
-  attach?: boolean;
 }): Promise<ClaimConversationOutcome> {
   return claimConversationInSessionWith(buildClaimDeps(input.userId), input);
 }
@@ -438,25 +439,6 @@ export async function createConversationInSession(input: {
    * own spawn. Only `spawn_session` has one.
    */
   excludeTargetId?: string;
-  /**
-   * Put the new thread ON SCREEN, or leave it parked.
-   *
-   * The narrowing of what `placeInGrid` used to decide, and the opt-out is
-   * still the important half. A caller that already has a pane in mind must NOT
-   * ask for this: the pane picker (`AgentPanes.handlePickAgent`) mints its own
-   * unbound pane, POSTs the creation, then binds that pane to the new
-   * conversation. An attached admission would place a SECOND pane for the same
-   * thread, and the client's own bind then leaves one conversation displayed
-   * twice (review finding — codex P1).
-   *
-   * So this is for creators with no client pane to fill: `spawn_session`, where
-   * an agent mints a worker and nothing in a browser is waiting to place it.
-   *
-   * Not attaching is safe, and it is no longer a matter of degree: a parked
-   * node is a MEMBER. The thread is in the workspace, in its listing, and one
-   * `move` from being on screen.
-   */
-  attach?: boolean;
 }): Promise<void> {
   await createConversationInSessionWith<DbExecutor>(
     {
@@ -536,13 +518,13 @@ export async function closeConversationInSession(input: {
         const result = await applyWorkspaceMembershipWrite({
           workspaceId,
           actingUserId: input.userId,
-          run: (nodes) => dismiss(nodes, { target: { kind: 'chat', id: conversationId } }),
+          run: (nodes) => expel(nodes, { target: { kind: 'chat', id: conversationId } }),
         });
         if (result.status === 'refused') {
           return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
         }
         if (result.status === 'stale') return 'refused';
-        return result.changed ? 'dismissed' : 'already_parked';
+        return 'dismissed';
       },
     },
     input,
@@ -564,17 +546,27 @@ export async function reopenConversationInSession(input: {
   return reopenConversationInSessionWith(
     {
       ...conversationOwnerRead(),
+      // REOPENING IS RE-ADMITTING. There is no `readmit` any more: it was a
+      // `move` back onto the grid, and it existed only because a closed thread
+      // kept a node with no parent. Closing DESTROYS that node, so a thread that
+      // was closed is a member of nothing and putting it back is an ordinary
+      // admission — which is also what re-consults the cap it stopped occupying.
       readmitConversation: async ({ conversationId, workspaceId }) => {
-        const result = await applyWorkspaceMembershipWrite({
+        const result = await admitConversationNode({
+          conversationId,
           workspaceId,
           actingUserId: input.userId,
-          run: (nodes) => readmit(nodes, { target: { kind: 'chat', id: conversationId } }),
         });
-        if (result.status === 'refused') {
-          return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
+        switch (result) {
+          case 'admitted':
+            return 'readmitted';
+          case 'already_a_member':
+            return 'already_attached';
+          case 'session_full':
+          case 'bound_elsewhere':
+          case 'refused':
+            return 'refused';
         }
-        if (result.status === 'stale') return 'refused';
-        return result.changed ? 'readmitted' : 'already_attached';
       },
     },
     input,
@@ -582,21 +574,31 @@ export async function reopenConversationInSession(input: {
 }
 
 /** What a history-delete's membership half came to. */
-export type ExpelConversationOutcome = 'expelled' | 'last_conversation' | 'refused';
+export type ExpelConversationOutcome = 'expelled' | 'refused';
 
 /**
- * Remove a conversation from its workspace ENTIRELY — the one membership act
- * that is a `destroy`, and the only caller is history-deletion.
+ * Remove a conversation from its workspace ENTIRELY — history-deletion's
+ * membership half.
  *
  * A thread whose history is gone has no listing to keep and no pane to render:
  * leaving its node behind would leave a rectangle bound to nothing and a cap
  * slot nobody could reclaim.
  *
- * **It carries the never-empty guard**, and this is the ONE place that guard
- * still lives. Closing no longer needs it (a `move` cannot empty a workspace);
- * deleting does, and here it is a count over the tree inside the write's own
- * transaction rather than a `SELECT count(*)` on a second connection racing the
- * delete it guarded.
+ * **The never-empty guard is gone**, and with it the `last_conversation` answer
+ * this function used to be able to give. `requireSurvivor` refused to take a
+ * workspace's last conversation, upholding "a workspace is never empty" — an
+ * invariant that only had teeth while a two-level grid could not represent zero
+ * panes and while "the last one closed" was the inference that ended a session.
+ * An empty tree is an ordinary resting state now, and a session ends when
+ * someone destroys its root. A guard defending a state nobody can reach only
+ * ever fires on legitimate work: here, on deleting the history of the one thread
+ * a workspace happened to be left with.
+ *
+ * `not_a_member` reads as SUCCESS. The removal is addressed by target and
+ * refuses a thread the workspace does not hold, because a caller acting for a
+ * user is owed the truth — this caller is not one of those. It runs behind a
+ * deletion that has already been authorized, and "it was not there" is the state
+ * that deletion asked for.
  *
  * **Call this BEFORE the soft-delete, not inside its transaction.** The two
  * writes cannot be made one without threading an executor through
@@ -611,20 +613,14 @@ export async function expelConversationFromSession(input: {
   conversationId: string;
   workspaceId: string;
   actingUserId: string;
-  /** Refuse when this is the workspace's last conversation (contract invariant 3). */
-  requireSurvivor: boolean;
 }): Promise<ExpelConversationOutcome> {
   const result = await applyWorkspaceMembershipWrite({
     workspaceId: input.workspaceId,
     actingUserId: input.actingUserId,
-    run: (nodes) =>
-      expel(nodes, {
-        target: { kind: 'chat', id: input.conversationId },
-        requireSurvivor: input.requireSurvivor,
-      }),
+    run: (nodes) => expel(nodes, { target: { kind: 'chat', id: input.conversationId } }),
   });
   if (result.status === 'ok') return 'expelled';
-  if (result.status === 'refused' && result.code === 'last_member') return 'last_conversation';
+  if (result.status === 'refused' && result.code === 'not_a_member') return 'expelled';
   loggers.api.error('History delete could not remove the thread from its workspace', undefined, {
     workspaceId: input.workspaceId,
     conversationId: input.conversationId,
@@ -867,17 +863,6 @@ export interface SessionConversationEntry {
    * no listing entry to carry one.
    */
   nodeId: string;
-  /**
-   * On screen, or parked.
-   *
-   * The whole of what the pane annotation used to compute, as one boolean read
-   * off the same row that decided the thread was here at all. `false` is a
-   * RESTING STATE and not a failure — a thread created without a placement, or
-   * one the user closed — and every surface that renders this listing must show
-   * it, which is the guarantee issue #2373 was reaching for and the reason the
-   * annotation's suite is replaced by tests on this field rather than deleted.
-   */
-  attached: boolean;
 }
 
 /**
@@ -923,17 +908,26 @@ export async function listSessionConversationsBulk(
 
   // MEMBERSHIP IS THE JOIN. `conversations.workspaceId` used to select these
   // rows and `closedInWorkspaceAt` used to filter them; both are gone, and the
-  // node that binds the thread does the whole job — it says WHICH workspace
-  // (its `rootId`) and whether the thread is on screen (its `parentId`) in one
-  // row that no other write path can disagree with. There is nothing left for
+  // node that binds the thread does the whole job. There is nothing left for
   // `annotateConversationsWithPanes` to reconcile, which is why that module and
   // its suite are deleted rather than ported.
+  //
+  // It used to select `parentId IS NOT NULL AS attached` beside each row, so a
+  // caller could tell a thread on screen from one parked. There is one place a
+  // node can be, so presence in this list IS "on screen" and the column has
+  // nothing left to report.
   const rankedConversations = db
     .select({
       workspaceId: agentWorkspaceNodes.rootId,
-      nodeId: agentWorkspaceNodes.id,
-      attached: sql<boolean>`${agentWorkspaceNodes.parentId} IS NOT NULL`.as('attached'),
-      conversationId: conversations.id,
+      // EXPLICITLY ALIASED, both of them. Drizzle names a subquery's output
+      // columns after the SOURCE column, so `agent_workspace_nodes.id` and
+      // `conversations.id` both came out as `"id"` and the outer select's
+      // `"id"` was `column reference "id" is ambiguous` (42702) — this listing
+      // failed outright for every caller. It went unnoticed because the suite
+      // that covers it is DB-backed and the shared test database had been
+      // wiped, so it skipped rather than ran.
+      nodeId: sql<string>`${agentWorkspaceNodes.id}`.as('node_id'),
+      conversationId: sql<string>`${conversations.id}`.as('conversation_id'),
       title: conversations.title,
       type: conversations.type,
       contextId: conversations.contextId,
@@ -964,7 +958,6 @@ export async function listSessionConversationsBulk(
     .select({
       workspaceId: rankedConversations.workspaceId,
       nodeId: rankedConversations.nodeId,
-      attached: rankedConversations.attached,
       conversationId: rankedConversations.conversationId,
       title: rankedConversations.title,
       type: rankedConversations.type,
@@ -986,7 +979,6 @@ export async function listSessionConversationsBulk(
       ownerId: row.ownerId,
       isShared: row.isShared,
       nodeId: row.nodeId,
-      attached: row.attached === true,
     });
     grouped.set(row.workspaceId, bucket);
   }
@@ -1136,9 +1128,56 @@ export async function measureWarmSessionStorage(input: {
   }
 }
 
+/**
+ * END A SESSION: settle the row's lifecycle, then `destroy(rootId)`.
+ *
+ * **The tree operation is the removal, and it is the SAME removal that closes a
+ * pane** — see `destroyWorkspaceTree`. What this function adds is the lifecycle
+ * consequence a pane destroy does not have: a session owns a sandbox, an
+ * `endedAt` and a billing history, and none of that is a fact about a node.
+ *
+ * **THE ORDER IS LOAD-BEARING, and it is lifecycle first.** The two writes are
+ * deliberately not one transaction (a Sprite is outside the database; see
+ * `destroyWorkspaceTree` for the full argument), so what matters is which
+ * interrupted state is survivable:
+ *
+ *  - **Lifecycle, then tree** — a crash in between leaves an ended row and a
+ *    tree that outlived it. Visible, harmless, and cleared by re-issuing the
+ *    DELETE: `endAgentSession` answers `already_ended` as a no-op and the
+ *    destroy then runs. Nothing is billing that nobody is watching, because
+ *    `endAgentSession`'s FIRST durable write is `teardownRequestedAt` — from
+ *    that instant the orphan reconciler owns the VM.
+ *  - **Tree, then lifecycle** — a crash in between leaves the tree gone, the row
+ *    un-stamped, and the Sprite alive with NO teardown request against it. The
+ *    reconciler will not touch it (an explicit recorded intent is what licenses
+ *    it to destroy anything), so it bills until a human notices. That is the one
+ *    failure here that costs money and that no background process can see.
+ *
+ * The tree write is best-effort ON PURPOSE: the session is ended once the row
+ * says so, and reporting a teardown failure because some layout rows outlived it
+ * would tell the caller the compute is still running when it is not.
+ */
 export async function endSession(workspaceId: string): Promise<EndAgentSessionResult> {
   const [store, host] = await Promise.all([getAgentSessionStore(), getSandboxHost()]);
-  return endAgentSession({ workspaceId, deps: { store, host, now: () => new Date() } });
+  const row = await store.findById(workspaceId);
+  const ended = await endAgentSession({ workspaceId, deps: { store, host, now: () => new Date() } });
+  if (!ended.ok) return ended;
+
+  // The acting user is the workspace's OWNER: this write binds nothing, so the
+  // gate has nothing to judge, and the owner is the identity the row itself
+  // carries rather than one this call would have to be told.
+  const ownerId = row?.ownerId;
+  if (ownerId !== undefined) {
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerId });
+    if (destroyed.status !== 'ok') {
+      loggers.api.error('Session ended but its tree was not destroyed; re-issuing the end will clear it', undefined, {
+        workspaceId,
+        status: destroyed.status,
+        ...(destroyed.status === 'refused' ? { code: destroyed.code } : {}),
+      });
+    }
+  }
+  return ended;
 }
 
 export async function listSessions(filter: AgentSessionListFilter): Promise<AgentSessionDTO[]> {

@@ -251,45 +251,27 @@ export async function DELETE(
     if (membership) {
       const workspaceId = membership;
       // EXPEL FIRST, THEN DELETE. The membership write takes the workspace's
-      // own lock, reads the tree inside it, and refuses when this is the last
-      // conversation — so the never-empty guard is a count over the very tree
-      // the same transaction is about to change. It also closes the reopen race
-      // by construction: a concurrent reopen is a write to this same tree under
-      // this same lock, so the two serialize rather than interleaving
+      // own lock and removes the node inside it, which also closes the reopen
+      // race by construction: a concurrent reopen is a write to this same tree
+      // under this same lock, so the two serialize rather than interleaving
       // arbitrarily as two operations under two different locks could.
+      //
+      // **The `last_conversation` 409 is gone** with the never-empty invariant
+      // it enforced — see the global route's twin for the full reasoning. In
+      // one line: emptiness stopped meaning anything, so a guard against it only
+      // ever refused legitimate deletions.
       const outcome = await expelConversationFromSession({
         conversationId,
         workspaceId,
         actingUserId: auth.userId,
-        requireSurvivor: true,
       });
 
       if (outcome === 'refused') {
         return NextResponse.json({ error: 'Could not delete this conversation' }, { status: 500 });
       }
-      if (outcome === 'expelled') {
-        // Ordered deliberately — see `expelConversationFromSession`'s doc for
-        // why the survivable failure is the one that can happen here.
-        await conversationRepository.softDeleteConversation(agentId, conversationId);
-      }
-
-      if (outcome === 'last_conversation') {
-        auditRequest(request, {
-          eventType: 'security.rate.limited',
-          userId: auth.userId,
-          resourceType: 'page_agent_conversation',
-          resourceId: conversationId,
-          details: { reason: 'last_session_conversation', agentId, workspaceId, method: 'DELETE' },
-          riskScore: 0,
-        });
-        return NextResponse.json(
-          {
-            error: 'This is the only conversation in its session — close the pane (or end the session) instead of deleting it from History.',
-            reason: 'last_conversation',
-          },
-          { status: 409 },
-        );
-      }
+      // Ordered deliberately — see `expelConversationFromSession`'s doc for
+      // why the survivable failure is the one that can happen here.
+      await conversationRepository.softDeleteConversation(agentId, conversationId);
     } else {
       // Not a member of any workspace — no listing to protect, no lock needed.
       await conversationRepository.softDeleteConversation(agentId, conversationId);

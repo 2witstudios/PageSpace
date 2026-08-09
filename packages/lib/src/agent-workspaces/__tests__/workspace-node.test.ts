@@ -3,10 +3,14 @@
  * later layer (validate, algebra, commands) composes.
  *
  * The model is a FLAT list, not a nested tree, and that is the decision this
- * suite is written against: rows are flat, the wire is flat, and it is the only
- * shape in which "detached" is not a second bucket alongside the tree. Nesting
- * is derived for rendering; the price is that cycles become representable, which
- * is `validateTree`'s job next door, not the type's.
+ * suite is written against: rows are flat and the wire is flat, so the canonical
+ * form is too. Nesting is derived for rendering; the price is that cycles become
+ * representable, which is `validateTree`'s job next door, not the type's.
+ *
+ * The ROOT is the only node with a null parent. There is no `detachedOf` here
+ * any more, and its absence is the point rather than an omission: it answered
+ * "which panes are in the workspace but nowhere in it", a question that could
+ * only be asked while a pane could be in one and not the other.
  *
  * Sibling of `workspace-layout-verbs.test.ts`, which covers the two-level
  * column/pane model this replaces. Both exist during the migration window.
@@ -15,7 +19,6 @@ import { describe, it, expect } from 'vitest';
 import {
   childrenOf,
   descendantsOf,
-  detachedOf,
   findNode,
   removeNodes,
   rootOf,
@@ -34,7 +37,7 @@ function split(id: string, parentId: string, position: number): SplitNode {
   return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, position: number): PaneNode {
+function pane(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 
@@ -44,9 +47,9 @@ describe('childrenOf', () => {
     expect(childrenOf(nodes, 'root-1').map((n) => n.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('should not count a detached pane as a child of anything', () => {
-    const nodes = [root(), pane('attached', 'root-1', 0), pane('detached', null, 0)];
-    expect(childrenOf(nodes, 'root-1').map((n) => n.id)).toEqual(['attached']);
+  it('should not count a node under a different parent as a child', () => {
+    const nodes = [root(), split('s1', 'root-1', 0), pane('under-split', 's1', 0)];
+    expect(childrenOf(nodes, 'root-1').map((n) => n.id)).toEqual(['s1']);
   });
 
   it('should be empty for an id that resolves to nothing, rather than throwing', () => {
@@ -55,25 +58,20 @@ describe('childrenOf', () => {
 });
 
 describe('rootOf', () => {
-  it('should find the root by its type, not by its null parent', () => {
-    const nodes = [pane('detached', null, 0), root(), pane('attached', 'root-1', 0)];
+  it('should find the root by its TYPE, which is the statement a null parent is only a consequence of', () => {
+    const nodes = [pane('a', 'root-1', 0), root(), pane('b', 'root-1', 1)];
     expect(rootOf(nodes)?.id).toBe('root-1');
   });
 
   it('should find nothing in a list that has no root', () => {
-    expect(rootOf([pane('orphan', null, 0)])).toBeUndefined();
-  });
-});
-
-describe('detachedOf', () => {
-  it('should return panes parked outside the tree, and never the root', () => {
-    const nodes = [root(), pane('attached', 'root-1', 0), pane('parked', null, 0)];
-    expect(detachedOf(nodes).map((n) => n.id)).toEqual(['parked']);
+    expect(rootOf([pane('orphan', 'gone', 0)])).toBeUndefined();
   });
 
-  it('should order parked panes by position, so the sidebar has a stable list', () => {
-    const nodes = [root(), pane('second', null, 1), pane('first', null, 0)];
-    expect(detachedOf(nodes).map((n) => n.id)).toEqual(['first', 'second']);
+  it('should not be fooled by a ROW that carries a null parent without the root type', () => {
+    // Only reachable by lying to the type checker, which is what a row does.
+    // `validateTree` calls this `null_parent`; `rootOf` simply does not see it.
+    const impostor = { nodeType: 'pane', id: 'impostor', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    expect(rootOf([impostor])).toBeUndefined();
   });
 });
 

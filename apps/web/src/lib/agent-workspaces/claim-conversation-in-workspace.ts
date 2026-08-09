@@ -87,11 +87,6 @@ export interface ClaimConversationInSessionDeps<Tx = unknown> {
 export interface AdmitConversationInput<Tx = unknown> {
   conversationId: string;
   workspaceId: string;
-  /**
-   * Put it on screen now, or leave it parked. Both are membership — see
-   * `workspace-membership.ts`'s `AdmitInput.attach`.
-   */
-  attach: boolean;
   /** The spawning conversation, never evicted by the thing it spawned. */
   excludeTargetId?: string;
   /** Work that must land in the SAME transaction as the node. Only the create path has any. */
@@ -104,8 +99,7 @@ export async function claimConversationInSessionWith<Tx>(
     conversationId,
     userId,
     workspaceId,
-    attach = false,
-  }: { conversationId: string; userId: string; workspaceId: string; attach?: boolean },
+  }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<ClaimConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null) return 'not_found';
@@ -151,7 +145,7 @@ export async function claimConversationInSessionWith<Tx>(
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
   }
 
-  const admitted = await deps.admitConversation({ conversationId, workspaceId, attach });
+  const admitted = await deps.admitConversation({ conversationId, workspaceId });
   switch (admitted) {
     case 'admitted':
       return 'claimed';

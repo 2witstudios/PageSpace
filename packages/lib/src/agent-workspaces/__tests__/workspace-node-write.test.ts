@@ -30,7 +30,7 @@ const root = (axis: 'row' | 'column' = 'row'): RootNode => ({
 
 const pane = (
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   extra: Partial<Pick<PaneNode, 'fraction' | 'target'>> = {},
 ): PaneNode => ({
@@ -160,11 +160,25 @@ describe('a put that orphans a subtree', () => {
 });
 
 describe('a payload that empties the tree entirely', () => {
-  it('refuses: a workspace with no root is not an empty workspace, it is a broken one', () => {
-    // An EMPTY GRID is legal — a root holding nothing. A workspace with no root
-    // is not the same state, and the difference is the whole reason `rootOf`
-    // finds the root by TYPE rather than by "the node with no parent".
+  it('ACCEPTS dropping the root and everything under it — that write is how a session ends', () => {
+    // The top half of the correction, arriving at the write path. `destroy(root)`
+    // produces exactly this payload, and a write path that answered `no_root`
+    // would make the tree operation that ends a session a tree operation the
+    // server refuses — which is how ending a session became a second mechanism
+    // in the first place.
     const decision = decide(TWO_PANES, { drop: ['root', 'pane-a', 'pane-b'] });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    expect(decision.nodes).toEqual([]);
+    expect(decision.changed).toBe(true);
+    expect(decision.persist.drop.slice().sort()).toEqual(['pane-a', 'pane-b', 'root']);
+  });
+
+  it('still refuses a payload that leaves nodes behind with no root to hold them', () => {
+    // A NON-EMPTY list with no root is a workspace whose rows lost their top,
+    // which is a fault. The difference from the case above is the whole reason
+    // `rootOf` finds the root by TYPE rather than by "the node with no parent".
+    const decision = decide(TWO_PANES, { drop: ['root'] });
     expect(decision.status).toBe('invalid');
     if (decision.status !== 'invalid') return;
     expect(decision.code).toBe('no_root');

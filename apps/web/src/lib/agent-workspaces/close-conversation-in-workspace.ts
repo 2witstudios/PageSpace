@@ -1,32 +1,33 @@
 /**
- * Close a conversation out of its workspace's GRID — which, now that membership
- * is the node row, is a `move` to no parent.
+ * Close a conversation out of its workspace — which, now that membership is the
+ * node row and a node is only ever in the tree, is a `destroy`.
  *
- * **What this used to be, and why the shape changed.** Closing stamped
- * `conversations.closedInWorkspaceAt`, a column that meant "not in the
- * workspace's listing", while a pane row meant "on screen". Two facts, two
- * writers, and the epic's whole complaint: the sidebar chose one, the cap
- * counted the other, and a thread could be in the workspace and invisible in
- * it. There is one fact now — where the node is — so closing changes a
- * LOCATION and nothing else. The thread stays a member, stays in the sidebar,
- * and keeps its binding.
+ * **What this used to be, and why the shape changed twice.** Closing first
+ * stamped `conversations.closedInWorkspaceAt`, a column that meant "not in the
+ * workspace's listing", while a pane row meant "on screen": two facts, two
+ * writers, and the epic's whole complaint. The node-tree cutover replaced that
+ * with a `move` to no parent — one fact, one writer, and a thread that stayed a
+ * member while sitting nowhere. That was the same split rebuilt inside the
+ * model: a permanent population of parentless nodes, so a pane a user closed and
+ * a pane that lost its parent to a defect were the same row and nothing could
+ * tell them apart. There is one place for a node to be now, so closing a thread
+ * out of a workspace REMOVES it from the workspace.
  *
- * **The never-empty guard is gone, and its absence is a consequence.**
- * `last_conversation` refused to close a workspace's last open listing, because
- * doing so left a workspace holding nothing — the state contract invariant 3
- * forbids. A `move` cannot produce that state: every member is still a member
- * afterwards, however few of them are on screen. Closing the last thread now
- * leaves an EMPTY GRID and a workspace that still holds all its threads, which
- * is exactly what `closePane` already does to the last pane. Ending a workspace
- * stays an explicit lifecycle act on a different route.
+ * **What that gives up, stated rather than hidden.** The table's global
+ * chat-target uniqueness makes a binding write-once only for as long as the row
+ * exists, and a destroy frees it — so a thread closed out of one workspace can
+ * afterwards be admitted into another. Under the parked model that was called "a
+ * rebind reached by clicking close" and refused. It is now the honest reading: a
+ * thread whose node is gone is a member of NO workspace, and admitting a
+ * member-of-nothing somewhere is an ordinary admission. The thread's history is
+ * untouched either way — this writes no `conversations` row.
  *
- * **What is deliberately NOT here: a `destroy`.** See `workspace-membership.ts`
- * for the full argument. In one line: the table's global chat-target uniqueness
- * is what makes a binding write-once, and a destroy frees it — so a close that
- * destroyed would let a closed thread be claimed into a DIFFERENT workspace,
- * which is a rebind reached by clicking "close". Removing a thread from a
- * workspace entirely belongs to history-deletion, which is a different act with
- * a different authorization.
+ * **The never-empty guard is gone**, and its absence is a consequence rather
+ * than an omission. `last_conversation` refused to close a workspace's last open
+ * listing because doing so left a workspace holding nothing. Holding nothing is
+ * an ordinary resting state: a root with no children, which `validateTree`
+ * accepts. Ending a workspace is `destroy(rootId)` — an explicit target, never
+ * inferred from emptiness.
  *
  * Pure decision logic over injected deps, per the repo rule that branching
  * which decides lifecycle/access lives in a testable module —
@@ -36,8 +37,8 @@
 
 export type CloseConversationOutcome = 'closed' | 'already_closed' | 'not_in_session';
 
-/** How the membership write answered a `move`. */
-export type DismissConversationOutcome = 'dismissed' | 'already_parked' | 'not_a_member' | 'refused';
+/** How the membership write answered the removal. */
+export type DismissConversationOutcome = 'dismissed' | 'not_a_member' | 'refused';
 
 export interface CloseConversationInSessionDeps {
   /**
@@ -62,7 +63,7 @@ export interface CloseConversationInSessionDeps {
      */
     isActive: boolean;
   } | null>;
-  /** THE MEMBERSHIP WRITE — `move` the thread's node out of the grid. */
+  /** THE MEMBERSHIP WRITE — `destroy` the thread's node. */
   dismissConversation: (input: {
     conversationId: string;
     workspaceId: string;
@@ -95,14 +96,15 @@ export async function closeConversationInSessionWith(
   switch (outcome) {
     case 'dismissed':
       return 'closed';
-    // A re-sent close of a thread already off the grid is idempotent, not an
-    // error: it is in the state the caller asked for.
-    case 'already_parked':
-      return 'already_closed';
     // "This workspace does not hold that thread" and "the tree would not take
-    // the move" collapse to one answer, the same shape a nonexistent id gets.
+    // the removal" collapse to one answer, the same shape a nonexistent id gets.
     // A caller cannot act on the difference, and an id-guessing one must not
     // learn it.
+    //
+    // A re-sent close lands here rather than on its own `already_closed` code:
+    // the first one removed the node, so the second genuinely finds no member.
+    // The distinction the old `already_parked` drew — "it is already where you
+    // asked" — needed a node that survived the close, and none does.
     case 'not_a_member':
     case 'refused':
       return 'not_in_session';

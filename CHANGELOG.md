@@ -108,16 +108,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - **Closing the last pane no longer ends your session** — it leaves the session open with an empty
-  layout, and the threads still listed. Ending a session is now only the explicit action on the
-  session row, so there is one way to end one instead of two.
-- **A thread you close stays in the session's list** — closing takes it off the screen rather than
-  out of the session, and you can open it again from where you left it. Previously closing removed
-  it from the list entirely. If you were using close to tidy the sidebar, that is the behaviour that
-  changed; the trade is that a thread can no longer quietly leave a session it belongs to, which is
-  what allowed the same conversation to end up claimed by a different session.
+  layout. Ending a session is now only the explicit action on the session row, so there is one way
+  to end one instead of two.
+- **Closing a thread takes it out of the session** — it stops being one of that session's threads
+  and leaves the list. Its history is untouched: you find it again in the agent's own conversation
+  list, and reopening it puts it back. An interim build briefly kept a closed thread in the list,
+  dimmed and off-screen; that is gone, because a thread sitting in a session with nowhere to be was
+  indistinguishable from one that had gone missing through a fault — the exact failure the rest of
+  this work exists to make impossible. Closing is one action with one meaning now, whether you close
+  a pane, close a thread, or end the whole session.
 
 ### Added
 
+- **Agents can close a pane** — they could already open, move, resize and reorder them, but taking
+  one away was only possible as a side effect of moving it "nowhere". That is now its own action,
+  which means an agent tidying up its own layout does exactly what it says.
 - **Your agent workspaces now follow you between devices, and agents can arrange their own** —
   the pane grid in the Agents console used to live partly in your browser's local storage, so the
   same workspace looked different on your laptop and your phone, and a collaborator watching a

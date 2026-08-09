@@ -5,7 +5,6 @@ import {
   bind,
   create,
   destroy,
-  move,
   type NodeWrite,
 } from '@pagespace/lib/agent-workspaces/workspace-node-algebra';
 import {
@@ -21,7 +20,6 @@ import {
 } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import {
   childrenOf,
-  detachedOf,
   findNode,
   rootOf,
   type NodeAxis,
@@ -110,10 +108,10 @@ interface WorkspaceFocus {
 /**
  * WHAT A COMPONENT RENDERS: one workspace's live tree plus the names beside it.
  *
- * `nodes` is the flat list — attached AND detached, in one collection, because
- * "in the workspace" and "on screen" stopped being two structures. A renderer
- * that wants only the grid walks from {@link rootOf}; the sidebar renders both,
- * and the #2373 guard is that it must.
+ * `nodes` is the flat list, and it is the WHOLE membership: "in the workspace"
+ * and "on screen" are one fact, so a renderer that walks from {@link rootOf}
+ * has enumerated every member and there is no second list to remember. That is
+ * why #2373 cannot recur here — not because every caller is careful.
  */
 export interface WorkspaceTree {
   workspaceId: string;
@@ -237,8 +235,13 @@ interface AgentWorkspaceState {
   /** Give a pane a sibling by putting a container where it was. */
   splitPane(workspaceId: string, nodeId: string, axis: NodeAxis): void;
   /**
-   * Take a pane out of the grid and LEAVE IT IN THE WORKSPACE — a `move` to no
-   * parent, never a destroy. Closing the last one leaves an empty grid.
+   * Close a pane: the pane GOES.
+   *
+   * A `destroy`, not a move to nowhere. Closing used to park the node — in the
+   * workspace, off the screen — which meant a pane a user closed and a pane that
+   * lost its parent to a defect were the same row. Closing the last one leaves
+   * the session standing with an empty tree; ending the session is a different,
+   * explicitly-named act.
    */
   closePane(workspaceId: string, nodeId: string): 'closed' | 'noop';
   /** Make a conversation visible. See {@link OpenTargetOptions} for the caller's half of the policy. */
@@ -248,13 +251,13 @@ interface AgentWorkspaceState {
   /** Make a shell visible — reattaching the node already holding it when there is one. */
   openShell(workspaceId: string, shellId: string, options?: OpenTargetOptions): void;
   /**
-   * Bring a PARKED node back onto the grid, beside where the user is looking.
+   * Focus a node, moving it beside where the user is looking if it is somewhere
+   * else in the tree.
    *
-   * The command layer refuses to do this implicitly — `open` answers
-   * `already_bound` for a target a parked node already holds, because minting a
-   * second node for it would put one conversation in two places. Showing it
-   * again is a `move`, and this is the caller naming it. Public because the
-   * sidebar names it too: a parked row's whole affordance is "put this back".
+   * It used to un-park a node — bring one with no parent back onto the grid —
+   * which was a parked row's whole affordance in the sidebar. There are no
+   * parked rows, so what is left is the ordinary "take me to this", and the
+   * move is only ever a reposition.
    */
   showNode(workspaceId: string, nodeId: string): void;
   /** Fill an UNBOUND pane. Refuses a bound one: a binding is for life. */
@@ -431,12 +434,10 @@ function commit(workspaceId: string, sync: WorkspaceSync, intent: FocusIntent): 
     const previous = state.workspaces[workspaceId];
     const focusNow = state.focus[workspaceId] ?? null;
 
-    // Focus names a node ON THE GRID, and the distinction is not pedantry: a
-    // parked node is a member of the workspace that is not on the screen, so
-    // "where the user is looking" can never be one. Closing the last pane parks
-    // it, and without this the store would keep pointing at it — which then
-    // reaches the placement policy as an `activeNodeId` preference for a
-    // rectangle nobody can see.
+    // Focus names a node that is STILL THERE. Closing a pane destroys it, so
+    // without this the store would keep pointing at a node that no longer
+    // exists — which then reaches the placement policy as an `activeNodeId`
+    // preference for a rectangle nobody can see.
     const gridPanes = gridPanesOf(rebased.nodes);
     const paneIds = new Set(gridPanes.map((node) => node.id));
     const desired = intent === 'preserve' ? focusNow : intent;
@@ -759,52 +760,22 @@ function clientReplaceable(options: OpenTargetOptions | undefined): (node: PaneN
 }
 
 /**
- * WHERE A NODE COMES BACK TO when it is un-parked: immediately after the pane
- * the user is looking at, and otherwise at the end of the root's own row.
- *
- * Beside the active pane rather than wherever it left from, because a node's old
- * slot is not a fact the model keeps — parking strips the share and renumbers
- * the group it left, deliberately, since a share chosen against one container
- * means nothing after the container has changed shape.
- */
-function gridSlotFor(
-  nodes: readonly WorkspaceNode[],
-  workspaceId: string,
-  nodeId: string,
-): { nodeId: string; parentId: string; index: number } {
-  const activeId = useAgentWorkspaceStore.getState().workspaces[workspaceId]?.activeNodeId ?? null;
-  const active = activeId === null ? undefined : findNode(nodes, activeId);
-  if (active !== undefined && active.nodeType === 'pane' && active.parentId !== null && active.id !== nodeId) {
-    const parentId = active.parentId;
-    const index = childrenOf(nodes, parentId).findIndex((sibling) => sibling.id === active.id) + 1;
-    return { nodeId, parentId, index };
-  }
-  // No usable focus — an empty grid, or focus on the very node being shown.
-  // `seedRoot` has already run by the time a command sees these nodes, so the
-  // root resolves; the non-null assertion the fallback would need is spelled as
-  // a refusal instead, by naming a parent `move` will not find.
-  const root = rootOf(nodes);
-  const parentId = root?.id ?? '';
-  return { nodeId, parentId, index: parentId === '' ? 0 : childrenOf(nodes, parentId).length };
-}
-
-/**
  * "SHOW ME THIS" — the one entry point behind `openConversation` and `openPage`,
  * and the only place the store adds anything to the shared placement policy.
  *
- * Three cases, and the middle one is the reason this is not a straight
- * pass-through to the command:
+ * TWO cases now, and the one that went is worth naming:
  *
- *  - **Already on the grid** → focus it. Focus is client-local, so the correct
+ *  - **Already in the tree** → focus it. Focus is client-local, so the correct
  *    write is no write at all — which is exactly what the command answers too,
  *    but the command cannot move the user's attention and this can.
- *  - **PARKED** → the command REFUSES (`already_bound`), on purpose: minting a
- *    second node would put one conversation in two places. Showing it again is a
- *    `move`, and this is the caller naming it. Without this branch, clicking a
- *    parked thread in the sidebar would silently do nothing — which is the #2373
- *    symptom wearing a new hat.
  *  - **Nowhere** → the shared policy places it, and whatever node ended up
  *    holding it gets the focus.
+ *
+ * The third case was PARKED: a node holding the target with no parent, which the
+ * command refused (`already_bound`) because minting a second node would put one
+ * conversation in two places, so this layer had to `move` it back by hand.
+ * Nothing is parked, so "a node holds it" and "it is on screen" are the same
+ * sentence and the first case covers both.
  */
 function openTarget(
   workspaceId: string,
@@ -815,8 +786,9 @@ function openTarget(
   const store = useAgentWorkspaceStore.getState();
   const existing = findShowing(store.workspaces[workspaceId]?.nodes ?? [], target);
   if (existing !== undefined) {
-    if (existing.parentId === null) store.showNode(workspaceId, existing.id);
-    else store.selectNode(workspaceId, existing.id);
+    // It is in the tree, so it is on screen: the whole answer is focus, which is
+    // client-local. The branch this replaces had to un-park a node first.
+    store.selectNode(workspaceId, existing.id);
     return;
   }
 
@@ -837,7 +809,7 @@ function openTarget(
   if (landed !== undefined) store.selectNode(workspaceId, landed.id);
 }
 
-/** The node showing this target anywhere in the workspace — parked included. */
+/** The node showing this target anywhere in the workspace, at any depth. */
 function findShowing(nodes: readonly WorkspaceNode[], target: PaneTarget): PaneNode | undefined {
   return nodes.find(
     (node): node is PaneNode =>
@@ -989,10 +961,10 @@ export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
         const tree = get().workspaces[workspaceId];
         if (!tree) return 'noop';
         const node = findNode(tree.nodes, nodeId);
-        // Already out of the grid, or never in this workspace: nothing to close.
-        // The command would write nothing anyway; answering `noop` lets a caller
-        // tell "I did that" from "there was nothing to do".
-        if (node === undefined || node.nodeType !== 'pane' || node.parentId === null) return 'noop';
+        // Never in this workspace, or not a pane: nothing to close. The command
+        // refuses either anyway; answering `noop` lets a caller tell "I did
+        // that" from "there was nothing to do".
+        if (node === undefined || node.nodeType !== 'pane') return 'noop';
         return get().runCommand(workspaceId, (nodes) => closePaneCommand(nodes, { nodeId })) === null
           ? 'closed'
           : 'noop';
@@ -1016,8 +988,10 @@ export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
           if (node === undefined || node.nodeType !== 'pane') {
             return { ok: false, code: 'not_a_pane', detail: `no pane "${nodeId}" to show` };
           }
-          if (node.parentId !== null) return { ok: true, write: emptyWrite() };
-          return compile(nodes, [(current) => move(current, gridSlotFor(current, workspaceId, nodeId))]);
+          // Already in the tree, which is the only place it can be, so showing
+          // it is focus and focus is client-local: no write at all. The branch
+          // this replaces moved a PARKED node back onto the grid.
+          return { ok: true, write: emptyWrite() };
         });
         if (refused === null) get().selectNode(workspaceId, nodeId);
       },
@@ -1036,8 +1010,7 @@ export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
           // The replacement arrives BEFORE the old node leaves, so no group
           // momentarily has a hole in it — in particular a two-child split does
           // not drop to one and collapse under the very command refilling it.
-          const group = parentId === null ? detachedOf(nodes) : childrenOf(nodes, parentId);
-          const index = group.findIndex((sibling) => sibling.id === nodeId) + 1;
+          const index = childrenOf(nodes, parentId).findIndex((sibling) => sibling.id === nodeId) + 1;
           return compile(nodes, [
             (current) => create(current, { nodeId: mintId('pane'), target: null, parentId, index }),
             (current) => destroy(current, { nodeId }),

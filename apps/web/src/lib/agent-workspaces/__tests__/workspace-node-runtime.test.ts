@@ -143,14 +143,17 @@ vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}), eq: () => ({}) 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
-const { applyWorkspaceMembershipWrite, applyWorkspaceNodeWrite, readWorkspaceNodes } = await import(
-  '../workspace-node-runtime',
-);
+const {
+  applyWorkspaceMembershipWrite,
+  applyWorkspaceNodeWrite,
+  destroyWorkspaceTree,
+  readWorkspaceNodes,
+} = await import('../workspace-node-runtime');
 
 const root: WorkspaceNode = { nodeType: 'root', id: 'root', parentId: null, position: 0, axis: 'row' };
 const pane = (
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   target: PaneTarget | null = null,
 ): WorkspaceNode => ({ nodeType: 'pane', id, parentId, position, target });
@@ -249,11 +252,30 @@ describe('the binding gate', () => {
 
   it('does NOT gate a binding the workspace already holds — the trap that would make a layout unwritable', async () => {
     // A viewer who lost access to a page must still be able to move, resize and
-    // CLOSE the pane showing it. Closing is a `put` with `parentId: null`, so
-    // gating every target in the payload would leave no exit at all.
-    store.nodes = [root, pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' })];
+    // CLOSE the pane showing it. Gating every target in the payload rather than
+    // only the ones the write INTRODUCES would leave no exit at all.
+    store.nodes = [
+      root,
+      pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' }),
+      pane('pane-b', 'root', 1),
+    ];
     authorize.allow = false;
-    const result = await write({ put: [pane('pane-a', null, 0, { kind: 'page', id: 'page-1' })] });
+    const result = await write({ put: [pane('pane-a', 'root', 1, { kind: 'page', id: 'page-1' }), pane('pane-b', 'root', 0)] });
+    expect(result.status).toBe('ok');
+    expect(authorize.seen).toEqual([]);
+  });
+
+  it('does not gate the DESTROY of a pane whose target the viewer can no longer read', async () => {
+    // The exit itself. Closing is a `drop` now rather than a `put` with a null
+    // parent, and a drop introduces no target at all — so the gate has nothing
+    // to judge and cannot strand a pane on screen.
+    store.nodes = [
+      root,
+      pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' }),
+      pane('pane-b', 'root', 1),
+    ];
+    authorize.allow = false;
+    const result = await write({ drop: ['pane-a'], put: [pane('pane-b', 'root', 0)] });
     expect(result.status).toBe('ok');
     expect(authorize.seen).toEqual([]);
   });
@@ -420,7 +442,7 @@ describe('a chat target already bound in ANOTHER workspace', () => {
     expect(result.snapshot.rev).toBe(3);
     expect(result.snapshot.nodes.map((node) => node.id)).toEqual(['root', 'pane-a']);
     expect(result.snapshot.targets).toEqual([
-      { id: 'conv-mine', kind: 'chat', title: 'Planning', lastMessageAt: null },
+      { id: 'conv-mine', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: null },
     ]);
   });
 
@@ -672,11 +694,16 @@ describe('the membership write', () => {
     expect(mockBroadcast).not.toHaveBeenCalled();
   });
 
-  it('reports a chat-target unique violation as `bound_elsewhere`, not as a fault', async () => {
-    // The one database answer this layer translates: two workspaces raced for
-    // one conversation, and only the global index was in a position to settle
-    // it. Matched on the constraint NAME rather than the message, because the
-    // message is a Postgres locale string.
+  it('reports a chat-target unique violation as a CONFLICT carrying the truth to rebase against', async () => {
+    // Two workspaces raced for one conversation, and only the global index was
+    // in a position to settle it. It is matched on the constraint NAME rather
+    // than the message, because the message is a Postgres locale string.
+    //
+    // This asserted `{status: 'refused', code: 'bound_elsewhere'}`, which this
+    // funnel could not produce: the write path's own backstop matches the same
+    // index and unwraps the driver's `cause` chain, so it always answered first
+    // and the local translation was dead code. The membership callers read
+    // `conflict` and give it their own name.
     const conflict = Object.assign(new Error('duplicate key'), {
       code: '23505',
       constraint: 'agent_workspace_nodes_chat_target_idx',
@@ -691,9 +718,9 @@ describe('the membership write', () => {
       },
     });
 
-    expect(result.status).toBe('refused');
-    if (result.status !== 'refused') return;
-    expect(result.code).toBe('bound_elsewhere');
+    expect(result.status).toBe('conflict');
+    if (result.status !== 'conflict') return;
+    expect(result.code).toBe('target_already_shown');
   });
 
   it('lets a unique violation from ANY OTHER index keep throwing', async () => {
@@ -714,5 +741,67 @@ describe('the membership write', () => {
         },
       }),
     ).rejects.toBe(conflict);
+  });
+});
+
+
+/**
+ * ENDING A SESSION IS `destroy(root)` — the tree's own removal, pointed at the
+ * top of the tree instead of at a pane.
+ *
+ * This is the correction the epic's node-tree cutover missed. `destroy` refused
+ * the root (`root_immutable`), which did not stop sessions ending — it moved
+ * ending one into a SECOND lifecycle mechanism beside the tree, two removals
+ * with two meanings reconciled by convention.
+ */
+describe('destroyWorkspaceTree', () => {
+  it('drops the root and its whole subtree, leaving no nodes at all', async () => {
+    store.nodes = [
+      root,
+      { nodeType: 'split', id: 'col', parentId: 'root', position: 0, axis: 'column' },
+      pane('pane-a', 'col', 0),
+      pane('pane-b', 'col', 1),
+    ];
+
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.changed).toBe(true);
+    expect(store.nodes).toEqual([]);
+    expect(store.writes[0].drop.slice().sort()).toEqual(['col', 'pane-a', 'pane-b', 'root']);
+  });
+
+  it('does NOT seed a root in order to destroy it', async () => {
+    // The funnel mints a root for any command that needs one to place into.
+    // Seeding here would put the seed in `put` and its id in `drop`, which the
+    // decision resolves as "put wins" — so ending a session that had no tree
+    // would CREATE one. The write must be empty instead.
+    store.nodes = [];
+
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.changed).toBe(false);
+    expect(store.nodes).toEqual([]);
+    expect(store.writes).toEqual([]);
+  });
+
+  it('is idempotent — a re-issued end writes nothing the second time', async () => {
+    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    store.writes = [];
+
+    const again = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+
+    expect(again.status).toBe('ok');
+    if (again.status !== 'ok') return;
+    expect(again.changed).toBe(false);
+    expect(store.writes).toEqual([]);
+  });
+
+  it('broadcasts the empty tree, so every client stops rendering the session', async () => {
+    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    expect(mockBroadcast).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WORKSPACE, nodes: [] }));
   });
 });

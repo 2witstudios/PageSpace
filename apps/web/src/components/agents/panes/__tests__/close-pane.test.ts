@@ -9,7 +9,7 @@ import { decideClosePane, type SessionConversationSummary } from '../close-pane'
 
 const WS = 'ws-1';
 
-function chat(id: string, conversationId: string, parentId: string | null = WS): PaneNode {
+function chat(id: string, conversationId: string, parentId: string = WS): PaneNode {
   return { nodeType: 'pane', id, parentId, position: 0, target: { kind: 'chat', id: conversationId } };
 }
 function terminal(id: string, shellId: string): PaneNode {
@@ -99,9 +99,12 @@ describe('decideClosePane', () => {
       expect(decision).toEqual({ action: 'close-pane' });
     });
 
-    it('should close the thread even for a PARKED node, since parking is not the same as closing', () => {
+    it('should close the thread for a node nested below a split, like any other', () => {
+      // Was stated with a PARKED node. Where a pane sits was never part of this
+      // decision — what it reads is the LISTING — and depth is what "somewhere
+      // other than the root's own children" means now.
       expect(
-        decideClosePane({ panes: [chat('n1', 'c1', null)], nodeId: 'n1', activeConversations: listing('c1') }),
+        decideClosePane({ panes: [chat('n1', 'c1', 's1')], nodeId: 'n1', activeConversations: listing('c1') }),
       ).toEqual({ action: 'close-conversation', conversationId: 'c1' });
     });
   });

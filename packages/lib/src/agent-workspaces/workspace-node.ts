@@ -2,23 +2,40 @@
  * The workspace NODE model — one flat list of nodes in which `parentId`
  * decides visibility and location, and nothing decides membership but presence.
  *
- * **Why flat and not a nested tree.** The rows are flat, the wire is flat, and
- * a flat list is the only shape in which a DETACHED node — present in the
- * workspace, absent from the rendered tree — is not a second bucket sitting
- * beside the tree. The whole point of this model is that "in the workspace" and
- * "on screen" stop being two structures, so the canonical form may not
- * reintroduce the split at the type level. Nesting is derived for rendering.
+ * **Why flat and not a nested tree.** The rows are flat and the wire is flat,
+ * so the canonical in-memory form is flat too: one list, one translation, no
+ * shape that fights its own storage. Nesting is derived for rendering.
  *
  * The price is that a flat parent pointer can express a cycle, which a nested
  * type cannot. That is paid once, deliberately, in `validateTree` — the single
- * function every write path runs — rather than by giving the model a shape that
- * fights its own storage.
+ * function every write path runs.
+ *
+ * **THERE IS ONE PLACE A NODE CAN BE, AND IT IS UNDER ITS PARENT.** An earlier
+ * cut of this model gave a non-root node a nullable `parentId` and called it
+ * DETACHED — in the workspace, off the screen — which was the very split this
+ * model exists to delete, rebuilt at the bottom of the tree. Two consequences
+ * made it untenable and both are worth stating, because nothing else in the
+ * file records them:
+ *
+ *  - A permanent population of parentless nodes existed BY DESIGN, so a node
+ *    that lost its parent through a genuine defect was indistinguishable from
+ *    one a user had closed. In the sibling system where this failure was
+ *    actually observed (PurePoint), panes restructuring to top level was
+ *    corruption — detectable precisely because it was never legal.
+ *  - `validateTree` could reject a DANGLING parent (an id that resolves to
+ *    nothing) but never a NULL one, because null was legal. Half the failure
+ *    shape was invisible to the one function every write path runs.
+ *
+ * So `parentId` is a `string` on everything except {@link RootNode}, whose null
+ * is a consequence of being the root — which `nodeType` already says.
  *
  * **Why a discriminated union.** Everything a `nodeType` can rule out is ruled
- * out here rather than in the validator: a root cannot carry a parent, a split
- * cannot be detached, and a pane cannot carry an axis. `validateTree` is then
- * left with exactly the invariants a type cannot state — one root, no cycles,
- * no dangling parent, depth and count caps, fractions that settle.
+ * out here rather than in the validator: a root cannot carry a parent, a
+ * non-root cannot lack one, and a pane cannot carry an axis. `validateTree` is
+ * then left with exactly the invariants a type cannot state — one root, no
+ * cycles, no dangling parent, depth and count caps, fractions that settle — plus
+ * the one a type states in memory and a ROW can still break, which is why
+ * `null_parent` is a violation code and not merely a compile error.
  *
  * **Why `position` and not `orderIndex`.** PageSpace already has a tree — the
  * page tree — and it already names this field `position` (`pages.position` in
@@ -61,9 +78,10 @@ export interface PaneTarget {
 }
 
 /**
- * The workspace's sole structural root. `parentId` is `null` because it is the
- * root, NOT because it is detached — which is exactly why `nodeType` and not a
- * null parent is what distinguishes the two.
+ * The workspace's sole structural root, and THE ONLY NODE THAT CARRIES A NULL
+ * PARENT. It carries one because it is the root — which `nodeType` already
+ * says, so the null is a consequence and never a definition. Every reader finds
+ * the root through {@link rootOf}, by type.
  */
 export interface RootNode {
   nodeType: 'root';
@@ -74,10 +92,8 @@ export interface RootNode {
 }
 
 /**
- * A split container. Never detached: a split has no durable target of its own,
- * so a parked one would be garbage rather than a member of anything. Destroying
- * a container takes its subtree with it, so orphaned splits have no way to
- * arise.
+ * A split container. Destroying one takes its subtree with it, so an orphaned
+ * split has no way to arise.
  */
 export interface SplitNode {
   nodeType: 'split';
@@ -97,14 +113,17 @@ export interface SplitNode {
 }
 
 /**
- * A leaf: the thing a user calls a pane. `parentId === null` means DETACHED —
- * in the workspace and in the sidebar, not on screen. `target === null` means
- * unbound: the pane renders the picker.
+ * A leaf: the thing a user calls a pane. `target === null` means unbound — the
+ * pane renders the picker.
+ *
+ * `parentId` is a `string`, so a pane is always somewhere. Closing one is a
+ * {@link destroy}, not a move to nowhere, and "in the workspace but off the
+ * screen" is a state this model deliberately cannot spell.
  */
 export interface PaneNode {
   nodeType: 'pane';
   id: string;
-  parentId: string | null;
+  parentId: string;
   position: number;
   fraction?: number;
   target: PaneTarget | null;
@@ -125,8 +144,6 @@ export function findNode(nodes: readonly WorkspaceNode[], id: string): Workspace
  * A parent's children, ordered. Total: an id that resolves to nothing has no
  * children, which is not an error — a stale click racing a close must never
  * throw, the same stance the transitions this replaces took.
- *
- * A detached node is a child of nothing, so it can never appear here.
  */
 export function childrenOf(nodes: readonly WorkspaceNode[], parentId: string): WorkspaceNode[] {
   return nodes
@@ -135,27 +152,19 @@ export function childrenOf(nodes: readonly WorkspaceNode[], parentId: string): W
 }
 
 /**
- * The workspace's root, found BY ITS TYPE.
+ * The workspace's root, found BY ITS TYPE and never by "the node with no
+ * parent".
  *
- * The root and a detached pane both carry a null parent, so a null parent is
- * not what identifies either of them. Every reader goes through here rather
- * than re-spelling the rule, because "the node with no parent" is the shape of
- * the bug this model exists to remove.
+ * Those two now select the same node, and this function still exists because
+ * they are not the same STATEMENT. `nodeType` is what a row asserts and what
+ * the union discriminates on; a null parent is a consequence of it. A reader
+ * that went looking for the null would be re-deriving the rule from its
+ * side-effect — which is how a null parent came to mean two things the last
+ * time, and the reason the parse re-establishes the agreement rather than
+ * trusting either column alone.
  */
 export function rootOf(nodes: readonly WorkspaceNode[]): RootNode | undefined {
   return nodes.find((node): node is RootNode => node.nodeType === 'root');
-}
-
-/**
- * The panes parked outside the tree, ordered — present in the workspace, absent
- * from the grid. Only a pane can be here: a detached split is unspellable
- * (`SplitNode.parentId` is a `string`), which is the type carrying an invariant
- * so the validator does not have to.
- */
-export function detachedOf(nodes: readonly WorkspaceNode[]): PaneNode[] {
-  return nodes
-    .filter((node): node is PaneNode => node.nodeType === 'pane' && node.parentId === null)
-    .sort((a, b) => a.position - b.position);
 }
 
 /**
@@ -217,7 +226,9 @@ export function upsertNodes(
  *
  * Removes ONLY what it is given: a subtree is the caller's to name, as
  * `[id, ...descendantsOf(nodes, id)]`. Making this walk the tree implicitly
- * would hide the difference between detaching a pane and destroying a column.
+ * would put the cascade somewhere a reader of `destroy` cannot see it — and
+ * `destroy` is the one removal, so what it takes has to be visible at its call
+ * site rather than inside a helper's mood.
  */
 export function removeNodes(
   nodes: readonly WorkspaceNode[],

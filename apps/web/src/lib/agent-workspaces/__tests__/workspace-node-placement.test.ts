@@ -72,7 +72,7 @@ const { layoutCommand, placePagePaneForConversation, placeWorkerPane } = await i
 const root: WorkspaceNode = { nodeType: 'root', id: 'root', parentId: null, position: 0, axis: 'row' };
 const pane = (
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   target: PaneTarget | null = null,
   fraction?: number,
@@ -235,13 +235,15 @@ describe('the rearrange commands', () => {
     expect(result.write.put.find((node) => node.id === 'a')).toMatchObject({ position: 2 });
   });
 
-  it('move to a parent of null PARKS the node — closing is a location, not a deletion', async () => {
-    const result = layoutCommand({ type: 'move', nodeId: 'a', parentId: null })(twoColumns());
+  it('move only ever RELOCATES — there is no destination outside the tree', async () => {
+    // `parentId: null` used to be a legal destination and meant PARK: out of the
+    // layout, still in the workspace. `LayoutCommandInput`'s `parentId` is a
+    // `string` now, so the tool cannot spell it and the model cannot hold it.
+    // Taking a pane away is a destroy.
+    const result = layoutCommand({ type: 'move', nodeId: 'c', parentId: 'root', index: 0 })(twoColumns());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const parked = result.write.put.find((node) => node.id === 'a');
-    expect(parked).toMatchObject({ parentId: null });
-    // It keeps its identity and its binding; only its place changed.
+    expect(result.write.put.find((node) => node.id === 'c')).toMatchObject({ parentId: 'root', position: 0 });
     expect(result.write.drop).toEqual([]);
   });
 
@@ -250,6 +252,42 @@ describe('the rearrange commands', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe('invalid_index');
+  });
+
+  it('close DESTROYS the pane — the capability the null destination used to carry', async () => {
+    // An agent's only way to take a pane off the grid was
+    // `move_pane(toParentId: null)`, which PARKED it. Removing that destination
+    // without this verb would have left agents able to rearrange a layout and
+    // unable to close anything in it.
+    const result = layoutCommand({ type: 'close', nodeId: 'b' })(twoColumns());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.write.drop).toEqual(['b']);
+    expect(result.write.put.some((node) => node.id === 'b')).toBe(false);
+  });
+
+  it('close refuses the ROOT, so an agent cannot end a session by closing a pane', async () => {
+    // `destroy(root)` genuinely ends the session — that is the correction at the
+    // top of the tree. This command is named for panes, and going through the
+    // COMMAND rather than straight to the algebra is what makes an agent's
+    // mis-aimed close a refusal rather than a session nobody asked to end.
+    const result = layoutCommand({ type: 'close', nodeId: 'root' })(twoColumns());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('root_immutable');
+  });
+
+  it('close refuses a CONTAINER, because closing a column is not closing a pane', async () => {
+    const nested: WorkspaceNode[] = [
+      root,
+      { nodeType: 'split', id: 's1', parentId: 'root', position: 0, axis: 'column' },
+      pane('a', 's1', 0, null),
+      pane('b', 's1', 1, null),
+    ];
+    const result = layoutCommand({ type: 'close', nodeId: 's1' })(nested);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('not_a_pane');
   });
 
   it('arrange puts the named ids first and leaves the rest in their relative order', async () => {
@@ -263,13 +301,14 @@ describe('the rearrange commands', () => {
   });
 
   it('arrange defaults to the ROOT children, found by TYPE and not by a null parent', async () => {
-    // A parked pane has a null parent too, so "the node with no parent" is not
-    // what identifies the root — the bug the whole model exists to remove.
-    const nodes = [...twoColumns(), pane('parked', null, 0)];
-    const result = layoutCommand({ type: 'arrange', nodeIds: ['b'] })(nodes);
+    // A ROW can carry a null parent without being a root, so "the node with no
+    // parent" is still not what identifies one — it is just no longer a state
+    // any legitimate write produces.
+    const result = layoutCommand({ type: 'arrange', nodeIds: ['b'] })(twoColumns());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.write.put.find((node) => node.id === 'parked')).toBeUndefined();
+    const positions = new Map(result.write.put.map((node) => [node.id, node.position]));
+    expect(positions.get('b')).toBe(0);
   });
 
   it('arrange SKIPS an id that is not a child of that container rather than failing the call', async () => {

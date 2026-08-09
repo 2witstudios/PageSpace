@@ -33,9 +33,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { factories } from '@pagespace/db/test/factories';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -50,6 +51,27 @@ import {
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
+
+/**
+ * The workspace whose TREE holds this conversation — the membership question,
+ * asked of the one row that answers it.
+ *
+ * These assertions used to read `conversations.workspaceId`. Nothing writes that
+ * column: membership moved to the node table, and the creator explicitly inserts
+ * `workspaceId: null`. So the old form compared two nulls and passed for no
+ * reason — which nobody noticed, because this suite is DB-backed and the local
+ * test database had been wiped, so it skipped instead of running.
+ */
+async function workspaceHolding(conversationId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ rootId: agentWorkspaceNodes.rootId })
+    .from(agentWorkspaceNodes)
+    .where(
+      and(eq(agentWorkspaceNodes.targetKind, 'chat'), eq(agentWorkspaceNodes.targetId, conversationId)),
+    )
+    .limit(1);
+  return row?.rootId ?? null;
+}
 
 describe('spawn_session from the global assistant (issue #2335)', () => {
   beforeAll(async () => {
@@ -92,7 +114,10 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       .where(eq(conversations.id, workerConversationId));
     expect(worker).toBeDefined();
     expect(worker.type).toBe('global');
-    expect(worker.workspaceId).toBe(ensured.session.id);
+    // MEMBERSHIP IS THE NODE. `conversations.workspaceId` is not written by
+    // anything on this branch, so asserting it here would only ever have
+    // compared two nulls.
+    expect(await workspaceHolding(workerConversationId)).toBe(ensured.session.id);
     expect(worker.title).toBe('repro worker');
   });
 
@@ -132,7 +157,8 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       .select()
       .from(conversations)
       .where(eq(conversations.id, workerConversationId));
-    expect(worker.workspaceId).toBe(ensured.session.id);
+    expect(worker).toBeDefined();
+    expect(await workspaceHolding(workerConversationId)).toBe(ensured.session.id);
 
     // …and the claim reopened the session's listing: the end-intent stamp is
     // withdrawn, so the workspace is visible in the sidebar again.
@@ -169,7 +195,8 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       .select()
       .from(conversations)
       .where(eq(conversations.id, isolatedWorkerId));
-    expect(isolatedWorker.workspaceId).toBe(isolated.workspaceId);
+    expect(isolatedWorker).toBeDefined();
+    expect(await workspaceHolding(isolatedWorkerId)).toBe(isolated.workspaceId);
 
     // Explicit target → lands exactly there (here: back in the caller's own).
     const targetedWorkerId = createId();

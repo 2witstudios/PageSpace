@@ -30,7 +30,7 @@ const WS = 'ws-1';
 /** The root a workspace is seeded with — deterministic, from the workspace id. */
 const root: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
 
-function pane(id: string, parentId: string | null, position: number, chatId?: string): WorkspaceNode {
+function pane(id: string, parentId: string, position: number, chatId?: string): WorkspaceNode {
   return {
     nodeType: 'pane',
     id,
@@ -183,7 +183,16 @@ describe('applyRemoteUpdate', () => {
 
   it('should refuse a broadcast whose tree is invalid', () => {
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
-    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [pane('orphan', null, 0, 'c9')] });
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [pane('orphan', 'gone', 0, 'c9')] });
+    expect(tree().rev).toBe(1);
+  });
+
+  it('should refuse a broadcast carrying a pane with NO parent, which a row can still spell', () => {
+    // `null_parent`. Under the previous model this was a legal member and the
+    // client would have adopted it as truth — a node it would then never draw.
+    const parentless = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, parentless] });
     expect(tree().rev).toBe(1);
   });
 });
@@ -213,9 +222,12 @@ describe('local writes survive new server truth', () => {
    * is gone.
    */
   it('should drop a pending write whose node the server destroyed, and flag it', () => {
+    // A pending edit TO a node — not a removal of it — is the case that matters:
+    // replaying it onto a tree the node has left would UPSERT it back, a pane
+    // somebody else destroyed returning with its binding intact.
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
-    store().closePane(WS, 'p2');
-    expect(tree().nodes.find((n) => n.id === 'p2')?.parentId).toBeNull();
+    store().splitPane(WS, 'p2', 'row');
+    expect(tree().nodes.some((n) => n.id === 'p2')).toBe(true);
 
     // The server's truth: p2 is gone entirely.
     store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, pane('p1', WS, 0, 'c1')] });
@@ -251,25 +263,31 @@ describe('the root seed', () => {
 });
 
 describe('closePane', () => {
-  it('should PARK the node rather than destroy it — it stays a member', () => {
+  it('should DESTROY the node — closing takes the pane out of the workspace', () => {
+    // It used to PARK it: same node, null parent, still a member and still
+    // holding its binding. That state is what made a pane the user closed and a
+    // pane that lost its parent to a defect the same row.
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
     expect(store().closePane(WS, 'p2')).toBe('closed');
-    const parked = tree().nodes.find((n) => n.id === 'p2');
-    expect(parked?.parentId).toBeNull();
-    expect(parked?.nodeType === 'pane' && parked.target?.id).toBe('c2');
+    expect(tree().nodes.find((n) => n.id === 'p2')).toBeUndefined();
+    expect(tree().nodes.map((n) => n.id)).toEqual([WS, 'p1']);
   });
 
-  it('should leave an EMPTY GRID when the last pane closes, and not forget the workspace', () => {
+  it('should leave an EMPTY TREE when the last pane closes, and not forget the workspace', () => {
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
     expect(store().closePane(WS, 'p1')).toBe('closed');
     expect(tree()).toBeDefined();
-    expect(tree().nodes.find((n) => n.id === 'p1')?.parentId).toBeNull();
+    // The node is GONE, not parked. The session stands with a root holding
+    // nothing — closing the last pane does not end it.
+    expect(tree().nodes.find((n) => n.id === 'p1')).toBeUndefined();
+    expect(tree().nodes.find((n) => n.nodeType === 'root')).toBeDefined();
     expect(tree().activeNodeId).toBeNull();
   });
 
-  it('should answer noop for a node already off the grid', () => {
-    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('parked', null, 0, 'c2')]));
-    expect(store().closePane(WS, 'parked')).toBe('noop');
+  it('should answer noop for the ROOT — closing a pane is not ending the session', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(store().closePane(WS, WS)).toBe('noop');
+    expect(tree().nodes.find((n) => n.nodeType === 'root')).toBeDefined();
   });
 
   it('should answer noop for a node this workspace does not hold', () => {
@@ -291,20 +309,27 @@ describe('openConversation', () => {
   });
 
   /**
-   * A PARKED target. The command refuses this on purpose ("showing it again is a
-   * move, and the caller names it"), so the store has to name it — otherwise
-   * clicking a parked thread in the sidebar silently does nothing.
+   * A target held DEEP in the tree. This case used to be about a PARKED node:
+   * the command refused it on purpose ("showing it again is a move, and the
+   * caller names it"), so the store had to move it back by hand or clicking a
+   * parked thread in the sidebar silently did nothing. A holder is always on
+   * screen now, so the whole answer is focus — and the property that matters,
+   * that no SECOND node is minted for it, is the same one.
    */
-  it('should bring a PARKED node back onto the grid rather than mint a second one', () => {
-    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('parked', null, 0, 'c2')]));
+  it('should focus a node nested below a split rather than mint a second one', () => {
+    const split: WorkspaceNode = { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' };
+    store().hydrateFromServer(
+      WS,
+      snapshot(1, [root, pane('p1', WS, 0, 'c1'), split, pane('deep', 's1', 0, 'c2'), pane('beside', 's1', 1, 'c3')]),
+    );
     store().selectNode(WS, 'p1');
+    mockFetchWithAuth.mockClear();
 
     store().openConversation(WS, 'c2');
 
-    const back = tree().nodes.find((n) => n.id === 'parked');
-    expect(back?.parentId).not.toBeNull();
     expect(tree().nodes.filter((n) => n.nodeType === 'pane' && n.target?.id === 'c2')).toHaveLength(1);
-    expect(tree().activeNodeId).toBe('parked');
+    expect(tree().activeNodeId).toBe('deep');
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
   });
 
   it('should fill an unbound pane rather than split', () => {

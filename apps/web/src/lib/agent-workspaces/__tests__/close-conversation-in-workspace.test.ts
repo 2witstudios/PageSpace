@@ -79,12 +79,13 @@ describe('closeConversationInSessionWith', () => {
     expect(deps.dismissConversation).not.toHaveBeenCalled();
   });
 
-  it('is idempotent on a thread already off the grid', async () => {
-    deps.dismissConversation.mockResolvedValue('already_parked');
-    expect(await closeConversationInSessionWith(deps, input)).toBe('already_closed');
-  });
-
-  it('reports a thread this workspace does not hold as "not there"', async () => {
+  it('reports a thread this workspace does not hold as "not there" — which a RE-SENT close also is', async () => {
+    // There was an `already_parked` answer here, mapped to `already_closed`:
+    // the first close parked the node, so a second one found it exactly where
+    // it had asked for. Closing DESTROYS the node, so the second close finds no
+    // member at all — the same answer a thread that was never here gets, which
+    // is deliberate: a caller cannot act on the difference and an id-guessing
+    // one must not learn it.
     deps.dismissConversation.mockResolvedValue('not_a_member');
     expect(await closeConversationInSessionWith(deps, input)).toBe('not_in_session');
   });

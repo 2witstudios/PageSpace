@@ -593,15 +593,17 @@ describe('AgentPageView', () => {
       conversationsState.lastOnConversationDelete?.('conv-1');
 
       // A binding is for life, so this is a PLACEMENT, not a rebind: the
-      // replacement takes a node of its own beside the stale one, and the stale
-      // node parks — still a member of the workspace, still in the sidebar.
+      // replacement takes a node of its own where the stale one was, and the
+      // stale node is DESTROYED. It used to park — a member off the screen —
+      // which is the state this correction removes; a node showing a thread
+      // whose history is gone has nothing left to be a member for.
       await waitFor(() => {
         const nodes = useAgentWorkspaceStore.getState().workspaces['ses-1'].nodes;
         const replacement = nodes.find(
           (node) => node.nodeType === 'pane' && node.target?.kind === 'chat' && node.target.id === 'conv-2',
         );
         expect(replacement?.parentId).toBe('ses-1');
-        expect(nodes.find((node) => node.id === 'n-stale')?.parentId).toBeNull();
+        expect(nodes.find((node) => node.id === 'n-stale')).toBeUndefined();
       });
     });
 

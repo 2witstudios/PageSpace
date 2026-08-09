@@ -41,7 +41,8 @@ import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
-import type { PaneTargetKind, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import { rootOf, type PaneTargetKind, type WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import { destroy } from '@pagespace/lib/agent-workspaces/workspace-node-algebra';
 import type {
   WireWorkspaceNode,
   WorkspaceNodeSnapshotResponse,
@@ -279,8 +280,23 @@ async function commitUnderLock(input: {
   produce: WriteProducer;
   /** See {@link WithinNodeWrite}. Runs once the write is DECIDED and GATED, and before it is persisted. */
   within?: WithinNodeWrite;
+  /**
+   * Mint the root when the workspace has none, before the producer runs.
+   * Defaults to TRUE, which is what every command needs: it has to have a root
+   * to place into, and the alternative is the create-then-attach shape this
+   * model deletes.
+   *
+   * {@link destroyWorkspaceTree} passes FALSE, and it is the only caller that
+   * does. Ending a session is `destroy(rootId)`, so seeding first would mint a
+   * root for the express purpose of destroying it — and the write that came out
+   * would carry the seed in `put` and its id in `drop`, which the decision
+   * resolves as "put wins" and lands as a freshly CREATED root on a workspace
+   * that was just ended.
+   */
+  seed?: boolean;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
   const { workspaceId, actingUserId, viewerId, produce, within } = input;
+  const seedIfMissing = input.seed ?? true;
 
   /**
    * The chat targets this write tried to introduce, kept where the BACKSTOP can
@@ -306,7 +322,9 @@ async function commitUnderLock(input: {
     // ahead of the caller's nodes, so a pane parented to it is never
     // `dangling_parent`. Its id is derived from the workspace, so two clients
     // racing to seed produce the identical write and converge on the upsert.
-    const { nodes: seatedNodes, seed } = seedRoot(before.nodes, workspaceId);
+    const { nodes: seatedNodes, seed } = seedIfMissing
+      ? seedRoot(before.nodes, workspaceId)
+      : { nodes: before.nodes, seed: null };
 
     const wanted = produce(seatedNodes, before.rev);
     if (wanted.status === 'refused') {
@@ -550,6 +568,63 @@ export async function applyWorkspaceNodeCommand(input: {
 }
 
 /**
+ * END THE SESSION'S TREE: `destroy(rootId)`, and nothing else.
+ *
+ * **This is the top half of "one removal", wired.** The tree's own removal
+ * operation is what ends a session — the same verb that closes a pane, pointed
+ * at the root instead of at a leaf. There is no separate lifecycle verb here
+ * and there must not be one, because two removals reconciled by convention is
+ * the bug class this epic exists to delete.
+ *
+ * **It is a TREE operation and it stays one.** The sandbox teardown and the
+ * row's lifecycle stamps are `endAgentSession`'s (`agent-workspaces.ts`), and
+ * they are deliberately NOT folded into this transaction. Two reasons, and the
+ * second is the load-bearing one:
+ *
+ *  - A Sprite is external to the database, so "transactional with the node
+ *    write" is a distributed transaction wearing a local disguise. Threading an
+ *    executor through the teardown path to get it would put a network call to
+ *    the sandbox provider inside the workspace's advisory lock, so a slow or
+ *    hanging teardown would block every layout write for that workspace.
+ *  - It is not needed. A Sprite is keyed off the workspace id
+ *    (`workspace-sprite-key.ts`), so an orphaned one is FINDABLE rather than
+ *    lost: `endAgentSession` stamps `teardownRequestedAt` BEFORE it kills, and
+ *    `sprite-orphan-reconcile.ts` reaps anything that carries that stamp without
+ *    a confirmed kill. Referential integrity and an id-keyed reconciler already
+ *    cover the gap a two-phase commit would have been buying.
+ *
+ * So the composition is an ORDER rather than a transaction, and `endSession`
+ * owns it: lifecycle first, tree second. See its own doc for why that order and
+ * not the reverse.
+ *
+ * Idempotent. A workspace with no root has no tree to destroy and writes
+ * nothing, so a retried end is a no-op rather than an error.
+ */
+export async function destroyWorkspaceTree(input: {
+  workspaceId: string;
+  /** The acting HUMAN. Nothing new is bound here, so the gate has nothing to judge — but the funnel takes one. */
+  actingUserId: string;
+}): Promise<ApplyWorkspaceNodeWriteResult> {
+  return commitUnderLock({
+    workspaceId: input.workspaceId,
+    actingUserId: input.actingUserId,
+    viewerId: null,
+    // See the flag's own doc: seeding here would mint a root in order to
+    // destroy it, and the composed write would land as a CREATE.
+    seed: false,
+    produce: (nodes, rev) => {
+      const root = rootOf(nodes);
+      // Nothing to end. Not a refusal: the caller asked for a workspace with no
+      // tree to hold no tree, which is the state it is in.
+      if (root === undefined) return { status: 'write', baseRev: rev, put: [], drop: [] };
+      const result = destroy(nodes, { nodeId: root.id });
+      if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
+      return { status: 'write', baseRev: rev, put: result.write.put, drop: result.write.drop };
+    },
+  });
+}
+
+/**
  * THE MEMBERSHIP WRITE — a node that says a thread belongs to this workspace,
  * and (optionally) the row that thread IS, in one transaction.
  *
@@ -569,6 +644,17 @@ export async function applyWorkspaceNodeCommand(input: {
  *
  * The cap is decided by `run` against the tree the lock read, so it can no
  * longer be a count racing the insert it guards.
+ *
+ * **The global chat-target index answers as `conflict`, not as a refusal.** This
+ * function used to wrap the call in a `try/catch` that turned that index
+ * violation into `{status: 'refused', code: 'bound_elsewhere'}`. That catch was
+ * DEAD: `commitUnderLock`'s own backstop matches the same index and, unlike the
+ * local check, unwraps the driver's `cause` chain — so it always won, and the
+ * `bound_elsewhere` branch had never run since Drizzle began wrapping query
+ * errors. Rather than restore a second detector that has to be kept in step
+ * with the first, the answer is the one the funnel actually gives, and the
+ * callers that want to report "that conversation already belongs to a
+ * workspace" read `conflict` (see `admitConversationNode`).
  */
 export async function applyWorkspaceMembershipWrite(input: {
   workspaceId: string;
@@ -578,53 +664,20 @@ export async function applyWorkspaceMembershipWrite(input: {
   within?: WithinNodeWrite;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
   const { workspaceId, actingUserId, run, within } = input;
-  try {
-    return await commitUnderLock({
-      workspaceId,
-      actingUserId,
-      // Nothing reads the body: membership callers report what happened and
-      // discard the rest, so resolving a title for them would be authority
-      // spent on nothing.
-      viewerId: null,
-      produce: (nodes, rev) => {
-        const result = run(nodes);
-        if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
-        return { status: 'write', baseRev: rev, put: result.write.put, drop: result.write.drop };
-      },
-      ...(within === undefined ? {} : { within }),
-    });
-  } catch (error) {
-    // The ONE database answer this layer translates. Every other throw is a
-    // fault or a `within` refusal and belongs to the caller unchanged.
-    if (!isChatTargetConflict(error)) throw error;
-    return {
-      status: 'refused',
-      code: 'bound_elsewhere',
-      detail: 'that conversation already belongs to a workspace',
-    };
-  }
-}
-
-/**
- * Did this failure come from the table's global one-node-per-conversation
- * index?
- *
- * `agent_workspace_nodes_chat_target_idx` is UNIQUE on `targetId` across every
- * workspace, deliberately: a conversation belongs to exactly one workspace, so
- * two workspaces racing to admit the same thread is a conflict the database is
- * the only party in a position to settle. Matched on the constraint NAME rather
- * than on the message, because the message is a Postgres locale string and the
- * name is the schema's own identifier — the same index the schema doc calls
- * constraint 6 of 6.
- *
- * Narrow on purpose: a `23505` from any OTHER index (the primary key, the
- * single-root index) is a genuine fault and must keep throwing rather than be
- * reported to a user as "already bound".
- */
-function isChatTargetConflict(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const candidate = error as { code?: unknown; constraint?: unknown };
-  return candidate.code === '23505' && candidate.constraint === 'agent_workspace_nodes_chat_target_idx';
+  return commitUnderLock({
+    workspaceId,
+    actingUserId,
+    // Nothing reads the body: membership callers report what happened and
+    // discard the rest, so resolving a title for them would be authority
+    // spent on nothing.
+    viewerId: null,
+    produce: (nodes, rev) => {
+      const result = run(nodes);
+      if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
+      return { status: 'write', baseRev: rev, put: result.write.put, drop: result.write.drop };
+    },
+    ...(within === undefined ? {} : { within }),
+  });
 }
 
 async function withTargets(

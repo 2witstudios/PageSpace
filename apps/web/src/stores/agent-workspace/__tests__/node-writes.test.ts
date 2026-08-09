@@ -14,7 +14,7 @@ import {
 
 const root: WorkspaceNode = { nodeType: 'root', id: 'R', parentId: null, position: 0, axis: 'row' };
 
-function pane(id: string, parentId: string | null, position: number, targetId?: string): WorkspaceNode {
+function pane(id: string, parentId: string, position: number, targetId?: string): WorkspaceNode {
   return {
     nodeType: 'pane',
     id,
@@ -88,8 +88,9 @@ describe('rebasePending — the base is unchanged', () => {
     const closed = writeOf(closePane(twoPanes, { nodeId: 'a' }));
     const result = rebasePending(twoPanes, [makePending('w1', twoPanes, closed)]);
     expect(result.dropped).toEqual([]);
-    const parked = result.nodes.find((node) => node.id === 'a');
-    expect(parked?.parentId).toBeNull();
+    // Closing DESTROYS the pane. It used to park it — same node, null parent —
+    // which is the state that made a closed pane and a broken one identical.
+    expect(result.nodes.find((node) => node.id === 'a')).toBeUndefined();
   });
 
   it('should render the base itself when nothing is pending', () => {
@@ -120,14 +121,9 @@ describe('rebasePending — a pending write whose target the server deleted', ()
     const created = writeOf(create(twoPanes, { nodeId: 'fresh', target: null, parentId: 'R' }));
     const pendingCreate = makePending('w1', twoPanes, created);
 
-    // The server tree moved on — somebody parked a pane — but never held
-    // `fresh`, and the grid slot the create names is still there.
-    const serverTree: WorkspaceNode[] = [
-      root,
-      pane('a', 'R', 0, 'c1'),
-      pane('b', 'R', 1, 'c2'),
-      pane('parked', null, 0, 'c3'),
-    ];
+    // The server tree moved on — somebody reordered the two panes — but never
+    // held `fresh`, and the grid slot the create names is still there.
+    const serverTree: WorkspaceNode[] = [root, pane('b', 'R', 0, 'c2'), pane('a', 'R', 1, 'c1')];
     const result = rebasePending(serverTree, [pendingCreate]);
 
     expect(result.dropped).toEqual([]);
@@ -181,8 +177,22 @@ describe('isAdoptableTree', () => {
     expect(isAdoptableTree([root])).toBe(true);
   });
 
-  it('should admit a tree holding a detached pane', () => {
-    expect(isAdoptableTree([root, pane('a', 'R', 0, 'c1'), pane('parked', null, 0, 'c2')])).toBe(true);
+  it('should admit a nested tree', () => {
+    const nested: WorkspaceNode[] = [
+      root,
+      { nodeType: 'split', id: 's1', parentId: 'R', position: 0, axis: 'column' },
+      pane('a', 's1', 0, 'c1'),
+      pane('b', 's1', 1, 'c2'),
+    ];
+    expect(isAdoptableTree(nested)).toBe(true);
+  });
+
+  it('should REFUSE a tree holding a pane with no parent — the shape a bad row would produce', () => {
+    // Adoptable used to include this: a parked pane was a legal member. It is
+    // `null_parent` now, so a payload carrying one is a payload this client must
+    // not seat as truth.
+    const parentless = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    expect(isAdoptableTree([root, pane('a', 'R', 0, 'c1'), parentless])).toBe(false);
   });
 
   it('should refuse a tree with two roots', () => {
@@ -200,6 +210,6 @@ describe('isAdoptableTree', () => {
   });
 
   it('should refuse a tree with no root but some nodes — the shape a partial read would produce', () => {
-    expect(isAdoptableTree([pane('a', null, 0, 'c1')])).toBe(false);
+    expect(isAdoptableTree([pane('a', 'gone', 0, 'c1')])).toBe(false);
   });
 });

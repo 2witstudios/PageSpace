@@ -66,19 +66,18 @@ describe('claimConversationInSessionWith', () => {
     expect(deps.admitConversation).toHaveBeenCalledWith({
       conversationId: 'conv-1',
       workspaceId: WORKSPACE,
-      attach: false,
     });
   });
 
-  it('leaves the thread PARKED unless the caller asks otherwise', async () => {
-    // Parked is membership. A claim arriving from the console has no pane
-    // waiting for it, and an attached admission would place one the user did
-    // not ask for.
+  it('has no PLACEMENT flag to pass, because every admission is placed', async () => {
+    // There was an `attach` boolean here: `false` minted the node parked — in
+    // the workspace, off the grid — so that a claim from the console did not put
+    // a pane the user had not asked for on screen. Parked is the state this
+    // correction removes, so the choice it offered was between membership and a
+    // membership nothing could render.
     await claimConversationInSessionWith(deps, input);
-    expect(deps.admitConversation).toHaveBeenCalledWith(expect.objectContaining({ attach: false }));
-
-    await claimConversationInSessionWith(deps, { ...input, attach: true });
-    expect(deps.admitConversation).toHaveBeenLastCalledWith(expect.objectContaining({ attach: true }));
+    const [[passed]] = deps.admitConversation.mock.calls;
+    expect(Object.keys(passed).sort()).toEqual(['conversationId', 'workspaceId']);
   });
 
   describe('the gates, each of which writes nothing', () => {

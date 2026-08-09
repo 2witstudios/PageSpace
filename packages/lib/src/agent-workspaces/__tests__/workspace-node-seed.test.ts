@@ -58,7 +58,9 @@ describe('seedRoot', () => {
    * which is true and says so.
    */
   it('should refuse to mint over an id that is already taken by something else', () => {
-    const collision: WorkspaceNode[] = [{ nodeType: 'pane', id: WS, parentId: null, position: 0, target: null }];
+    const collision: WorkspaceNode[] = [
+      { nodeType: 'pane', id: WS, parentId: 'somewhere', position: 0, target: null },
+    ];
     const { nodes, seed } = seedRoot(collision, WS);
     expect(seed).toBeNull();
     expect(nodes).toBe(collision);
@@ -130,7 +132,10 @@ describe('openShell', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const applied = applyNodeWrite(nodes, result.write);
-    expect(applied.find((node) => node.id === 'chat')?.parentId).toBeNull();
+    // The displaced pane is DESTROYED rather than parked. It used to survive
+    // with a null parent — still a member, off the screen — which is the state
+    // that made a closed pane and a broken one the same row.
+    expect(applied.find((node) => node.id === 'chat')).toBeUndefined();
     expect(applied.find((node) => node.id === 'n1')?.parentId).toBe(WS);
   });
 

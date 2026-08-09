@@ -115,13 +115,24 @@ describe('nodeFromRow', () => {
     });
   });
 
-  it('should read a pane row with a null parent as detached, not as a root', () => {
-    expect(nodeFromRow(paneRow({ parentId: null }))).toStrictEqual({
-      nodeType: 'pane',
-      id: 'pane-1',
+  it('should REFUSE a pane row with a null parent, which is a corrupt row and not a parked pane', () => {
+    // The correction, stated at the boundary that reads storage. This used to
+    // parse cleanly and mean "detached": in the workspace, off the screen. So a
+    // row whose parent had been nulled — a bad write, a half-run migration, a
+    // hand-run UPDATE — became a legal node no renderer would draw, and was
+    // indistinguishable from a pane the user had closed. The TYPE makes it
+    // unspellable in memory; `parentId text` still takes NULL from anything that
+    // writes it, so the parse is what stands between such a row and the model.
+    expect(() => nodeFromRow(paneRow({ parentId: null }))).toThrow();
+  });
+
+  it('should still read the ROOT row, whose null parent is a consequence of its type', () => {
+    expect(nodeFromRow(rootRow())).toStrictEqual({
+      nodeType: 'root',
+      id: 'root-1',
       parentId: null,
       position: 0,
-      target: { kind: 'chat', id: 'conv-1' },
+      axis: 'row',
     });
   });
 
@@ -156,7 +167,7 @@ describe('nodeFromRow', () => {
     expect(() => nodeFromRow(splitRow({ axis: null }))).toThrow();
   });
 
-  it('should reject a split row with a null parent, because a detached split would be garbage', () => {
+  it('should reject a split row with a null parent, because only the root has none', () => {
     expect(() => nodeFromRow(splitRow({ parentId: null }))).toThrow();
   });
 
@@ -288,17 +299,19 @@ describe('rowFromNode', () => {
     expect({ targetKind: row.targetKind, targetId: row.targetId }).toStrictEqual({ targetKind: null, targetId: null });
   });
 
-  it('should write a detached pane with a null parent, keeping it a row like any other', () => {
-    // Detached is a LOCATION, not a membership: the pane still has a row, so it
-    // still belongs to the workspace.
-    expect(rowFromNode(paneNode({ parentId: null }), 'root-1').parentId).toBeNull();
+  it('should write the ROOT with a null parent, and every other node with a real one', () => {
+    // The only null `parentId` any writer produces. A pane can no longer carry
+    // one, which is what makes the column's null unambiguous on the way back.
+    expect(rowFromNode(rootNode(), 'root-1').parentId).toBeNull();
+    expect(rowFromNode(paneNode(), 'root-1').parentId).toBe('root-1');
+    expect(rowFromNode(splitNode(), 'root-1').parentId).toBe('root-1');
   });
 
   it('should stamp the workspace it was given, never one inferred from the node', () => {
     // The node cannot carry a workspace — that is what makes cross-workspace
     // parenting unspellable in the model — so the writer must say which one it
     // is writing into, every time.
-    const nodes: WorkspaceNode[] = [rootNode(), splitNode(), paneNode(), paneNode({ id: 'parked', parentId: null })];
+    const nodes: WorkspaceNode[] = [rootNode(), splitNode(), paneNode(), paneNode({ id: 'second', position: 1 })];
     expect(nodes.map((node) => rowFromNode(node, 'ws-target').rootId)).toEqual([
       'ws-target',
       'ws-target',
@@ -338,35 +351,40 @@ describe('buildRenderTree', () => {
     expect(tree.root && outline(tree.root)).toBe('root-1(a,b,c)');
   });
 
-  it('should keep a detached pane out of the tree entirely while still reporting it', () => {
-    // The whole model in one assertion: parked is a LOCATION, and the pane is
-    // still a member of the workspace. Two fields, so no caller can render the
-    // tree and forget the sidebar — which is the bug this replaces.
+  it('should render EVERY pane the workspace holds, because there is no second list beside the tree', () => {
+    // The whole correction in one assertion. `RenderTree` used to carry a
+    // `detached` field — panes in the workspace and off the grid — so every
+    // caller had to remember "and also render the parked ones", and the caller
+    // that forgot was the sidebar bug (#2373) in a new costume. There is nothing
+    // to remember now.
     const nodes: WorkspaceNode[] = [
       rootNode(),
-      paneNode({ id: 'onscreen', position: 0 }),
-      paneNode({ id: 'parked', parentId: null, position: 0 }),
+      paneNode({ id: 'first', position: 0 }),
+      paneNode({ id: 'second', position: 1 }),
     ];
     const tree = buildRenderTree(nodes);
-    expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
-    expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
+    expect(tree.root && outline(tree.root)).toBe('root-1(first,second)');
+    expect(tree.orphaned).toEqual([]);
   });
 
-  it('should order detached panes by position, so the sidebar list is stable', () => {
-    const nodes: WorkspaceNode[] = [
-      rootNode(),
-      paneNode({ id: 'second', parentId: null, position: 1 }),
-      paneNode({ id: 'first', parentId: null, position: 0 }),
-    ];
-    expect(buildRenderTree(nodes).detached.map((pane) => pane.id)).toEqual(['first', 'second']);
-  });
-
-  it('should return a null tree for a list with no root, and still report what is parked', () => {
+  it('should return a null tree for a list with no root, and orphan whatever it held', () => {
     // A workspace mid-hydration has nodes but no root yet. The renderer draws
-    // nothing rather than guessing which node is the top.
-    const tree = buildRenderTree([paneNode({ id: 'parked', parentId: null, position: 0 })]);
+    // nothing rather than guessing which node is the top, and says what it could
+    // not place.
+    const tree = buildRenderTree([paneNode({ id: 'stranded', parentId: 'gone', position: 0 })]);
     expect(tree.root).toBeNull();
-    expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
+    expect(tree.orphaned.map((node) => node.id)).toEqual(['stranded']);
+  });
+
+  it('should ORPHAN a node a row left with no parent, rather than filing it anywhere else', () => {
+    // The state the projection used to have a whole field for. It is not a
+    // location any more — it is a node with no place, which is exactly what
+    // `orphaned` is for.
+    const parentless = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    const nodes: WorkspaceNode[] = [rootNode(), paneNode({ id: 'onscreen', position: 0 }), parentless];
+    const tree = buildRenderTree(nodes);
+    expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
+    expect(tree.orphaned.map((node) => node.id)).toEqual(['lost']);
   });
 
   it('should surface a node whose parent does not resolve, and never re-parent it onto the root', () => {
@@ -382,7 +400,6 @@ describe('buildRenderTree', () => {
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
     expect(tree.orphaned.map((node) => node.id)).toEqual(['lost']);
-    expect(tree.detached.map((pane) => pane.id)).toEqual([]);
   });
 
   it('should report a whole orphaned SUBTREE, not only the node whose parent went missing', () => {
@@ -399,35 +416,17 @@ describe('buildRenderTree', () => {
     const tree = buildRenderTree(nodes);
     expect(tree.root && outline(tree.root)).toBe('root-1(onscreen)');
     expect(tree.orphaned.map((node) => node.id)).toEqual(['lost-col', 'lost-pane']);
-    expect(tree.detached.map((pane) => pane.id)).toEqual([]);
   });
 
-  it('should orphan a node parented under a detached pane, while the pane itself stays parked', () => {
-    // `detached` is the SIDEBAR's list, and the sidebar lists parked panes, not
-    // trees. So the descent stops at a parked pane and whatever claims it as a
-    // parent is placed nowhere. A later change that descended into detached
-    // panes to render them would start filing these under `detached` instead —
-    // putting a node the user never parked into the parked list.
-    const nodes: WorkspaceNode[] = [
-      rootNode(),
-      paneNode({ id: 'parked', parentId: null, position: 0 }),
-      paneNode({ id: 'under-parked', parentId: 'parked', position: 0 }),
-    ];
-    const tree = buildRenderTree(nodes);
-    expect(tree.root && outline(tree.root)).toBe('root-1');
-    expect(tree.detached.map((pane) => pane.id)).toEqual(['parked']);
-    expect(tree.orphaned.map((node) => node.id)).toEqual(['under-parked']);
-  });
-
-  it('should count every node exactly once across the tree, the parked list and the orphans', () => {
-    // The three fields partition the list. That is what makes the flat list safe
+  it('should count every node exactly once across the tree and the orphans', () => {
+    // The two fields partition the list. That is what makes the flat list safe
     // to keep canonical: a projection that could lose a node would put "in the
     // workspace" and "on screen" back into disagreement.
     const nodes: WorkspaceNode[] = [
       rootNode(),
       splitNode({ id: 'col' }),
       paneNode({ id: 'in-col', parentId: 'col' }),
-      paneNode({ id: 'parked', parentId: null }),
+      paneNode({ id: 'beside', position: 1 }),
       paneNode({ id: 'lost', parentId: 'ghost' }),
     ];
     const tree = buildRenderTree(nodes);
@@ -437,8 +436,8 @@ describe('buildRenderTree', () => {
       branch.children.forEach(walk);
     };
     if (tree.root) walk(tree.root);
-    expect([...rendered, ...tree.detached.map((n) => n.id), ...tree.orphaned.map((n) => n.id)].sort()).toEqual(
-      ['col', 'in-col', 'lost', 'parked', 'root-1'].sort(),
+    expect([...rendered, ...tree.orphaned.map((n) => n.id)].sort()).toEqual(
+      ['beside', 'col', 'in-col', 'lost', 'root-1'].sort(),
     );
   });
 
@@ -490,10 +489,14 @@ const AXES = ['row', 'column'] as const;
 const TARGET_KINDS = ['chat', 'terminal', 'page'] as const;
 
 /**
- * A whole workspace's rows: a root, a random tree of splits and panes beneath
- * it, and some panes parked outside it. Rows are valid by construction — the
- * property under test is losslessness, not rejection, which the example suite
- * above pins directly.
+ * A whole workspace's rows: a root and a random tree of splits and panes beneath
+ * it. Rows are valid by construction — the property under test is losslessness,
+ * not rejection, which the example suite above pins directly.
+ *
+ * It used to generate PARKED panes too (`parentId: null`), which is now a row
+ * the parse refuses rather than a shape the round trip has to preserve. The
+ * refusal is pinned by example above; generating it here would only assert that
+ * `nodeFromRow` throws, 200 times.
  */
 function generateWorkspace(seed: number): WorkspaceNodeRow[] {
   const rand = prng(seed * 7919 + 101);
@@ -556,24 +559,6 @@ function generateWorkspace(seed: number): WorkspaceNodeRow[] {
     });
   }
 
-  // Parked panes: present in the workspace, absent from the grid. The whole
-  // reason the round trip has to be exact rather than merely tree-shaped.
-  const detached = Math.floor(rand() * 4);
-  for (let n = 0; n < detached; n += 1) {
-    const bound = rand() < 0.75;
-    rows.push({
-      id: `d-${seed}-${n}`,
-      rootId,
-      parentId: null,
-      position: n,
-      nodeType: 'pane',
-      axis: null,
-      fraction: maybeFraction(),
-      targetKind: bound ? pick(TARGET_KINDS) : null,
-      targetId: bound ? `t-d-${seed}-${n}` : null,
-    });
-  }
-
   // Storage returns rows in whatever order it likes; shuffling here keeps the
   // properties honest about not depending on the order they arrive in.
   for (let i = rows.length - 1; i > 0; i -= 1) {
@@ -587,7 +572,7 @@ const SEEDS = Array.from({ length: 200 }, (_, i) => i + 1);
 
 describe('rows ⟷ nodes (property)', () => {
   it('given any generated workspace, should round-trip rows → nodes → rows unchanged', () => {
-    const census = { absentFraction: 0, zeroFraction: 0, detachedPane: 0, unboundPane: 0, nestedSplit: 0 };
+    const census = { absentFraction: 0, zeroFraction: 0, boundPane: 0, unboundPane: 0, nestedSplit: 0 };
 
     for (const seed of SEEDS) {
       const rows = generateWorkspace(seed);
@@ -596,7 +581,7 @@ describe('rows ⟷ nodes (property)', () => {
 
         if (row.nodeType !== 'root' && row.fraction === null) census.absentFraction += 1;
         if (row.fraction === 0) census.zeroFraction += 1;
-        if (row.nodeType === 'pane' && row.parentId === null) census.detachedPane += 1;
+        if (row.nodeType === 'pane' && row.targetKind !== null) census.boundPane += 1;
         if (row.nodeType === 'pane' && row.targetKind === null) census.unboundPane += 1;
         if (row.nodeType === 'split' && row.parentId !== row.rootId) census.nestedSplit += 1;
       }
@@ -644,7 +629,7 @@ describe('rows ⟷ nodes (property)', () => {
     }
   });
 
-  it('given any generated workspace, should render every attached node once and no detached pane at all', () => {
+  it('given any generated workspace, should render EVERY node exactly once, with nothing beside the tree', () => {
     for (const seed of SEEDS) {
       const nodes = nodesFromRows(generateWorkspace(seed), `ws-${seed}`);
       const tree = buildRenderTree(nodes);
@@ -658,17 +643,13 @@ describe('rows ⟷ nodes (property)', () => {
       expect(tree.root, where).not.toBeNull();
       if (tree.root) walk(tree.root);
 
-      const detachedIds = nodes.filter((node) => node.parentId === null && node.nodeType === 'pane').map((n) => n.id);
-      const attachedIds = nodes.filter((node) => node.nodeType === 'root' || node.parentId !== null).map((n) => n.id);
-
-      expect(rendered.slice().sort(), `${where}: the tree is exactly the attached nodes, once each`).toEqual(
-        attachedIds.slice().sort(),
+      expect(rendered.slice().sort(), `${where}: the tree is every node, once each`).toEqual(
+        nodes.map((node) => node.id).slice().sort(),
       );
-      expect(tree.detached.map((pane) => pane.id).sort(), `${where}: parked panes`).toEqual(detachedIds.slice().sort());
       // Nothing is lost and nothing is duplicated: the projection partitions
       // the list, which is what makes the flat list safe to keep canonical.
       expect(tree.orphaned, `${where}: a well-formed workspace has no orphans`).toEqual([]);
-      expect(rendered.length + tree.detached.length, `${where}: node count`).toBe(nodes.length);
+      expect(rendered.length, `${where}: node count`).toBe(nodes.length);
     }
   });
 });

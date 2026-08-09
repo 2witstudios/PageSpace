@@ -32,7 +32,6 @@ import {
 import { validateTree } from '../workspace-node-validate';
 import {
   childrenOf,
-  detachedOf,
   findNode,
   type PaneNode,
   type PaneTarget,
@@ -49,12 +48,12 @@ function split(id: string, parentId: string, position: number): SplitNode {
   return { nodeType: 'split', id, parentId, position, axis: 'column' };
 }
 
-function pane(id: string, parentId: string | null, position: number): PaneNode {
+function pane(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'chat', id: `conv-${id}` } };
 }
 
 /** A pane rendering its picker: in the workspace, showing nothing yet. */
-function unbound(id: string, parentId: string | null, position: number): PaneNode {
+function unbound(id: string, parentId: string, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: null };
 }
 
@@ -65,7 +64,7 @@ function unbound(id: string, parentId: string | null, position: number): PaneNod
  */
 function showing(
   id: string,
-  parentId: string | null,
+  parentId: string,
   position: number,
   target: PaneTarget,
 ): PaneNode {
@@ -220,22 +219,26 @@ describe('create', () => {
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should mint a parked pane when given no parent, because detached is a state and not a second act', () => {
+  it('should always seat the mint under the parent it was given — there is no parentless mint', () => {
+    // `CreateInput.parentId` is a `string`. It used to accept `null`, which
+    // minted the pane parked: in the workspace, off the grid. That was the one
+    // operation able to CREATE the population that made a closed pane and a
+    // broken one look alike, so it is gone rather than merely discouraged.
     const before = [root()];
-    const after = applied(before, create(before, { nodeId: 'parked', target: null, parentId: null }));
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['parked']);
+    const after = applied(before, create(before, { nodeId: 'fresh', target: null, parentId: 'root-1' }));
+    expect(findNode(after, 'fresh')?.parentId).toBe('root-1');
     expect(validateTree(after)).toEqual({ ok: true });
   });
 });
 
 describe('move', () => {
-  it('should take a pane out of the tree when given no parent, which is what closing one is', () => {
-    // There is no `close_pane` here. Leaving the tree is a location change like
-    // any other, so it is the same operation as arriving in it.
-    const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
-    const after = applied(before, move(before, { nodeId: 'a', parentId: null, index: 0 }));
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['a']);
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['b']);
+  it('should carry a pane between containers, which is the whole of what it does now', () => {
+    // `move` used to mean "relocate OR leave", with `parentId: null` for the
+    // second. Leaving is `destroy`; this operation only ever changes where
+    // something is, so every destination it takes is a real container.
+    const before = [root(), split('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1), pane('c', 'root-1', 1)];
+    const after = applied(before, move(before, { nodeId: 'c', parentId: 'col', index: 0 }));
+    expect(childrenOf(after, 'col').map((n) => n.id)).toEqual(['c', 'a', 'b']);
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
@@ -341,10 +344,13 @@ describe('move rejections', () => {
     );
   });
 
-  it('should refuse to park a split, which has no durable target to be parked with', () => {
-    const before = [root(), split('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
-    expect(refusedWith(move(before, { nodeId: 'col', parentId: null, index: 0 }))).toBe(
-      'not_detachable',
+  it('should refuse the ROOT, because a workspace has no outside to be moved into', () => {
+    // The one refusal on the root that survives, alongside `bind` and `resize`.
+    // It is not a second lifecycle mechanism: it says the operation has no
+    // meaning here, which is a different thing from forbidding removal.
+    const before = [root(), pane('a', 'root-1', 0)];
+    expect(refusedWith(move(before, { nodeId: 'root-1', parentId: 'a', index: 0 }))).toBe(
+      'root_immutable',
     );
   });
 
@@ -368,7 +374,7 @@ describe('degenerate splits', () => {
       pane('a', 'col', 0),
       pane('b', 'col', 1),
     ];
-    const after = applied(before, move(before, { nodeId: 'a', parentId: null, index: 0 }));
+    const after = applied(before, destroy(before, { nodeId: 'a' }));
     expect(findNode(after, 'col')).toBeUndefined();
     expect(findNode(after, 'b')?.parentId).toBe('root-1');
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['b', 'other']);
@@ -383,7 +389,7 @@ describe('degenerate splits', () => {
       { ...pane('a', 'col', 0), fraction: 0.5 },
       { ...pane('b', 'col', 1), fraction: 0.5 },
     ];
-    const after = applied(before, move(before, { nodeId: 'a', parentId: null, index: 0 }));
+    const after = applied(before, destroy(before, { nodeId: 'a' }));
     expect(findNode(after, 'b')).toMatchObject({ parentId: 'root-1', fraction: 0.7 });
     expect(validateTree(after)).toEqual({ ok: true });
   });
@@ -433,15 +439,17 @@ describe('bind', () => {
     expect(refusedWith(result)).toBe('target_already_shown');
   });
 
-  it('should refuse a conversation only a PARKED node shows, because detaching is not unbinding', () => {
-    // A detached pane is still a member of the workspace and still holds its
-    // binding — and the unique index does not read `parentId` at all, so a
-    // rule that let a parked node's conversation be re-bound would be a rule
-    // the storage goes on refusing.
+  it('should refuse a conversation a node NESTED ANYWHERE shows, because the index does not read parentId', () => {
+    // Where the holder sits has never been part of `UNIQUE (targetId) WHERE
+    // targetKind = 'chat'`. This used to be stated with a PARKED holder, which
+    // was the only way to make "somewhere the caller might not be looking"
+    // interesting; depth serves the same purpose and is a state that exists.
     const before = [
       root(),
-      showing('parked', null, 0, { kind: 'chat', id: 'conv-1' }),
-      unbound('b', 'root-1', 0),
+      split('col', 'root-1', 0),
+      showing('deep', 'col', 0, { kind: 'chat', id: 'conv-1' }),
+      pane('filler', 'col', 1),
+      unbound('b', 'root-1', 1),
     ];
     const result = bind(before, { nodeId: 'b', target: { kind: 'chat', id: 'conv-1' } });
     expect(refusedWith(result)).toBe('target_already_shown');
@@ -552,10 +560,6 @@ describe('resize', () => {
     expect(refusedWith(resize(before, { nodeId: 'root-1', fraction: 0.5 }))).toBe('root_immutable');
   });
 
-  it('should refuse a parked pane, which sits in no container', () => {
-    const before = [root(), pane('a', 'root-1', 0), pane('parked', null, 0)];
-    expect(refusedWith(resize(before, { nodeId: 'parked', fraction: 0.5 }))).toBe('not_sizable');
-  });
 
   it('should refuse a lone child, which already owns the whole container', () => {
     const before = [root(), pane('only', 'root-1', 0)];
@@ -597,17 +601,40 @@ describe('destroy', () => {
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should remove a parked pane and renumber the ones left beside it', () => {
-    const before = [root(), pane('first', null, 0), pane('second', null, 1), pane('third', null, 2)];
+  it('should remove a pane and renumber the ones left beside it', () => {
+    const before = [
+      root(),
+      pane('first', 'root-1', 0),
+      pane('second', 'root-1', 1),
+      pane('third', 'root-1', 2),
+    ];
     const after = applied(before, destroy(before, { nodeId: 'first' }));
-    expect(detachedOf(after).map((n) => n.id)).toEqual(['second', 'third']);
-    expect(detachedOf(after).map((n) => n.position)).toEqual([0, 1]);
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['second', 'third']);
+    expect(childrenOf(after, 'root-1').map((n) => n.position)).toEqual([0, 1]);
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should refuse the root, because a workspace cannot destroy itself', () => {
-    const before = [root(), pane('a', 'root-1', 0)];
-    expect(refusedWith(destroy(before, { nodeId: 'root-1' }))).toBe('root_immutable');
+  it('should take the WHOLE SESSION when pointed at the root — the same verb, a different target', () => {
+    // The correction at the top of the tree. This used to be `root_immutable`,
+    // which did not stop sessions ending — it moved ending one into a second
+    // mechanism beside the tree, two removals with two meanings reconciled by
+    // convention.
+    const before = [root(), split('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
+    const result = destroy(before, { nodeId: 'root-1' });
+    expect(result.ok).toBe(true);
+    const after = applied(before, result);
+    expect(after).toEqual([]);
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should REFUSE a root destroy that would leave a straggler behind, rather than sweeping it', () => {
+    // `destroy` removes what it names and its subtree, at the top of the tree
+    // exactly as at the bottom. A set holding a node that does not descend from
+    // the root is already broken; the honest answer is to refuse the write, not
+    // to tidy the evidence away.
+    const orphan = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    const before: WorkspaceNode[] = [root(), pane('a', 'root-1', 0), orphan];
+    expect(refusedWith(destroy(before, { nodeId: 'root-1' }))).toBe('no_root');
   });
 
   it('should refuse a node id that does not resolve', () => {
@@ -658,7 +685,9 @@ describe('the result gate', () => {
   it('should refuse to create in a workspace that has no root, rather than inventing one', () => {
     // The root is minted when the workspace is provisioned. There is deliberately
     // no operation here that can bring one into being.
-    expect(refusedWith(create([], { nodeId: 'p1', target: null, parentId: null }))).toBe('no_root');
+    expect(refusedWith(create([], { nodeId: 'p1', target: null, parentId: 'root-1' }))).toBe(
+      'unknown_parent',
+    );
   });
 });
 
@@ -666,8 +695,9 @@ describe('every operation', () => {
   it('should leave its input untouched', () => {
     const before = [root(), split('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
     const snapshot = JSON.parse(JSON.stringify(before)) as WorkspaceNode[];
-    move(before, { nodeId: 'a', parentId: null, index: 0 });
+    move(before, { nodeId: 'a', parentId: 'root-1', index: 0 });
     destroy(before, { nodeId: 'col' });
+    destroy(before, { nodeId: 'root-1' });
     resize(before, { nodeId: 'a', fraction: 0.8 });
     create(before, { nodeId: 'fresh', target: null, parentId: 'col' });
     bind(before, { nodeId: 'a', target: { kind: 'page', id: 'page-1' } });

@@ -3,14 +3,20 @@
  *
  * This function is the reason the flat model is safe to choose. A nested tree
  * type cannot express a cycle; a flat parent pointer can. The model is flat
- * deliberately (see `workspace-node.ts`) — rows are flat, the wire is flat, and
- * it is the only shape in which a DETACHED node is not a second bucket beside
- * the tree — and the entire price of that choice is paid here, once, by the
- * single function every write path runs before persisting.
+ * deliberately (see `workspace-node.ts`) — rows are flat and the wire is flat —
+ * and the entire price of that choice is paid here, once, by the single
+ * function every write path runs before persisting.
  *
- * It checks EXACTLY what the types cannot state. A root with a parent, a
- * detached split and a pane with an axis are already unspellable, so nothing
- * here re-checks them.
+ * It checks EXACTLY what the types cannot state, PLUS ONE THING THEY DO STATE
+ * AND A ROW CAN STILL BREAK. A root with a parent and a pane with an axis are
+ * unspellable in memory and nothing here re-checks them; a NON-ROOT WITH A NULL
+ * PARENT is unspellable in memory too, and `null_parent` checks it anyway,
+ * because this function's input can come from nine mostly-nullable columns and
+ * a column does not know what a union is. That check is the correction of a
+ * real mistake: the previous cut made a null parent a LEGAL resting state
+ * ("detached"), so `dangling_parent` covered the half of the failure where a
+ * parent pointer resolves to nothing and NOTHING covered the half where it
+ * points at nothing at all.
  *
  * With ONE deliberate exception, stated last: a conversation is bound to at
  * most one node OF THIS SET. That is a domain rule rather than a structural
@@ -38,18 +44,26 @@
  * location is its parent, and the two are never allowed to become confusable.
  *
  * Violations are reported in a FIXED order, so one bad tree always yields one
- * code: node cap, blank ids, duplicate ids, root count, dangling parent, cycle,
- * reachability, depth, split arity, pane leafness, fraction finiteness, the
- * per-container fraction rules, ordering, chat bindings. The order is not
- * arbitrary — each check assumes what the ones before it established. Nothing
- * that resolves a node by id can mean anything until ids are known to be real
- * strings and unique; everything that walks a parent pointer needs the dangling
- * check to have passed; the depth walk needs the cycle check to have passed,
- * which is what lets it run without a visited set; and the fraction SUM needs
- * its terms proven finite, because a NaN loses every comparison it is given.
+ * code: node cap, blank ids, duplicate ids, root count, null parent, dangling
+ * parent, cycle, reachability, depth, split arity, pane leafness, fraction
+ * finiteness, the per-container fraction rules, ordering, chat bindings. The
+ * order is not arbitrary — each check assumes what the ones before it
+ * established. Nothing that resolves a node by id can mean anything until ids
+ * are known to be real strings and unique; everything that walks a parent
+ * pointer needs BOTH parent checks to have passed; the depth walk needs the
+ * cycle check to have passed, which is what lets it run without a visited set;
+ * and the fraction SUM needs its terms proven finite, because a NaN loses every
+ * comparison it is given.
+ *
+ * **The EMPTY list is valid**, and that is the top half of this correction
+ * rather than a loosening. `destroy(rootId)` is how a session ends — one
+ * removal, pointed at the root — and what it leaves behind is no nodes at all.
+ * A list with no root and something in it is still `no_root`: that is a
+ * workspace whose rows lost their root, which is a fault. Nothing is there to
+ * be faulty about an empty one.
  */
 import { FRACTION_EPSILON } from './workspace-layout-verbs';
-import { childrenOf, descendantsOf, detachedOf, rootOf, type WorkspaceNode } from './workspace-node';
+import { childrenOf, descendantsOf, rootOf, type WorkspaceNode } from './workspace-node';
 
 /**
  * The most nodes a workspace may hold.
@@ -84,6 +98,14 @@ export type TreeViolationCode =
   | 'duplicate_id'
   | 'no_root'
   | 'multiple_roots'
+  /**
+   * A non-root node whose `parentId` is null. Its own code, and NOT folded into
+   * `dangling_parent` or `unreachable`: a pointer that resolves to nothing and a
+   * pointer that was never set are different faults with different causes, and
+   * "nothing would render it" is a true but downstream thing to say about a node
+   * that is not anywhere at all.
+   */
+  | 'null_parent'
   | 'dangling_parent'
   | 'cycle'
   | 'unreachable'
@@ -110,23 +132,35 @@ function fractionOf(node: WorkspaceNode): number | undefined {
   return node.nodeType === 'root' ? undefined : node.fraction;
 }
 
-/** A parent and its children; `parentId: null` marks the parked panes. */
+/**
+ * A node's parent pointer, read as STORAGE can spell it rather than as the union
+ * promises it.
+ *
+ * The indirection is load-bearing and is the reason it is a function. Reading
+ * `node.parentId` directly after narrowing to a non-root gives the type
+ * `string`, so `=== null` narrows to `never` and the compiler is entitled to
+ * conclude the check is dead — which it is, for every node this package
+ * CONSTRUCTS. It is not dead for the ones it READS: nine mostly-nullable columns,
+ * a wire payload, a node set a client assembled. Widening here says exactly that
+ * — the value has the type the storage has, not the type the model wishes it
+ * had — instead of asserting it away.
+ */
+function parentPointerOf(node: WorkspaceNode): string | null {
+  return node.parentId;
+}
+
+/** A parent and its children. Every group has a real container now. */
 interface SiblingGroup {
-  parentId: string | null;
+  parentId: string;
   members: WorkspaceNode[];
 }
 
 /**
- * Every set of siblings, in a deterministic order: attached groups by the order
- * their parent's first child appears in the list, then the parked panes.
+ * Every set of siblings, in a deterministic order: by the order each parent's
+ * first child appears in the list.
  *
- * The parked panes are a group — they are ordered in the sidebar, so their
- * `position` still has to be contiguous — but they are NOT a container, and
- * the fraction check below skips them for exactly that reason.
- *
- * The root is in no group at all: it and a parked pane both carry a null
- * parent, and lumping them together would collide the root's `position: 0`
- * with the first parked pane's.
+ * The root is in no group at all — it is the only node with a null parent, and
+ * it is a container rather than a member of one.
  */
 function siblingGroups(nodes: readonly WorkspaceNode[]): SiblingGroup[] {
   const groups: SiblingGroup[] = [];
@@ -136,12 +170,16 @@ function siblingGroups(nodes: readonly WorkspaceNode[]): SiblingGroup[] {
     seen.add(node.parentId);
     groups.push({ parentId: node.parentId, members: childrenOf(nodes, node.parentId) });
   }
-  const parked = detachedOf(nodes);
-  if (parked.length > 0) groups.push({ parentId: null, members: parked });
   return groups;
 }
 
 export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
+  // THE EMPTY WORKSPACE, settled before the root check can call it `no_root`.
+  // It is what `destroy(rootId)` leaves behind, and destroying the root is how
+  // a session ends — one removal, pointed at the top of the tree instead of at
+  // a pane. Everything below is a statement about nodes; there are none.
+  if (nodes.length === 0) return { ok: true };
+
   // First, because it bounds the work every check below does.
   if (nodes.length > MAX_NODES) {
     return violation('max_nodes_exceeded', `${nodes.length} nodes; the cap is ${MAX_NODES}`);
@@ -196,10 +234,10 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
     seenIds.add(node.id);
   }
 
-  // The root is found by TYPE, never by "the node with no parent" — a parked
-  // pane has no parent either, and conflating the two is the bug this whole
-  // model exists to remove. An empty list has no root, so an empty workspace
-  // is invalid rather than vacuously fine.
+  // The root is found by TYPE, never by "the node with no parent". Those two
+  // now select the same node — which is the whole correction — and the reason
+  // to keep asking the type is that a ROW can disagree with itself, and the
+  // next check is what says so.
   const root = rootOf(nodes);
   if (root === undefined) {
     return violation('no_root', 'no node of type "root"; a workspace has exactly one');
@@ -210,6 +248,37 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
       'multiple_roots',
       `${roots.length} nodes of type "root" (${roots.map((node) => node.id).join(', ')}); a workspace has exactly one`,
     );
+  }
+
+  // A NON-ROOT WITH NO PARENT — the check the previous cut of this model could
+  // not have, because it had made that state legal and called it "detached".
+  //
+  // **It is unspellable in memory and stated here anyway, and that is the
+  // point.** `PaneNode.parentId` and `SplitNode.parentId` are both `string`, so
+  // no code path in this package can construct one. But this function's input is
+  // not always constructed: it is also nine mostly-nullable columns read back
+  // through `nodeFromRow`, a wire payload, and — during the migration window — a
+  // node set assembled by a client this repo did not ship. A column does not
+  // know what a discriminated union is, and `parentId text` takes NULL from
+  // anything that writes it. `nodeFromRow` refuses such a row too; this is the
+  // set-level statement of the same rule, and BOTH are needed because the wire's
+  // primitive is `put(nodes[])` and a caller that assembled its own nodes goes
+  // through neither the algebra nor a row parse.
+  //
+  // BEFORE `dangling_parent`, and the order carries meaning rather than
+  // convenience. A tree holding both faults is answered with this one, because
+  // "this node is nowhere" is the more primitive statement: a dangling pointer is
+  // a node that named a place that is gone, and a null one is a node that named
+  // no place at all. Reported ahead of `unreachable` for the same reason — that
+  // code is true of this node as well, and it describes the CONSEQUENCE (nothing
+  // would render it) rather than the fault.
+  for (const node of nodes) {
+    if (node.nodeType !== 'root' && parentPointerOf(node) === null) {
+      return violation(
+        'null_parent',
+        `node "${node.id}" is a ${node.nodeType} with no parent; only the root has none, and it has one because it is the root`,
+      );
+    }
   }
 
   // Every check below walks parent pointers, so they all assume a pointer
@@ -254,13 +323,13 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // pointer that loops, the other a subtree nothing renders — and a reader
   // needs to see both named.
   //
-  // The single exception is a DETACHED pane: parked, in the workspace and in
-  // the sidebar, deliberately absent from the grid. It is unreachable BY
-  // DESIGN, and that is the whole point of the flat model.
+  // IT HAS NO EXCEPTIONS. The previous cut exempted a "detached" pane, which is
+  // to say it exempted precisely the population that made a lost pane and a
+  // closed one look alike. Every node descends from the root or the tree is
+  // refused.
   const reachable = new Set([root.id, ...descendantsOf(nodes, root.id).map((node) => node.id)]);
-  const parked = new Set(detachedOf(nodes).map((node) => node.id));
   for (const node of nodes) {
-    if (!reachable.has(node.id) && !parked.has(node.id)) {
+    if (!reachable.has(node.id)) {
       return violation(
         'unreachable',
         `node "${node.id}" does not descend from the root, so nothing would render it`,
@@ -307,15 +376,11 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   }
 
   // A pane is a LEAF by definition: only a root and a split hold children. The
-  // types get most of the way there — a split cannot be detached, a pane cannot
-  // carry an axis — but they stop short here, because `PaneNode.parentId` is an
-  // ordinary string and nothing in it knows what kind of node the id names. So
-  // a `move` that names a pane as its destination writes a subtree hanging off
-  // a viewport: reachable, acyclic, correctly numbered, and unrenderable.
-  //
-  // After reachability on purpose. A parked pane holding a stowaway fails both
-  // this and the reachability check, and `unreachable` is the truer thing to
-  // say about a subtree nothing renders — the test for it pins that.
+  // types get most of the way there — a pane cannot carry an axis — but they
+  // stop short here, because `PaneNode.parentId` is an ordinary string and
+  // nothing in it knows what kind of node the id names. So a `move` that names
+  // a pane as its destination writes a subtree hanging off a viewport:
+  // reachable, acyclic, correctly numbered, and unrenderable.
   for (const node of nodes) {
     if (node.nodeType !== 'pane') continue;
     const children = childrenOf(nodes, node.id);
@@ -331,12 +396,6 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // group-level precondition: `fraction_mixed` and `fraction_sum` are questions
   // about a container, and this is a question about one number.
   //
-  // It sat inside the loop below, under the skip that exempts the parked panes
-  // — so a NaN or an Infinity on a DETACHED pane was exempted by position
-  // rather than by intent, and passed. That exemption is right for the two
-  // container rules (parked panes share no container, so there is nothing for a
-  // share to be a share OF) and wrong for this one.
-  //
   // BEFORE the sum, and the ordering is the whole point. `Math.abs(NaN - 1) >=
   // FRACTION_EPSILON` is FALSE — every comparison against NaN is — so a group
   // holding one waves itself through the very check written to stop it. The sum
@@ -347,9 +406,8 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // has an extent of 0. Worse, it is self-propagating: a persisted NaN poisons
   // every future total that includes it, so the sum check would never fire on
   // that container again. An infinity is the same division one signed step
-  // away, and just as much not a share of anything. Parking the pane it landed
-  // on does not make it a number — Postgres `real` takes both, and the row
-  // parse throws on the way back.
+  // away, and just as much not a share of anything. Postgres `real` takes both,
+  // and the row parse throws on the way back.
   for (const node of nodes) {
     const fraction = fractionOf(node);
     if (fraction !== undefined && !Number.isFinite(fraction)) {
@@ -362,10 +420,9 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
 
   const groups = siblingGroups(nodes);
 
-  // Fractions, per container. The parked panes are skipped: they share no
-  // container, so there is nothing for a share to be a share OF.
+  // Fractions, per container — and every group is a container now, so there is
+  // no group here that a share could fail to be a share OF.
   for (const group of groups) {
-    if (group.parentId === null) continue;
     const fractions = group.members.map(fractionOf);
     const sized = fractions.filter((fraction): fraction is number => fraction !== undefined);
     if (sized.length > 0 && sized.length !== fractions.length) {
@@ -402,11 +459,9 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   for (const group of groups) {
     const positions = group.members.map((node) => node.position).sort((a, b) => a - b);
     if (!positions.every((value, slot) => value === slot)) {
-      const where =
-        group.parentId === null ? 'the parked panes' : `the children of "${group.parentId}"`;
       return violation(
         'position_contiguity',
-        `${where} hold positions [${positions.join(', ')}]; expected a contiguous 0-based run`,
+        `the children of "${group.parentId}" hold positions [${positions.join(', ')}]; expected a contiguous 0-based run`,
       );
     }
   }

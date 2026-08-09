@@ -172,12 +172,14 @@ describe('useOpenPagePane', () => {
     // The user moves on: they close the pane the tool call opened, then the
     // SAME messages rerender. A naive re-scan would reopen page-1 and undo it.
     // A binding is for life, so "the user retargeted this pane" is spelled as
-    // closing the node rather than as a rebind of it.
+    // closing the node rather than as a rebind of it — and closing DESTROYS it,
+    // so the pane must simply stay gone.
     const pagePane = panesOf().find((p) => p.target?.kind === 'page')!;
     store().closePane('ses-1', pagePane.id);
     rerender({ messages: completed });
 
-    expect(panesOf().find((p) => p.id === pagePane.id)?.parentId).toBeNull();
+    expect(panesOf().find((p) => p.id === pagePane.id)).toBeUndefined();
+    expect(panesOf().some((p) => p.target?.kind === 'page')).toBe(false);
   });
 
   it('never evicts the invoking chat pane — splits beside it instead (excludeTargetId)', () => {

@@ -36,16 +36,20 @@
  * See {@link stageContainer}.
  *
  * **There is no "attach" here either.** A node's location is one column and
- * `move` is the only thing that changes it: "opening" a pane is a move to
- * somewhere visible and "closing" one is a move to no parent. `detachedOf`
- * asks where a node is; it performs nothing. Attach is the vocabulary of
- * joining two independently existing systems, and having two systems to join
- * is the bug this epic deletes.
+ * `move` is the only thing that changes it. Attach is the vocabulary of joining
+ * two independently existing systems, and having two systems to join is the bug
+ * this epic deletes.
+ *
+ * **And "closing" is a `destroy`.** It was a move to no parent, which made a
+ * closed pane and a pane that lost its parent through a defect the same state.
+ * A pane that is in the workspace is on the screen; taking it off the screen
+ * takes it out of the workspace, and that is one act with one name.
  */
 import {
   applyNodeWrite,
   bind,
   create,
+  destroy,
   move,
   type NodeOperationCode,
   type NodeOperationResult,
@@ -53,7 +57,6 @@ import {
 } from './workspace-node-algebra';
 import {
   childrenOf,
-  detachedOf,
   findNode,
   rootOf,
   type NodeAxis,
@@ -68,14 +71,15 @@ import {
 /**
  * Why a command was refused.
  *
- * A superset of {@link NodeOperationCode}, which is itself a superset of the
- * validator's codes — the same widening at each layer, so a caller handles ONE
- * result type no matter how deep the refusal came from. Only one condition is
- * new at this layer: every command here operates on the GRID, and a pane that
- * is parked is in the workspace without being in the grid. That is a state the
- * operations below have no opinion about and a command must refuse.
+ * Exactly {@link NodeOperationCode}, and the aliasing is the point: this layer
+ * adds POLICY (where a thing opens, what a gesture compiles to) and it no longer
+ * adds a refusal of its own. It used to carry `detached_pane` — "this pane is in
+ * the workspace but not in the grid", a condition that only existed because a
+ * pane could be in one and not the other. There is one place a pane can be now,
+ * so the code has nothing left to describe. The alias stays so every caller's
+ * `CommandCode` annotation keeps meaning "however deep the refusal came from".
  */
-export type CommandCode = NodeOperationCode | 'detached_pane';
+export type CommandCode = NodeOperationCode;
 
 /** Mirrors {@link NodeOperationResult} deliberately: a command and an operation are interchangeable. */
 export type CommandResult =
@@ -212,19 +216,6 @@ export function seedRoot(
   return { nodes: [...nodes, seed], seed };
 }
 
-/**
- * The slot at the end of the parked group, with `nodeId` not counted among it.
- *
- * Leaving the grid is an arrival like any other, and it arrives LAST: the
- * sidebar's order is then the order things left. Discounting the node itself is
- * what makes a re-sent close write nothing — `move` measures its destination
- * with the mover removed, so a pane already parked at the end lands back where
- * it was.
- */
-function parkedSlot(nodes: readonly WorkspaceNode[], nodeId: string): number {
-  return detachedOf(nodes).filter((parked) => parked.id !== nodeId).length;
-}
-
 // ---------------------------------------------------------------------------
 // split
 // ---------------------------------------------------------------------------
@@ -303,13 +294,6 @@ function splitInto(
   if (node.nodeType !== 'pane') {
     return refuse('not_a_pane', `node "${input.nodeId}" is a split; a split divides space rather than occupying it`);
   }
-  // A parked pane is in the workspace and not in the grid, so there is no
-  // container for a new one to sit in — and `SplitNode.parentId` is a `string`,
-  // which makes a parked container unspellable. There is nothing to repair this
-  // into; showing the pane first is a `move` the caller makes deliberately.
-  if (node.parentId === null) {
-    return refuse('detached_pane', `pane "${input.nodeId}" is parked, so there is no container for a split to divide`);
-  }
   // `create` catches a `newNodeId` the workspace already holds; the container's
   // id has no operation to catch it, and an id already in the set would be
   // UPSERTED over its sitting node rather than minted beside it.
@@ -355,36 +339,56 @@ export function split(nodes: readonly WorkspaceNode[], input: SplitInput): Comma
 // closePane
 // ---------------------------------------------------------------------------
 
-/** Which pane leaves the grid. */
+/** Which pane goes. */
 export interface ClosePaneInput {
   nodeId: string;
 }
 
 /**
- * Close a pane: take it out of the grid, and leave it in the workspace.
+ * Close a pane: THE PANE GOES.
  *
- * **A `move` to no parent, never a `destroy`.** The node keeps its identity and
- * its binding, stays a member of the workspace and keeps appearing in the
- * sidebar; only its location changes. "Closed" and "parked" were two different
- * structures in the model this replaces — `close_pane` deleted the pane and a
- * conversation reachable nowhere else went with it — and collapsing them into
- * one location is the whole point of the flat model.
+ * **A `destroy`, not a move to nowhere.** It was the latter, and the cost was
+ * exact: closing a pane produced a node with no parent, so a permanent
+ * population of parentless nodes existed by design and a pane that lost its
+ * parent through a defect looked identical to one a user had closed. Nothing
+ * could tell them apart — not the validator, which could reject a parent id that
+ * failed to resolve but never a null one, and not a reader of the rows.
  *
- * **Closing the LAST pane leaves an empty grid and does not end the workspace.**
- * A deliberate behaviour change: that decision used to live half in the reducer
- * (which no-oped on the last pane, because a two-level grid could not represent
- * zero) and half in browser code that ended the session. `validateTree` is
- * explicit that a root holding nothing is an ordinary state, and ending a
- * workspace is an explicit lifecycle act elsewhere.
+ * What is given up is named rather than hidden: a closed pane's node is gone,
+ * so the conversation it showed is no longer a member of this workspace and its
+ * binding is released. That is what closing MEANS under one removal, and it is
+ * the same act as `destroy(paneId)` because it is that act.
  *
- * A split left holding one child collapses, because `move` collapses it — not
- * because this command noticed. A pane already out of the grid writes nothing.
+ * **Closing the LAST pane leaves the session standing with an empty tree.** Not
+ * "closing the last pane ends the session" — that inference is gone with the
+ * state that motivated it. A root holding nothing is an ordinary resting state,
+ * and ending a session is `destroy(rootId)`: an explicit target, never derived
+ * from emptiness.
+ *
+ * A split left holding one child collapses, because `destroy` collapses it —
+ * not because this command noticed.
+ *
+ * **It insists on a PANE, and that is not a second removal.** `destroy` takes
+ * whatever it is pointed at, root included, which is the whole correction. This
+ * is a COMMAND — a gesture with a name — and the gesture is "close this pane".
+ * Handed a split it would close a column the user did not name; handed the root
+ * it would end the session. Both are category errors in the caller, and a
+ * command whose name states its subject should say so rather than obey. Ending a
+ * session is `destroy(rootId)`, asked for by a caller that means it.
  */
 export function closePane(nodes: readonly WorkspaceNode[], input: ClosePaneInput): CommandResult {
-  return compile(nodes, [
-    (current) =>
-      move(current, { nodeId: input.nodeId, parentId: null, index: parkedSlot(current, input.nodeId) }),
-  ]);
+  const node = findNode(nodes, input.nodeId);
+  if (node === undefined) return refuse('unknown_node', `no node "${input.nodeId}" to close`);
+  if (node.nodeType === 'root') {
+    return refuse(
+      'root_immutable',
+      `node "${input.nodeId}" is the root; closing a pane is not ending the session, which is a destroy the caller names`,
+    );
+  }
+  if (node.nodeType !== 'pane') {
+    return refuse('not_a_pane', `node "${input.nodeId}" is a split; closing a column is not closing a pane`);
+  }
+  return compile(nodes, [(current) => destroy(current, { nodeId: input.nodeId })]);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,16 +418,16 @@ function nodeShowing(nodes: readonly WorkspaceNode[], target: PaneTarget): PaneN
 /**
  * Swap what a pane displays.
  *
- * **TWO MOVES, NEVER A REBIND.** A bound node's target is fixed for the whole
- * of its life — `bind` refuses to re-point one, and that refusal is the design
- * rather than an omission. So this does not change what a rectangle shows; it
- * changes which node occupies the slot. The displaced node moves to no parent,
- * which leaves it a member of the workspace and in the sidebar, and the node
- * already showing the target moves in.
+ * **A MOVE AND A DESTROY, NEVER A REBIND.** A bound node's target is fixed for
+ * the whole of its life — `bind` refuses to re-point one, and that refusal is
+ * the design rather than an omission. So this does not change what a rectangle
+ * shows; it changes which node occupies the slot. The node already showing the
+ * target moves in, and the node it displaces is destroyed.
  *
- * That is what keeps "this pane" and "this conversation" separable. A pane that
- * could be re-pointed is the same object as its conversation, and then closing
- * a view reads as discarding what it showed.
+ * That is what keeps "this pane" and "this conversation" separable at the level
+ * that still matters: the NODE is what goes, and the conversation's history is
+ * untouched by it. What is no longer true is that the displaced node survives
+ * somewhere off-screen — there is no off-screen.
  *
  * It follows that this command can only move in a node the workspace ALREADY
  * holds: ids are minted by the caller, and this one is given none to mint a
@@ -448,9 +452,6 @@ export function replaceConversation(
     return refuse('not_a_pane', `node "${nodeId}" is a split; only a pane is a viewport onto anything`);
   }
   const parentId = displaced.parentId;
-  if (parentId === null) {
-    return refuse('detached_pane', `pane "${nodeId}" is parked, so there is nothing displayed there to swap`);
-  }
 
   const replacement = nodeShowing(nodes, target);
   if (replacement === undefined) {
@@ -473,8 +474,9 @@ export function replaceConversation(
 
   return compile(nodes, [
     (current) => move(current, { nodeId: replacement.id, parentId, index }),
-    // Indexed against the tree the arrival produced, not against the original.
-    (current) => move(current, { nodeId, parentId: null, index: parkedSlot(current, nodeId) }),
+    // The displaced node goes. Run against the tree the arrival produced, so the
+    // container it shared with the replacement is never momentarily a hole.
+    (current) => destroy(current, { nodeId }),
   ]);
 }
 
@@ -521,32 +523,29 @@ export type OpenConversationInput = OpenInput<'chat'>;
 export type OpenPageInput = OpenInput<'page'>;
 export type OpenShellInput = OpenInput<'terminal'>;
 
-/** A pane that is IN the grid. The type states what {@link gridPanes} guarantees, so no reader re-checks. */
-type GridPane = PaneNode & { parentId: string };
-
-function isGridPane(node: WorkspaceNode): node is GridPane {
-  return node.nodeType === 'pane' && node.parentId !== null;
-}
-
 /**
- * The grid's panes in RENDER order — depth first from the root, which is the
- * order a reader's eye takes and the order `panesOf` produced when the model
+ * The workspace's panes in RENDER order — depth first from the root, which is
+ * the order a reader's eye takes and the order `panesOf` produced when the model
  * was two levels deep and the distinction could not arise.
+ *
+ * There is no longer a second list beside this one. Every pane descends from the
+ * root, so "the panes the grid draws" and "the panes the workspace holds" are
+ * the same set, differing only in ORDER — which is what this function is for.
  *
  * Total on cyclic input, like every other walk over this model: a flat parent
  * pointer can express a cycle, and placement runs before the write that would
  * have rejected one.
  */
-function gridPanes(nodes: readonly WorkspaceNode[]): GridPane[] {
+function gridPanes(nodes: readonly WorkspaceNode[]): PaneNode[] {
   const root = rootOf(nodes);
   if (root === undefined) return [];
-  const panes: GridPane[] = [];
+  const panes: PaneNode[] = [];
   const seen = new Set<string>([root.id]);
   const walk = (parentId: string): void => {
     for (const child of childrenOf(nodes, parentId)) {
       if (seen.has(child.id)) continue;
       seen.add(child.id);
-      if (isGridPane(child)) panes.push(child);
+      if (child.nodeType === 'pane') panes.push(child);
       else if (child.nodeType === 'split') walk(child.id);
     }
   };
@@ -577,16 +576,19 @@ function isReplaceablePane(pane: PaneNode): boolean {
  * the invoking conversation is never evicted, and nothing replaceable means
  * SPLIT rather than take something away.
  *
- * Two cases are new, and both are new because the flat model can express what
- * the two-level one could not:
+ * One case is new, and it is new because the flat model can express what the
+ * two-level one could not: **the grid is empty.** A workspace used to be
+ * guaranteed at least one pane; closing the last one now leaves an empty tree,
+ * so "place it in the root" is an ordinary answer rather than the `create` of a
+ * whole workspace.
  *
- *  - **The grid is empty.** A workspace used to be guaranteed at least one
- *    pane; closing the last one now leaves an empty grid, so "place it in the
- *    root" is an ordinary answer rather than the `create` of a whole workspace.
- *  - **A PARKED node already holds the target.** Minting a second node for it
- *    would put one conversation in two places, which is the duplicate the focus
- *    rule exists to prevent — so this is refused. Bringing a parked node back is
- *    a `move`, and the caller names it.
+ * A case that USED to be here is gone with the state it described. When a node
+ * could be parked, a target already held by a parked node had to be refused
+ * (`already_bound`) rather than shown, because minting a second node for it
+ * would put one conversation in two places and bringing the parked one back was
+ * a `move` only the caller could name. A node holding this target is now
+ * necessarily on the grid, so "already showing it" is the whole answer and the
+ * correct write is no write.
  */
 function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>): CommandResult {
   const { target, newNodeId, newSplitId } = input;
@@ -600,16 +602,9 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
   // A guard here would be a second statement of it that no test could tell
   // apart from the first.
 
-  const already = nodeShowing(nodes, target);
-  if (already !== undefined) {
-    // On screen already: focus is client-local — no row carries it and it does
-    // not restore across devices — so the correct write is no write at all.
-    if (already.parentId !== null) return { ok: true, write: { put: [], drop: [] } };
-    return refuse(
-      'already_bound',
-      `node "${already.id}" already shows ${target.kind} "${target.id}" and is parked; showing it again is a move, not a second mint`,
-    );
-  }
+  // On screen already: focus is client-local — no row carries it and it does
+  // not restore across devices — so the correct write is no write at all.
+  if (nodeShowing(nodes, target) !== undefined) return { ok: true, write: { put: [], drop: [] } };
 
   const root = rootOf(nodes);
   if (root === undefined) return refuse('no_root', 'no node of type "root" to place anything into');
@@ -621,7 +616,7 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
     ]);
   }
 
-  const canReplace = (pane: GridPane): boolean =>
+  const canReplace = (pane: PaneNode): boolean =>
     isReplaceablePane(pane) &&
     (input.preferSplit !== true || pane.target === null) &&
     (input.excludeTargetId === undefined || pane.target?.id !== input.excludeTargetId) &&
@@ -641,13 +636,13 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
   if (chosen !== undefined) {
     // A bound pane the policy is willing to give up. The old model REPOINTED it;
     // a target is fixed for a node's life here, so the new node takes the slot
-    // and the old one parks — still in the workspace, still in the sidebar.
-    // It arrives before the other leaves, so no group momentarily has a hole.
+    // and the old one is DESTROYED. It arrives before the other leaves, so no
+    // group momentarily has a hole.
     const parentId = chosen.parentId;
     const index = childrenOf(nodes, parentId).findIndex((sibling) => sibling.id === chosen.id) + 1;
     return compile(nodes, [
       (current) => create(current, { nodeId: newNodeId, target, parentId, index }),
-      (current) => move(current, { nodeId: chosen.id, parentId: null, index: parkedSlot(current, chosen.id) }),
+      (current) => destroy(current, { nodeId: chosen.id }),
     ]);
   }
 

@@ -129,16 +129,22 @@ describe('the conversation and its membership are one transaction', () => {
   });
 
   it('passes the spawning conversation through, so a spawn never evicts its own invoker', async () => {
-    await createConversationInSessionWith(deps, { ...input, attach: true, excludeTargetId: 'conv-caller' });
+    await createConversationInSessionWith(deps, { ...input, excludeTargetId: 'conv-caller' });
 
     expect(deps.admitConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ attach: true, excludeTargetId: 'conv-caller' }),
+      expect.objectContaining({ excludeTargetId: 'conv-caller' }),
     );
   });
 
-  it('leaves the thread PARKED by default — the picker fills its own pane', async () => {
+  it('passes NO placement flag — every admission is placed, by one policy', async () => {
+    // `attach: false` was the default and meant PARKED: the picker mints its own
+    // unbound pane, so an attached admission would have placed a SECOND one
+    // beside it. The placement policy only ever FILLS an unbound pane before it
+    // splits, so the picker's waiting pane is exactly what it lands in — the
+    // trap the flag existed to dodge is not reachable.
     await createConversationInSessionWith(deps, input);
-    expect(deps.admitConversation).toHaveBeenCalledWith(expect.objectContaining({ attach: false }));
+    const [[passed]] = deps.admitConversation.mock.calls;
+    expect(passed).not.toHaveProperty('attach');
   });
 });
 

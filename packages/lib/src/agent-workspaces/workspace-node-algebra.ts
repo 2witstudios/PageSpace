@@ -32,6 +32,16 @@
  * location is one column and `move` is the only operation that changes it;
  * "attach" is the vocabulary of joining two independently existing systems, and
  * having two systems to join is the bug this model deletes.
+ *
+ * **AND THERE IS ONE REMOVAL.** `destroy` takes a node and its subtree, and the
+ * only thing that changes with the node you point it at is how much goes:
+ * `destroy(paneId)` and the pane goes, `destroy(rootId)` and the session goes.
+ * An earlier cut refused the root here (`root_immutable`), which did not remove
+ * the ability to end a session — it moved it into a SECOND mechanism beside the
+ * tree, two removals with two meanings reconciled by convention, which is the
+ * thing this epic exists to delete. The root is still immutable for `move`,
+ * `bind` and `resize`, because those genuinely make no sense on it; refusing an
+ * operation that has no meaning is not a second mechanism.
  */
 import {
   currentShares,
@@ -42,7 +52,6 @@ import {
 import {
   childrenOf,
   descendantsOf,
-  detachedOf,
   findNode,
   removeNodes,
   upsertNodes,
@@ -104,7 +113,6 @@ export type NodeOperationCode =
   | 'invalid_target'
   | 'not_a_container'
   | 'not_a_pane'
-  | 'not_detachable'
   | 'not_sizable'
   | 'parent_in_subtree'
   | 'root_immutable'
@@ -160,9 +168,9 @@ export function applyNodeWrite(nodes: readonly WorkspaceNode[], write: NodeWrite
 /**
  * A node that sits in a sibling group: everything except the root.
  *
- * The root is in no group at all — `childrenOf` cannot return it (its parent is
- * null) and `detachedOf` yields only panes — so this is the type of the things
- * `position` and `fraction` are renumbered across.
+ * The root is in no group at all — `childrenOf` cannot return it, because its
+ * parent is null and it is the only node whose parent is. So this is the type of
+ * the things `position` and `fraction` are renumbered across.
  */
 type MemberNode = PaneNode | SplitNode;
 
@@ -189,22 +197,14 @@ function withFraction(node: MemberNode, fraction: number | null): MemberNode {
   return { ...node, fraction };
 }
 
-/**
- * The ordered members of a sibling group: a parent's children, or — for
- * `parentId: null` — the panes parked outside the tree.
- *
- * The parked panes ARE a group: they are ordered in the sidebar, so their
- * `position` is contiguous like anyone else's. They are not a CONTAINER, which
- * is a different statement and the reason shares are stripped from them.
- */
-function membersOf(nodes: readonly WorkspaceNode[], parentId: string | null): MemberNode[] {
-  const group = parentId === null ? detachedOf(nodes) : childrenOf(nodes, parentId);
-  return group.filter((node): node is MemberNode => node.nodeType !== 'root');
+/** The ordered members of a sibling group: a parent's children. */
+function membersOf(nodes: readonly WorkspaceNode[], parentId: string): MemberNode[] {
+  return childrenOf(nodes, parentId).filter((node): node is MemberNode => node.nodeType !== 'root');
 }
 
 /** A sibling group's membership, in the order it should end up in. */
 interface GroupOrder {
-  parentId: string | null;
+  parentId: string;
   members: readonly MemberNode[];
 }
 
@@ -221,16 +221,12 @@ interface GroupOrder {
  * Shares go through `rebalanceFractions`, the SAME rule the model this replaces
  * uses, imported rather than re-derived: a newcomer takes an even share of the
  * container it joins and the survivors keep their relative proportions inside
- * what is left. Parked panes hold no share of anything, because there is no
- * container for a share to be a share of.
+ * what is left.
  */
 function reseat(nodes: readonly WorkspaceNode[], groups: readonly GroupOrder[]): WorkspaceNode[] {
   let next = [...nodes];
   for (const group of groups) {
-    const fractions =
-      group.parentId === null
-        ? group.members.map(() => null)
-        : rebalanceFractions(group.members.map((member) => member.fraction));
+    const fractions = rebalanceFractions(group.members.map((member) => member.fraction));
     next = upsertNodes(
       next,
       group.members.map((member, position) => withFraction({ ...member, position }, fractions[position])),
@@ -307,9 +303,8 @@ function isSlot(index: number, size: number): boolean {
  * An algebra stricter than the storage it validates for is a second rule nobody
  * can see, and the two then drift.
  *
- * A DETACHED node counts. It is off the grid and still a member of the
- * workspace, still holding its binding, still one row under an index that does
- * not read `parentId` at all.
+ * Every node in the set counts, wherever it sits — the index does not read
+ * `parentId` at all, and neither does this.
  */
 function shownElsewhere(
   nodes: readonly WorkspaceNode[],
@@ -388,11 +383,12 @@ function settle(nodes: readonly WorkspaceNode[], next: readonly WorkspaceNode[])
 // The five operations
 // ---------------------------------------------------------------------------
 
-/** What `create` mints. `parentId: null` mints it parked; `index` defaults to last. */
+/** What `create` mints. `index` defaults to last. */
 export interface CreateInput {
   nodeId: string;
   target: PaneTarget | null;
-  parentId: string | null;
+  /** REQUIRED. There is nowhere for a pane to be except under a parent. */
+  parentId: string;
   index?: number;
 }
 
@@ -404,8 +400,12 @@ export interface CreateInput {
  * transitions, so every caller has to reason about the moment where the first
  * landed and the second did not — which is the state production is in today,
  * with workspaces that exist holding zero panes. An atomic create has no such
- * moment. Minting something parked is `parentId: null`: a STATE, not a
- * separate act.
+ * moment.
+ *
+ * `parentId` is a `string` and there is no detached mint. An earlier cut
+ * accepted `null` here and called the result parked, which meant `create` could
+ * produce exactly the population that makes a lost pane indistinguishable from a
+ * closed one.
  *
  * Ids come from the CALLER, never from in here. The client mints them, so
  * applying the write optimistically needs no round trip to learn what the thing
@@ -463,7 +463,7 @@ export function create(nodes: readonly WorkspaceNode[], input: CreateInput): Nod
     }
   }
 
-  if (parentId !== null && findNode(nodes, parentId) === undefined) {
+  if (findNode(nodes, parentId) === undefined) {
     return reject('unknown_parent', `no node "${parentId}" to create "${nodeId}" in`);
   }
   // A parent that resolves to a PANE is refused too, but by the gate rather than
@@ -483,21 +483,24 @@ export function create(nodes: readonly WorkspaceNode[], input: CreateInput): Nod
   return settle(nodes, reseat([...nodes, minted], [{ parentId, members }]));
 }
 
-/** Where `move` puts a node. `parentId: null` leaves it parked. */
+/** Where `move` puts a node. A destination is always a real container. */
 export interface MoveInput {
   nodeId: string;
-  parentId: string | null;
+  /** REQUIRED. "Out of the tree" is not a destination; leaving is a `destroy`. */
+  parentId: string;
   index: number;
 }
 
 /**
- * THE ONLY OPERATION THAT CHANGES WHERE A NODE IS — into the tree, out of it,
- * reordered inside a parent, or carried between parents.
+ * THE ONLY OPERATION THAT CHANGES WHERE A NODE IS — reordered inside a parent,
+ * or carried between parents.
  *
- * One operation because those are one thing. The model this replaces spent
- * three verbs on them (`close_pane`, `move_pane`, `reorder_columns`), which is
- * how "closed" and "parked" drifted into two different structures. Here
- * `parentId: null` is simply another location.
+ * One operation because those are one thing: the model this replaces spent two
+ * verbs on them (`move_pane`, `reorder_columns`). It does NOT also mean
+ * "leaving", and that is the correction. An earlier cut let `parentId: null`
+ * mean out-of-the-tree, so `move` was both a relocation and a removal, and a
+ * closed pane and a broken one ended up in the same state. Leaving is
+ * {@link destroy}.
  *
  * A node's BINDING is untouched: this moves a rectangle, never what it shows.
  *
@@ -515,35 +518,23 @@ export function move(nodes: readonly WorkspaceNode[], input: MoveInput): NodeOpe
     return reject('root_immutable', `node "${nodeId}" is the root; the workspace has no outside`);
   }
 
-  // The destination is settled in the branch that produces the moved node, so
-  // the `parentId` the type accepts is always the one the caller supplied.
-  // There is no path here on which a parent is chosen rather than given.
-  let arriving: MemberNode;
-  if (parentId === null) {
-    if (node.nodeType === 'split') {
-      return reject(
-        'not_detachable',
-        `node "${nodeId}" is a split; a split has no target of its own, so a parked one would be garbage`,
-      );
-    }
-    arriving = { ...node, parentId };
-  } else {
-    if (parentId === nodeId) {
-      return reject('parent_in_subtree', `node "${nodeId}" cannot be its own parent`);
-    }
-    // As in `create`, a pane named as a destination is refused by the gate.
-    if (findNode(nodes, parentId) === undefined) {
-      return reject('unknown_parent', `no node "${parentId}" to move "${nodeId}" into`);
-    }
-    // A destination BENEATH the mover takes the whole branch out of the tree
-    // with it. `validateTree` would catch the resulting cycle, but "you asked to
-    // move a node inside itself" is a different bug from "the tree you wrote
-    // loops", and a caller rebasing on the answer needs to see which.
-    if (descendantsOf(nodes, nodeId).some((descendant) => descendant.id === parentId)) {
-      return reject('parent_in_subtree', `node "${parentId}" is inside "${nodeId}", which cannot hold it`);
-    }
-    arriving = { ...node, parentId };
+  if (parentId === nodeId) {
+    return reject('parent_in_subtree', `node "${nodeId}" cannot be its own parent`);
   }
+  // As in `create`, a pane named as a destination is refused by the gate.
+  if (findNode(nodes, parentId) === undefined) {
+    return reject('unknown_parent', `no node "${parentId}" to move "${nodeId}" into`);
+  }
+  // A destination BENEATH the mover takes the whole branch out of the tree
+  // with it. `validateTree` would catch the resulting cycle, but "you asked to
+  // move a node inside itself" is a different bug from "the tree you wrote
+  // loops", and a caller rebasing on the answer needs to see which.
+  if (descendantsOf(nodes, nodeId).some((descendant) => descendant.id === parentId)) {
+    return reject('parent_in_subtree', `node "${parentId}" is inside "${nodeId}", which cannot hold it`);
+  }
+  // The `parentId` the moved node carries is always the one the caller supplied.
+  // There is no path here on which a parent is chosen rather than given.
+  const arriving: MemberNode = { ...node, parentId };
 
   const origin = node.parentId;
   const sameParent = origin === parentId;
@@ -578,12 +569,12 @@ export function move(nodes: readonly WorkspaceNode[], input: MoveInput): NodeOpe
  */
 function collapseInto(
   nodes: readonly WorkspaceNode[],
-  origin: string | null,
+  origin: string,
   vacated: readonly MemberNode[],
   destination?: GroupOrder,
 ): WorkspaceNode[] {
   const arrivals = destination === undefined ? [] : [destination];
-  const container = origin === null ? undefined : findNode(nodes, origin);
+  const container = findNode(nodes, origin);
   if (container === undefined || container.nodeType !== 'split' || vacated.length !== 1) {
     return reseat(nodes, [...arrivals, { parentId: origin, members: vacated }]);
   }
@@ -616,13 +607,35 @@ export interface DestroyInput {
 }
 
 /**
- * Remove a node AND ITS SUBTREE.
+ * Remove a node AND ITS SUBTREE. **THE ONE REMOVAL.**
+ *
+ * Point it at a pane and the pane goes. Point it at a split and the split and
+ * everything under it goes. Point it at the ROOT and the whole session goes —
+ * same verb, same meaning, a different target.
+ *
+ * **Why the root is not refused here.** It was, in the cut this corrects, on the
+ * grounds that "a workspace cannot destroy itself". The effect was not that
+ * sessions stopped ending; it was that ending one became a SEPARATE LIFECYCLE
+ * MECHANISM, because the tree's own removal was forbidden from touching the top
+ * of the tree. Two removals with two meanings, reconciled by convention — the
+ * exact shape this epic exists to delete, rebuilt at the other end. So the
+ * refusal is gone and the root is an ordinary target.
+ *
+ * The root stays immutable for `move`, `bind` and `resize`. Those are not a
+ * second mechanism: a workspace has no outside to move into, shows nothing of
+ * its own, and is not a share of anything, so refusing them states that the
+ * operations are meaningless rather than that the root is special.
+ *
+ * **What a destroyed root leaves is an EMPTY NODE SET, and that is a valid
+ * tree** (`validateTree` settles the empty list first, ahead of `no_root`).
+ * Ending a session has a LIFECYCLE consequence this operation deliberately does
+ * not carry — the sandbox teardown and the row's `endedAt` — because those are
+ * facts about `agent_workspaces` and this is a function over a node list. The
+ * composition lives at the runtime; see `endSession`.
  *
  * Composed rather than special-cased — `[nodeId, ...descendantsOf(nodes,
  * nodeId)]` is the whole of what "destroy a container" means, which is why
- * `removeNodes` takes its ids and does not walk the tree itself: detaching a
- * pane and destroying a column are then visibly different acts instead of one
- * helper's two moods.
+ * `removeNodes` takes its ids and does not walk the tree itself.
  *
  * Removing a node can leave its parent a split with one child, which
  * `validateTree` rejects — so this collapses through exactly the path `move`
@@ -634,11 +647,16 @@ export function destroy(nodes: readonly WorkspaceNode[], input: DestroyInput): N
 
   const node = findNode(nodes, nodeId);
   if (node === undefined) return reject('unknown_node', `no node "${nodeId}" to destroy`);
-  if (node.nodeType === 'root') {
-    return reject('root_immutable', `node "${nodeId}" is the root; a workspace cannot destroy itself`);
-  }
 
   const pruned = removeNodes(nodes, [nodeId, ...descendantsOf(nodes, nodeId).map((n) => n.id)]);
+  // The root has no parent group to reseat and no container to collapse: what
+  // it leaves is whatever did not descend from it, which in a valid tree is
+  // nothing. A straggler survives into `settle` rather than being swept, so a
+  // set that somehow held an unreachable node is REFUSED as `no_root` instead of
+  // being silently tidied — this operation removes what it names and nothing
+  // else, at the top of the tree exactly as at the bottom.
+  if (node.nodeType === 'root') return settle(nodes, pruned);
+
   return settle(nodes, collapseInto(pruned, node.parentId, membersOf(pruned, node.parentId)));
 }
 
@@ -747,9 +765,6 @@ export function resize(nodes: readonly WorkspaceNode[], input: ResizeInput): Nod
   }
   if (fraction <= 0 || fraction >= 1) {
     return reject('invalid_fraction', `a share of ${fraction} is not strictly between 0 and 1`);
-  }
-  if (node.parentId === null) {
-    return reject('not_sizable', `pane "${nodeId}" is parked, so there is no container to take a share of`);
   }
 
   const siblings = membersOf(nodes, node.parentId);
