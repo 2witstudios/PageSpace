@@ -124,6 +124,43 @@ describe('validateTree', () => {
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'duplicate_id' });
   });
 
+  it('should reject a node whose id is blank, which every later read of the workspace then throws on', () => {
+    // The same class as a duplicate id and every bit as invariant: an id is
+    // what the whole model resolves by. The difference is where it lands.
+    // Postgres stores `''` happily (`text NOT NULL` is satisfied), and
+    // `nodeFromRow` then rejects it — and `nodesFromRows` rejects the WHOLE
+    // set rather than filtering, deliberately — so the workspace becomes
+    // permanently unreadable and the read is the only way in.
+    //
+    // This is the gate every write path runs, and the wire's primitive is
+    // `put(nodes[])`: a client that assembled its own node set never goes
+    // through the algebra's operations at all.
+    expect(validateTree([{ ...root(), id: '' }])).toMatchObject({ ok: false, code: 'blank_id' });
+    expect(validateTree([root(), pane('', 'root-1', 0)])).toMatchObject({
+      ok: false,
+      code: 'blank_id',
+    });
+  });
+
+  it('should reject a whitespace-only id, which the row parse’s min-length check would let through', () => {
+    // `z.string().min(1)` at the row boundary is satisfied by `'   '`, so this
+    // one survives the read and lands as a node nothing can address. The
+    // algebra spells the rule as `trim() === ''` in `bind` and `create`; this
+    // is the same rule where the set-level write can see it.
+    expect(validateTree([root(), pane('   ', 'root-1', 0)])).toMatchObject({
+      ok: false,
+      code: 'blank_id',
+    });
+  });
+
+  it('should reject a pane bound to a target with a blank id, which is the same row made unreadable', () => {
+    // `targetId` is `z.string().min(1)` on the way back in, so a blank one
+    // throws in exactly the same place a blank node id does — and a binding is
+    // for life, so nothing later corrects it.
+    const nodes: WorkspaceNode[] = [root(), showing('a', 'root-1', 0, { kind: 'chat', id: '  ' })];
+    expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'blank_id' });
+  });
+
   it('should reject a parentId naming a node that is not in the set', () => {
     const nodes: WorkspaceNode[] = [root(), pane('orphan', 'column-that-was-closed', 0)];
     expect(validateTree(nodes)).toMatchObject({ ok: false, code: 'dangling_parent' });
@@ -331,6 +368,32 @@ describe('validateTree', () => {
       pane('parked-c', null, 2),
     ];
     expect(validateTree(nodes)).toEqual({ ok: true });
+  });
+
+  it('should reject a non-finite share on a PARKED pane, which no container is there to sum', () => {
+    // Skipping `fraction_mixed` and `fraction_sum` for the parked panes is
+    // right — they share no container, so there is nothing for a share to be a
+    // share OF. Finiteness is not that kind of check: it is a property of ONE
+    // number, and the parked group was exempt from it by position rather than
+    // by intent.
+    //
+    // The consequence is the same one the attached case has: Postgres `real`
+    // takes NaN and Infinity happily, and `nodeFromRow` then throws on the way
+    // back — an unreadable workspace, reached by parking a pane the client
+    // resized before its container had laid out.
+    const parkedNaN: WorkspaceNode[] = [
+      root(),
+      pane('onscreen', 'root-1', 0),
+      sized('parked', null, 0, Number.NaN),
+    ];
+    expect(validateTree(parkedNaN)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
+
+    const parkedInfinity: WorkspaceNode[] = [
+      root(),
+      pane('onscreen', 'root-1', 0),
+      sized('parked', null, 0, Number.POSITIVE_INFINITY),
+    ];
+    expect(validateTree(parkedInfinity)).toMatchObject({ ok: false, code: 'fraction_not_finite' });
   });
 
   it('should not require a parked pane to carry a share of anything', () => {

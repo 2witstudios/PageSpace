@@ -21,6 +21,13 @@ import {
   type RenderNode,
   type WorkspaceNodeRow,
 } from '../workspace-node-rows';
+import {
+  applyNodeWrite,
+  create,
+  resize,
+  type NodeOperationResult,
+  type NodeWrite,
+} from '../workspace-node-algebra';
 
 function rootRow(overrides: Partial<WorkspaceNodeRow> = {}): WorkspaceNodeRow {
   return {
@@ -662,6 +669,69 @@ describe('rows ⟷ nodes (property)', () => {
       // the list, which is what makes the flat list safe to keep canonical.
       expect(tree.orphaned, `${where}: a well-formed workspace has no orphans`).toEqual([]);
       expect(rendered.length + tree.detached.length, `${where}: node count`).toBe(nodes.length);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The OTHER producer
+//
+// Everything above round-trips nodes the ROW PARSE built, so both sides of
+// every comparison come from one producer. The guarantee both module docblocks
+// actually make is about the pair: the client holds the node THE ALGEBRA built
+// optimistically while the server holds the rehydrated one, and any difference
+// in which keys are present makes every write look like a change and puts the
+// two planes permanently out of step.
+// ---------------------------------------------------------------------------
+
+describe('nodes the ALGEBRA built ⟷ rows', () => {
+  /** A sized two-pane grid, built the way the algebra builds one rather than declared. */
+  function grid(): WorkspaceNode[] {
+    const root: RootNode = { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row' };
+    const minted = applyNodeWrite(
+      [root],
+      accepted(create([root], { nodeId: 'a', target: { kind: 'chat', id: 'conv-a' }, parentId: 'root-1' })),
+    );
+    const both = applyNodeWrite(
+      minted,
+      accepted(create(minted, { nodeId: 'b', target: { kind: 'chat', id: 'conv-b' }, parentId: 'root-1' })),
+    );
+    // `resize` is what MATERIALIZES the fractions: before it, both panes carry
+    // no `fraction` key at all, which is the absence the round trip has to
+    // preserve — and after it, they carry one appended by `withFraction`, which
+    // is the case the docblocks are really about.
+    return applyNodeWrite(both, accepted(resize(both, { nodeId: 'a', fraction: 0.3 })));
+  }
+
+  function accepted(result: NodeOperationResult): NodeWrite {
+    if (!result.ok) throw new Error(`expected an accepted operation, got ${result.code}: ${result.detail}`);
+    return result.write;
+  }
+
+  it('should round-trip a SIZED node the algebra built, with its share preserved as a present key', () => {
+    // `toStrictEqual`, not `toEqual`: `toEqual` treats a key holding
+    // `undefined` as absent, which is exactly the difference that has to fail.
+    for (const node of grid()) {
+      expect(nodeFromRow(rowFromNode(node, 'root-1')), `node ${node.id}`).toStrictEqual(node);
+    }
+  });
+
+  it('should round-trip an UNSIZED node the algebra built with no fraction key at all', () => {
+    // The absence IS the state ("my parent is unsized"), never an explicit
+    // null. A rehydrated node carrying `fraction: null` — or `undefined` —
+    // would differ from the one the client is holding on every unsized
+    // container in the workspace, which is most of them.
+    const root: RootNode = { nodeType: 'root', id: 'root-1', parentId: null, position: 0, axis: 'row' };
+    const minted = applyNodeWrite(
+      [root],
+      accepted(create([root], { nodeId: 'a', target: null, parentId: 'root-1' })),
+    );
+    for (const node of minted) {
+      const back = nodeFromRow(rowFromNode(node, 'root-1'));
+      expect(back, `node ${node.id}`).toStrictEqual(node);
+      expect(Object.prototype.hasOwnProperty.call(back, 'fraction'), `node ${node.id}: fraction key`).toBe(
+        false,
+      );
     }
   });
 });

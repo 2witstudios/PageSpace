@@ -120,6 +120,36 @@ describe('create', () => {
     expect(refusedWith(result)).toBe('duplicate_id');
   });
 
+  it('should refuse a blank node id, which the storage accepts and every later read then rejects', () => {
+    // `text NOT NULL` is satisfied by `''`, so Postgres stores this without
+    // complaint. `nodeFromRow` does not — and `nodesFromRows` rejects the whole
+    // set rather than filtering it, deliberately — so one such row makes every
+    // subsequent read of the workspace throw, permanently, with the read being
+    // the only way in. Repair takes a hand-written DELETE against production.
+    //
+    // Whitespace-only is the same fault wearing a different value, and it is
+    // the one `z.string().min(1)` at the row boundary would NOT catch.
+    expect(refusedWith(create([root()], { nodeId: '', target: null, parentId: 'root-1' }))).toBe(
+      'invalid_id',
+    );
+    expect(refusedWith(create([root()], { nodeId: '   ', target: null, parentId: 'root-1' }))).toBe(
+      'invalid_id',
+    );
+  });
+
+  it('should refuse a blank target id at the MINT, exactly as bind refuses one at the fill', () => {
+    // `create` binds at the mint — that is the whole reason `CreateInput`
+    // carries a target — so it is the other place this can be caught, and the
+    // one a pane minted already bound goes through. A binding is for life, so
+    // there is no second chance to notice.
+    const result = create([root()], {
+      nodeId: 'fresh',
+      target: { kind: 'chat', id: '  ' },
+      parentId: 'root-1',
+    });
+    expect(refusedWith(result)).toBe('invalid_target');
+  });
+
   it('should refuse a pane as a parent, because a pane is a leaf', () => {
     const before = [root(), pane('p1', 'root-1', 0)];
     const result = create(before, { nodeId: 'p2', target: null, parentId: 'p1' });
@@ -588,8 +618,10 @@ describe('destroy', () => {
 
 describe('the result gate', () => {
   it('should refuse to operate on a set in which two nodes already share an id', () => {
-    // `validateTree` has nothing to say about this, and every helper resolves an
-    // id to the first match — so the second node is not corrupt, it is invisible.
+    // `validateTree` says this too; the gate says it FIRST, so an operation
+    // names the collision rather than whichever downstream fault the duplicate
+    // happened to produce. Every helper resolves an id to the first match — so
+    // the second node is not corrupt, it is invisible.
     const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('b', 'root-1', 1)];
     expect(refusedWith(resize(before, { nodeId: 'a', fraction: 0.6 }))).toBe('duplicate_id');
   });

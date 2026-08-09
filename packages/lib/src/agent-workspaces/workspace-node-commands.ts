@@ -519,13 +519,14 @@ function isReplaceablePane(pane: PaneNode): boolean {
 function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>): CommandResult {
   const { target, newNodeId, newSplitId } = input;
 
-  // `bind` refuses a blank target id and `create` does not, so without this the
-  // fill path and the split path would answer the same request differently. The
-  // pane stops being unbound the moment either lands, so there is no second
-  // chance to notice.
-  if (target.id.trim() === '') {
-    return refuse('invalid_target', `a ${target.kind} target with no id would bind a pane to nothing`);
-  }
+  // No blank-target guard here, deliberately. This layer used to carry one,
+  // because `bind` refused a blank target id and `create` did not — so the fill
+  // path and the split path answered the same request differently, and the
+  // command had to paper over the difference. `create` now refuses it at the
+  // mint, which is where a pane minted already bound can be caught, so every
+  // path below reaches the same refusal from the layer that owns the rule.
+  // A guard here would be a second statement of it that no test could tell
+  // apart from the first.
 
   const already = nodeShowing(nodes, target);
   if (already !== undefined) {

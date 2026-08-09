@@ -88,8 +88,10 @@ export interface SplitNode {
   /**
    * This node's share of its parent. ABSENT when the parent is unsized (its
    * children split it evenly) — the absence IS the state, never an explicit
-   * null, so a tree the algebra built and one rehydrated from rows are
-   * byte-identical. Carried over verbatim from the model this replaces.
+   * null, so a tree the algebra built and one rehydrated from rows agree on
+   * which keys are there and not merely on what they render as. Key ORDER is
+   * not part of that agreement; see `workspace-node-rows.ts`. Carried over
+   * verbatim from the model this replaces.
    */
   fraction?: number;
 }

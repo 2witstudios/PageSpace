@@ -735,11 +735,40 @@ describe('openConversation rejections', () => {
     ).toBe('already_bound');
   });
 
-  it('should refuse a target with a blank id, which would bind the new pane to nothing for good', () => {
-    // `bind` refuses this and `create` does not, so the fill path and the split
-    // path would otherwise disagree about the same request.
+  it('should refuse a target with a blank id on the FILL path, which would bind the pane to nothing for good', () => {
+    // Placement finds an unbound pane, so this falls through to `bind`. It is
+    // the cheaper of the two paths to reach and the one that was already
+    // covered — and it does not pin the mint, which is why the split path
+    // below is stated separately.
     const before = [root(), unbound('picker', 'root-1', 0)];
     expect(refusedWith(openConversation(before, { ...opening, target: { kind: 'chat', id: '  ' } }))).toBe(
+      'invalid_target',
+    );
+  });
+
+  it('should refuse a target with a blank id on the SPLIT path, which MINTS the pane already bound', () => {
+    // The path that puts the unreadable row in the table. Both panes are
+    // terminals, so nothing is replaceable, placement has to split, and the
+    // newcomer is minted already carrying the target — `open` → `splitInto` →
+    // `create`, never reaching `bind` and never reaching its guard.
+    //
+    // A blank id is stored happily by Postgres (`text NOT NULL` is satisfied by
+    // `''`) and then rejected by `nodeFromRow`, which rejects the whole set
+    // rather than filtering it — so every subsequent read of the workspace
+    // throws, and the read is the only way in.
+    const before = [root(), terminal('a', 'root-1', 0), terminal('b', 'root-1', 1)];
+    expect(refusedWith(openConversation(before, { ...opening, target: { kind: 'chat', id: '  ' } }))).toBe(
+      'invalid_target',
+    );
+  });
+
+  it('should refuse a target with a blank id into an EMPTY grid, which has no pane to fall back on', () => {
+    // The third route to a bound pane, after fill and split: a workspace whose
+    // grid is empty mints straight into the root. There is no pane here for
+    // `bind` to refuse through and no split to compose, so this is `create` on
+    // its own — the case that had nothing behind it once the command layer
+    // stopped stating the rule itself.
+    expect(refusedWith(openConversation([root()], { ...opening, target: { kind: 'chat', id: '' } }))).toBe(
       'invalid_target',
     );
   });

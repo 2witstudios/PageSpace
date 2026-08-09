@@ -12,13 +12,33 @@
  *
  * **Why absence is preserved exactly.** `fraction` on the node side is optional
  * and its absence IS a state ("my parent is unsized"), never an explicit null.
- * A node rehydrated from rows must be byte-identical to the one the algebra
- * built, because the client holds the algebra's version optimistically while
- * the server holds the rehydrated one: any difference — `{}` vs
- * `{fraction: null}` vs `{fraction: undefined}` — makes every write look like a
- * change and puts the two planes permanently out of step. The same holds for
- * `axis` on a pane and `target` on an unbound pane, which is why those columns
- * are dropped rather than nulled through.
+ * A node rehydrated from rows must be STRUCTURALLY IDENTICAL to the one the
+ * algebra built, down to which keys are present — `{}` vs `{fraction: null}`
+ * vs `{fraction: undefined}` are three different things and the round trip
+ * preserves which one you had. That is what the property suite next door pins
+ * with `toStrictEqual`, and it matters because the client holds the algebra's
+ * version optimistically while the server holds the rehydrated one: a
+ * difference makes every write look like a change and puts the two planes
+ * permanently out of step. The same holds for `axis` on a pane and `target` on
+ * an unbound pane, which is why those columns are dropped rather than nulled
+ * through.
+ *
+ * **What is NOT promised: key ORDER, and therefore not byte identity.** The two
+ * producers disagree about where `fraction` goes — `withFraction`
+ * (`workspace-node-algebra.ts`) appends it by spread, so it lands after
+ * `target`, while the transform below emits it before — so a sized pane the
+ * algebra built and the same pane rehydrated are deep-equal and not
+ * byte-equal. This is stated rather than fixed because key order is a property
+ * no test can hold across every future construction site, and a guarantee
+ * nothing enforces is worse than none: it invites exactly the code below.
+ *
+ * The consequence is concrete and adjacent. `workspace-layout-verbs.ts:152-155`
+ * documents the existing store's change detection as "a `JSON.stringify`
+ * comparison of the grid it just read against the grid it is about to write". A
+ * store that reuses that idiom on NODES sees every write as a change: no
+ * idempotence, a rev bump per retry, a re-broadcast per unrelated edit. Change
+ * detection over nodes compares fields — the algebra's own `sameNode` is the
+ * shape of it — never bytes.
  *
  * **Why `rootId` is not on the node, and what that costs.** It scopes a row to
  * its workspace; it says nothing about the node's identity or shape, and no

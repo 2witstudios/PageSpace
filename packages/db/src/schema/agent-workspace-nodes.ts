@@ -182,6 +182,20 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
    * That is exactly the detached case — it falls out of the semantics rather
    * than needing an exemption — and it is why constraint 3 above exists to
    * give those rows their own cascade path.
+   *
+   * ITS NAME IN THE DATABASE IS TRUNCATED. Drizzle derives
+   * `agent_workspace_nodes_rootId_parentId_agent_workspace_nodes_rootId_id_fk`,
+   * which is 72 characters, and Postgres cuts every identifier to 63 — so the
+   * constraint actually present is
+   * `agent_workspace_nodes_rootId_parentId_agent_workspace_nodes_roo`. The
+   * migration applies fine (Postgres only NOTICEs). Any future
+   * `ALTER TABLE … DROP CONSTRAINT` must name the truncated form, and giving it
+   * an explicit short name is a rename that needs its own migration.
+   *
+   * The cascade is also why `applyNodeWrite`
+   * (`packages/lib/src/agent-workspaces/workspace-node-algebra.ts`) applies
+   * `put` before `drop`: a collapse drops a container whose children are being
+   * REPARENTED, and dropping first would take them with it.
    */
   parentFk: foreignKey({
     columns: [table.rootId, table.parentId],
