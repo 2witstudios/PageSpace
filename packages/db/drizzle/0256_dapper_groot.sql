@@ -65,11 +65,27 @@
 DO $$
 DECLARE orphan_panes bigint; orphan_threads bigint;
 BEGIN
-  SELECT count(*) INTO orphan_panes FROM agent_workspace_panes p
-   WHERE NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+  -- Scoped to LIVE workspaces, because that is what the derivation covers. An
+  -- ended workspace is never derived, so its pane rows correctly have no node
+  -- and counting them refuses a database the backfill migrated perfectly.
+  SELECT count(*) INTO orphan_panes
+    FROM agent_workspace_panes p
+    JOIN agent_workspaces w ON w.id = p."workspaceId"
+   WHERE w."endedAt" IS NULL
+     AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
                       WHERE n."rootId" = p."workspaceId");
-  SELECT count(*) INTO orphan_threads FROM conversations c
-   WHERE c."workspaceId" IS NOT NULL
+  -- Same scoping, plus the membership predicate the derivation itself applies:
+  -- a dismissed or inactive thread is deliberately NOT a member, so it has no
+  -- node BY DESIGN. Counting it here is what made this block refuse a correct
+  -- migration — the pre-flight was written against an idea of the derivation
+  -- rather than the derivation, and then the dismissed-thread fix moved the
+  -- derivation further away from it.
+  SELECT count(*) INTO orphan_threads
+    FROM conversations c
+    JOIN agent_workspaces w ON w.id = c."workspaceId"
+   WHERE w."endedAt" IS NULL
+     AND c."isActive"
+     AND c."closedInWorkspaceAt" IS NULL
      AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
                       WHERE n."targetKind" = 'chat' AND n."targetId" = c.id);
   IF orphan_panes > 0 OR orphan_threads > 0 THEN
