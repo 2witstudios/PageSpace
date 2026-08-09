@@ -60,6 +60,7 @@ import {
   type ChatPaneReference,
   type WorkspaceBackfillSource,
   type WorkspaceDerivation,
+  type WorkspaceCensus,
 } from '@pagespace/lib/agent-workspaces/workspace-node-backfill';
 
 // One-shot ops script — runs on the unthrottled migration pool, not the
@@ -317,20 +318,26 @@ export interface BackfillOptions {
   quiet?: boolean;
 }
 
-export interface BackfillTotals {
+export type BackfillTotals = {
   workspacesScanned: number;
   alreadyMigrated: number;
   written: number;
   skipped: number;
   failed: number;
-  panesIn: number;
-  conversationsIn: number;
-  shellsIn: number;
-  membersIn: number;
-  nodesOut: number;
-  paneNodesOut: number;
-  detachedOut: number;
-  membershipDropped: number;
+  /**
+   * DERIVED from `WorkspaceCensus`, not restated. These counters were declared
+   * here by hand, and when the lib renamed `detachedOut` to `seatedOut` this
+   * file kept the old name: `census.detachedOut` read `undefined`, every total
+   * became `NaN`, and the operator's per-workspace readout — the one thing
+   * standing between a bad derivation and an irreversible one-shot migration —
+   * printed `panes 2→NaN`. Nothing caught it, because `scripts/` is in no
+   * tsconfig. Deriving the shape is what makes the next rename a compile error
+   * rather than a silent `NaN`.
+   */
+} & Pick<
+  WorkspaceCensus,
+  'panesIn' | 'conversationsIn' | 'shellsIn' | 'membersIn' | 'nodesOut' | 'paneNodesOut' | 'seatedOut' | 'membershipDropped'
+> & {
   notes: Record<string, number>;
   skips: Record<string, number>;
 }
@@ -348,7 +355,7 @@ function emptyTotals(): BackfillTotals {
     membersIn: 0,
     nodesOut: 0,
     paneNodesOut: 0,
-    detachedOut: 0,
+    seatedOut: 0,
     membershipDropped: 0,
     notes: {},
     skips: {},
@@ -485,7 +492,7 @@ function recordCensus(totals: BackfillTotals, derived: WorkspaceDerivation): voi
   totals.membersIn += census.membersIn;
   totals.nodesOut += census.nodesOut;
   totals.paneNodesOut += census.paneNodesOut;
-  totals.detachedOut += census.detachedOut;
+  totals.seatedOut += census.seatedOut;
   totals.membershipDropped += census.membershipDropped;
   for (const note of derived.notes) {
     totals.notes[note.code] = (totals.notes[note.code] ?? 0) + 1;
@@ -496,9 +503,9 @@ function censusLine(derived: WorkspaceDerivation): string {
   const c = derived.census;
   const notes = derived.notes.length === 0 ? '' : ` · ${derived.notes.map((note) => note.code).join(',')}`;
   return (
-    `${c.workspaceId}: panes ${c.panesIn}→${c.paneNodesOut - c.detachedOut}, ` +
+    `${c.workspaceId}: panes ${c.panesIn}→${c.paneNodesOut - c.seatedOut}, ` +
     `threads ${c.conversationsIn}, shells ${c.shellsIn}, ` +
-    `members ${c.membersIn}→${c.paneNodesOut}, detached ${c.detachedOut}, nodes ${c.nodesOut}${notes}`
+    `members ${c.membersIn}→${c.paneNodesOut}, seated ${c.seatedOut}, nodes ${c.nodesOut}${notes}`
   );
 }
 
@@ -516,7 +523,7 @@ function report(totals: BackfillTotals, dryRun: boolean): void {
   console.log(`  shells in               : ${totals.shellsIn}`);
   console.log(`  members in              : ${totals.membersIn}`);
   console.log(`  pane nodes out          : ${totals.paneNodesOut}`);
-  console.log(`  of which detached       : ${totals.detachedOut}`);
+  console.log(`  of which seated         : ${totals.seatedOut}`);
   console.log(`  total nodes out         : ${totals.nodesOut}`);
   console.log(`  membership dropped      : ${totals.membershipDropped}`);
   console.log('');
