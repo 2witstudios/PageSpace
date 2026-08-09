@@ -35,6 +35,7 @@ import {
   detachedOf,
   findNode,
   type PaneNode,
+  type PaneTarget,
   type RootNode,
   type SplitNode,
   type WorkspaceNode,
@@ -55,6 +56,20 @@ function pane(id: string, parentId: string | null, position: number): PaneNode {
 /** A pane rendering its picker: in the workspace, showing nothing yet. */
 function unbound(id: string, parentId: string | null, position: number): PaneNode {
   return { nodeType: 'pane', id, parentId, position, target: null };
+}
+
+/**
+ * A pane bound to a target the caller names. `pane` derives a chat target from
+ * the node id, which is what keeps every other fixture's bindings distinct —
+ * so the tests about two nodes naming ONE target have to spell the target out.
+ */
+function showing(
+  id: string,
+  parentId: string | null,
+  position: number,
+  target: PaneTarget,
+): PaneNode {
+  return { nodeType: 'pane', id, parentId, position, target };
 }
 
 /** The accepted write, or a failure naming the code that came back instead. */
@@ -146,6 +161,33 @@ describe('create', () => {
     const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
     const result = create(before, { nodeId: 'fresh', target: null, parentId: 'root-1', index: 0.5 });
     expect(refusedWith(result)).toBe('invalid_index');
+  });
+
+  it('should refuse a pane minted onto a conversation another node already shows', () => {
+    // The database states this as `UNIQUE (targetId) WHERE targetKind = 'chat'`,
+    // so the write would come back a raw constraint violation — a failure the
+    // model already knew was impossible, arriving as something the client cannot
+    // interpret and after the optimistic pane is already on screen.
+    const before = [root(), showing('a', 'root-1', 0, { kind: 'chat', id: 'conv-1' })];
+    const result = create(before, {
+      nodeId: 'fresh',
+      target: { kind: 'chat', id: 'conv-1' },
+      parentId: 'root-1',
+    });
+    expect(refusedWith(result)).toBe('target_already_shown');
+  });
+
+  it('should mint a second pane onto one page, which the storage deliberately permits', () => {
+    // Chat-scoped, exactly as the unique index is. Opening one page twice is a
+    // thing users do, and an algebra stricter than its storage is a second rule
+    // nobody can see.
+    const before = [root(), showing('a', 'root-1', 0, { kind: 'page', id: 'page-1' })];
+    const after = applied(
+      before,
+      create(before, { nodeId: 'fresh', target: { kind: 'page', id: 'page-1' }, parentId: 'root-1' }),
+    );
+    expect(findNode(after, 'fresh')).toMatchObject({ target: { kind: 'page', id: 'page-1' } });
+    expect(validateTree(after)).toEqual({ ok: true });
   });
 
   it('should mint a parked pane when given no parent, because detached is a state and not a second act', () => {
@@ -344,6 +386,72 @@ describe('bind', () => {
     // chose the other side of that deliberately.
     const before = [root(), pane('a', 'root-1', 0)];
     const result = bind(before, { nodeId: 'a', target: { kind: 'page', id: 'page-1' } });
+    expect(refusedWith(result)).toBe('already_bound');
+  });
+
+  it('should refuse a conversation another node in the workspace already shows', () => {
+    // One conversation → one workspace → at most one pane, which the table
+    // enforces as `UNIQUE (targetId) WHERE targetKind = 'chat'`. The algebra is
+    // where a caller is supposed to learn this, BEFORE the optimistic bind is
+    // applied and the write goes out to be answered with a raw index violation.
+    const before = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'chat', id: 'conv-1' }),
+      unbound('b', 'root-1', 1),
+    ];
+    const result = bind(before, { nodeId: 'b', target: { kind: 'chat', id: 'conv-1' } });
+    expect(refusedWith(result)).toBe('target_already_shown');
+  });
+
+  it('should refuse a conversation only a PARKED node shows, because detaching is not unbinding', () => {
+    // A detached pane is still a member of the workspace and still holds its
+    // binding — and the unique index does not read `parentId` at all, so a
+    // rule that let a parked node's conversation be re-bound would be a rule
+    // the storage goes on refusing.
+    const before = [
+      root(),
+      showing('parked', null, 0, { kind: 'chat', id: 'conv-1' }),
+      unbound('b', 'root-1', 0),
+    ];
+    const result = bind(before, { nodeId: 'b', target: { kind: 'chat', id: 'conv-1' } });
+    expect(refusedWith(result)).toBe('target_already_shown');
+  });
+
+  it('should still fill a slot with a page a second pane already shows', () => {
+    const before = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'page', id: 'page-1' }),
+      unbound('b', 'root-1', 1),
+    ];
+    const after = applied(before, bind(before, { nodeId: 'b', target: { kind: 'page', id: 'page-1' } }));
+    expect(findNode(after, 'b')).toMatchObject({ target: { kind: 'page', id: 'page-1' } });
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should still fill a slot with a terminal a second pane already shows', () => {
+    // The constraint is chat-scoped and terminals sit outside it. Extending the
+    // rule to them would put the algebra ahead of the storage it validates for,
+    // and the stricter of two rules that disagree is the invisible one.
+    const before = [
+      root(),
+      showing('a', 'root-1', 0, { kind: 'terminal', id: 'shell-1' }),
+      unbound('b', 'root-1', 1),
+    ];
+    const after = applied(
+      before,
+      bind(before, { nodeId: 'b', target: { kind: 'terminal', id: 'shell-1' } }),
+    );
+    expect(findNode(after, 'b')).toMatchObject({ target: { kind: 'terminal', id: 'shell-1' } });
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should refuse a pane re-bound to the very conversation it already shows as already_bound', () => {
+    // The pane showing the target IS the node being bound, so nothing is being
+    // shown twice — the fault is that a binding is for life, which is a
+    // different bug with a different fix. Pinned so the new rule cannot drift
+    // into answering for this one.
+    const before = [root(), pane('a', 'root-1', 0)];
+    const result = bind(before, { nodeId: 'a', target: { kind: 'chat', id: 'conv-a' } });
     expect(refusedWith(result)).toBe('already_bound');
   });
 

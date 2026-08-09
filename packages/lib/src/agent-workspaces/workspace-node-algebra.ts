@@ -75,7 +75,10 @@ export interface NodeWrite {
  * two are kept distinct even where they rhyme: `unknown_parent` means the
  * parent the CALLER named is not there, while `dangling_parent` means a node
  * already in the set points at nothing. Same shape, different bug, different
- * fix.
+ * fix. `target_already_shown` and the validator's `duplicate_chat_target` are
+ * the same pairing: the first is the conversation the CALLER named being
+ * already on another node, the second is a set that shows one conversation
+ * twice however it came to.
  */
 export type NodeOperationCode =
   | TreeViolationCode
@@ -90,6 +93,7 @@ export type NodeOperationCode =
   | 'not_sizable'
   | 'parent_in_subtree'
   | 'root_immutable'
+  | 'target_already_shown'
   | 'unknown_node'
   | 'unknown_parent';
 
@@ -249,6 +253,44 @@ function isSlot(index: number, size: number): boolean {
 }
 
 /**
+ * The OTHER node already showing this target, if there is one — the check that
+ * makes `bind` and `create` refuse what the database would.
+ *
+ * A conversation is bound to at most one node anywhere, which the table states
+ * as `UNIQUE (targetId) WHERE targetKind = 'chat'`. Without this the client
+ * applies the bind optimistically, the write goes out, and the answer is a raw
+ * unique-constraint violation: a failure the model already knew was impossible,
+ * arriving in a form the caller cannot interpret and after the state it has to
+ * unwind is already on screen. The algebra is where a caller learns this.
+ *
+ * CHAT ONLY, and keyed by kind rather than by id alone. Pages and terminals sit
+ * outside the index deliberately — opening one page in two panes is a
+ * legitimate thing a user does — and `targetId` is polymorphic, so a
+ * conversation id and a page id may coincide without either being a collision.
+ * An algebra stricter than the storage it validates for is a second rule nobody
+ * can see, and the two then drift.
+ *
+ * A DETACHED node counts. It is off the grid and still a member of the
+ * workspace, still holding its binding, still one row under an index that does
+ * not read `parentId` at all.
+ */
+function shownElsewhere(
+  nodes: readonly WorkspaceNode[],
+  target: PaneTarget,
+  exceptNodeId: string,
+): WorkspaceNode | undefined {
+  if (target.kind !== 'chat') return undefined;
+  return nodes.find(
+    (node) =>
+      node.id !== exceptNodeId &&
+      node.nodeType === 'pane' &&
+      node.target !== null &&
+      node.target.kind === 'chat' &&
+      node.target.id === target.id,
+  );
+}
+
+/**
  * The one exit every operation takes: the result is validated, and an operation
  * that would produce an invalid tree is REFUSED, never repaired.
  *
@@ -335,6 +377,20 @@ export function create(nodes: readonly WorkspaceNode[], input: CreateInput): Nod
   // quietly ate a pane.
   if (findNode(nodes, nodeId) !== undefined) {
     return reject('duplicate_id', `the workspace already holds a node "${nodeId}"`);
+  }
+
+  // Beside it, because it is the same kind of fault: a create naming something
+  // the workspace already holds. A pane minted already bound is bound for life,
+  // so this is the only moment the conflict can be refused rather than
+  // discovered from the index.
+  if (target !== null) {
+    const taken = shownElsewhere(nodes, target, nodeId);
+    if (taken !== undefined) {
+      return reject(
+        'target_already_shown',
+        `node "${taken.id}" already shows chat "${target.id}"; a conversation renders in at most one pane`,
+      );
+    }
   }
 
   if (parentId !== null && findNode(nodes, parentId) === undefined) {
@@ -532,6 +588,11 @@ export interface BindInput {
  * two `move`s one layer up — the old pane leaves, a new one arrives — which
  * keeps "this rectangle" and "this conversation" separable, so closing a view
  * never reads as discarding what it showed.
+ *
+ * And only a conversation NO OTHER node shows — see {@link shownElsewhere}. The
+ * database refuses that binding, so the algebra has to refuse it first or the
+ * caller learns it from a raw index violation with the optimistic edit already
+ * applied.
  */
 export function bind(nodes: readonly WorkspaceNode[], input: BindInput): NodeOperationResult {
   const { nodeId, target } = input;
@@ -556,6 +617,17 @@ export function bind(nodes: readonly WorkspaceNode[], input: BindInput): NodeOpe
   // notice. This is the only place it can be caught.
   if (target.id.trim() === '') {
     return reject('invalid_target', `pane "${nodeId}" was given a ${target.kind} target with no id`);
+  }
+  // AFTER `already_bound`, so a pane re-bound to the very target it shows keeps
+  // answering with that code. Nothing is being shown twice there — the fault is
+  // that a binding is for life, which is a different bug with a different fix,
+  // and `shownElsewhere` excludes this node for the same reason.
+  const taken = shownElsewhere(nodes, target, nodeId);
+  if (taken !== undefined) {
+    return reject(
+      'target_already_shown',
+      `node "${taken.id}" already shows chat "${target.id}"; a conversation renders in at most one pane`,
+    );
   }
 
   return settle(nodes, upsertNodes(nodes, [{ ...node, target }]));

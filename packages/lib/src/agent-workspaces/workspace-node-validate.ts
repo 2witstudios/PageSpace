@@ -12,6 +12,14 @@
  * detached split and a pane with an axis are already unspellable, so nothing
  * here re-checks them.
  *
+ * With ONE deliberate exception, stated last: a conversation is bound to at
+ * most one node. That is a domain rule rather than a structural one, and it is
+ * here because it is a property of a SET of nodes that the TABLE also enforces
+ * (`UNIQUE (targetId) WHERE targetKind = 'chat'`) — and this function is what
+ * runs before every write. A rule the storage refuses and the model permits is
+ * a rejection the client can only receive as a raw constraint error, too late
+ * to do anything with.
+ *
  * **It validates and never repairs.** The only outputs are `ok: true` and a
  * violation; there is no branch anywhere below that reassigns a `parentId`,
  * and there must never be one. A parent that does not resolve is a REJECTED
@@ -24,9 +32,9 @@
  *
  * Violations are reported in a FIXED order, so one bad tree always yields one
  * code: node cap, duplicate ids, root count, dangling parent, cycle,
- * reachability, depth, split arity, pane leafness, fractions, ordering. The
- * order is not arbitrary — each check assumes what the ones before it
- * established. Everything that resolves a node needs ids to be unique;
+ * reachability, depth, split arity, pane leafness, fractions, ordering, chat
+ * bindings. The order is not arbitrary — each check assumes what the ones
+ * before it established. Everything that resolves a node needs ids to be unique;
  * everything that walks a parent pointer needs the dangling check to have
  * passed; the depth walk needs the cycle check to have passed, which is what
  * lets it run without a visited set; and the fraction SUM needs its terms
@@ -77,7 +85,8 @@ export type TreeViolationCode =
   | 'fraction_mixed'
   | 'fraction_not_finite'
   | 'fraction_sum'
-  | 'position_contiguity';
+  | 'position_contiguity'
+  | 'duplicate_chat_target';
 
 function violation(code: TreeViolationCode, detail: string): TreeValidation {
   return { ok: false, code, detail };
@@ -335,6 +344,43 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
         `${where} hold positions [${positions.join(', ')}]; expected a contiguous 0-based run`,
       );
     }
+  }
+
+  // A conversation is bound to at most ONE node, anywhere — the model's side of
+  // `UNIQUE (targetId) WHERE targetKind = 'chat'`. A conversation belongs to
+  // exactly one workspace (`conversations.workspaceId`, permanent — moving a
+  // thread is a FORK, never a rebind), so one conversation → one workspace → at
+  // most one pane, and a set naming it twice is a set the storage refuses.
+  //
+  // It lives here, and not only in `bind`/`create`, because THIS is what every
+  // write path runs. The wire primitive is an upsert of a node SET, so a client
+  // that assembled its own nodes never goes through the algebra's operations —
+  // and without this the duplicate would be learned from a raw index violation,
+  // after the optimistic edit is already on screen and in a form the client
+  // cannot interpret. It is the same rule stated where the write can see it.
+  //
+  // LAST, and deliberately: it is the only DOMAIN invariant in a function whose
+  // others are all structural, and a tree that is also misnumbered or cyclic has
+  // a fault that makes it unrenderable rather than merely unstorable. Nothing
+  // below the line needs what it establishes, so it also costs the checks above
+  // it nothing.
+  //
+  // CHAT ONLY, keyed by kind and not by id alone. Pages and terminals carry no
+  // such index — opening one page in two panes is a legitimate thing a user
+  // does — and `targetId` is polymorphic, so a conversation id and a page id
+  // may coincide without either being a collision. An algebra stricter than its
+  // storage is a second rule nobody can see, and the two drift.
+  const showing = new Map<string, string>();
+  for (const node of nodes) {
+    if (node.nodeType !== 'pane' || node.target === null || node.target.kind !== 'chat') continue;
+    const holder = showing.get(node.target.id);
+    if (holder !== undefined) {
+      return violation(
+        'duplicate_chat_target',
+        `nodes "${holder}" and "${node.id}" both show chat "${node.target.id}"; a conversation renders in at most one pane`,
+      );
+    }
+    showing.set(node.target.id, node.id);
   }
 
   return { ok: true };
