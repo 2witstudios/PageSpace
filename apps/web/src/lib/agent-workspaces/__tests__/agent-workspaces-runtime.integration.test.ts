@@ -273,12 +273,15 @@ describe('the cap is a property of the tree, enforced by the write that changes 
       workspaceId: workspace.id,
     });
 
-    // Refused, and the refusal is the CAP's — collapsed to the one answer this
-    // route gives for "you cannot have this back", the same shape a nonexistent
-    // id gets.
+    // Refused, and the refusal SAYS IT IS THE CAP. It used to collapse into
+    // `not_in_session` — the same shape a nonexistent id gets — which told the
+    // caller nothing about a thread that is theirs, exists, and is one freed
+    // slot away from returning. The module doc promises "a workspace that
+    // filled up in the meantime refuses"; this is that promise, kept in the
+    // type. The route answers 409 rather than joining the 404 shape.
     expect(
       await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
-    ).toBe('not_in_session');
+    ).toBe('session_full');
     expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
 });

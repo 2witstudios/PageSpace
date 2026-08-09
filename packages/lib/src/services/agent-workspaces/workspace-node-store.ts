@@ -298,13 +298,32 @@ export async function readChatTargetHolders(
  * derived — never the caller's payload. This function decides nothing: it does
  * not validate, does not compare, and does not know what a tree is.
  *
- * **DELETE first, then ONE upsert.** The order is what keeps the table's global
+ * **RELEASE first, then ONE upsert.** The order is what keeps the table's global
  * `UNIQUE (targetId) WHERE targetKind = 'chat'` satisfiable when a write moves a
  * conversation from one node to another: upserting first would make two rows
- * hold it for the length of the transaction. The upsert is a SINGLE multi-row
- * statement on purpose — Postgres checks foreign keys at end of statement, so a
- * child and the parent it arrives under may appear in any order within it, and
- * no caller has to topologically sort a tree it already validated.
+ * hold it for the length of the transaction. Releasing has two halves, because
+ * a conversation can leave a node in two different ways:
+ *
+ *  - **The node goes.** `write.drop` is deleted first, which frees whatever it
+ *    held.
+ *  - **The node stays and stops holding it.** This one is not covered by the
+ *    delete, and it is the case a partial unique index punishes hardest. A
+ *    write that hands chat C from `n1` to `n2` while KEEPING both nodes has an
+ *    empty `drop`, so the upsert is the only statement — and a unique index is
+ *    checked as each row is written, not at end of statement. If `n2` is
+ *    written before `n1`, two live rows hold C for an instant and the write is
+ *    rejected even though the tree it asks for is perfectly valid. A SWAP
+ *    (`n1: C→D`, `n2: D→C`) has no row order that avoids it at all.
+ *
+ * So every node named in `put` has its chat binding cleared before the upsert
+ * restates it. Any row still holding one of those conversations afterwards is a
+ * node the write did not mention, which is a genuine duplicate in the final
+ * tree — and `validateTree` has already refused it upstream.
+ *
+ * The upsert itself is a SINGLE multi-row statement on purpose — Postgres checks
+ * foreign keys at end of statement, so a child and the parent it arrives under
+ * may appear in any order within it, and no caller has to topologically sort a
+ * tree it already validated. Only the unique index needs the help.
  *
  * The rev mint doubles as the serializing row lock, exactly as
  * `agent_workspace_layout_revs`' did — and lives in its own table so that lock
@@ -334,6 +353,21 @@ export async function writeWorkspaceNodes(
   }
 
   if (write.put.length > 0) {
+    // The second half of the release — see the docblock. Scoped to `chat`
+    // because that is the only kind the partial index covers, and to the ids
+    // this write is about to restate, so it can never disturb a node the write
+    // did not name.
+    await executor
+      .update(agentWorkspaceNodes)
+      .set({ targetKind: null, targetId: null })
+      .where(
+        and(
+          eq(agentWorkspaceNodes.rootId, workspaceId),
+          inArray(agentWorkspaceNodes.id, write.put.map((node) => node.id)),
+          eq(agentWorkspaceNodes.targetKind, 'chat'),
+        ),
+      );
+
     const now = new Date();
     await executor
       .insert(agentWorkspaceNodes)

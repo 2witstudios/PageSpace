@@ -98,35 +98,38 @@ async function seedTree(workspaceId: string, nodes: WorkspaceNode[]): Promise<vo
   await writeWorkspaceNodes(db, { workspaceId, write: { put: nodes, drop: [] } });
 }
 
+// FILE-SCOPED, so every describe below builds on the same owner and agent page.
+// It used to live inside the first describe, which meant a second one ran with
+// no fixtures at all — and after `afterAll` had already deleted the user.
+beforeAll(async () => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      'workspace-node-chat-binding.integration.test.ts requires DATABASE_URL: it asserts a ' +
+        'constraint name the database reports, and must fail loudly rather than skip.',
+    );
+  }
+  try {
+    await db.select({ id: users.id }).from(users).limit(1);
+  } catch (error) {
+    throw new Error(
+      `workspace-node-chat-binding.integration.test.ts could not reach DATABASE_URL: ${String(error)}`,
+    );
+  }
+
+  const owner = await factories.createUser();
+  ownerIds.push(owner.id);
+  const drive = await factories.createDrive(owner.id);
+  const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Binding Agent' });
+  agentPageId = agentPage.id;
+});
+
+afterAll(async () => {
+  if (ownerIds.length > 0) {
+    await db.delete(users).where(inArray(users.id, ownerIds));
+  }
+});
+
 describe('a conversation already shown by a node in ANOTHER workspace', () => {
-  beforeAll(async () => {
-    if (!process.env.DATABASE_URL) {
-      throw new Error(
-        'workspace-node-chat-binding.integration.test.ts requires DATABASE_URL: it asserts a ' +
-          'constraint name the database reports, and must fail loudly rather than skip.',
-      );
-    }
-    try {
-      await db.select({ id: users.id }).from(users).limit(1);
-    } catch (error) {
-      throw new Error(
-        `workspace-node-chat-binding.integration.test.ts could not reach DATABASE_URL: ${String(error)}`,
-      );
-    }
-
-    const owner = await factories.createUser();
-    ownerIds.push(owner.id);
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Binding Agent' });
-    agentPageId = agentPage.id;
-  });
-
-  afterAll(async () => {
-    if (ownerIds.length > 0) {
-      await db.delete(users).where(inArray(users.id, ownerIds));
-    }
-  });
-
   // -------------------------------------------------------------------------
   // 1. The pre-flight — the fact no workspace-scoped read holds
   // -------------------------------------------------------------------------
@@ -233,22 +236,22 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
     expect(isChatTargetUniqueViolation(raised)).toBe(true);
   });
 
-  it('catches the WITHIN-workspace ordering fault too, which the pre-flight by design does not', async () => {
-    // A payload that hands a conversation THIS workspace already holds to a
-    // second node in the same `put`. The result tree is valid — one node shows
-    // it — so `validateTree` passes; the pre-flight skips it because the target
-    // is not being INTRODUCED; and the store's single upsert statement sets the
-    // taker before it clears the holder, so the non-deferrable index fires
-    // mid-statement. Unreachable from the algebra (a binding is for life) and
-    // reachable from a hand-assembled payload, which is what this route accepts.
+  it('ACCEPTS a hand-off within one workspace — the ordering fault the release closed', async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and its own comment asked whoever
+    // changed it to say so here. A payload that hands a conversation this
+    // workspace already holds to a second node in the same `put` produces a
+    // valid tree — one node shows it — so `validateTree` passes and the
+    // pre-flight skips it because the target is not being INTRODUCED. But the
+    // store's single upsert set the taker before it cleared the holder, and a
+    // partial unique index is checked per row rather than at end of statement,
+    // so a legal write was refused mid-statement. The old test pinned that
+    // refusal as "the behaviour today, not the end state".
     //
-    // The backstop is the only thing standing between that and a 502. It is
-    // pinned here because it is the behaviour today, not because it is the end
-    // state: this refusal is STABLE rather than transient, so a client that
-    // rebases and re-sends the same payload gets the same answer. Closing it
-    // properly means releasing a chat target in a statement before the one that
-    // takes it — a change to the store's write, reported rather than smuggled in
-    // here. Whoever makes it should expect this test to need updating.
+    // `writeWorkspaceNodes` now RELEASES the chat bindings of every node it is
+    // about to restate before the upsert restates them, so the index never sees
+    // the pair. The backstop it used to reach is still there and still tested —
+    // by the cross-workspace race above, which is the case no ordering inside
+    // one workspace can fix.
     const workspaceId = await createWorkspace();
     const conversationId = await createConversation();
     await seedTree(workspaceId, [
@@ -269,15 +272,16 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
       viewerId: ownerIds[0],
     });
 
-    expect(result.status).toBe('conflict');
-    if (result.status !== 'conflict') return;
-    expect(result.code).toBe('target_already_shown');
-    // No id is named: nothing was INTRODUCED, so the backstop has nothing to
-    // name and says the fact instead of guessing.
-    expect(result.detail).toBe(
-      'the database refused this write: a conversation cannot be shown by two nodes at once',
-    );
-    expect(result.snapshot.rev).toBe(before.rev);
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+
+    const after = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const holder = after.nodes.find((node) => node.nodeType === 'pane' && node.target?.id === conversationId);
+    expect(holder?.id).toBe('taker');
+    // And exactly one node holds it — the rule the index states, still stated.
+    expect(
+      after.nodes.filter((node) => node.nodeType === 'pane' && node.target?.id === conversationId),
+    ).toHaveLength(1);
   });
 
   it('does NOT claim the single-root index, which raises the very same sqlstate', async () => {
@@ -303,5 +307,73 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
     // Same sqlstate, different index — and the detector says no.
     expect(String(raised)).not.toContain(CHAT_TARGET_UNIQUE_INDEX);
     expect(isChatTargetUniqueViolation(raised)).toBe(false);
+  });
+});
+
+describe('moving a conversation between nodes that BOTH survive the write', () => {
+  /**
+   * The store's write order, end to end, for the one shape a delete cannot
+   * help with.
+   *
+   * `writeWorkspaceNodes` deletes before it upserts, which frees whatever a
+   * removed node was holding. But a write that hands a conversation from one
+   * node to another while KEEPING BOTH has an empty `drop` — so the upsert is
+   * the only statement, and a partial unique index is checked as each row is
+   * written rather than at end of statement. Without the release step this is a
+   * duplicate-key error on a tree that is perfectly valid, and a swap has no row
+   * order that avoids it.
+   *
+   * `packages/db/src/__tests__/agent-workspace-nodes-chat-index.test.ts` pins the
+   * index behaviour itself, on raw SQL. This pins that THIS FUNCTION respects
+   * it — remove the release from `writeWorkspaceNodes` and these two go red.
+   *
+   * Found in review of PR #2378 (CodeRabbit).
+   */
+  it('SWAPS two conversations in one write', async () => {
+    const workspaceId = await createWorkspace();
+    const convA = await createConversation();
+    const convB = await createConversation();
+    await seedTree(workspaceId, [root, chatPane('n1', 0, convA), chatPane('n2', 1, convB)]);
+
+    await writeWorkspaceNodes(db, {
+      workspaceId,
+      write: { put: [chatPane('n1', 0, convB), chatPane('n2', 1, convA)], drop: [] },
+    });
+
+    const { nodes } = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const bound = nodes
+      .filter((node): node is Extract<WorkspaceNode, { nodeType: 'pane' }> => node.nodeType === 'pane')
+      .map((node) => [node.id, node.target?.id] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    expect(bound).toEqual([
+      ['n1', convB],
+      ['n2', convA],
+    ]);
+  });
+
+  it('hands a conversation to a node that stays, unbinding the one that had it', async () => {
+    const workspaceId = await createWorkspace();
+    const conv = await createConversation();
+    await seedTree(workspaceId, [
+      root,
+      chatPane('n1', 0, conv),
+      { nodeType: 'pane', id: 'n2', parentId: 'root', position: 1, target: null },
+    ]);
+
+    await writeWorkspaceNodes(db, {
+      workspaceId,
+      write: {
+        put: [
+          { nodeType: 'pane', id: 'n1', parentId: 'root', position: 0, target: null },
+          chatPane('n2', 1, conv),
+        ],
+        drop: [],
+      },
+    });
+
+    const { nodes } = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const holder = nodes.find((node) => node.nodeType === 'pane' && node.target?.id === conv);
+    expect(holder?.id).toBe('n2');
   });
 });

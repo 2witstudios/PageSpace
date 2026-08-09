@@ -14,11 +14,13 @@
  * that had to be kept in agreement at four call sites, and it is now one row.
  * The two clauses that disappeared did not become someone else's job — they
  * stopped existing. A history-deleted thread has its NODE removed by the delete
- * (`expelConversationFromSession`), and a closed thread is a node that MOVED,
- * so it is still a member and still counted.
+ * (`expelConversationFromSession`), and so does a CLOSED one: closing is the
+ * same single removal, not a move to somewhere off the screen.
  *
- * That last one is a deliberate behaviour change and it is asserted below
- * rather than left to be discovered: closing no longer frees a cap slot.
+ * An earlier cut of this model let a closed thread keep a parentless node and
+ * stay a member, and this suite pinned that. It is gone — a member is somewhere
+ * or is not a member — so closing frees a cap slot again and reopening is an
+ * ordinary admission that consumes one.
  *
  * It also pins the `executor` parameter, which exists so a caller holding its
  * own connection is counted ON THAT CONNECTION rather than having this module
@@ -69,14 +71,16 @@ async function createWorkspace(): Promise<string> {
  * seeded directly: what is under test is a COUNT over existing state, so the
  * rows are state, not the output of a writer.
  *
- * `attached` is a LOCATION. A parked node (`parentId: null`) is a thread the
- * user closed, and it is still a member, which is exactly what this suite is
- * here to pin.
+ * EVERY seeded node is under the root, because there is nowhere else. The
+ * `attached` option this helper used to take chose between a node under the
+ * root and one with `parentId: null` — "in the workspace, off the screen" —
+ * and that state no longer exists at any layer: `validateTree` calls it
+ * `null_parent`, `nodeFromRow` throws on it, and the table's root CHECK is
+ * biconditional, so the database refuses the row outright.
  */
 async function seedConversation(opts: {
   workspaceId: string | null;
   isActive?: boolean;
-  attached?: boolean;
   executor?: Executor;
 }): Promise<string> {
   const id = createId();
@@ -93,7 +97,7 @@ async function seedConversation(opts: {
     await executor.insert(agentWorkspaceNodes).values({
       id: createId(),
       rootId: opts.workspaceId,
-      parentId: opts.attached === true ? await rootOfWorkspace(opts.workspaceId, executor) : null,
+      parentId: await rootOfWorkspace(opts.workspaceId, executor),
       position: 0,
       nodeType: 'pane',
       targetKind: 'chat',
@@ -184,13 +188,20 @@ describe('countOpenConversations — the one membership count, on a real databas
   // WHAT DOES NOT COUNT
   // ---------------------------------------------------------------------------
 
-  it('COUNTS a thread that is off the grid — closing changes a location, not a membership', async () => {
-    // The behaviour change, pinned rather than discovered. Under the column,
-    // closing freed a cap slot; under a `move` it does not, because the thread
-    // is still in the workspace and one `move` from being on screen again.
+  it('counts every node the workspace holds, because holding one IS membership', async () => {
+    // THIS TEST USED TO SEED A THREAD "off the grid" — a node with
+    // `parentId: null` — and assert it still counted, on the reasoning that
+    // closing was a MOVE and a moved thread was still a member. The one-removal
+    // correction deleted that state: closing DESTROYS the node, so there is no
+    // longer a way to be a member and not be somewhere, and the database now
+    // refuses the row the old fixture inserted.
+    //
+    // What the old test was really pinning survives and is stronger for it: the
+    // count is of MEMBERSHIP, and membership is the presence of a row. Nothing
+    // about where the row sits enters the predicate.
     const workspaceId = await createWorkspace();
-    await seedConversation({ workspaceId, attached: true });
-    await seedConversation({ workspaceId, attached: false });
+    await seedConversation({ workspaceId });
+    await seedConversation({ workspaceId });
 
     expect(await countOpenConversations(workspaceId)).toBe(2);
   });
@@ -231,31 +242,37 @@ describe('countOpenConversations — the one membership count, on a real databas
   // CLOSE / REOPEN SYMMETRY
   // ---------------------------------------------------------------------------
 
-  it('is UNMOVED by a close and a reopen — both are moves, and the count is of members', async () => {
+  it('FREES A SLOT on close and consumes one on reopen — both are the one removal and an ordinary admission', async () => {
+    // THE INVERSE OF WHAT THIS PINNED BEFORE, and the inversion is the point.
+    // This test asserted the count was UNMOVED by a close, because closing was
+    // a `move` to no parent and the thread stayed a member. Closing is a
+    // `destroy` now — the single removal — so a closed thread is a member of
+    // nothing, its slot is freed, and reopening it is an ordinary admission
+    // that consumes one again (which is why `reopen` can answer `session_full`).
+    //
+    // The old shape only worked because a parentless pane was storable. It is
+    // not: the root CHECK is biconditional.
     const workspaceId = await createWorkspace();
-    await seedConversation({ workspaceId, attached: true });
-    const toggled = await seedConversation({ workspaceId, attached: true });
+    await seedConversation({ workspaceId });
+    const toggled = await seedConversation({ workspaceId });
     expect(await countOpenConversations(workspaceId)).toBe(2);
 
-    const rootId = await rootOfWorkspace(workspaceId, db);
-
-    // Closing: the node moves out of the tree and stays in the workspace.
-    await db
-      .update(agentWorkspaceNodes)
-      .set({ parentId: null })
-      .where(eq(agentWorkspaceNodes.targetId, toggled));
-    expect(await countOpenConversations(workspaceId)).toBe(2);
-
-    // Reopening: the same node moves back. Nothing was minted, nothing freed.
-    await db
-      .update(agentWorkspaceNodes)
-      .set({ parentId: rootId })
-      .where(eq(agentWorkspaceNodes.targetId, toggled));
-    expect(await countOpenConversations(workspaceId)).toBe(2);
-
-    // Removing membership — what a history-delete does — is what drops it.
+    // Closing: the node is destroyed, and the slot goes with it.
     await db.delete(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.targetId, toggled));
     expect(await countOpenConversations(workspaceId)).toBe(1);
+
+    // Reopening: a new node, seated under the root like any other admission.
+    await db.insert(agentWorkspaceNodes).values({
+      id: createId(),
+      rootId: workspaceId,
+      parentId: await rootOfWorkspace(workspaceId, db),
+      position: 1,
+      nodeType: 'pane',
+      targetKind: 'chat',
+      targetId: toggled,
+      updatedAt: new Date(),
+    });
+    expect(await countOpenConversations(workspaceId)).toBe(2);
   });
 
   // ---------------------------------------------------------------------------
