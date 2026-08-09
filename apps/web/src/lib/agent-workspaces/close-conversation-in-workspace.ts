@@ -40,7 +40,28 @@ export type CloseConversationOutcome = 'closed' | 'already_closed' | 'not_in_ses
 /** How the membership write answered the removal. */
 export type DismissConversationOutcome = 'dismissed' | 'not_a_member' | 'refused';
 
-export interface CloseConversationInSessionDeps {
+/**
+ * The row facts this decision gates on. Deliberately the MINIMUM: the deps are
+ * generic over whatever richer row the caller's read actually returns (see
+ * `announceClosed`), so the production wiring can hand its emit context
+ * straight through without this module having to name it.
+ */
+export interface ConversationCloseSubject {
+  /**
+   * The conversation's OWNER. Workspace access and conversation ownership are
+   * different questions and neither substitutes for the other — see the
+   * ownership gate in `closeConversationInSessionWith`.
+   */
+  userId: string;
+  /**
+   * History soft-delete. A history-deleted thread has no listing left to
+   * close; its node is removed by the delete itself, so closing one is
+   * `already_closed` rather than an act with anything to do.
+   */
+  isActive: boolean;
+}
+
+export interface CloseConversationInSessionDeps<TRow extends ConversationCloseSubject = ConversationCloseSubject> {
   /**
    * Row facts for the ownership gate.
    *
@@ -49,29 +70,40 @@ export interface CloseConversationInSessionDeps {
    * lock, which is the only place the answer cannot go stale between the check
    * and the act.
    */
-  findConversation: (conversationId: string) => Promise<{
-    /**
-     * The conversation's OWNER. Workspace access and conversation ownership are
-     * different questions and neither substitutes for the other — see the
-     * ownership gate in `closeConversationInSessionWith`.
-     */
-    userId: string;
-    /**
-     * History soft-delete. A history-deleted thread has no listing left to
-     * close; its node is removed by the delete itself, so closing one is
-     * `already_closed` rather than an act with anything to do.
-     */
-    isActive: boolean;
-  } | null>;
+  findConversation: (conversationId: string) => Promise<TRow | null>;
   /** THE MEMBERSHIP WRITE — `destroy` the thread's node. */
   dismissConversation: (input: {
     conversationId: string;
     workspaceId: string;
   }) => Promise<DismissConversationOutcome>;
+  /**
+   * ANNOUNCE THE CLOSE ON THE DIRECTORY PLANE — `conversation:closed`.
+   *
+   * A dep rather than a caller-side follow-up because THIS function is the only
+   * place that knows a close actually happened: every other answer below is a
+   * refusal wearing the same shape, and a caller re-deriving "did it close" from
+   * the returned string is a second copy of this switch.
+   *
+   * **Why it exists at all, since the membership write already broadcasts.**
+   * Closing is a node `destroy`, and that write emits `workspace:nodes-updated`
+   * — the TREE plane. The sidebar's rows are not the tree: `AgentsSidebar`'s
+   * `conversationRows` is "keyed by the listing and never by the tree", and the
+   * store the tree event feeds deliberately ignores workspaces it is not
+   * already tracking. So the structural broadcast cannot, even in principle,
+   * take a row out of the listing cache — only the directory event can, and
+   * for the window in which nothing emitted one, a closed thread stayed in the
+   * sidebar until the 120s backstop poll. Regression caught by
+   * `apps/e2e/tests/18-sidebar-directory-live.spec.ts`, which blocks the
+   * listing fetch at the network so that only the event can move the row.
+   *
+   * Fire-and-forget by contract: a broadcast that fails must not un-succeed a
+   * committed close.
+   */
+  announceClosed: (row: TRow) => void;
 }
 
-export async function closeConversationInSessionWith(
-  deps: CloseConversationInSessionDeps,
+export async function closeConversationInSessionWith<TRow extends ConversationCloseSubject>(
+  deps: CloseConversationInSessionDeps<TRow>,
   { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<CloseConversationOutcome> {
   const row = await deps.findConversation(conversationId);
@@ -95,6 +127,10 @@ export async function closeConversationInSessionWith(
   const outcome = await deps.dismissConversation({ conversationId, workspaceId });
   switch (outcome) {
     case 'dismissed':
+      // AFTER the write, and only on the branch that wrote. Announcing beside
+      // the call would announce the refusals too, which is the failure mode
+      // that reads as "the row vanished and came back".
+      deps.announceClosed(row);
       return 'closed';
     // "This workspace does not hold that thread" and "the tree would not take
     // the removal" collapse to one answer, the same shape a nonexistent id gets.

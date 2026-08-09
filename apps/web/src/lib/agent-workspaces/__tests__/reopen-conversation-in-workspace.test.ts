@@ -22,6 +22,7 @@ import {
 interface MockDeps extends ReopenConversationInSessionDeps {
   findConversation: ReturnType<typeof vi.fn>;
   readmitConversation: ReturnType<typeof vi.fn>;
+  announceReopened: ReturnType<typeof vi.fn>;
 }
 
 const OWNER = 'user-1';
@@ -31,6 +32,7 @@ function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): Moc
   return {
     findConversation: vi.fn(async () => ({ userId: OWNER, isActive: true })),
     readmitConversation: vi.fn(async () => 'readmitted' as const),
+    announceReopened: vi.fn(),
     ...overrides,
   } as MockDeps;
 }
@@ -90,5 +92,46 @@ describe('reopenConversationInSessionWith', () => {
   it('collapses a tree refusal — a workspace with no root — into the same answer', async () => {
     deps.readmitConversation.mockResolvedValue('refused');
     expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
+  });
+
+  /**
+   * The mirror of the close side's announcement, missing for the same reason:
+   * both emits lived on the deleted `closedInWorkspaceAt` repository writers.
+   * The listener answers this one with a re-read rather than local surgery,
+   * which is correct — a reopen names a row the cache does NOT have — but a
+   * re-read that is never triggered is still the 120s poll.
+   */
+  describe('the directory announcement', () => {
+    it('announces a reopen that actually re-admitted', async () => {
+      const row = { userId: OWNER, isActive: true, id: 'conv-1', rev: 3 };
+      deps.findConversation.mockResolvedValue(row);
+
+      expect(await reopenConversationInSessionWith(deps, input)).toBe('reopened');
+      expect(deps.announceReopened).toHaveBeenCalledWith(row);
+    });
+
+    it('stays silent when the thread was already on the grid — nothing changed', async () => {
+      deps.readmitConversation.mockResolvedValue('already_attached');
+
+      expect(await reopenConversationInSessionWith(deps, input)).toBe('already_open');
+      expect(deps.announceReopened).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a refusal', 'refused' as const],
+      ['a thread the workspace does not hold', 'not_a_member' as const],
+    ])('stays silent for %s', async (_label, outcome) => {
+      deps.readmitConversation.mockResolvedValue(outcome);
+
+      await reopenConversationInSessionWith(deps, input);
+      expect(deps.announceReopened).not.toHaveBeenCalled();
+    });
+
+    it('stays silent for a history-deleted thread, which never reaches the write', async () => {
+      deps.findConversation.mockResolvedValue({ userId: OWNER, isActive: false });
+
+      expect(await reopenConversationInSessionWith(deps, input)).toBe('history_deleted');
+      expect(deps.announceReopened).not.toHaveBeenCalled();
+    });
   });
 });

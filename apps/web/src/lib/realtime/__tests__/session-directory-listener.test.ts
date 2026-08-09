@@ -163,14 +163,92 @@ describe('useSessionDirectoryListener', () => {
   });
 
   /**
-   * Both used to drop the row from ONE session's cache entry, keyed on the
-   * payload's `workspaceId`. Same story as `created`: no key, so a re-read.
+   * `conversation:closed` — THE ONE EVENT THAT MUST NEED NO REQUEST.
+   *
+   * This block used to assert a re-read, alongside `:deleted`, on the reasoning
+   * that killed `created`'s surgery: the payload no longer names a workspace,
+   * so there is no key to aim a patch at. That reasoning does not survive
+   * contact with a REMOVAL. Dropping a row needs to know the conversation, not
+   * the workspace, and the cache can find it on its own — a thread is a member
+   * of at most one workspace (the node table's global chat-target uniqueness),
+   * so the sweep matches at most one row.
+   *
+   * Downgrading it to a re-read is what `18-sidebar-directory-live.spec.ts`
+   * caught in CI: with the listing GET blocked at the network — which is how
+   * that spec proves the sidebar reacts to the EVENT and not to a poll — the
+   * closed row never left. In production it left after the 120s backstop, which
+   * is precisely the staleness this plane exists to delete. The test that
+   * should have caught it was this one, and it was asserting the bug.
    */
-  describe('conversation:closed / :deleted', () => {
-    it.each(['conversation:closed', 'conversation:deleted'])('%s should re-read the session listings', (event) => {
+  describe('conversation:closed — served locally, with no request at all', () => {
+    it('should drop the row with a NON-revalidating local write', () => {
       renderHook(() => useSessionDirectoryListener());
 
-      fire(event, base());
+      fire('conversation:closed', base());
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      const [, updater, options] = mockMutate.mock.calls[0];
+      // An updater AND `revalidate: false` — a bare one-argument `mutate` here
+      // is a refetch, which is the regression.
+      expect(updater).toBeTypeOf('function');
+      expect(options).toEqual({ revalidate: false });
+    });
+
+    it('should remove exactly the closed conversation, leaving its siblings', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:closed', base());
+
+      const next = applyMutation(0, listing([
+        { conversationId: CONV, agentPageId: null, lastMessageAt: null },
+        { conversationId: 'conv-survivor', agentPageId: null, lastMessageAt: null },
+      ]));
+      expect(next.sessions[0].conversations.map((c) => c.conversationId)).toEqual(['conv-survivor']);
+    });
+
+    /**
+     * The payload cannot say which workspace, so the updater sweeps all of
+     * them. That is safe rather than broad: the uniqueness index means only one
+     * can hold the thread. Pinned because "sweeps every session" and "corrupts
+     * every session" are one bad filter apart.
+     */
+    it('should leave a session that does not hold the conversation untouched', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:closed', base());
+
+      const other = { workspaceId: 'ws-2', sessionId: 'ws-2', conversations: [
+        { conversationId: 'conv-elsewhere', agentPageId: null, lastMessageAt: null },
+      ] };
+      const next = applyMutation(0, {
+        sessions: [{ workspaceId: SESSION, sessionId: SESSION, conversations: [
+          { conversationId: CONV, agentPageId: null, lastMessageAt: null },
+        ] }, other],
+      });
+      expect(next.sessions[0].conversations).toEqual([]);
+      expect(next.sessions[1].conversations.map((c) => c.conversationId)).toEqual(['conv-elsewhere']);
+    });
+
+    it('given a cache entry that has not loaded, should write nothing rather than throw', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:closed', base());
+
+      expect(applyMutation(0, undefined)).toBeUndefined();
+    });
+  });
+
+  /**
+   * `:deleted` KEEPS ITS RE-READ, and the asymmetry with `:closed` above is
+   * deliberate. A history delete is not only a listing removal — it changes
+   * what other surfaces under this key show — and no spec asks it to survive a
+   * blocked network. Same story as `created`: no key, so a re-read.
+   */
+  describe('conversation:deleted', () => {
+    it('should re-read the session listings', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:deleted', base());
 
       expect(mockMutate).toHaveBeenCalledTimes(1);
       expect(mockMutate.mock.calls[0]).toHaveLength(1);

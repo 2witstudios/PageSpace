@@ -216,8 +216,35 @@ export function revalidateWorkspaceListings(mutate: ScopedMutator): void {
  * cross-file mirror of `AgentPanes.tsx`'s own `recordClosedConversation`,
  * for a caller (the sidebar) with no local SWR binding of its own. See
  * `forgetWorkspaceInCache` for why `mutate` is a parameter, not an import.
+ *
+ * **`sessionId: null` means "whichever workspace holds it".** The directory
+ * listener calls it that way, because a `conversation:closed` event no longer
+ * names a workspace: membership moved out of `conversations."workspaceId"` and
+ * into `agent_workspace_nodes`, so the event names the conversation and nothing
+ * else. Sweeping every session's row is not a widening — the node table's
+ * global chat-target uniqueness means a thread is a member of AT MOST ONE
+ * workspace, so at most one row can match, and a row that is not there is
+ * simply not patched. It is the same search `touchConversationInCache` above
+ * already does for the same reason.
+ *
+ * A caller that DOES hold the workspace id still passes it: the sidebar's own
+ * optimistic close knows exactly which row it is touching, and saying so keeps
+ * that write as narrow as its knowledge.
+ *
+ * Local and NON-REVALIDATING in both forms, which for the listener's call is
+ * the whole contract rather than an optimization: closing names a row to
+ * remove, so the cache can serve it without asking, and
+ * `apps/e2e/tests/18-sidebar-directory-live.spec.ts` blocks the listing fetch
+ * at the network to prove no request is involved. Answering a close with a
+ * revalidate instead puts that row back on the 120s backstop poll whenever the
+ * refetch is slow, blocked or failing — the exact staleness this plane exists
+ * to delete.
  */
-export function forgetConversationInCache(mutate: ScopedMutator, sessionId: string, conversationId: string): void {
+export function forgetConversationInCache(
+  mutate: ScopedMutator,
+  sessionId: string | null,
+  conversationId: string,
+): void {
   void mutate(
     isWorkspaceListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
@@ -225,7 +252,7 @@ export function forgetConversationInCache(mutate: ScopedMutator, sessionId: stri
         ? {
             ...current,
             sessions: current.sessions.map((session) =>
-              session.workspaceId === sessionId
+              sessionId === null || session.workspaceId === sessionId
                 ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
                 : session,
             ),

@@ -30,6 +30,8 @@
  * whole decision in the workspace's own advisory lock and transaction.
  */
 
+import type { ConversationCloseSubject } from './close-conversation-in-workspace';
+
 export type ReopenConversationOutcome =
   | 'reopened'
   | 'already_open'
@@ -39,21 +41,30 @@ export type ReopenConversationOutcome =
 /** How the membership write answered the re-admission. */
 export type ReadmitConversationOutcome = 'readmitted' | 'already_attached' | 'not_a_member' | 'refused';
 
-export interface ReopenConversationInSessionDeps {
+export interface ReopenConversationInSessionDeps<TRow extends ConversationCloseSubject = ConversationCloseSubject> {
   /** Row facts for the ownership and history gates. Same shape the close side reads. */
-  findConversation: (conversationId: string) => Promise<{
-    userId: string;
-    isActive: boolean;
-  } | null>;
+  findConversation: (conversationId: string) => Promise<TRow | null>;
   /** THE MEMBERSHIP WRITE — `admit` the thread back into the workspace. */
   readmitConversation: (input: {
     conversationId: string;
     workspaceId: string;
   }) => Promise<ReadmitConversationOutcome>;
+  /**
+   * ANNOUNCE THE REOPEN — `conversation:reopened`. The exact mirror of
+   * `announceClosed`, and missing for the same reason it was: both call sites
+   * were deleted with the `closedInWorkspaceAt` repository writers that used to
+   * hold them.
+   *
+   * The listener answers this one with a RE-READ rather than local surgery, and
+   * that asymmetry is correct: a close names a row to remove and a reopen names
+   * a row the cache does not have, so only one of the two can be served without
+   * asking the server.
+   */
+  announceReopened: (row: TRow) => void;
 }
 
-export async function reopenConversationInSessionWith(
-  deps: ReopenConversationInSessionDeps,
+export async function reopenConversationInSessionWith<TRow extends ConversationCloseSubject>(
+  deps: ReopenConversationInSessionDeps<TRow>,
   { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<ReopenConversationOutcome> {
   const row = await deps.findConversation(conversationId);
@@ -72,6 +83,10 @@ export async function reopenConversationInSessionWith(
   const outcome = await deps.readmitConversation({ conversationId, workspaceId });
   switch (outcome) {
     case 'readmitted':
+      // Only the branch that actually re-admitted. `already_attached` below is
+      // a retry meeting a row that is already there — nothing changed, so
+      // nothing is announced.
+      deps.announceReopened(row);
       return 'reopened';
     // Already on screen: a retry, or a second tab that got there first.
     case 'already_attached':
