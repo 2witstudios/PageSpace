@@ -7,15 +7,19 @@
  * session (the reopen route's job).
  *
  * POST → 200 { ok: true, alreadyInSession: boolean } — wraps
- * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), the ONE
- * place `conversations.workspaceId` is ever written.
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), which
+ * ADMITS the thread: one node in `agent_workspace_nodes`. Membership IS that
+ * row. It used to be `conversations.workspaceId`, which nothing writes now.
  *
  * `checkSessionAccess` below authorizes the SESSION — drive-membership-wide,
  * so any drive member reaches another member's session. That is NOT
- * ownership of the CONVERSATION: the claim primitive's own guarded UPDATE
- * carries `userId = :caller` in its WHERE, which is what stops a drive
- * co-member from claiming a co-member's own sessionless thread into their
- * session. Neither check substitutes for the other.
+ * ownership of the CONVERSATION: the claim primitive refuses a row whose
+ * `userId` is not the caller's (`claim-conversation-in-workspace.ts`, the
+ * `row.userId !== userId` gate, answering `not_found` so an id-guessing caller
+ * cannot tell "not yours" from "not there"). That gate used to be a `userId =
+ * :caller` predicate in the WHERE of the membership UPDATE; the membership
+ * write is a node now, so the check is stated in the decider instead of being
+ * a side-effect of the row it updated. Neither check substitutes for the other.
  */
 
 import { NextResponse } from 'next/server';
