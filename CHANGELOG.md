@@ -108,13 +108,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - **Closing the last pane no longer ends your session** — it leaves the session open with an empty
-  layout, and the threads still listed. Ending a session is now only the explicit action on the
-  session row, so there is one way to end one instead of two.
-- **A thread you close stays in the session's list** — closing takes it off the screen rather than
-  out of the session, and you can open it again from where you left it. Previously closing removed
-  it from the list entirely. If you were using close to tidy the sidebar, that is the behaviour that
-  changed; the trade is that a thread can no longer quietly leave a session it belongs to, which is
-  what allowed the same conversation to end up claimed by a different session.
+  layout. Ending a session is its own act, aimed at the session rather than inferred from the last
+  pane going away, so closing something can never end more than you asked it to.
 
 ### Added
 
