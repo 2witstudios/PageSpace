@@ -68,18 +68,13 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
           setSpawnPick(null);
           onSpawned?.();
           // useAgentSurfaceStore has no shell concept — land by selecting the
-          // session there, then placing the pane directly on the workspace
-          // store, mirroring AgentPanes.tsx's handleReattachShell. The shell
-          // is named independently server-side (spawnShell, no name passed) —
-          // use its own name, not the session label, so the pane title
-          // matches the shell row shown in the sidebar.
+          // session there, then placing the node directly on the workspace
+          // store. The shell's NAME is no longer passed: a node holds an id and
+          // nothing else, and the title is resolved per viewer beside the tree
+          // (`targets[]`), so the pane header and the sidebar row now read the
+          // same authorized answer instead of two independently-carried copies.
           selectSession(created.session.workspaceId);
-          useAgentWorkspaceStore.getState().openConversation(created.session.workspaceId, {
-            kind: 'terminal',
-            name: created.shellName,
-            targetId: created.shellId,
-            agentPageId: null,
-          });
+          useAgentWorkspaceStore.getState().openShell(created.session.workspaceId, created.shellId);
           return;
         }
         const created = await post<{ session: { workspaceId: string }; conversationId: string }>(

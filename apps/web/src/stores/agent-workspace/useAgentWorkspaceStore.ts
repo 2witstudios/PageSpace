@@ -1,144 +1,202 @@
-import { create } from 'zustand';
+import { create as createStore } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { z } from 'zod';
-import { type PaneScope, type PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
 import {
-  workspaceLayoutSnapshotSchema,
-  workspaceLayoutStaleResponseSchema,
-  workspaceLayoutVerbResponseSchema,
-  type WorkspaceLayoutSnapshot,
-} from '@pagespace/lib/agent-workspaces/workspace-layout-wire';
+  bind,
+  create,
+  destroy,
+  move,
+  type NodeWrite,
+} from '@pagespace/lib/agent-workspaces/workspace-node-algebra';
+import {
+  closePane as closePaneCommand,
+  compile,
+  openConversation as openConversationCommand,
+  openPage as openPageCommand,
+  openShell as openShellCommand,
+  seedRoot,
+  split as splitCommand,
+  type CommandCode,
+  type CommandResult,
+} from '@pagespace/lib/agent-workspaces/workspace-node-commands';
+import {
+  childrenOf,
+  detachedOf,
+  findNode,
+  rootOf,
+  type NodeAxis,
+  type PaneNode,
+  type PaneTarget,
+  type WorkspaceNode,
+} from '@pagespace/lib/agent-workspaces/workspace-node';
+import type {
+  WorkspaceNodeSnapshotResponse,
+  WorkspaceNodeTarget,
+} from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import {
-  applyVerbLocal,
-  isLastPane,
-  panesOf,
-  type PaneState,
-  type WorkspaceLayoutVerb,
-  type WorkspaceState,
-} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { resolveOpenPlacement } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { adoptServerGrid, replayPending, type PendingVerbOp } from './verb-queue';
-import { carryPaneLabelsForward, hasUnknownBoundTarget, paneLabelIndex } from './pane-labels';
+  emptyWrite,
+  isAdoptableTree,
+  isEmptyWrite,
+  makePending,
+  rebasePending,
+  unionWrites,
+  type PendingWrite,
+} from './node-writes';
 
 /**
- * Where each session's pane layout lives — as a DERIVED CACHE of the server's
- * relational grid, not as its own source of truth (epic Phase 3, the #2202
- * machine-panes pattern).
+ * ONE LIVE TREE PER WORKSPACE — the client half of the node cutover.
  *
- * **The equation.** For every session this store holds a server snapshot
- * (`base` + `rev`) and a FIFO of verbs applied locally but not yet
- * acknowledged; what components render is always
- * `replayPending(base, pending)` (`verb-queue.ts`). Every mutating action
- * reduces through the SHARED reducer (`applyVerbLocal`, which the server's
- * verb engine runs too — one function, two callers), enqueues the verb, and
- * POSTs it EAGERLY, one at a time, in order:
+ * **The equation.** For every workspace this store holds a server snapshot
+ * (`base` + `rev` + `targets`) and a FIFO of WRITE-SETS applied locally but not
+ * yet acknowledged; what components render is always
+ * `rebasePending(base, pending)` (`node-writes.ts`). Every mutating action
+ * reduces through the SHARED command layer
+ * (`@pagespace/lib/agent-workspaces/workspace-node-commands`, which the server's
+ * agent tools run too — one function, two callers), enqueues the write it
+ * produced, and POSTs the outstanding queue as ONE `{baseRev, put, drop}`:
  *
- *   - **200** → the op landed (or replayed, or no-oped): drop it from the
- *     queue and adopt the returned `{rev, grid}` as the new snapshot —
- *     including when `applied: false`, because a no-op still tells us the
- *     current truth, and refusing it would leave the client one rev behind
- *     forever and 409 on everything after.
- *   - **409** → `baseRev` was stale: the body IS the truth. Adopt it, replay
- *     everything still unacked (the 409'd op included — it did not land),
- *     and re-POST from the head with the new rev.
- *   - **`workspace:updated`** (another device, or a server-side AI placement)
- *     → drop if `rev <= known`; no-op if it carries an opId we still have in
- *     flight (our own echo — our POST's own answer is the authoritative one
- *     and is already on its way); otherwise adopt + replay.
+ *   - **200** → it landed (or was a no-op). Adopt the returned `{rev, nodes,
+ *     targets}` and drop everything that was on the wire.
+ *   - **409** → `baseRev` was stale: the body IS the truth. Adopt it, rebase
+ *     everything still unacked on top, and re-POST.
+ *   - **`workspace:nodes-updated`** (another device, an agent placement, or our
+ *     own echo) → drop if `rev <= known`; otherwise adopt and rebase.
  *
- * **Broadcasts carry no labels** (security review HIGH 1). `session:<id>` is
- * a room, so one payload reaches every member of a shared workspace at once
- * and per-viewer title redaction is not expressible on it; the server ships
- * structure only. Names are this client's own business: known bindings keep
- * their label across a broadcast (`pane-labels.ts`), and a broadcast that
- * introduces a target we have never labelled triggers one
- * `refreshWorkspaceSnapshot` — the access-checked GET, whose labels are
- * resolved for THIS viewer and nobody else.
+ * **What is gone, and why it could go.** The verb queue needed `opId`s, an
+ * idempotency table, `verbAlreadyLanded`, and a per-verb list of which ids each
+ * verb minted — all of it to make a REPLAY safe. A write-set is an upsert of a
+ * node set, so replay is safe by construction and the whole apparatus went with
+ * the shape that needed it. `pane-labels.ts` went too: it existed only to
+ * re-dress a label-free broadcast, and `targets[]` — resolved and redacted once
+ * per viewer on the HTTP reads, riding BESIDE the tree — replaces it. A
+ * broadcast still carries no titles, and it no longer needs to: a tree whose
+ * targets this client has not resolved renders from the ids it does hold, and
+ * the listing read fills the names in.
  *
- * **What this replaced, and why it is gone.** The blob era arbitrated between
- * three copies of the same fact with a debounced PUT, two hydration latches
- * (`hydratedSessionsThisPageLoad`, `adoptServerWorkspaceAsHydrated`) and a
- * localStorage copy of the grid. All of it existed to answer "who wins?" —
- * a question a rev + a replayable queue answers structurally. A stale local
- * seed no longer needs a latch to protect it: it simply 409s once and
- * rebases. THE GRID IS NO LONGER PERSISTED LOCALLY.
+ * **ONE STRUCTURE, so one cache.** The sidebar and the pane grid are two
+ * renderings of what is in here. There is nothing left to synchronise between
+ * them, which is the entire point of the epic — and it is why
+ * {@link AgentWorkspaceState.hydrateFromServer} is careful to return the SAME
+ * object when nothing changed: the sidebar seats every listed workspace on every
+ * revalidation, and a fresh `workspaces[id]` on each of those would re-render
+ * every tree in the app twice a minute.
  *
- * **What is still client-local**, and the only thing localStorage still
- * holds: `activePaneId` and `pendingPickerPaneId`. Focus is view state no row
- * owns (per #2048, deliberately not restored cross-device), so it is kept
- * beside the cache and overlaid on every snapshot that arrives — a remote
- * edit never steals your focus, and a pane that vanished falls back to the
- * first one.
+ * **Client-only guards stay client-only.** The placement policy is the shared
+ * one (`openConversation`'s `open`), but the two refusals a server cannot
+ * evaluate — a pane holding unsaved edits, and a pane showing a conversation
+ * this caller knows is no longer live — are injected as `isReplaceable`.
  *
- * **Client-only guards stay client-only.** `openConversation`/`openPage`
- * refuse to evict a pane with unsaved edits (`useEditingStore` via
- * {@link isPaneDirty}), a non-live conversation or a page pane (issue #2295),
- * a running terminal, or the invoking conversation's own pane. The server
- * cannot evaluate any of those, so this store does NOT emit the server's
- * policy verb (`open_conversation`) — it resolves the policy here and posts
- * the RESULT (`assign_pane`, or `split_right` + `assign_pane`). Server-driven
- * placement uses `open_conversation` with its own narrowings.
+ * **What is still client-local**, and the only thing localStorage holds:
+ * `activeNodeId` and `pendingPickerNodeId`. Focus is view state no row owns (per
+ * #2048, deliberately not restored cross-device), so it is kept beside the cache
+ * and overlaid on every snapshot that arrives — a remote edit never steals your
+ * focus, and a node that vanished falls back to the first pane in the grid.
  *
- * Keyed by SESSION id: the session is the workspace unit (it owns the sandbox
- * every pane shares).
- *
- * **A session is never empty, in both directions.** It is born with its first
- * conversation in its first pane, and closing the LAST pane is intercepted
- * HERE — the store forgets the grid and reports it, so the caller can end the
- * session (tear down its sandbox) as the same act. No `close_pane` verb is
- * sent for it: emptying a session is a lifecycle act (the end route), never a
- * layout verb, which is exactly why the shared reducer no-ops on it.
+ * **A workspace CAN be empty, in both directions.** Closing the last pane leaves
+ * an empty grid and does not end the workspace: that decision used to live half
+ * in the reducer (which no-oped on the last pane, because a two-level grid could
+ * not represent zero) and half in browser code that ended the session. Ending a
+ * workspace is an explicit lifecycle act elsewhere.
  */
 
-/** Focus — the only pane-grid state that is still client-local (and still persisted). */
+/** Focus — the only tree state that is still client-local (and still persisted). */
 interface WorkspaceFocus {
-  activePaneId: string;
-  pendingPickerPaneId: string | null;
+  activeNodeId: string | null;
+  pendingPickerNodeId: string | null;
 }
 
-/** One session's cache bookkeeping. Never read by components; the derived `workspaces` map is. */
+/**
+ * WHAT A COMPONENT RENDERS: one workspace's live tree plus the names beside it.
+ *
+ * `nodes` is the flat list — attached AND detached, in one collection, because
+ * "in the workspace" and "on screen" stopped being two structures. A renderer
+ * that wants only the grid walks from {@link rootOf}; the sidebar renders both,
+ * and the #2373 guard is that it must.
+ */
+export interface WorkspaceTree {
+  workspaceId: string;
+  /** The rev `base` was read at. Local edits do not advance it. */
+  rev: number;
+  nodes: WorkspaceNode[];
+  /**
+   * Resolved, per-viewer titles for the bound nodes — `id`-keyed BESIDE the
+   * tree, never inside it. A target this viewer may not read (or that is gone)
+   * simply has no entry, which is deliberately indistinguishable.
+   */
+  targets: WorkspaceNodeTarget[];
+  /** `null` on an empty grid — a legal resting state, not a missing value. */
+  activeNodeId: string | null;
+  pendingPickerNodeId: string | null;
+}
+
+/** One workspace's cache bookkeeping. Never read by components; `workspaces` is. */
 interface WorkspaceSync {
-  /** The last server snapshot. `null` = the server has no grid for this session. */
-  base: WorkspaceState | null;
+  /** The last server snapshot's nodes. `null` = never read. */
+  base: WorkspaceNode[] | null;
   /** The rev `base` was read at — what the next POST rebases on. */
   rev: number;
-  /** Verbs applied locally, awaiting their POST. Strictly FIFO. */
-  pending: PendingVerbOp[];
-  /** The opId currently on the wire, if any — the serial-send guard. */
-  inFlight: string | null;
-  /** Consecutive transport failures for the head op; resets on any settled answer. */
+  targets: WorkspaceNodeTarget[];
+  /** Write-sets applied locally, awaiting their POST. Strictly FIFO. */
+  pending: PendingWrite[];
+  /** The pending ids currently on the wire — the serial-send guard. */
+  inFlight: string[];
+  /** Consecutive transport failures; resets on any settled answer. */
   attempts: number;
 }
 
 /**
- * Why a session's pending layout work was thrown away.
+ * Why a workspace's pending layout work was thrown away.
  *
- * The store's own reasoning is that showing the user the durable truth beats
- * showing them a local edit that will silently evaporate — but it never showed
- * them anything. Every abandon path (a 403 from the scope gate, a rejected
- * payload, a spent attempt budget) reset `pending` to `[]` and refetched, so
- * the split or resize the user just made vanished with no toast, no log, and no
- * flag anything could render. This is the flag; `AgentPanes` renders it.
- *
- *   refused       a 4xx that is not a 409 — the server will never accept this
- *                 verb. Most often the pane-scope gate saying the target is not
- *                 the caller's to show.
- *   abandoned     the transport failed MAX_TRANSPORT_ATTEMPTS times running.
- *   stale-display the abandon happened AND the resync that was supposed to
- *                 replace it also failed, so what is on screen is neither the
- *                 user's edit nor the server's truth.
+ *   refused        a 4xx that is not a 409 — the server will never accept this
+ *                  write. Most often the target gate saying this is not the
+ *                  caller's to show.
+ *   abandoned      the transport failed MAX_TRANSPORT_ATTEMPTS times running.
+ *   stale-display  the abandon happened AND the resync that was supposed to
+ *                  replace it also failed.
+ *   superseded     new server truth arrived that a local edit can no longer be
+ *                  rebased onto — the node it edited is gone. NEW in the node
+ *                  model, and it is the honest name for the one thing an upsert
+ *                  cannot paper over: re-applying that write would RESURRECT
+ *                  what somebody else destroyed. See `node-writes.ts`.
  */
 export interface WorkspaceQueueError {
-  reason: 'refused' | 'abandoned' | 'stale-display';
+  reason: 'refused' | 'abandoned' | 'stale-display' | 'superseded';
   /** Set once per transition, so a renderer can fire a toast without repeating it. */
   at: number;
 }
 
+/** The `workspace:nodes-updated` payload, as it arrives on either room. */
+export interface WorkspaceNodesUpdatedEvent {
+  workspaceId: string;
+  rev: number;
+  nodes: WorkspaceNode[];
+}
+
+/** The caller-supplied half of "show me this" — see `OpenInput` for the shared half. */
+export interface OpenTargetOptions {
+  /**
+   * Where the user is looking, when the caller knows better than the store's own
+   * focus (a pick made inside one particular pane). A PREFERENCE: one that does
+   * not resolve is simply not honoured.
+   */
+  activeNodeId?: string;
+  /** An agent ADDS a surface: with this set, only an unbound pane may be filled. */
+  preferSplit?: boolean;
+  /** The invoking conversation — its node is never a candidate. */
+  excludeTargetId?: string;
+  /**
+   * When supplied, a BOUND chat node whose conversation is not in this set is
+   * protected from eviction — a thread closed out of the workspace, which an
+   * unrelated later selection has no business displacing (issue #2295).
+   */
+  liveConversationIds?: ReadonlySet<string>;
+}
+
 interface AgentWorkspaceState {
-  /** workspaceId → what to render. Derived: `replayPending(base, pending)` plus the focus overlay. */
-  workspaces: Record<string, WorkspaceState>;
+  /** workspaceId → what to render. Derived: `rebasePending(base, pending)` plus the focus overlay. */
+  workspaces: Record<string, WorkspaceTree>;
   /** workspaceId → the server snapshot + unacked queue behind it. */
   sync: Record<string, WorkspaceSync>;
   /** workspaceId → client-local focus. The ONLY thing this store persists. */
@@ -146,132 +204,79 @@ interface AgentWorkspaceState {
   /** workspaceId → why its queue was dropped, or null once anything settles cleanly. */
   queueErrors: Record<string, WorkspaceQueueError | null>;
 
-  /** Give a session its opening grid, once. Idempotent. */
-  ensureWorkspace(workspaceId: string, scope: PaneScope): void;
   /**
-   * Make a conversation VISIBLE in the session's grid — what a sidebar or
-   * history selection means. Focus the pane already showing it; otherwise
-   * open it in the active pane when that pane is replaceable, or in the first
-   * replaceable pane — never over a TERMINAL (a running PTY loses its only
-   * surface; there is no reattach UI), never over unsaved edits. With nothing
-   * replaceable, split the active pane right.
-   *
-   * `options.liveConversationIds`, when supplied, additionally protects a
-   * chat pane whose target is NOT in that set — e.g. a conversation the user
-   * closed out of this session (`closedInWorkspaceAt`) — AND any page pane (a
-   * deliberate, persisted artifact; a reload's seed effect used to silently
-   * evict agent-opened pages this way) from an unrelated later selection
-   * (issue #2295); both fall through to the split fallback instead, exactly
-   * like a terminal/dirty pane does. Omitted (any caller that hasn't learned
-   * the live set yet), behavior is unchanged — this guard is strictly
-   * additive.
+   * Adopt a `{rev, nodes, targets}` snapshot straight from the server — the
+   * mount GET, a resync, or the sessions listing seating every workspace it
+   * returned.
    */
-  openConversation(
-    workspaceId: string,
-    scope: PaneScope,
-    options?: { liveConversationIds?: ReadonlySet<string> },
-  ): void;
-  /**
-   * Make a PAGE visible in the session's grid — the page-pane sibling of
-   * `openConversation`, sharing its focus-or-replace-or-split policy with two
-   * extra guards (a page pane can hold unsaved edits, and can itself BE the
-   * conversation that asked to open it): `excludeTargetId` (the invoking
-   * conversation's own id, for the agent-driven `open_page_pane` path) is
-   * never replaced, and `options.preferSplit` (that same agent-driven path)
-   * evicts nothing bound at all — an agent ADDS a surface beside what the
-   * user is doing, it never navigates. Used by the picker's "Pages" section
-   * and by `useOpenPagePane`'s resolution.
-   */
-  openPage(
-    workspaceId: string,
-    scope: PaneScope,
-    options?: { excludeTargetId?: string; preferSplit?: boolean },
-  ): void;
-  splitRight(workspaceId: string, fromPaneId: string): void;
-  splitDown(workspaceId: string, fromPaneId: string): void;
-  /**
-   * Close a pane. Closing the LAST pane removes the whole grid and returns
-   * `'session-ended'` — the caller owns the IO that ends the session; the
-   * store owns only the layout fact.
-   */
-  closePane(workspaceId: string, paneId: string): 'closed' | 'session-ended' | 'noop';
-  /** Focus a pane. CLIENT-LOCAL — focus is not a row, so no verb crosses the wire. */
-  selectPane(workspaceId: string, paneId: string): void;
-  assignPane(workspaceId: string, paneId: string, scope: PaneScope): void;
-  /** Unbind a pane back to the picker — a failed mint, first-class rather than a sentinel scope. */
-  resetPane(workspaceId: string, paneId: string): void;
-  /** Retire a pane's picker focus. CLIENT-LOCAL, like `selectPane`. */
-  dismissPicker(workspaceId: string, paneId: string): void;
-  /**
-   * Give a column `widthFraction` of the grid's width (issue #2208). Unlike
-   * focus, sizing IS a row — it restores cross-device and an agent can set it
-   * — so this posts a verb like every other structural mutation, and the
-   * shared reducer owns the clamping and the sibling renormalization.
-   */
-  resizeColumn(workspaceId: string, columnId: string, widthFraction: number): void;
-  /** Give a pane `heightFraction` of ITS COLUMN's height. Column-local; see {@link resizeColumn}. */
-  resizePane(workspaceId: string, paneId: string, heightFraction: number): void;
-  /** Relocate a pane to another column and/or index. `toIndex` omitted = append. */
-  movePane(workspaceId: string, paneId: string, toColumnId: string, toIndex?: number): void;
-  /** Reorder the grid's columns. The list is read as a PREFIX — see the reducer's `reorderColumns`. */
-  reorderColumns(workspaceId: string, columnIds: string[]): void;
-  /**
-   * Point whichever pane is showing `oldConversationId` at its replacement.
-   * Used when the current conversation is deleted and re-minted into the
-   * SAME session (`AgentPageView`'s delete flow) — a no-op if the deleted
-   * conversation was not showing in any pane.
-   */
-  replaceConversation(workspaceId: string, oldConversationId: string, newScope: PaneScope): void;
-  /**
-   * Drop a session's grid entirely (the session was ended elsewhere). Also
-   * abandons anything still queued for it — the rows are gone server-side, so
-   * there is nothing left for those verbs to land on.
-   */
-  forgetWorkspace(workspaceId: string): void;
-  /**
-   * Seat a grid LOCALLY, without claiming to know its rev — the sidebar's
-   * server-listing snapshot for a session `AgentPanes` isn't rendering, and
-   * the rollback path when ending a session fails. Unconditional and
-   * last-write-wins over whatever the store held, and it CLEARS the unacked
-   * queue (a rollback's whole point is that nothing local survives).
-   *
-   * Seating a snapshot at an unknown rev is now safe without any latch: the
-   * first verb posted from it 409s once and rebases on the truth. That is
-   * precisely the arbitration `adoptServerWorkspaceAsHydrated` used to do by
-   * hand.
-   */
-  hydrateWorkspace(workspaceId: string, workspace: WorkspaceState): void;
-  /** Adopt a `{rev, grid}` snapshot straight from the server (the mount GET / a resync). */
-  hydrateFromServer(workspaceId: string, snapshot: WorkspaceLayoutSnapshot): void;
-  /** Apply a `workspace:updated` broadcast. See the module doc for the three-way rule. */
-  applyRemoteUpdate(payload: WorkspaceUpdatedEvent): void;
-  /** Re-read the server's snapshot for a session (mount, socket reconnect, or a give-up). */
+  hydrateFromServer(workspaceId: string, snapshot: WorkspaceNodeSnapshotResponse): void;
+  /** Apply a `workspace:nodes-updated` broadcast. Structural only; carries no titles. */
+  applyRemoteUpdate(payload: WorkspaceNodesUpdatedEvent): void;
   /** Re-read the access-checked snapshot. Resolves false when it could not be read. */
   refreshWorkspaceSnapshot(workspaceId: string): Promise<boolean>;
-}
+  /** Drop a workspace's tree entirely (it was ended elsewhere), and orphan anything in flight. */
+  forgetWorkspace(workspaceId: string): void;
 
-/** The `workspace:updated` payload, as it arrives on the `session:<id>` room. */
-export interface WorkspaceUpdatedEvent {
-  workspaceId: string;
-  rev: number;
-  /** The opId of the verb that caused it, when a verb caused it — how a client spots its own echo. */
-  opId?: string | null;
-  grid: PersistedColumnState[];
-}
+  /** Focus a node. CLIENT-LOCAL — focus is not a row, so nothing crosses the wire. */
+  selectNode(workspaceId: string, nodeId: string): void;
+  /** Retire a node's picker focus. CLIENT-LOCAL, like {@link selectNode}. */
+  dismissPicker(workspaceId: string, nodeId: string): void;
 
-// The 409 body carries no `applied` — nothing was applied — so the two are
-// parsed with different schemas rather than one loose shape.
-const snapshotSchema = workspaceLayoutSnapshotSchema;
-const verbResponseSchema = workspaceLayoutVerbResponseSchema;
-const staleResponseSchema = workspaceLayoutStaleResponseSchema;
+  /**
+   * THE ONE MUTATING FUNNEL: run a command against the live tree, enqueue the
+   * write it produced, and POST it. Returns the refusal code, or `null` when the
+   * command was accepted (including when it accepted and wrote nothing).
+   *
+   * EXPORTED on the store rather than kept private, because a caller composing
+   * several operations into ONE write — an agent's "rearrange these four" — must
+   * not have to publish three intermediate trees to do it. `compile` is the
+   * composer; this is where its single write lands.
+   */
+  runCommand(workspaceId: string, run: (nodes: readonly WorkspaceNode[]) => CommandResult): CommandCode | null;
+
+  /** Give a pane a sibling by putting a container where it was. */
+  splitPane(workspaceId: string, nodeId: string, axis: NodeAxis): void;
+  /**
+   * Take a pane out of the grid and LEAVE IT IN THE WORKSPACE — a `move` to no
+   * parent, never a destroy. Closing the last one leaves an empty grid.
+   */
+  closePane(workspaceId: string, nodeId: string): 'closed' | 'noop';
+  /** Make a conversation visible. See {@link OpenTargetOptions} for the caller's half of the policy. */
+  openConversation(workspaceId: string, conversationId: string, options?: OpenTargetOptions): void;
+  /** Make a page visible — same policy, a kind that cannot be confused with a conversation. */
+  openPage(workspaceId: string, pageId: string, options?: OpenTargetOptions): void;
+  /** Make a shell visible — reattaching the node already holding it when there is one. */
+  openShell(workspaceId: string, shellId: string, options?: OpenTargetOptions): void;
+  /**
+   * Bring a PARKED node back onto the grid, beside where the user is looking.
+   *
+   * The command layer refuses to do this implicitly — `open` answers
+   * `already_bound` for a target a parked node already holds, because minting a
+   * second node for it would put one conversation in two places. Showing it
+   * again is a `move`, and this is the caller naming it. Public because the
+   * sidebar names it too: a parked row's whole affordance is "put this back".
+   */
+  showNode(workspaceId: string, nodeId: string): void;
+  /** Fill an UNBOUND pane. Refuses a bound one: a binding is for life. */
+  bindPane(workspaceId: string, nodeId: string, target: PaneTarget): void;
+  /**
+   * Send a bound pane back to the picker.
+   *
+   * A binding is for life, so this is NOT a rebind: the node is destroyed and a
+   * fresh unbound one takes its slot. THE NODE ID CHANGES, deliberately — a
+   * caller holding the old one is holding a pane that no longer exists, which is
+   * exactly what happened, and the model refuses to let that read as "the same
+   * rectangle, emptied".
+   */
+  unbindPane(workspaceId: string, nodeId: string): void;
+}
 
 /**
- * Transport give-up threshold. A verb that cannot be settled after this many
+ * Transport give-up threshold. A write that cannot be settled after this many
  * consecutive failures (network down, a 5xx, or a workspace so contended that
  * every rebase 409s again) is ABANDONED and the server's snapshot re-read:
- * showing the user the durable truth beats showing them a local edit that
- * will silently evaporate on the next reload. The old debounced PUT dropped
- * such saves the same way, just without ever correcting the display.
+ * showing the user the durable truth beats showing them a local edit that will
+ * silently evaporate on the next reload.
  */
 const MAX_TRANSPORT_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [300, 900, 2400, 5000];
@@ -279,58 +284,39 @@ const RETRY_BACKOFF_MS = [300, 900, 2400, 5000];
 /**
  * A NEW value on every page load, mixed into the counter fallback below.
  *
- * Without it the fallback restarted at 1 on every load, and both id families it
- * mints are compound-PK'd per workspace — so a reload re-minting `col-1` into
- * the same workspace wrote a duplicate id (the 500-then-discard path
- * `verb-queue.ts` documents), and a re-minted `op-1` was worse: the ops table
- * is PK'd `(workspaceId, opId)`, so `findOp` read it as a REPLAY, returned the
- * recorded rev and never applied the verb. No error, no retry, no toast — the
- * user's split or resize simply did not happen (review finding).
- *
- * Not hypothetical: the fallback is taken whenever `crypto.randomUUID` is
- * missing, which means any non-secure context — for this product, an
- * onprem/self-hosted deployment reached over plain HTTP on a LAN address.
- * `Math.random` needs no secure context, so the degraded path now degrades to
- * ugly ids rather than to ids that collide with the previous load's.
+ * Without it the fallback restarted at 1 on every load, and node ids are
+ * compound-PK'd per workspace — so a reload re-minting `pane-1` into the same
+ * workspace would UPSERT over a live pane rather than mint beside it. Taken
+ * whenever `crypto.randomUUID` is missing, i.e. any non-secure context — for
+ * this product, an onprem deployment reached over plain HTTP on a LAN address.
  */
 const FALLBACK_MINT_NONCE = Math.random().toString(36).slice(2, 10);
 
-/**
- * `crypto.randomUUID` where available, with a counter fallback so a
- * non-secure-context browser (or a test environment without it) still mints
- * distinct pane ids rather than colliding on one.
- */
-let paneCounter = 0;
+let nodeCounter = 0;
 function mintId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID()}`;
   }
-  paneCounter += 1;
-  return `${prefix}-${FALLBACK_MINT_NONCE}-${paneCounter}`;
+  nodeCounter += 1;
+  return `${prefix}-${FALLBACK_MINT_NONCE}-${nodeCounter}`;
 }
 
 function emptySync(): WorkspaceSync {
-  return { base: null, rev: 0, pending: [], inFlight: null, attempts: 0 };
+  return { base: null, rev: 0, targets: [], pending: [], inFlight: [], attempts: 0 };
 }
 
 /**
- * Bumped whenever a session's queue is reset from outside it
- * (`forgetWorkspace`, `hydrateWorkspace`). A verb response that comes back
- * carrying an older generation is DROPPED rather than applied — otherwise a
- * slow POST could resurrect a grid the user just ended, or overwrite a
- * rollback with the state it rolled back from. Module-level, so it survives
- * the sync entry itself being deleted.
+ * Bumped whenever a workspace's queue is reset from outside it
+ * (`forgetWorkspace`). A response that comes back carrying an older generation
+ * is DROPPED rather than applied — otherwise a slow POST could resurrect a tree
+ * the user just ended.
  *
- * ENTRIES ARE DELIBERATELY NEVER REMOVED, which is why `drop` bumps rather
- * than deletes (review finding — the Map grows for the lifetime of the tab).
- * Deleting would reset the counter to 0, and a response still in flight from
- * before the drop — minted at generation 0, because this workspace had never
- * been reset — would then MATCH the re-hydrated entry's fresh 0 and be
- * applied: precisely the resurrection the generation exists to prevent. The
- * cost of keeping them is one integer per workspace id the tab has ever
- * opened; the cost of dropping them is the bug. Giving the queue a
- * per-workspace controller created and disposed with the sync entry would
- * retire both, and is the shape to reach for if this ever needs to change.
+ * ENTRIES ARE DELIBERATELY NEVER REMOVED. Deleting would reset the counter to 0,
+ * and a response still in flight from before the drop — minted at generation 0,
+ * because this workspace had never been reset — would then MATCH the re-hydrated
+ * entry's fresh 0 and be applied: precisely the resurrection the generation
+ * exists to prevent. The cost is one integer per workspace id the tab has ever
+ * opened.
  */
 const queueGeneration = new Map<string, number>();
 
@@ -342,72 +328,37 @@ function bumpGeneration(workspaceId: string): void {
   queueGeneration.set(workspaceId, generationOf(workspaceId) + 1);
 }
 
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 /**
  * Test-only full reset. A real page load never needs it; tests, sharing one
- * module scope, do — and resetting `workspaces` ALONE is not enough and never
- * was safe: the rendered grid is derived from `sync`, so a leftover queue
- * would replay a previous test's verbs into the next one's fresh grid.
+ * module scope, do — and resetting `workspaces` ALONE is not enough: the
+ * rendered tree is derived from `sync`, so a leftover queue would replay a
+ * previous test's writes into the next one's fresh tree.
  */
 export function __resetWorkspaceQueuesForTests(): void {
   queueGeneration.clear();
   registeredEditing.clear();
   for (const timeout of retryTimers.values()) clearTimeout(timeout);
   retryTimers.clear();
-  for (const timeout of labelRefreshTimers.values()) clearTimeout(timeout);
-  labelRefreshTimers.clear();
   useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
 }
 
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
 /**
- * Trailing debounce for the label-resolving refetch.
- *
- * A broadcast that introduces a target this client has never labelled is the
- * one case it cannot dress itself, so it goes and reads the access-checked GET.
- * Un-debounced, an agent placing three panes meant three broadcasts and three
- * GETs — and the last one's answer is the only one that could have been
- * complete anyway.
- */
-const LABEL_REFRESH_DEBOUNCE_MS = 150;
-const labelRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function scheduleLabelRefresh(workspaceId: string): void {
-  const existing = labelRefreshTimers.get(workspaceId);
-  if (existing) clearTimeout(existing);
-  labelRefreshTimers.set(
-    workspaceId,
-    setTimeout(() => {
-      labelRefreshTimers.delete(workspaceId);
-      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
-    }, LABEL_REFRESH_DEBOUNCE_MS),
-  );
-}
-
-function cancelLabelRefresh(workspaceId: string): void {
-  const timer = labelRefreshTimers.get(workspaceId);
-  if (timer) {
-    clearTimeout(timer);
-    labelRefreshTimers.delete(workspaceId);
-  }
-}
-
-/**
- * Sessions currently registered with `useEditingStore` — the repo's
- * refresh-protection rule, inherited from the debounced PUT's own
- * `performSave`. Registered while ANY verb is unacked (an auth refresh or an
- * SWR clobber mid-queue would be exactly the interruption the rule exists to
- * prevent), released the moment the queue drains. Tracked here rather than
- * called unconditionally so a drained queue does not re-enter the editing
+ * Workspaces currently registered with `useEditingStore` — the repo's
+ * refresh-protection rule. Registered while ANY write is unacked (an auth
+ * refresh or an SWR clobber mid-queue would be exactly the interruption the rule
+ * exists to prevent), released the moment the queue drains. Tracked here rather
+ * than called unconditionally so a drained queue does not re-enter the editing
  * store on every subsequent render.
  */
 const registeredEditing = new Set<string>();
 
 function syncEditingRegistration(workspaceId: string, queued: boolean): void {
-  const editingId = `workspace-verbs:${workspaceId}`;
+  const editingId = `workspace-nodes:${workspaceId}`;
   if (queued && !registeredEditing.has(workspaceId)) {
     registeredEditing.add(workspaceId);
-    useEditingStore.getState().startEditing(editingId, 'other', { componentName: `workspace-verbs:${workspaceId}` });
+    useEditingStore.getState().startEditing(editingId, 'other', { componentName: editingId });
     return;
   }
   if (!queued && registeredEditing.has(workspaceId)) {
@@ -416,67 +367,132 @@ function syncEditingRegistration(workspaceId: string, queued: boolean): void {
   }
 }
 
+/** Every pane in the grid, depth-first from the root — the order a reader's eye takes. */
+function gridPanesOf(nodes: readonly WorkspaceNode[]): PaneNode[] {
+  const root = rootOf(nodes);
+  if (root === undefined) return [];
+  const panes: PaneNode[] = [];
+  const seen = new Set<string>([root.id]);
+  const walk = (parentId: string): void => {
+    for (const child of childrenOf(nodes, parentId)) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      if (child.nodeType === 'pane') panes.push(child);
+      else if (child.nodeType === 'split') walk(child.id);
+    }
+  };
+  walk(root.id);
+  return panes;
+}
+
 /**
  * What focus should be after a commit.
- *  - `'follow-reducer'`: a local transition just ran and the reducer already
- *    decided where focus goes (a split focuses its new pane, an assign
- *    focuses what it bound) — take its word.
- *  - `'preserve'`: new SERVER truth arrived; keep the user's focus if the
- *    pane still exists, and fall back to the first pane only if it doesn't.
- *    A remote edit must never steal focus.
- *  - an explicit focus: the two client-local actions (`selectPane`,
- *    `dismissPicker`), which are nothing BUT a focus change.
+ *  - `'preserve'`: keep the user's focus if the node still exists, and fall back
+ *    to the first grid pane only if it does not. A remote edit must never steal
+ *    focus, and neither must the user's own edit elsewhere in the tree.
+ *  - an explicit focus: the two client-local actions, which are nothing BUT a
+ *    focus change, and the commands that know where they put something.
  */
-type FocusIntent = 'follow-reducer' | 'preserve' | WorkspaceFocus;
+type FocusIntent = 'preserve' | WorkspaceFocus;
+
+/** Two trees that would render identically — a shallow identity check over the same list. */
+function sameNodeList(left: readonly WorkspaceNode[], right: readonly WorkspaceNode[]): boolean {
+  return left.length === right.length && left.every((node, index) => node === right[index]);
+}
+
+function sameTargetList(left: readonly WorkspaceNodeTarget[], right: readonly WorkspaceNodeTarget[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((target, index) => {
+    const other = right[index];
+    return (
+      target.id === other.id &&
+      target.kind === other.kind &&
+      target.title === other.title &&
+      target.lastMessageAt === other.lastMessageAt &&
+      target.agentPageId === other.agentPageId
+    );
+  });
+}
 
 /**
- * THE single write. Recomputes the rendered state from `sync`, resolves focus
- * per `intent`, stores all three maps, keeps the editing registration honest,
- * and kicks the send pump.
+ * THE single write. Recomputes the rendered tree from `sync`, resolves focus per
+ * `intent`, stores all four maps, keeps the editing registration honest, and
+ * kicks the send pump.
+ *
+ * A write that no longer applies to the base it is landing on is DROPPED here
+ * and reported — see `node-writes.ts` for why re-applying it would be a
+ * resurrection rather than an edit.
  */
 function commit(workspaceId: string, sync: WorkspaceSync, intent: FocusIntent): void {
-  const structural = replayPending(sync.base, workspaceId, sync.pending);
+  const rebased = rebasePending(sync.base ?? [], sync.pending);
+  const settled: WorkspaceSync = { ...sync, pending: rebased.kept };
 
   useAgentWorkspaceStore.setState((state) => {
-    const workspaces = { ...state.workspaces };
-    const focus = { ...state.focus };
+    const previous = state.workspaces[workspaceId];
+    const focusNow = state.focus[workspaceId] ?? null;
 
-    if (structural === null) {
-      delete workspaces[workspaceId];
-      delete focus[workspaceId];
-    } else {
-      const paneIds = new Set(panesOf(structural).map((pane) => pane.id));
-      const desired =
-        intent === 'follow-reducer'
-          ? { activePaneId: structural.activePaneId, pendingPickerPaneId: structural.pendingPickerPaneId }
-          : intent === 'preserve'
-            ? (focus[workspaceId] ?? null)
-            : intent;
-      // Neither the wire nor a saved blob cross-validates that `activePaneId`
-      // names a pane inside `columns` — normalize HERE, at the one place any
-      // grid enters the store, rather than leaving every consumer to grow its
-      // own fallback.
-      const fallbackPaneId = paneIds.has(structural.activePaneId)
-        ? structural.activePaneId
-        : panesOf(structural)[0].id;
-      const activePaneId =
-        desired && paneIds.has(desired.activePaneId) ? desired.activePaneId : fallbackPaneId;
-      const pendingPickerPaneId =
-        desired && desired.pendingPickerPaneId !== null && paneIds.has(desired.pendingPickerPaneId)
-          ? desired.pendingPickerPaneId
-          : null;
-      workspaces[workspaceId] = { ...structural, activePaneId, pendingPickerPaneId };
-      focus[workspaceId] = { activePaneId, pendingPickerPaneId };
-    }
+    // Focus names a node ON THE GRID, and the distinction is not pedantry: a
+    // parked node is a member of the workspace that is not on the screen, so
+    // "where the user is looking" can never be one. Closing the last pane parks
+    // it, and without this the store would keep pointing at it — which then
+    // reaches the placement policy as an `activeNodeId` preference for a
+    // rectangle nobody can see.
+    const gridPanes = gridPanesOf(rebased.nodes);
+    const paneIds = new Set(gridPanes.map((node) => node.id));
+    const desired = intent === 'preserve' ? focusNow : intent;
+    // Neither the wire nor a saved preference cross-validates that
+    // `activeNodeId` names a node inside the tree — normalize HERE, at the one
+    // place any tree enters the store, rather than leaving every consumer to
+    // grow its own fallback. `null` is a legitimate answer now: an empty grid
+    // has nothing to focus, and inventing something would be a lie.
+    const fallbackNodeId = gridPanes[0]?.id ?? null;
+    const activeNodeId =
+      desired?.activeNodeId != null && paneIds.has(desired.activeNodeId) ? desired.activeNodeId : fallbackNodeId;
+    const pendingPickerNodeId =
+      desired?.pendingPickerNodeId != null && paneIds.has(desired.pendingPickerNodeId)
+        ? desired.pendingPickerNodeId
+        : null;
 
-    return { workspaces, focus, sync: { ...state.sync, [workspaceId]: sync } };
+    // Referential stability is load-bearing, not an optimisation: the sidebar
+    // seats every listed workspace on every revalidation, and a fresh object
+    // here re-renders every tree in the app on each of those.
+    const unchanged =
+      previous !== undefined &&
+      previous.rev === settled.rev &&
+      previous.activeNodeId === activeNodeId &&
+      previous.pendingPickerNodeId === pendingPickerNodeId &&
+      sameNodeList(previous.nodes, rebased.nodes) &&
+      sameTargetList(previous.targets, settled.targets);
+
+    const tree: WorkspaceTree = unchanged
+      ? previous
+      : {
+          workspaceId,
+          rev: settled.rev,
+          nodes: rebased.nodes,
+          targets: settled.targets,
+          activeNodeId,
+          pendingPickerNodeId,
+        };
+
+    const focusChanged =
+      focusNow === null || focusNow.activeNodeId !== activeNodeId || focusNow.pendingPickerNodeId !== pendingPickerNodeId;
+
+    return {
+      workspaces: unchanged ? state.workspaces : { ...state.workspaces, [workspaceId]: tree },
+      focus: focusChanged
+        ? { ...state.focus, [workspaceId]: { activeNodeId, pendingPickerNodeId } }
+        : state.focus,
+      sync: { ...state.sync, [workspaceId]: settled },
+    };
   });
 
-  syncEditingRegistration(workspaceId, sync.pending.length > 0);
+  if (rebased.dropped.length > 0) setQueueError(workspaceId, 'superseded');
+  syncEditingRegistration(workspaceId, settled.pending.length > 0);
   void pump(workspaceId);
 }
 
-/** Drop every trace of a session — grid, focus, queue — and orphan anything in flight. */
+/** Drop every trace of a workspace — tree, focus, queue — and orphan anything in flight. */
 function drop(workspaceId: string): void {
   bumpGeneration(workspaceId);
   const timer = retryTimers.get(workspaceId);
@@ -484,10 +500,9 @@ function drop(workspaceId: string): void {
     clearTimeout(timer);
     retryTimers.delete(workspaceId);
   }
-  cancelLabelRefresh(workspaceId);
   syncEditingRegistration(workspaceId, false);
   useAgentWorkspaceStore.setState((state) => {
-    const { [workspaceId]: _grid, ...workspaces } = state.workspaces;
+    const { [workspaceId]: _tree, ...workspaces } = state.workspaces;
     const { [workspaceId]: _focus, ...focus } = state.focus;
     const { [workspaceId]: _sync, ...sync } = state.sync;
     const { [workspaceId]: _err, ...queueErrors } = state.queueErrors;
@@ -495,154 +510,161 @@ function drop(workspaceId: string): void {
   });
 }
 
-/**
- * Apply a verb locally through the shared reducer and enqueue it for the
- * server. A verb the reducer declines (a stale click racing a close, an
- * `ensure` on a grid that already exists) never reaches the queue: there is
- * nothing to converge on.
- */
-function enqueueVerb(workspaceId: string, verb: WorkspaceLayoutVerb): void {
-  const state = useAgentWorkspaceStore.getState();
-  const sync = state.sync[workspaceId] ?? emptySync();
-  const current = state.workspaces[workspaceId] ?? null;
-  if (!applyVerbLocal(current, workspaceId, verb).applied) return;
-  const op: PendingVerbOp = { opId: mintId('op'), baseRev: sync.rev, verb };
-  commit(workspaceId, { ...sync, pending: [...sync.pending, op] }, 'follow-reducer');
-}
-
-function workspaceUrl(workspaceId: string): string {
-  return `/api/agent-workspaces/${encodeURIComponent(workspaceId)}/workspace`;
+function nodesUrl(workspaceId: string): string {
+  return `/api/agent-workspaces/${encodeURIComponent(workspaceId)}/nodes`;
 }
 
 /**
- * Send the head of a session's queue, one at a time. Serial by construction:
- * op N's `baseRev` is only knowable once op N-1 has been answered, which is
- * also why `baseRev` is re-stamped from the CURRENT snapshot here rather than
- * taken from the op's own record.
+ * Send the whole outstanding queue as ONE write, and only one at a time.
+ *
+ * Serial by construction: the wire's `baseRev` is only knowable once the
+ * previous POST has been answered. Coalescing is free and correct — the union
+ * rule is the same one `compile` applies, and the server's own change detection
+ * decides whether any of it mints a rev.
  */
 async function pump(workspaceId: string): Promise<void> {
   const sync = useAgentWorkspaceStore.getState().sync[workspaceId];
-  if (!sync || sync.inFlight !== null || sync.pending.length === 0) return;
+  if (!sync || sync.inFlight.length > 0 || sync.pending.length === 0) return;
   if (retryTimers.has(workspaceId)) return;
 
-  const op = sync.pending[0];
+  const sending = sync.pending;
+  const write = unionWrites(sending.map((entry) => entry.write));
   const generation = generationOf(workspaceId);
-  commit(workspaceId, { ...sync, inFlight: op.opId }, 'preserve');
+  commit(workspaceId, { ...sync, inFlight: sending.map((entry) => entry.id) }, 'preserve');
 
   let response: Response | undefined;
   try {
-    response = await fetchWithAuth(`${workspaceUrl(workspaceId)}/verbs`, {
+    response = await fetchWithAuth(nodesUrl(workspaceId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        opId: op.opId,
-        baseRev: useAgentWorkspaceStore.getState().sync[workspaceId]?.rev ?? op.baseRev,
-        verb: op.verb,
+        baseRev: useAgentWorkspaceStore.getState().sync[workspaceId]?.rev ?? sync.rev,
+        put: write.put,
+        drop: write.drop,
       }),
     });
   } catch {
-    // Transport failure — the op is unchanged and still ours to retry.
+    // Transport failure — the write is unchanged and still ours to retry.
   }
 
-  await settle(workspaceId, op, generation, response);
+  await settle(workspaceId, sending.map((entry) => entry.id), generation, response);
 }
 
-/** Decide what one verb POST's answer means for the queue, then commit it. */
+/** Decide what one POST's answer means for the queue, then commit it. */
 async function settle(
   workspaceId: string,
-  op: PendingVerbOp,
+  sentIds: readonly string[],
   generation: number,
   response: Response | undefined,
 ): Promise<void> {
   // EVERY await happens before the state read. Reading `sync` first and then
-  // awaiting the body would drop any verb enqueued in that window — a real
-  // and routine race (a mint's success callback assigns its pane the instant
-  // its POST resolves, which is exactly when the previous verb's body is
-  // being parsed), and the queue would silently lose the write.
+  // awaiting the body would drop any write enqueued in that window — a real and
+  // routine race (a mint's success callback opens its conversation the instant
+  // its POST resolves, which is exactly when the previous body is being
+  // parsed), and the queue would silently lose the edit.
   const body = response ? await response.json().catch(() => null) : null;
 
   if (generationOf(workspaceId) !== generation) return;
   const sync = useAgentWorkspaceStore.getState().sync[workspaceId];
-  if (!sync || sync.inFlight !== op.opId) return;
-  const rest = sync.pending.filter((queued) => queued.opId !== op.opId);
+  if (!sync) return;
+  const onWire = new Set(sentIds);
+  // Somebody else already settled this send (a `forgetWorkspace` and a
+  // re-hydrate inside the round trip); nothing here is ours to answer for.
+  if (sync.inFlight.length !== sentIds.length || !sync.inFlight.every((id) => onWire.has(id))) return;
+  const rest = sync.pending.filter((entry) => !onWire.has(entry.id));
 
-  // Transport failure, or a server that could not answer: retry the SAME op.
+  // Transport failure, or a server that could not answer: retry the SAME write.
   if (!response || response.status >= 500) {
-    scheduleRetry(workspaceId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
+    scheduleRetry(workspaceId, { ...sync, inFlight: [], attempts: sync.attempts + 1 });
     return;
   }
 
-  if (response.status === 409) {
-    // The STALE schema, not the 200 one: a 409 carries no `applied`, because
-    // nothing was applied. Parsing it with the verb-response shape would fail
-    // on the missing field and turn every rebase into a backoff-and-retry.
-    const parsed = staleResponseSchema.safeParse(body);
-    if (!parsed.success) {
-      scheduleRetry(workspaceId, { ...sync, inFlight: null, attempts: sync.attempts + 1 });
+  if (response.status === 409 || response.ok) {
+    const snapshot = readSnapshotBody(body);
+    if (!snapshot) {
+      if (response.status === 409) {
+        // Told to rebase and handed nothing to rebase onto. Back off rather
+        // than spin: the next answer, or the socket, brings the truth.
+        scheduleRetry(workspaceId, { ...sync, inFlight: [], attempts: sync.attempts + 1 });
+        return;
+      }
+      // Acked, but we learned no truth. Fold the sent writes into the base so
+      // the rendered tree is unchanged and the equation stays true.
+      const folded = rebasePending(sync.base ?? [], sync.pending.filter((entry) => onWire.has(entry.id)));
+      commit(workspaceId, { ...sync, base: folded.nodes, pending: rest, inFlight: [], attempts: 0 }, 'preserve');
       return;
     }
-    // The 409 body IS the truth. Rebase on it and re-post from the head
-    // IMMEDIATELY — `op` did NOT land, and unlike a transport failure there
-    // is nothing to wait for: the server just told us everything we were
-    // missing. The attempt still counts, so a permanently contended
-    // workspace cannot spin forever.
-    retry(workspaceId, {
-      base: adoptServerGrid(workspaceId, parsed.data.grid),
-      rev: parsed.data.rev,
-      pending: sync.pending,
-      inFlight: null,
-      attempts: sync.attempts + 1,
-    });
-    return;
-  }
 
-  if (!response.ok) {
-    // A 4xx that is not a 409 (a rejected payload, a session that is gone or
-    // no longer ours) will never succeed on retry. Abandon the queue and go
-    // read what is actually durable — and SAY SO: the user's split or resize is
-    // being discarded, and silently reverting it reads as the app ignoring them.
-    commit(workspaceId, { ...sync, pending: [], inFlight: null, attempts: 0 }, 'preserve');
-    setQueueError(workspaceId, 'refused');
-    void resyncAfterAbandon(workspaceId);
-    return;
-  }
+    if (response.status === 409) {
+      // The 409 body IS the truth. Rebase on it and re-post IMMEDIATELY — the
+      // sent write did NOT land, and unlike a transport failure there is
+      // nothing to wait for. The attempt still counts, so a permanently
+      // contended workspace cannot spin forever.
+      retry(
+        workspaceId,
+        {
+          ...sync,
+          base: snapshot.nodes,
+          rev: snapshot.rev,
+          targets: snapshot.targets,
+          pending: sync.pending,
+          inFlight: [],
+          attempts: sync.attempts + 1,
+        },
+      );
+      return;
+    }
 
-  const parsed = verbResponseSchema.safeParse(body);
-  if (!parsed.success) {
-    // Acked, but we learned no truth. Fold the op into the snapshot so the
-    // rendered state is unchanged and the equation stays true.
+    // 200 — adopt the returned truth even when nothing changed: a no-op still
+    // reports the current rev, and ignoring it would strand us behind forever.
     commit(
       workspaceId,
       {
-        ...sync,
-        base: applyVerbLocal(sync.base, workspaceId, op.verb).state,
+        base: snapshot.nodes,
+        rev: snapshot.rev,
+        targets: snapshot.targets,
         pending: rest,
-        inFlight: null,
+        inFlight: [],
         attempts: 0,
       },
       'preserve',
     );
+    clearQueueError(workspaceId);
     return;
   }
 
-  // 200 — adopt the returned truth even when `applied: false`: a no-op still
-  // reports the current rev, and ignoring it would strand us behind forever.
-  commit(
-    workspaceId,
-    {
-      base: adoptServerGrid(workspaceId, parsed.data.grid),
-      rev: parsed.data.rev,
-      pending: rest,
-      inFlight: null,
-      attempts: 0,
-    },
-    'preserve',
-  );
-  // The queue is moving again, so whatever went wrong before is over.
-  clearQueueError(workspaceId);
+  // A 4xx that is not a 409 (a refused target, a tree the validator rejected, a
+  // workspace that is gone or no longer ours) will never succeed on retry.
+  // Abandon the queue and go read what is durable — and SAY SO: the user's edit
+  // is being discarded, and silently reverting it reads as the app ignoring
+  // them.
+  commit(workspaceId, { ...sync, pending: [], inFlight: [], attempts: 0 }, 'preserve');
+  setQueueError(workspaceId, 'refused');
+  void resyncAfterAbandon(workspaceId);
 }
 
-/** Forget a session's queue error — anything settling cleanly supersedes it. */
+/**
+ * Parse a `{rev, nodes, targets}` body, and REFUSE a tree this client should not
+ * adopt.
+ *
+ * The shape check is deliberately structural rather than a zod mirror of the
+ * wire: the authority on what a node is lives in `@pagespace/lib`, and a second
+ * schema here is a second thing to keep in step. What matters is that a body
+ * which is not a tree — a proxy's error page, a truncated response, a
+ * half-applied write — never becomes this client's base, because every
+ * subsequent local edit would then be refused by the very gate the server
+ * applies, with no way out but a reload.
+ */
+function readSnapshotBody(body: unknown): WorkspaceNodeSnapshotResponse | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const candidate = body as Partial<WorkspaceNodeSnapshotResponse>;
+  if (typeof candidate.rev !== 'number' || !Number.isInteger(candidate.rev) || candidate.rev < 0) return null;
+  if (!Array.isArray(candidate.nodes) || !Array.isArray(candidate.targets)) return null;
+  if (!isAdoptableTree(candidate.nodes)) return null;
+  return { rev: candidate.rev, nodes: candidate.nodes, targets: candidate.targets };
+}
+
+/** Forget a workspace's queue error — anything settling cleanly supersedes it. */
 function clearQueueError(workspaceId: string): void {
   if (!useAgentWorkspaceStore.getState().queueErrors[workspaceId]) return;
   useAgentWorkspaceStore.setState((state) => ({
@@ -650,21 +672,17 @@ function clearQueueError(workspaceId: string): void {
   }));
 }
 
-/**
- * Re-post the head op right away (the 409 path — the server just handed us
- * everything we were missing), or give up and resync once the attempt budget
- * is spent. `commit` kicks the pump, and nothing blocks it.
- */
+/** Re-post right away (the 409 path), or give up and resync once the budget is spent. */
 function retry(workspaceId: string, sync: WorkspaceSync): void {
   if (giveUp(workspaceId, sync)) return;
   commit(workspaceId, sync, 'preserve');
 }
 
 /**
- * Back off, then re-pump (the transport-failure path — there is nothing to
- * rebase on, only a network to wait for). The timer is registered BEFORE the
- * commit: `commit` kicks the pump, and the pump's `retryTimers` guard is the
- * only thing standing between a failed op and a backoff-free re-send loop.
+ * Back off, then re-pump (the transport-failure path). The timer is registered
+ * BEFORE the commit: `commit` kicks the pump, and the pump's `retryTimers` guard
+ * is the only thing standing between a failed write and a backoff-free re-send
+ * loop.
  */
 function scheduleRetry(workspaceId: string, sync: WorkspaceSync): void {
   if (giveUp(workspaceId, sync)) return;
@@ -680,13 +698,13 @@ function scheduleRetry(workspaceId: string, sync: WorkspaceSync): void {
 /** Spent the attempt budget: abandon the queue and go read what is durable. */
 function giveUp(workspaceId: string, sync: WorkspaceSync): boolean {
   if (sync.attempts < MAX_TRANSPORT_ATTEMPTS) return false;
-  commit(workspaceId, { ...sync, pending: [], attempts: 0 }, 'preserve');
+  commit(workspaceId, { ...sync, pending: [], inFlight: [], attempts: 0 }, 'preserve');
   setQueueError(workspaceId, 'abandoned');
   void resyncAfterAbandon(workspaceId);
   return true;
 }
 
-/** Record why a session's queue was dropped. `at` makes each transition distinct. */
+/** Record why a workspace's queue was dropped. `at` makes each transition distinct. */
 function setQueueError(workspaceId: string, reason: WorkspaceQueueError['reason']): void {
   useAgentWorkspaceStore.setState((state) => ({
     queueErrors: { ...state.queueErrors, [workspaceId]: { reason, at: Date.now() } },
@@ -697,10 +715,9 @@ function setQueueError(workspaceId: string, reason: WorkspaceQueueError['reason'
  * Refetch after abandoning the queue, and escalate if that fails too.
  *
  * Abandoning is only defensible because the refetch replaces the discarded work
- * with the server's truth. When the refetch ALSO fails, the rendered grid is
+ * with the server's truth. When the refetch ALSO fails, the rendered tree is
  * neither — it is whatever `base` happened to be, indefinitely, with nothing
- * saying so. That case used to disappear into `refreshWorkspaceSnapshot`'s
- * best-effort `catch {}`.
+ * saying so.
  */
 async function resyncAfterAbandon(workspaceId: string): Promise<void> {
   const ok = await useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(workspaceId);
@@ -708,104 +725,127 @@ async function resyncAfterAbandon(workspaceId: string): Promise<void> {
 }
 
 /**
- * Is `pane` a PAGE pane whose target currently has unsaved edits? Checked
- * against `useEditingStore` by pageId (not by the pane's own id — the
- * editing-store componentId carries a per-mount `useId()` suffix the pane
- * model knows nothing about), so a dirty document/canvas/sheet page is never
- * silently overwritten by `focusOrAssignScope`'s replace path (only 'document'
- * and 'form' session types count as dirty for this purpose — see
- * `useEditingStore.isAnyEditing`'s identical set).
+ * Is this node a PAGE pane whose target currently has unsaved edits?
  *
- * The server's own reducer deliberately does NOT know this predicate — it
- * cannot; only a browser knows what is half-typed in it. That is why this
- * runs BEFORE a verb is minted, and why the store never emits the server's
- * `open_conversation` policy verb for a user-driven open.
+ * Checked against `useEditingStore` by pageId (not by the node's own id — the
+ * editing-store componentId carries a per-mount `useId()` suffix the node model
+ * knows nothing about), so a dirty document/canvas/sheet page is never silently
+ * displaced by the placement policy's replace path.
+ *
+ * The server's own command layer deliberately does NOT know this predicate — it
+ * cannot; only a browser knows what is half-typed in it. That is exactly what
+ * `OpenInput.isReplaceable` is for.
  */
-function isPaneDirty(pane: PaneState): boolean {
-  if (pane.scope?.kind !== 'page' || pane.scope.targetId === null) return false;
-  const targetPageId = pane.scope.targetId;
+function isNodeDirty(node: PaneNode): boolean {
+  if (node.target?.kind !== 'page') return false;
+  const targetPageId = node.target.id;
   return useEditingStore
     .getState()
     .getActiveSessions()
-    .some((session) => (session.type === 'document' || session.type === 'form') && session.metadata?.pageId === targetPageId);
+    .some(
+      (session) =>
+        (session.type === 'document' || session.type === 'form') && session.metadata?.pageId === targetPageId,
+    );
+}
+
+/** The caller's own refusals, ANDed into the shared placement policy. */
+function clientReplaceable(options: OpenTargetOptions | undefined): (node: PaneNode) => boolean {
+  return (node) => {
+    if (isNodeDirty(node)) return false;
+    if (options?.liveConversationIds === undefined) return true;
+    if (node.target === null) return true;
+    return node.target.kind === 'chat' && options.liveConversationIds.has(node.target.id);
+  };
 }
 
 /**
- * Shared by `openConversation` and `openPage`: make `scope`'s target VISIBLE
- * in the session's grid, resolving the whole policy HERE (see the module doc)
- * and emitting only the primitive verb it resolved to.
+ * WHERE A NODE COMES BACK TO when it is un-parked: immediately after the pane
+ * the user is looking at, and otherwise at the end of the root's own row.
+ *
+ * Beside the active pane rather than wherever it left from, because a node's old
+ * slot is not a fact the model keeps — parking strips the share and renumbers
+ * the group it left, deliberately, since a share chosen against one container
+ * means nothing after the container has changed shape.
  */
-function focusOrAssignScope(
+function gridSlotFor(
+  nodes: readonly WorkspaceNode[],
   workspaceId: string,
-  scope: PaneScope,
-  options?: {
-    excludeTargetId?: string;
-    liveConversationIds?: ReadonlySet<string>;
-    preferSplit?: boolean;
-  },
+  nodeId: string,
+): { nodeId: string; parentId: string; index: number } {
+  const activeId = useAgentWorkspaceStore.getState().workspaces[workspaceId]?.activeNodeId ?? null;
+  const active = activeId === null ? undefined : findNode(nodes, activeId);
+  if (active !== undefined && active.nodeType === 'pane' && active.parentId !== null && active.id !== nodeId) {
+    const parentId = active.parentId;
+    const index = childrenOf(nodes, parentId).findIndex((sibling) => sibling.id === active.id) + 1;
+    return { nodeId, parentId, index };
+  }
+  // No usable focus — an empty grid, or focus on the very node being shown.
+  // `seedRoot` has already run by the time a command sees these nodes, so the
+  // root resolves; the non-null assertion the fallback would need is spelled as
+  // a refusal instead, by naming a parent `move` will not find.
+  const root = rootOf(nodes);
+  const parentId = root?.id ?? '';
+  return { nodeId, parentId, index: parentId === '' ? 0 : childrenOf(nodes, parentId).length };
+}
+
+/**
+ * "SHOW ME THIS" — the one entry point behind `openConversation` and `openPage`,
+ * and the only place the store adds anything to the shared placement policy.
+ *
+ * Three cases, and the middle one is the reason this is not a straight
+ * pass-through to the command:
+ *
+ *  - **Already on the grid** → focus it. Focus is client-local, so the correct
+ *    write is no write at all — which is exactly what the command answers too,
+ *    but the command cannot move the user's attention and this can.
+ *  - **PARKED** → the command REFUSES (`already_bound`), on purpose: minting a
+ *    second node would put one conversation in two places. Showing it again is a
+ *    `move`, and this is the caller naming it. Without this branch, clicking a
+ *    parked thread in the sidebar would silently do nothing — which is the #2373
+ *    symptom wearing a new hat.
+ *  - **Nowhere** → the shared policy places it, and whatever node ended up
+ *    holding it gets the focus.
+ */
+function openTarget(
+  workspaceId: string,
+  target: PaneTarget,
+  options: OpenTargetOptions | undefined,
+  command: (nodes: readonly WorkspaceNode[], input: never) => CommandResult,
 ): void {
   const store = useAgentWorkspaceStore.getState();
-  const workspace = store.workspaces[workspaceId];
-  if (!workspace) {
-    store.ensureWorkspace(workspaceId, scope);
+  const existing = findShowing(store.workspaces[workspaceId]?.nodes ?? [], target);
+  if (existing !== undefined) {
+    if (existing.parentId === null) store.showNode(workspaceId, existing.id);
+    else store.selectNode(workspaceId, existing.id);
     return;
   }
 
-  // The structural policy — the replaceable predicate, the `preferSplit` and
-  // `excludeTargetId` narrowings, active-pane-first, and the split fallback —
-  // is the SHARED one the server's `open_conversation` runs. What this store
-  // adds are the two refusals the server cannot evaluate, injected on top:
-  //
-  //  - a pane with unsaved edits (`isPaneDirty`, via `useEditingStore`);
-  //  - when the caller passed `liveConversationIds` (only `openConversation`
-  //    does, from the selection/mount-seed paths): a BOUND pane whose scope is
-  //    not a live chat — a conversation closed out of this session (issue
-  //    #2295), or a PAGE pane, a deliberate persisted artifact a conversation
-  //    selection has no business evicting (a reload's seed effect used to eat
-  //    agent-opened page panes this way). Both fall through to the split
-  //    fallback instead, exactly like a terminal.
-  //
-  // Those refusals are precisely why this store resolves the policy locally
-  // and posts the RESULT (`assign_pane`, or `split_right` + `assign_pane`)
-  // rather than sending the server's `open_conversation` verb.
-  const placement = resolveOpenPlacement(workspace, scope.targetId, {
-    preferSplit: options?.preferSplit,
-    excludeTargetId: options?.excludeTargetId,
-    isReplaceable: (pane) =>
-      !isPaneDirty(pane) &&
-      (options?.liveConversationIds === undefined ||
-        pane.scope === null ||
-        (pane.scope.kind === 'chat' &&
-          (pane.scope.targetId === null || options.liveConversationIds.has(pane.scope.targetId)))),
-  });
+  const active = options?.activeNodeId ?? store.workspaces[workspaceId]?.activeNodeId ?? undefined;
+  const input = {
+    target,
+    newNodeId: mintId('pane'),
+    newSplitId: mintId('split'),
+    ...(active === undefined ? {} : { activeNodeId: active }),
+    ...(options?.preferSplit === undefined ? {} : { preferSplit: options.preferSplit }),
+    ...(options?.excludeTargetId === undefined ? {} : { excludeTargetId: options.excludeTargetId }),
+    isReplaceable: clientReplaceable(options),
+  };
+  const refused = store.runCommand(workspaceId, (nodes) => command(nodes, input as never));
+  if (refused !== null) return;
 
-  switch (placement.kind) {
-    case 'focus':
-      // Already visible — focus is client-local, so nothing crosses the wire.
-      store.selectPane(workspaceId, placement.paneId);
-      return;
-    case 'assign':
-      enqueueVerb(workspaceId, { type: 'assign_pane', paneId: placement.paneId, scope });
-      return;
-    case 'split': {
-      // Two verbs, in order: the split, then the binding.
-      const newPaneId = mintId('pane');
-      enqueueVerb(workspaceId, {
-        type: 'split_right',
-        fromPaneId: placement.fromPaneId,
-        newColumnId: mintId('col'),
-        newPaneId,
-      });
-      enqueueVerb(workspaceId, { type: 'assign_pane', paneId: newPaneId, scope });
-      return;
-    }
-    case 'create':
-      // Unreachable: the `!workspace` case returned above.
-      return;
-  }
+  const landed = findShowing(useAgentWorkspaceStore.getState().workspaces[workspaceId]?.nodes ?? [], target);
+  if (landed !== undefined) store.selectNode(workspaceId, landed.id);
 }
 
-export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
+/** The node showing this target anywhere in the workspace — parked included. */
+function findShowing(nodes: readonly WorkspaceNode[], target: PaneTarget): PaneNode | undefined {
+  return nodes.find(
+    (node): node is PaneNode =>
+      node.nodeType === 'pane' && node.target?.kind === target.kind && node.target.id === target.id,
+  );
+}
+
+export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
   persist(
     (set, get) => ({
       workspaces: {},
@@ -813,127 +853,35 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       focus: {},
       queueErrors: {},
 
-      ensureWorkspace: (workspaceId, scope) =>
-        enqueueVerb(workspaceId, { type: 'ensure', columnId: mintId('col'), paneId: mintId('pane'), scope }),
-
-      openConversation: (workspaceId, scope, options) => focusOrAssignScope(workspaceId, scope, options),
-
-      openPage: (workspaceId, scope, options) => focusOrAssignScope(workspaceId, scope, options),
-
-      splitRight: (workspaceId, fromPaneId) =>
-        enqueueVerb(workspaceId, {
-          type: 'split_right',
-          fromPaneId,
-          newColumnId: mintId('col'),
-          newPaneId: mintId('pane'),
-        }),
-
-      splitDown: (workspaceId, fromPaneId) =>
-        enqueueVerb(workspaceId, { type: 'split_down', fromPaneId, newPaneId: mintId('pane') }),
-
-      closePane: (workspaceId, paneId) => {
-        const current = get().workspaces[workspaceId];
-        if (!current) return 'noop';
-        if (!panesOf(current).some((pane) => pane.id === paneId)) return 'noop';
-        if (isLastPane(current, paneId)) {
-          // The LAST pane: emptying a session ends it, which is a lifecycle
-          // act (the end route), never a layout verb — the shared reducer
-          // no-ops on it by design, so no verb is posted here either. The
-          // caller reads this verdict and ends the session.
-          drop(workspaceId);
-          return 'session-ended';
-        }
-        enqueueVerb(workspaceId, { type: 'close_pane', paneId });
-        return 'closed';
-      },
-
-      selectPane: (workspaceId, paneId) => {
-        const state = get();
-        const workspace = state.workspaces[workspaceId];
-        if (!workspace) return;
-        if (workspace.activePaneId === paneId) return;
-        if (!panesOf(workspace).some((pane) => pane.id === paneId)) return;
-        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
-          activePaneId: paneId,
-          pendingPickerPaneId: workspace.pendingPickerPaneId,
-        });
-      },
-
-      assignPane: (workspaceId, paneId, scope) => enqueueVerb(workspaceId, { type: 'assign_pane', paneId, scope }),
-
-      resetPane: (workspaceId, paneId) => enqueueVerb(workspaceId, { type: 'reset_pane', paneId }),
-
-      dismissPicker: (workspaceId, paneId) => {
-        const state = get();
-        const workspace = state.workspaces[workspaceId];
-        if (!workspace || workspace.pendingPickerPaneId !== paneId) return;
-        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
-          activePaneId: workspace.activePaneId,
-          pendingPickerPaneId: null,
-        });
-      },
-
-      // The four rearrange verbs (issue #2208). Each is a plain enqueue: the
-      // shared reducer applies it optimistically, decides whether it changed
-      // anything at all (a clamped-to-identical resize never reaches the
-      // queue), and the same 409-rebase path covers them as every other verb.
-      resizeColumn: (workspaceId, columnId, widthFraction) =>
-        enqueueVerb(workspaceId, { type: 'resize_column', columnId, widthFraction }),
-
-      resizePane: (workspaceId, paneId, heightFraction) =>
-        enqueueVerb(workspaceId, { type: 'resize_pane', paneId, heightFraction }),
-
-      movePane: (workspaceId, paneId, toColumnId, toIndex) =>
-        enqueueVerb(workspaceId, { type: 'move_pane', paneId, toColumnId, ...(toIndex === undefined ? {} : { toIndex }) }),
-
-      reorderColumns: (workspaceId, columnIds) =>
-        enqueueVerb(workspaceId, { type: 'reorder_columns', columnIds }),
-
-      replaceConversation: (workspaceId, oldConversationId, newScope) =>
-        enqueueVerb(workspaceId, {
-          type: 'replace_conversation',
-          oldTargetId: oldConversationId,
-          scope: newScope,
-        }),
-
-      forgetWorkspace: (workspaceId) => {
-        if (!get().sync[workspaceId] && !get().workspaces[workspaceId]) return;
-        drop(workspaceId);
-      },
-
-      hydrateWorkspace: (workspaceId, workspace) => {
-        // `workspace.id` is documented as "the SESSION id whose grid this
-        // is" — a mismatch means the caller fetched the wrong session's
-        // saved grid (or the payload was tampered with); seating it under a
-        // DIFFERENT session's key would poison every consumer that trusts
-        // `workspace.id` to match.
-        if (workspace.id !== workspaceId) return;
-        // A verb still on the wire belongs to the state being replaced.
-        bumpGeneration(workspaceId);
-        commit(
-          workspaceId,
-          // `rev: 0`, NOT the previous rev. This seats an UNVERSIONED listing
-          // snapshot as the base, so carrying the old rev forward would claim
-          // to have read this grid at a rev it was never read at — the method's
-          // own doc says it does not know the rev. Both callers happen to be
-          // safe (one guards on absence, the other restores after a failed
-          // end-session), but `0` closes the class instead of relying on that;
-          // the cost is one extra 409 on the rollback path.
-          { base: workspace, rev: 0, pending: [], inFlight: null, attempts: 0 },
-          // The snapshot carries its own focus — honor it, falling back to the
-          // first pane if it dangles.
-          { activePaneId: workspace.activePaneId, pendingPickerPaneId: workspace.pendingPickerPaneId },
-        );
-      },
-
       hydrateFromServer: (workspaceId, snapshot) => {
         const sync = get().sync[workspaceId] ?? emptySync();
-        // An older snapshot than what we already hold tells us nothing (a
-        // slow GET landing behind a fast verb ack, say).
+        // An older snapshot than what we already hold tells us nothing (a slow
+        // GET landing behind a fast ack, say).
         if (snapshot.rev < sync.rev) return;
+        // A body that is not a tree never becomes a base. See `readSnapshotBody`.
+        if (!isAdoptableTree(snapshot.nodes)) return;
+
+        // THE NO-OP EARLY-OUT, and it is not a micro-optimisation. The sidebar
+        // seats every workspace in the listing on every revalidation — twice a
+        // minute at the backstop poll, and once per directory event on top —
+        // and without this each of those reallocates `workspaces[id]` and
+        // re-renders every tree in the app. Same rev, a base we already have,
+        // and nothing local outstanding means there is provably nothing to
+        // learn; the targets are compared too, so a RENAME at an unchanged rev
+        // still lands (a title is not part of the rev, and pretending it were
+        // would strand a renamed thread until its next structural edit).
+        if (
+          snapshot.rev === sync.rev &&
+          sync.base !== null &&
+          sync.pending.length === 0 &&
+          sameTargetList(sync.targets, snapshot.targets)
+        ) {
+          return;
+        }
+
         commit(
           workspaceId,
-          { ...sync, base: adoptServerGrid(workspaceId, snapshot.grid), rev: snapshot.rev },
+          { ...sync, base: snapshot.nodes, rev: snapshot.rev, targets: snapshot.targets },
           'preserve',
         );
       },
@@ -941,61 +889,169 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       applyRemoteUpdate: (payload) => {
         const { workspaceId } = payload;
         const sync = get().sync[workspaceId];
-        // Not tracking this session: nothing to update, and inventing an
-        // entry here would resurrect a grid the user has closed. Whenever it
-        // opens next, the mount GET reads the truth anyway.
+        // Not tracking this workspace: nothing to update, and inventing an entry
+        // here would RESURRECT a tree the user has closed. Whenever it opens
+        // next, its own read gets the truth anyway.
         if (!sync) return;
-        // Already at or past this rev — including our OWN echo of a verb the
-        // ack has already applied.
+        // Already at or past this rev — which is also how the SECOND copy of
+        // one event is dropped. The same write reaches a user who both owns the
+        // workspace and has its grid mounted on two rooms, and this guard is
+        // armed synchronously by whichever arrives first.
         if (payload.rev <= sync.rev) return;
-        // Our own verb, still unanswered: the POST's own 200/409 is the
-        // authoritative answer and is already on its way. Adopting the echo
-        // here would replay the op on a snapshot that already contains it.
-        if (
-          payload.opId &&
-          (sync.inFlight === payload.opId || sync.pending.some((op) => op.opId === payload.opId))
-        ) {
-          return;
-        }
-        // The broadcast is label-free, so re-dress it from what this client
-        // already knows before it reaches the renderer — otherwise a pure
-        // resize would blank every pane header it touched.
-        const known = paneLabelIndex(sync.base);
-        const server = adoptServerGrid(workspaceId, payload.grid);
-        // An emptied grid has no labels to carry and nothing to go read.
-        const adopted = server === null ? null : carryPaneLabelsForward(known, server);
-        commit(workspaceId, { ...sync, base: adopted, rev: payload.rev }, 'preserve');
-        // A target we have never labelled is the ONE case a broadcast cannot
-        // dress itself: go read it under this viewer's own authority.
-        if (adopted !== null && hasUnknownBoundTarget(known, adopted)) {
-          scheduleLabelRefresh(workspaceId);
-        }
+        if (!Array.isArray(payload.nodes) || !isAdoptableTree(payload.nodes)) return;
+        // The broadcast is STRUCTURAL — it carries no titles, because
+        // `session:<id>` is a room and per-viewer redaction is not expressible
+        // on that wire. The titles this client already resolved are carried
+        // forward as-is; a target that is new here simply has no name until the
+        // next authorized read, and renders from what the node itself holds.
+        commit(workspaceId, { ...sync, base: payload.nodes, rev: payload.rev }, 'preserve');
       },
 
       refreshWorkspaceSnapshot: async (workspaceId) => {
         try {
-          const response = await fetchWithAuth(workspaceUrl(workspaceId));
+          const response = await fetchWithAuth(nodesUrl(workspaceId));
           if (!response.ok) return false;
-          const parsed = snapshotSchema.safeParse(await response.json());
-          if (!parsed.success) return false;
-          get().hydrateFromServer(workspaceId, parsed.data);
+          const snapshot = readSnapshotBody(await response.json());
+          if (!snapshot) return false;
+          get().hydrateFromServer(workspaceId, snapshot);
           return true;
         } catch {
           // Still best-effort for its own sake — the socket's own reconnect, or
-          // the next mutation's 409, will bring the truth along. But the caller
-          // now learns it failed, because a refetch that was covering for a
-          // DISCARDED queue leaves the user looking at neither their edit nor
-          // the server's state, and that is worth saying out loud.
+          // the next write's 409, brings the truth along. But the caller learns
+          // it failed, because a refetch that was covering for a DISCARDED queue
+          // leaves the user looking at neither their edit nor the server's
+          // state, and that is worth saying out loud.
           return false;
         }
+      },
+
+      forgetWorkspace: (workspaceId) => {
+        if (!get().sync[workspaceId] && !get().workspaces[workspaceId]) return;
+        drop(workspaceId);
+      },
+
+      selectNode: (workspaceId, nodeId) => {
+        const state = get();
+        const tree = state.workspaces[workspaceId];
+        if (!tree || tree.activeNodeId === nodeId) return;
+        if (!tree.nodes.some((node) => node.nodeType === 'pane' && node.id === nodeId)) return;
+        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
+          activeNodeId: nodeId,
+          pendingPickerNodeId: tree.pendingPickerNodeId,
+        });
+      },
+
+      dismissPicker: (workspaceId, nodeId) => {
+        const state = get();
+        const tree = state.workspaces[workspaceId];
+        if (!tree || tree.pendingPickerNodeId !== nodeId) return;
+        commit(workspaceId, state.sync[workspaceId] ?? emptySync(), {
+          activeNodeId: tree.activeNodeId,
+          pendingPickerNodeId: null,
+        });
+      },
+
+      runCommand: (workspaceId, run) => {
+        const state = get();
+        const sync = state.sync[workspaceId] ?? emptySync();
+        const current = state.workspaces[workspaceId]?.nodes ?? [];
+
+        // THE WORKSPACE'S BIRTH, mirrored from the server's own write funnel and
+        // through the SAME function. A workspace read at rev 0 holds nothing, and
+        // every command needs a root to place into; seeding it here is what lets
+        // the very first click compose into one write instead of needing a
+        // round trip to learn what the grid is called. The id is derived from
+        // the workspace, so this client's seed and the server's are the same
+        // node and converge on the upsert rather than fighting.
+        const { nodes: seated, seed } = seedRoot(current, workspaceId);
+        const result = run(seated);
+        if (!result.ok) return result.code;
+
+        const write: NodeWrite =
+          seed === null ? result.write : { put: [seed, ...result.write.put], drop: result.write.drop };
+        // A command that asked for the state the tree is already in writes
+        // nothing — the "declined" convention, kept honest so a re-sent click
+        // does not bump a rev or broadcast.
+        if (isEmptyWrite(write)) return null;
+
+        const entry = makePending(mintId('write'), current, write);
+        commit(workspaceId, { ...sync, pending: [...sync.pending, entry] }, 'preserve');
+        return null;
+      },
+
+      splitPane: (workspaceId, nodeId, axis) => {
+        get().runCommand(workspaceId, (nodes) =>
+          splitCommand(nodes, { nodeId, axis, newNodeId: mintId('pane'), newSplitId: mintId('split') }),
+        );
+      },
+
+      closePane: (workspaceId, nodeId) => {
+        const tree = get().workspaces[workspaceId];
+        if (!tree) return 'noop';
+        const node = findNode(tree.nodes, nodeId);
+        // Already out of the grid, or never in this workspace: nothing to close.
+        // The command would write nothing anyway; answering `noop` lets a caller
+        // tell "I did that" from "there was nothing to do".
+        if (node === undefined || node.nodeType !== 'pane' || node.parentId === null) return 'noop';
+        return get().runCommand(workspaceId, (nodes) => closePaneCommand(nodes, { nodeId })) === null
+          ? 'closed'
+          : 'noop';
+      },
+
+      openConversation: (workspaceId, conversationId, options) => {
+        openTarget(workspaceId, { kind: 'chat', id: conversationId }, options, openConversationCommand);
+      },
+
+      openPage: (workspaceId, pageId, options) => {
+        openTarget(workspaceId, { kind: 'page', id: pageId }, options, openPageCommand);
+      },
+
+      openShell: (workspaceId, shellId, options) => {
+        openTarget(workspaceId, { kind: 'terminal', id: shellId }, options, openShellCommand);
+      },
+
+      showNode: (workspaceId, nodeId) => {
+        const refused = get().runCommand(workspaceId, (nodes) => {
+          const node = findNode(nodes, nodeId);
+          if (node === undefined || node.nodeType !== 'pane') {
+            return { ok: false, code: 'not_a_pane', detail: `no pane "${nodeId}" to show` };
+          }
+          if (node.parentId !== null) return { ok: true, write: emptyWrite() };
+          return compile(nodes, [(current) => move(current, gridSlotFor(current, workspaceId, nodeId))]);
+        });
+        if (refused === null) get().selectNode(workspaceId, nodeId);
+      },
+
+      bindPane: (workspaceId, nodeId, target) => {
+        get().runCommand(workspaceId, (nodes) => bind(nodes, { nodeId, target }));
+      },
+
+      unbindPane: (workspaceId, nodeId) => {
+        get().runCommand(workspaceId, (nodes) => {
+          const node = findNode(nodes, nodeId);
+          if (node === undefined || node.nodeType !== 'pane') {
+            return { ok: false, code: 'not_a_pane', detail: `no pane "${nodeId}" to send back to the picker` };
+          }
+          const parentId = node.parentId;
+          // The replacement arrives BEFORE the old node leaves, so no group
+          // momentarily has a hole in it — in particular a two-child split does
+          // not drop to one and collapse under the very command refilling it.
+          const group = parentId === null ? detachedOf(nodes) : childrenOf(nodes, parentId);
+          const index = group.findIndex((sibling) => sibling.id === nodeId) + 1;
+          return compile(nodes, [
+            (current) => create(current, { nodeId: mintId('pane'), target: null, parentId, index }),
+            (current) => destroy(current, { nodeId }),
+          ]);
+        });
       },
     }),
     {
       name: 'agent-workspace-storage',
-      // v2 = the grid is no longer persisted. `partialize` alone would leave
-      // a v1 payload's `workspaces` key sitting in storage, so the version
-      // bump is what actually retires it.
-      version: 2,
+      // v3 = the node model. `activePaneId`/`pendingPickerPaneId` named PANE
+      // ids in a grid that no longer exists; a v2 payload's ids would resolve
+      // to nothing and be normalized away anyway, but the version bump is what
+      // actually retires it rather than leaving a dead key in storage.
+      version: 3,
       partialize: (state) => ({ focus: state.focus }),
       merge: (persisted, current) => ({ ...current, focus: validatePersistedFocus(persisted) }),
     },
@@ -1004,17 +1060,20 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
 
 /**
  * `persist`'s `merge` hook. Storage is untyped by construction (a previous
- * schema version, an extension, plain corruption), and this is the one place
- * a foreign value could enter the store — so every entry is shape-checked and
+ * schema version, an extension, plain corruption), and this is the one place a
+ * foreign value could enter the store — so every entry is shape-checked and
  * anything that fails is dropped rather than repaired. A lost focus preference
- * costs the user nothing: the grid re-focuses its first pane.
+ * costs the user nothing: the tree focuses its first pane.
  */
 function validatePersistedFocus(persisted: unknown): Record<string, WorkspaceFocus> {
   const parsed = z
     .object({
       focus: z.record(
         z.string(),
-        z.object({ activePaneId: z.string().min(1), pendingPickerPaneId: z.string().min(1).nullable() }),
+        z.object({
+          activeNodeId: z.string().min(1).nullable(),
+          pendingPickerNodeId: z.string().min(1).nullable(),
+        }),
       ),
     })
     .safeParse(persisted);

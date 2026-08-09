@@ -6,7 +6,7 @@ import { Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import { gridPanesOf } from '@/stores/agent-workspace/workspace-tree-view';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
@@ -136,17 +136,27 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
         selectConversation({ sessionId: currentSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
         return;
       }
-      const workspace = useAgentWorkspaceStore.getState().workspaces[currentSessionId];
-      const replacement = workspace
-        ? panesOf(workspace).find(
-            (pane) =>
-              pane.scope?.kind === 'chat' && pane.scope.targetId !== null && pane.scope.targetId !== event.conversationId,
+      // Nothing was rebound (the grid is allowed to be empty now), so the
+      // console picks its own next subject: any OTHER chat node still on the
+      // grid. Off-grid nodes are deliberately not candidates — a parked thread
+      // is in the workspace and not on the screen, and following the console's
+      // selection to one would put the header on something the user cannot see.
+      const tree = useAgentWorkspaceStore.getState().workspaces[currentSessionId];
+      const replacement = tree
+        ? gridPanesOf(tree.nodes).find(
+            (node) => node.target?.kind === 'chat' && node.target.id !== event.conversationId,
           )
         : undefined;
+      const replacementId = replacement?.target?.id ?? null;
       selectConversation({
         sessionId: currentSessionId,
-        conversationId: replacement?.scope?.targetId ?? null,
-        agentId: replacement?.scope?.agentPageId ?? null,
+        conversationId: replacementId,
+        // Resolved beside the tree, behind the gate its title passed.
+        agentId:
+          replacementId === null
+            ? null
+            : (tree?.targets.find((target) => target.kind === 'chat' && target.id === replacementId)?.agentPageId ??
+              null),
       });
     },
     [selectConversation, selectionRef],

@@ -47,6 +47,7 @@ import {
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
+import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
@@ -117,13 +118,24 @@ export async function GET(request: Request) {
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).
     const workspaceIds = sessions.map((session) => session.workspaceId);
-    const [shellsBySession, conversationsBySession, gridBySession] = await Promise.all([
+    const [shellsBySession, conversationsBySession, gridBySession, nodesBySession] = await Promise.all([
       listShellsBulk(workspaceIds),
       listSessionConversationsBulk(workspaceIds),
       readWorkspaceGridsBulk(workspaceIds, auth.userId),
+      // THE NODE TREE, one per listed session — the sidebar's own source now
+      // that it renders the live tree out of the store instead of a polled
+      // grid snapshot. One statement for one workspace and for fifty, and the
+      // titles are resolved once per viewer beside the nodes, never inside
+      // them.
+      readWorkspaceNodesBulk(workspaceIds, auth.userId),
     ]);
     const withChildren = sessions.map((session) => {
       const grid = gridBySession.get(session.workspaceId) ?? null;
+      // Every workspace ASKED FOR has an entry; this fallback covers only a
+      // session that vanished between `listSessions` and the node read. An
+      // empty tree at rev 0 is the honest answer for it, and the same one a
+      // never-written workspace gets — the client seats both identically.
+      const tree = nodesBySession.get(session.workspaceId) ?? { rev: 0, nodes: [], targets: [] };
       return {
         ...session,
         shells: shellsBySession.get(session.workspaceId) ?? [],
@@ -141,9 +153,21 @@ export async function GET(request: Request) {
         // reaching for.
         conversations: conversationsBySession.get(session.workspaceId) ?? [],
         // The grid's GEOMETRY — column widths, pane heights, ordering — for the
-        // pane surface to render, still off the legacy grid for the migration
-        // window (the node tree has its own route, `[workspaceId]/nodes`).
+        // pane surface to render. Deliberately no longer the sidebar's source
+        // for "which threads exist": that question has exactly one answer now,
+        // and it is the list above.
+        //
+        // LEGACY, and on its way out with the two-level model. Every client
+        // surface reads `nodes` below (and the node tree has its own route,
+        // `[workspaceId]/nodes`); this stays for the rolling-deploy window,
+        // exactly as `sessionId` does beside `workspaceId`.
         workspace: workspaceListEntryFromGrid(session.workspaceId, grid),
+        // THE TREE. `{rev, nodes, targets}` — the same shape `GET
+        // /[workspaceId]/nodes` answers, so the sidebar's seat and a pane
+        // surface's own read are one function on the client, not two.
+        rev: tree.rev,
+        nodes: tree.nodes,
+        targets: tree.targets,
       };
     });
     return NextResponse.json({ sessions: withChildren });

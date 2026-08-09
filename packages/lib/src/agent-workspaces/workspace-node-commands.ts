@@ -60,6 +60,7 @@ import {
   type PaneNode,
   type PaneTarget,
   type PaneTargetKind,
+  type RootNode,
   type SplitNode,
   type WorkspaceNode,
 } from './workspace-node';
@@ -146,6 +147,69 @@ export function compile(nodes: readonly WorkspaceNode[], steps: readonly Step[])
 /** A step that writes exactly what it is given, for the one edit the algebra cannot express. */
 function staged(write: NodeWrite): Step {
   return () => ({ ok: true, write });
+}
+
+// ---------------------------------------------------------------------------
+// The root seed
+// ---------------------------------------------------------------------------
+
+/**
+ * A workspace's root, minted deterministically FROM THE WORKSPACE'S OWN ID.
+ *
+ * **Why the id is not random.** Two clients — or a client and an agent tool —
+ * can reach an unseeded workspace at the same instant, and each would mint its
+ * own root. Both writes validate in isolation and the second upserts a SECOND
+ * root row, which `oneRootPerWorkspace` refuses and `validateTree` calls
+ * `multiple_roots`: a workspace that becomes unwritable on a race. A
+ * deterministic id makes the two writes the SAME write, so they converge
+ * through the upsert exactly like every other retried node write.
+ *
+ * The workspace id is the natural choice and not merely a convenient one: the
+ * row's key is `(rootId, id)`, so a root keyed `id === rootId` says in the table
+ * what it says in the model. It cannot collide with a client-minted node id
+ * either, because {@link seedRoot} refuses to mint over an id that is already
+ * there.
+ *
+ * `axis: 'row'` — a row of columns, which is the shape `split_right` gave the
+ * grid this replaces.
+ */
+export function rootSeedFor(workspaceId: string): RootNode {
+  return { nodeType: 'root', id: workspaceId, parentId: null, position: 0, axis: 'row' };
+}
+
+/**
+ * THE WORKSPACE'S BIRTH, and the reason the client no longer seeds a grid on
+ * mount.
+ *
+ * A workspace row can exist with no node rows at all — a fresh spawn, or one the
+ * backfill has not reached — and every command here needs a root to place into
+ * (`open` refuses `no_root`, and `create` needs a parent that resolves). Under
+ * the model this replaces, that gap was filled by the BROWSER: `ensureWorkspace`
+ * posted an `ensure` verb on mount, which is precisely the create-then-attach
+ * shape the flat model exists to delete — two successful transitions before
+ * anything is on screen, and production is full of the state where only the
+ * first landed.
+ *
+ * So the root is minted by whatever write first needs one, on the server, inside
+ * the lock, as part of that write. Not a repair: nothing here rescues a pointer
+ * that failed to resolve or moves a node the caller did not name. It is the
+ * empty grid becoming spellable, which is a legal resting state
+ * (`validateTree` accepts a root holding nothing) rather than a fault.
+ *
+ * Total and idempotent: a workspace that already has a root — under ANY id, not
+ * just the seeded one — gets `{nodes, seed: null}` and nothing is written.
+ */
+export function seedRoot(
+  nodes: readonly WorkspaceNode[],
+  workspaceId: string,
+): { nodes: readonly WorkspaceNode[]; seed: RootNode | null } {
+  if (rootOf(nodes) !== undefined) return { nodes, seed: null };
+  const seed = rootSeedFor(workspaceId);
+  // An id already taken by something that is NOT a root leaves the workspace
+  // where it was: refusing beats upserting a root over a live pane, and the
+  // caller's command then answers `no_root` — which is true, and says so.
+  if (findNode(nodes, seed.id) !== undefined) return { nodes, seed: null };
+  return { nodes: [...nodes, seed], seed };
 }
 
 /**
@@ -455,6 +519,7 @@ export interface OpenInput<Kind extends PaneTargetKind> {
 
 export type OpenConversationInput = OpenInput<'chat'>;
 export type OpenPageInput = OpenInput<'page'>;
+export type OpenShellInput = OpenInput<'terminal'>;
 
 /** A pane that is IN the grid. The type states what {@link gridPanes} guarantees, so no reader re-checks. */
 type GridPane = PaneNode & { parentId: string };
@@ -602,5 +667,21 @@ export function openConversation(
 
 /** Place a page. Same policy as {@link openConversation}; the kind is fixed so the two cannot be confused. */
 export function openPage(nodes: readonly WorkspaceNode[], input: OpenPageInput): CommandResult {
+  return open(nodes, input);
+}
+
+/**
+ * Place a SHELL — reattaching one this workspace already has, or seating one the
+ * caller just spawned.
+ *
+ * Same policy again, and the third caller is what settles that the policy
+ * belongs in {@link open} rather than in `openConversation` with two aliases.
+ * Note the asymmetry it inherits and should keep: a shell is never EVICTED
+ * (`isReplaceablePane` refuses a terminal — the PTY loses its only surface and
+ * there is no reattach UI), but a shell can perfectly well be what displaces
+ * something else. "Do not take this away" and "this may be put here" are
+ * different questions about the same kind.
+ */
+export function openShell(nodes: readonly WorkspaceNode[], input: OpenShellInput): CommandResult {
   return open(nodes, input);
 }

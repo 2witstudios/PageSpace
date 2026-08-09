@@ -64,6 +64,12 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
     // depends on: a refusal raised after `within` has written must take those
     // writes with it, and a fake that could not roll back would make an
     // unwinding refusal and a returning one indistinguishable.
+    //
+    // The transaction it hands `fn` is used for two things: the store reads
+    // above (mocked wholesale), and `readWorkspaceOwnerId`'s own SELECT — which
+    // runs INSIDE the lock deliberately, so the broadcast can reach the owner's
+    // directory plane without a second query on the hot path. A `{}` here would
+    // pass every rollback test and throw on every broadcast one.
     withWorkspaceLayoutLock: async (_id: string, fn: (tx: unknown) => Promise<unknown>) => {
       const snapshot = {
         rev: store.rev,
@@ -72,7 +78,11 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
         rows: [...store.rows],
       };
       try {
-        return await fn({});
+        return await fn({
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => labelRows.workspaces }) }),
+          }),
+        });
       } catch (error) {
         Object.assign(store, snapshot);
         throw error;
@@ -129,7 +139,7 @@ vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaces: { __name: 'workspaces' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
-vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}) }));
+vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}), eq: () => ({}) }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
@@ -298,9 +308,15 @@ describe('the broadcast', () => {
 
     expect(mockBroadcast).toHaveBeenCalledTimes(1);
     const payload = mockBroadcast.mock.calls[0][0] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(['nodes', 'rev', 'workspaceId']);
-    // `session:<id>` is a ROOM — one payload reaches every member at once, so
-    // there is no viewer to redact for and a title has no business on this wire.
+    // `ownerId` is routing, not content: it names the second ROOM the event
+    // goes to (the owner's own directory plane, so a workspace nobody has open
+    // still updates its sidebar rows) and is stripped before the payload is
+    // emitted — see `broadcastWorkspaceNodesUpdated`.
+    expect(Object.keys(payload).sort()).toEqual(['nodes', 'ownerId', 'rev', 'workspaceId']);
+    expect(payload.ownerId).toBe(VIEWER);
+    // Both rooms carry the same STRUCTURAL payload — one reaches every member
+    // of a shared workspace at once, so there is no viewer to redact for and a
+    // title has no business on this wire.
     expect(JSON.stringify(payload)).not.toContain('Q3 layoffs');
   });
 });
@@ -313,7 +329,16 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     ];
     const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
     expect(snapshot.targets).toEqual([
-      { id: 'conv-1', kind: 'chat', title: 'Planning', lastMessageAt: '2026-01-02T03:04:05.000Z' },
+      {
+        id: 'conv-1',
+        kind: 'chat',
+        title: 'Planning',
+        lastMessageAt: '2026-01-02T03:04:05.000Z',
+        // Derived by the SHARED `conversationPageId` rule, behind the same gate
+        // the title passed — the pane header's only route to its agent now that
+        // there is no `PaneScope` to carry one.
+        agentPageId: 'page-9',
+      },
     ]);
   });
 
@@ -325,7 +350,7 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     ];
     const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
     expect(snapshot.targets).toEqual([
-      { id: 'conv-1', kind: 'chat', title: '(private thread)', lastMessageAt: null },
+      { id: 'conv-1', kind: 'chat', title: '(private thread)', lastMessageAt: null, agentPageId: null },
     ]);
   });
 
