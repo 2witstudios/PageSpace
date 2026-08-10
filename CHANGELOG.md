@@ -3,7 +3,7 @@
 All notable user-facing changes to PageSpace are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.7.1] — 2026-08-10
 
 ### Fixed
 
