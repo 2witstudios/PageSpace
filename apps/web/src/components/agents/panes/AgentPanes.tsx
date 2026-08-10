@@ -788,7 +788,25 @@ export default function AgentPanes({
             sessionId,
           });
         }
-        const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint));
+        // The server's admit path binds the pane AND broadcasts
+        // workspace:nodes-updated BEFORE the HTTP response returns. That
+        // broadcast binds the pane to the new conversation, so by the time
+        // we check `stillMinting`, the node's target is no longer null and
+        // the check reads as "superseded" — even though nothing superseded
+        // it. Without this guard the cleanup below would DELETE the very
+        // conversation we just created, destroying the pane the user sees
+        // flash and then vanish. The first pane never hits this because it
+        // is placed by the initial-conversation effect, not handlePickAgent.
+        // Pages never hit it because bindPane is synchronous (no server
+        // round trip, no broadcast race).
+        const alreadyPlacedByServer =
+          nodeShowing(
+            useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [],
+            'chat',
+            conversationId,
+          ) !== undefined;
+        const superseded =
+          !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint) && !alreadyPlacedByServer);
         if (showsSpinner) endMint(nodeId);
         if (superseded) {
           // A NEWER call for this node superseded this one, or the node was

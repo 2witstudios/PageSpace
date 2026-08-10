@@ -640,6 +640,43 @@ describe('AgentPanes — the mint lifecycle', () => {
     await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
   });
 
+  it('does not clean up the conversation when the server broadcast binds the pane before the POST resolves', async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    const withPicker = () => seat([rootNode, paneNode('n1', WS, 0, null)], []);
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // The server's admit path binds the pane AND broadcasts
+    // workspace:nodes-updated BEFORE the HTTP response returns. Simulate
+    // that broadcast arriving: the pane n1 is now bound to the new
+    // conversation.
+    act(() => {
+      useAgentWorkspaceStore.getState().applyRemoteUpdate({
+        workspaceId: WS,
+        rev: 2,
+        nodes: [
+          rootNode,
+          { nodeType: 'pane', id: 'n1', parentId: WS, position: 0, target: { kind: 'chat', id: 'new-id-1' } },
+        ],
+      });
+    });
+
+    // Now the POST resolves. Without the guard, stillMinting returns false
+    // (the pane is no longer unbound), so the code treats this as superseded
+    // and DELETEs the conversation — destroying the pane.
+    resolveMint({});
+
+    // The conversation is still in the tree, not cleaned up.
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+    expect(conversationDeletes().every((url) => !url.includes('new-id-1'))).toBe(true);
+  });
+
   it('cleans up the orphaned row when the pane is closed mid-mint', async () => {
     let resolveMint!: (value: unknown) => void;
     mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
