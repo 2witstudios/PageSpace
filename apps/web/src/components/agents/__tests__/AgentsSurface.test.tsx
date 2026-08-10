@@ -261,6 +261,45 @@ describe('AgentsSurface', () => {
   });
 });
 
+describe('the way out of a session', () => {
+  it('"All conversations" drops the selection and shows the list, without ending the session', async () => {
+    // The reported bug: the list renders only while nothing is selected, and
+    // every existing way to clear a selection destroyed the session first. A
+    // back control has to clear the selection and NOTHING else — no DELETE,
+    // no forgotten grid.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-workspaces/conversations')) {
+        return { ok: true, json: async () => EMPTY_CONVERSATIONS };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null, name: 'My Session' } }) };
+    });
+    seatTree('ses-back', [rootOf('ses-back'), chatNode('n1', 'ses-back', 0, 'conv-1')]);
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-back&c=conv-1&agent=agent-1');
+
+    render(<AgentsSurface />);
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => screen.getByRole('button', { name: /All conversations/ }).click());
+
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+    expect(screen.queryByTestId('agent-panes')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeDefined();
+    // The session is still there — this is a change of view, not of the world.
+    expect(useAgentWorkspaceStore.getState().workspaces['ses-back']).toBeDefined();
+    expect(
+      mockFetchWithAuth.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE'),
+    ).toBe(false);
+    // And the URL it mirrors to no longer names the session, so a refresh
+    // lands on the list too.
+    expect(window.location.search).toBe('');
+  });
+
+  it('is not rendered when nothing is selected — there is nowhere to go back to', () => {
+    render(<AgentsSurface />);
+    expect(screen.queryByRole('button', { name: /All conversations/ })).toBeNull();
+  });
+});
+
 describe('GC when the server says the session is gone (issue #2263, finding 6)', () => {
   beforeEach(() => {
     __resetWorkspaceQueuesForTests();

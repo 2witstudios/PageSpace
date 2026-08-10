@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { ChevronLeft, Loader2 } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { gridPanesOf } from '@/stores/agent-workspace/workspace-tree-view';
@@ -166,28 +167,71 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
     <div className="flex h-full flex-col">
       {selectedSessionId ? (
         sessionDriveResolved ? (
-          // A session selection alone mounts the grid — the conversation is
-          // the SEED, not a precondition. A session can be page- or
-          // terminal-only now (the sidebar's page rows select a session and
-          // focus a pane, with no conversation to name), and `AgentPanes`
-          // accepts a null `initialConversation` for exactly that: it
-          // renders the stored/hydrated grid and seeds nothing.
-          <AgentPanes
-            key={selectedSessionId}
-            sessionId={selectedSessionId}
-            driveId={sessionDriveId}
-            initialConversation={
-              selectedConversationId
-                ? {
-                    conversationId: selectedConversationId,
-                    agentPageId: selectedAgentId,
-                    name: 'Conversation',
-                  }
-                : null
-            }
-            onSessionEnded={() => selectSession(null)}
-            onConversationClosed={handleConversationClosed}
-          />
+          <>
+            {/*
+              The way OUT of a session, and the only one that doesn't destroy
+              it. Everything that cleared a selection before this — the end
+              dialog, the sidebar's End Session, the server answering that the
+              workspace is gone — required the session to stop existing, so
+              browsing your own history meant ending the work you were in the
+              middle of. `selectSession(null)` just drops the selection: the
+              workspace, its panes, its PTYs and any streaming reply are all
+              untouched, and the row in the sidebar reselects it.
+
+              Rendered above the grid rather than inside `AgentPanes` because
+              it is the CONSOLE's control, not the workspace's — the same grid
+              also mounts inside a page (`AgentPageView`), where there is no
+              conversation list to go back to.
+            */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+                onClick={() => selectSession(null)}
+              >
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                All conversations
+              </Button>
+              {sessionData?.session?.name ? (
+                <span className="truncate text-xs text-muted-foreground" title={sessionData.session.name}>
+                  {sessionData.session.name}
+                </span>
+              ) : null}
+            </div>
+            {/*
+              `min-h-0 flex-1` rather than letting the grid own the height:
+              `SessionPanes` is `h-full`, which is 100% of THIS box, so the
+              header above has to be subtracted by the flex track rather than
+              by the grid — without it the grid overflows by the header's
+              height and the bottom pane's input is pushed off-screen.
+
+              A session selection alone mounts the grid — the conversation is
+              the SEED, not a precondition. A session can be page- or
+              terminal-only now (the sidebar's page rows select a session and
+              focus a pane, with no conversation to name), and `AgentPanes`
+              accepts a null `initialConversation` for exactly that: it
+              renders the stored/hydrated grid and seeds nothing.
+            */}
+            <div className="flex min-h-0 flex-1 flex-col">
+              <AgentPanes
+                key={selectedSessionId}
+                sessionId={selectedSessionId}
+                driveId={sessionDriveId}
+                initialConversation={
+                  selectedConversationId
+                    ? {
+                        conversationId: selectedConversationId,
+                        agentPageId: selectedAgentId,
+                        name: 'Conversation',
+                      }
+                    : null
+                }
+                onSessionEnded={() => selectSession(null)}
+                onConversationClosed={handleConversationClosed}
+              />
+            </div>
+          </>
         ) : (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
