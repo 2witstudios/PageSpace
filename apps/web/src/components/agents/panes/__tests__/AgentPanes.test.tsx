@@ -253,7 +253,7 @@ describe('AgentPanes — the grid it renders', () => {
   });
 
   /**
-   * THE EMPTY GRID. Closing the last pane parks it and leaves the workspace
+   * THE EMPTY GRID. Closing the last pane destroys it and leaves the workspace
    * alive — a state the two-level model could not represent, which is why
    * browser code used to end the session instead.
    */

@@ -110,10 +110,10 @@ export interface AgentPanesProps {
   driveId: string | null;
   /**
    * The conversation the host wants shown. Selection IS an instruction: this
-   * focuses the node already showing it, un-parks that node when it has one, or
-   * places it. Null for a workspace-only selection (a page/terminal row in the
-   * sidebar, a conversation-less deep link) — there is nothing to show, and the
-   * grid renders whatever the tree holds.
+   * focuses the node already showing it, or places it when nothing does. Null
+   * for a workspace-only selection (a page/terminal row in the sidebar, a
+   * conversation-less deep link) — there is nothing to show, and the grid
+   * renders whatever the tree holds.
    */
   initialConversation: { conversationId: string; agentPageId: string | null; name: string } | null;
   /** Fired after the workspace was ended — the host owns what renders next. */
@@ -450,9 +450,10 @@ export default function AgentPanes({
    * Selection IS an instruction to show the conversation.
    *
    * NOT a grid seed — there is nothing to seed, because the root is minted
-   * server-side by whatever write first needs one. This focuses the node already
-   * showing the thread, un-parks it when it has one, or places it; the store
-   * owns all three (`openConversation`).
+   * server-side by whatever write first needs one. Two outcomes, not the three
+   * the parked model needed: the thread is in the tree, so showing it is FOCUS
+   * and costs no write at all; or it is nowhere, and it is PLACED. The store
+   * owns both (`openConversation`).
    *
    * It still waits for the live conversation set before it can risk an EVICTION.
    * A target already showing never reaches that logic, so that case goes
@@ -557,9 +558,10 @@ export default function AgentPanes({
 
       if (decision.action === 'close-pane') {
         closePane(sessionId, nodeId);
-        // A closed terminal tab is a DELETE, not an orphan. The node parks with
-        // its binding, but the PTY has no surface left and no reattach path
-        // through a parked node's own row, so it goes with the close.
+        // A closed terminal tab is a DELETE, not an orphan. The node and its
+        // binding are gone with the close, so the PTY has no surface left and
+        // nothing that could reattach to it — it goes too, rather than being
+        // left running for a row that no longer exists.
         if (node.target?.kind === 'terminal') closeShell(node.target.id);
         return;
       }
@@ -662,10 +664,11 @@ export default function AgentPanes({
    * After a mint or a switch replaces what a node shows, close the conversation
    * it replaced — the fix for panes silently accumulating stray sidebar rows.
    *
-   * The displaced NODE is parked rather than destroyed, so its thread is still
-   * one click from being shown again right up until this DELETE lands. Runs only
-   * AFTER the replacement is in place; a failed mint never touches the prior
-   * conversation.
+   * Nothing is displaced: a binding is for life, so the replacement is PLACED in
+   * a node of its own rather than repointing this one. The prior thread keeps
+   * its node, stays on screen and stays a member right up until this DELETE
+   * lands and destroys it. Runs only AFTER the replacement is in place; a failed
+   * mint never touches the prior conversation.
    */
   const closeReplacedConversation = useCallback(
     async (oldConversationId: string, newConversationId: string, newAgentPageId: string | null) => {
@@ -963,9 +966,9 @@ export default function AgentPanes({
       }
 
       if (!isCurrent()) return false;
-      // ONE placement call for every branch. The store owns the three cases the
-      // duplicated block here used to hand-roll — already on the grid (focus
-      // it), parked (un-park and focus), nowhere (place it) — and it reads live
+      // ONE placement call for every branch. The store owns the two cases the
+      // duplicated block here used to hand-roll — already in the tree (focus
+      // it), nowhere (place it) — and it reads live
       // state, which is what two panes racing to reopen the same conversation
       // need: a stale pre-request snapshot would let both miss the other's
       // arrival and independently place it, which the chat-target index refuses.

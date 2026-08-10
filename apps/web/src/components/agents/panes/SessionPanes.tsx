@@ -17,8 +17,8 @@
  * xterm.
  *
  * **An empty grid renders as empty.** A root holding nothing is a legal resting
- * state (closing the last pane parks it and leaves the workspace alive), so this
- * draws the empty frame and says so, instead of treating zero panes as a
+ * state — closing the last pane destroys it and leaves the workspace alive — so
+ * this draws the empty frame and says so, instead of treating zero panes as a
  * workspace that has ended.
  */
 
@@ -39,7 +39,7 @@ import {
 import { gridPanesOf } from '@/stores/agent-workspace/workspace-tree-view';
 
 export interface SessionPanesProps {
-  /** The workspace's whole flat list — attached and detached. Only the grid is drawn here. */
+  /** The workspace's whole flat list. Only what hangs off the root is drawn here. */
   nodes: readonly WorkspaceNode[];
   /** `null` on an empty grid. */
   activeNodeId: string | null;

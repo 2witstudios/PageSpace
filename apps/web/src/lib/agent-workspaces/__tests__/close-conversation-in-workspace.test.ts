@@ -44,7 +44,7 @@ describe('closeConversationInSessionWith', () => {
     deps = makeDeps();
   });
 
-  it('moves the thread off the grid', async () => {
+  it('removes the thread from the workspace', async () => {
     expect(await closeConversationInSessionWith(deps, input)).toBe('closed');
     expect(deps.dismissConversation).toHaveBeenCalledWith({
       conversationId: 'conv-1',
@@ -54,9 +54,10 @@ describe('closeConversationInSessionWith', () => {
 
   it('closes the workspace\'s LAST thread without refusing', async () => {
     // The behaviour change this leaf makes, pinned deliberately. There is no
-    // count to stub because there is no guard: the thread stays a member, so
-    // the workspace it leaves is still not empty. A test that had to arrange
-    // "only one open listing" to reach a 409 has nothing left to arrange.
+    // count to stub because there is no guard: the thread DOES leave, and a
+    // workspace holding nothing is an ordinary resting state — a root with no
+    // children, which `validateTree` accepts. A test that had to arrange "only
+    // one open listing" to reach a 409 has nothing left to arrange.
     expect(await closeConversationInSessionWith(deps, input)).toBe('closed');
   });
 

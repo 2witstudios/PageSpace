@@ -310,11 +310,11 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             //
             // Addressed as a PLACEMENT, not as a rebind. A binding is for life,
             // so the fresh conversation cannot be pointed at the stale node; it
-            // gets a node of its own in that slot, and the stale one parks —
-            // still a member of the workspace, still one click from the sidebar,
-            // which is strictly better than the pane it used to overwrite in
-            // place. `activeNodeId` is how "here, in this rectangle" is said to
-            // the placement policy.
+            // gets a node of its own in that slot, and the stale one KEEPS ITS
+            // OWN — still in the tree, still a member, still on screen — which
+            // is strictly better than the pane it used to overwrite in place.
+            // `activeNodeId` is how "here, in this rectangle" is said to the
+            // placement policy.
             const workspaceNodes =
               useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [];
             const staleNode = workspaceNodes.find(

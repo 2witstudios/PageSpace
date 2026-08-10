@@ -132,10 +132,10 @@ describe('GET /api/agent-workspaces', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       // The listing is handed through UNCHANGED. Every entry already carries
-      // its own `nodeId` and `attached`, read off the node that decided the
-      // thread is in this workspace at all — so there is nothing for the route
-      // to annotate it with, and `annotateConversationsWithPanes` is deleted
-      // rather than ported (issue #2373).
+      // its own `nodeId`, read off the node that decided the thread is in this
+      // workspace at all — so there is nothing for the route to annotate it
+      // with, and `annotateConversationsWithPanes` is deleted rather than
+      // ported (issue #2373).
       sessions: [
         {
           ...SESSION_DTO,
@@ -163,32 +163,27 @@ describe('GET /api/agent-workspaces', () => {
    * `AgentsSidebar` chose the grid, so a thread with no pane row was invisible.
    *
    * The reconciliation that fixed it is gone too, because there is nothing left
-   * to reconcile: membership is the node, so `attached` is read off the same row
-   * that put the thread in the listing. A thread OFF the grid is in the list
-   * with `attached: false` — a resting state, not an absence — and this is the
-   * guard that replaces the deleted annotation's suite.
+   * to reconcile: membership is the node, so a thread is in this listing exactly
+   * when a node of this workspace binds it, and that node's id rides along. This
+   * is the guard that replaces the deleted annotation's suite, so what it has to
+   * pin is the ABSENCE of annotation: whatever the store answers is what the
+   * client gets, key for key.
+   *
+   * It pins that with `toEqual` on the whole array rather than `toMatchObject`
+   * on each entry, because the failure this guards against is the route ADDING a
+   * derived field back — `attached` was one, deleted with the grid it
+   * reconciled against — and a per-key match would not see one arrive.
    */
-  it('LISTS a thread that is off the grid, carrying its node and its state', async () => {
-    mockListSessionConversationsBulk.mockResolvedValue(
-      new Map([
-        [
-          'ses-1',
-          [
-            { ...CONVERSATION_ENTRY, nodeId: 'node-1', attached: true },
-            { ...CONVERSATION_ENTRY, conversationId: 'conv-parked', nodeId: 'node-2', attached: false },
-          ],
-        ],
-      ]),
-    );
+  it('hands the listing back exactly as the store answered it — no annotation, no derived state', async () => {
+    const entries = [
+      { ...CONVERSATION_ENTRY, nodeId: 'node-1' },
+      { ...CONVERSATION_ENTRY, conversationId: 'conv-2', nodeId: 'node-2' },
+    ];
+    mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', entries]]));
 
     const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
-    const conversations = body.sessions[0].conversations;
 
-    expect(conversations).toHaveLength(2);
-    expect(conversations[0]).toMatchObject({ nodeId: 'node-1', attached: true });
-    // The one the old shape dropped on the floor, and the one a `close` now
-    // produces: still a member, still listed, simply not on screen.
-    expect(conversations[1]).toMatchObject({ conversationId: 'conv-parked', nodeId: 'node-2', attached: false });
+    expect(body.sessions[0].conversations).toEqual(entries);
   });
 
   /**
