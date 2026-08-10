@@ -94,10 +94,10 @@ SELECT w.id, w."endedAt",
                     WHERE n."rootId" = w.id AND n."nodeType" = 'root');
 ```
 
-### ⚠️ Deploy order for `0256`: bring the new image up BEFORE migrating
+### ⚠️ `0256` has a deploy window, and it is ACCEPTED — know what it costs
 
 **This applies to EVERY deployment, cloud included — it is not a
-version-skipping concern.**
+version-skipping concern.** No data is at risk; this is availability only.
 
 `0256` is a CONTRACT migration, so the usual order is backwards for it. The
 pipeline (`.github/workflows/docker-images.yml`) runs the migrate one-shot and
@@ -124,21 +124,27 @@ Three such selects exist, and one of them is on the main chat path:
 This is the same shape as `0252`'s window (documented below) but with a **much**
 wider blast radius. `0252` degraded the Agents sidebar and the layout endpoints;
 this one reaches `getConversation`, which sits on the chat turn itself — so in
-the default order, sending a message 500s for the length of the roll. Treat the
-inverted order below as required rather than advisory.
+the pipeline's default order, **sending a message 500s for the length of the
+roll**, not merely a sidebar.
 
-**It is fully avoidable, and the fix costs nothing:** the NEW image is forward
-compatible with the un-contracted schema. It never names either column, and both
-are nullable, so it runs correctly against a database that still has them. So
-for this one release, invert the order:
+**This window is a deliberate, accepted trade for this release**, on the same
+reasoning `0252` was accepted: the degradation is bounded to the migrate→roll
+gap and it is loud (500s), not silent, and no data is at risk in either
+direction. Ship it in the default order and the window closes on its own when
+the roll completes.
+
+**If you want to avoid it, you can, and it costs nothing:** the NEW image is
+forward compatible with the un-contracted schema — it never names either column,
+and both are nullable, so it runs correctly against a database that still has
+them. Any deployment that would rather not take the window can simply invert the
+order for this one release:
 
 1. Deploy `web` (and `realtime`) on the new image FIRST, against the database
    still at `0255`.
 2. Run the migrate one-shot once the roll has completed.
 
-Degradation if you do it in the pipeline's default order is bounded to the
-migrate→roll window and it is loud (500s), not silent. No data is at risk either
-way — this is an availability concern only.
+That is the recommended sequence for a self-host stack upgrading by hand, where
+inverting costs nothing. Cloud takes the default order and the window with it.
 
 ## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
