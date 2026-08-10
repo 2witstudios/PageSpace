@@ -16,6 +16,19 @@ export const userPersonalization = pgTable('user_personalization', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
   // Legacy content columns — kept for backfall compatibility
+  // LEGACY. Superseded by the page pointers below, and read ONLY while a field's
+  // pointer is still null — see `personalization-utils.getUserPersonalization`.
+  // `scripts/backfill-memory-pages.ts` copies each into its page and then nulls
+  // the column, so a row that has been backfilled holds nothing here.
+  //
+  // ⚠️ Dropping these three is a CONTRACT migration and carries the same hazard
+  // `infrastructure/UPGRADE.md` documents for 0255 → 0256: the backfill is what
+  // moves the content, and it can only run while the columns still exist. A
+  // deployment that jumps straight to the drop applies it to rows the backfill
+  // never reached, and their profiles are gone with nothing to recover from —
+  // silently, because the pointer-absent fallback simply reads empty. Ship the
+  // drop only behind a release that carries the backfill, and give it an
+  // UPGRADE.md entry saying so.
   bio: text('bio'),
   writingStyle: text('writingStyle'),
   rules: text('rules'),
