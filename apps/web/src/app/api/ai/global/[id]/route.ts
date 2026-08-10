@@ -156,7 +156,20 @@ export async function DELETE(
       await globalConversationRepository.softDeleteConversation(userId, id);
       await expelAfterDelete(id, userId);
     } else {
+      // NO MEMBERSHIP AT THE READ — which is not the same as no membership at
+      // the DELETE, and that gap is why this branch expels too. A thread with no
+      // workspace is exactly the thread `claimConversationInSession` will admit
+      // (it proceeds on `home === null`), so a claim landing between the read
+      // above and the soft-delete below leaves a live node bound to a thread
+      // that is now inactive — holding its chat-target index slot, with nothing
+      // left to reclaim either. The `if` branch above compensates for precisely
+      // this race; the `else` had no compensation at all.
+      //
+      // `expelAfterDelete` re-resolves the workspace rather than trusting the
+      // read, so it finds whatever the race bound. When nothing raced — the
+      // overwhelmingly common case — it is one indexed read and no write.
       await globalConversationRepository.softDeleteConversation(userId, id);
+      await expelAfterDelete(id, userId);
     }
 
     auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'global_chat', resourceId: id, details: {

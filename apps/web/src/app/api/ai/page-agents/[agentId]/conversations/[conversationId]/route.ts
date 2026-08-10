@@ -278,8 +278,21 @@ export async function DELETE(
       await conversationRepository.softDeleteConversation(agentId, conversationId);
       await expelAfterDelete(conversationId, auth.userId);
     } else {
-      // Not a member of any workspace — no listing to protect, no lock needed.
+      // NO MEMBERSHIP AT THE READ, which is not the same as none at the DELETE.
+      // The previous comment here — "no listing to protect, no lock needed" —
+      // was a true statement about the READ and a false one about the write:
+      // a thread with no workspace is exactly what `claimConversationInSession`
+      // admits (it proceeds on `home === null`), so a claim landing between that
+      // read and this delete leaves a live node bound to a thread that is now
+      // inactive, holding its chat-target index slot with nothing left to
+      // reclaim it. The `if` branch compensates for that race; this one did not.
+      //
+      // `expelAfterDelete` re-resolves the workspace rather than trusting the
+      // read, so it finds whatever the race bound, and it is best-effort so a
+      // fully committed delete can never 500 on it. Nothing raced in the common
+      // case: one indexed read, no write.
       await conversationRepository.softDeleteConversation(agentId, conversationId);
+      await expelAfterDelete(conversationId, auth.userId);
     }
 
     // Audit log the deletion for security and compliance

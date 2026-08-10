@@ -494,6 +494,26 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       );
     });
 
+    it('runs the second expel on the NO-MEMBERSHIP branch too — the race that branch had no answer for', async () => {
+      // The twin of the global route's F3 test (`.pu-reports/pu-rev-races.md`).
+      // This branch carried a comment saying "no listing to protect, no lock
+      // needed", which was true of the READ and false of the write: a claim
+      // landing between the membership read and the delete leaves a live node
+      // bound to a now-inactive thread, holding its chat-target index slot.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
+      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
+      );
+    });
+
     it("DELETES a thread that is its workspace's last conversation", async () => {
       // See the global route's twin: the never-empty guard defended a state
       // nobody can reach any more, so its 409 only ever refused legitimate work.

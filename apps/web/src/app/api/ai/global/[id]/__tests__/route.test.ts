@@ -422,6 +422,31 @@ describe('DELETE /api/ai/global/[id]', () => {
       );
     });
 
+    it('runs the second expel on the NO-MEMBERSHIP branch too — the race that branch had no answer for', async () => {
+      // F3, from `.pu-reports/pu-rev-races.md`. Both delete routes read
+      // membership, then delete; the `if` branch compensates for a claim landing
+      // in that gap and the `else` branch did not. A thread with no workspace is
+      // precisely what `claimConversationInSession` admits (it proceeds on
+      // `home === null`), so the uncompensated branch is the one the race is
+      // most likely to hit — and it left a live node bound to an inactive
+      // thread, holding its chat-target index slot with nothing to reclaim it.
+      //
+      // The sweep must run AFTER the soft-delete: before it, it is just the
+      // first expel again and the window is still open behind it.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
+      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
+      );
+    });
+
     it("DELETES a thread that is its workspace's last conversation", async () => {
       // The never-empty guard is gone, and with it the `last_conversation` 409.
       // It refused this delete to uphold "a workspace is never empty" — an
