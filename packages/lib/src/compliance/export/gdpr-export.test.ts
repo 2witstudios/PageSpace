@@ -129,7 +129,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
 vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
 vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
 vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
-vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: mockTable('userPersonalization') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: mockTable('userPersonalization'),
+  personalizationCandidates: mockTable('personalizationCandidates'),
+}));
 
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),

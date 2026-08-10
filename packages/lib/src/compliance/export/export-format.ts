@@ -79,6 +79,12 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // checkpointed `parts` are content nothing else in this bundle carries.
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
     { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
+    // Inferences the memory cron drew about the subject, with the quotes of
+    // their own messages it kept as justification. Shipped unconditionally
+    // (unlike personalization.json below) so an empty file reads as "nothing
+    // was inferred about you" rather than leaving the subject unable to tell
+    // the difference between that and the category not being carried.
+    { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -188,6 +194,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'displayPreferences', value: data.displayPreferences },
       { '@type': 'PropertyValue', name: 'settings', value: data.settings },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
+      { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
     ],

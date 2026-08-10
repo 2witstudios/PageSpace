@@ -15,7 +15,7 @@ import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
-import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
@@ -226,6 +226,43 @@ export interface UserPersonalizationExport {
 }
 
 /**
+ * One INFERENCE the memory cron drew about the subject, and the words of theirs
+ * it drew it from.
+ *
+ * This is the most sensitive row shape in the personalization area and the one
+ * a subject is most likely to be surprised by, so it is exported in full rather
+ * than summarised. `claim` is a machine-authored assertion ABOUT the person —
+ * derived personal data under Art 4(1), which Art 15(1)(a)-(b) covers whether
+ * or not it was ever promoted into the profile — and `evidence` is a verbatim
+ * quote of their own message that the system retained as its justification.
+ *
+ * Candidates that were rejected, or that are still awaiting corroboration, are
+ * included deliberately. "We inferred this about you, and did not act on it"
+ * is precisely the processing a subject access request exists to disclose, and
+ * withholding it would disclose only the flattering half of the record.
+ *
+ * `claimKey` is omitted: it is a lowercased, punctuation-stripped derivative of
+ * `claim` that exists solely for deduplication, so it carries no information
+ * the subject cannot already read in `claim`.
+ */
+export interface UserPersonalizationCandidateExport {
+  /** Which profile page this claim was staged for. */
+  field: string;
+  /** The inference itself, as written by the model. */
+  claim: string;
+  /** The subject's own words that the system retained as support for the claim. */
+  evidence: string;
+  /** Distinct days the claim was re-observed on. */
+  occurrences: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  /** Set when the claim was written into the subject's profile. */
+  promotedAt: Date | null;
+  /** Set when the claim was evaluated and declined. */
+  rejectedAt: Date | null;
+}
+
+/**
  * One PTY the subject opened inside a workspace.
  *
  * `spriteExecId` is deliberately absent: it names an exec session on a VM in
@@ -356,6 +393,7 @@ export interface AllUserData {
   displayPreferences: UserDisplayPreferenceExport[];
   settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
+  personalizationCandidates: UserPersonalizationCandidateExport[];
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
 }
@@ -912,6 +950,39 @@ export async function collectUserPersonalization(database: DB, userId: string): 
 }
 
 /**
+ * Every inference the memory cron staged about the subject — promoted, declined
+ * and still-pending alike.
+ *
+ * Sorted oldest-first in memory rather than with `ORDER BY` so the query shape
+ * stays identical to every other collector here (select/from/where). The row
+ * count is bounded by what one user's discovery passes produce, so the sort is
+ * trivial, and matching the shared shape keeps this collector working with the
+ * same test harness as its neighbours.
+ */
+export async function collectUserPersonalizationCandidates(
+  database: DB,
+  userId: string,
+): Promise<UserPersonalizationCandidateExport[]> {
+  const rows = await database
+    .select({
+      field: personalizationCandidates.field,
+      claim: personalizationCandidates.claim,
+      evidence: personalizationCandidates.evidence,
+      occurrences: personalizationCandidates.occurrences,
+      firstSeenAt: personalizationCandidates.firstSeenAt,
+      lastSeenAt: personalizationCandidates.lastSeenAt,
+      promotedAt: personalizationCandidates.promotedAt,
+      rejectedAt: personalizationCandidates.rejectedAt,
+    })
+    .from(personalizationCandidates)
+    .where(eq(personalizationCandidates.userId, userId));
+
+  return [...rows].sort(
+    (a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime(),
+  );
+}
+
+/**
  * The subject's WORKING CONTEXTS and the shells inside them.
  *
  * ── Why this collector exists ────────────────────────────────────────────────
@@ -1103,7 +1174,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userAgentWorkspaces, userStreamState] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
@@ -1118,6 +1189,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserDisplayPreferences(database, userId),
     collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
+    collectUserPersonalizationCandidates(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
   ]);
@@ -1139,6 +1211,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     displayPreferences: userDisplayPreferences,
     settings: userSettings,
     personalization: userPersonalizationData,
+    personalizationCandidates: userPersonalizationCandidates,
     agentWorkspaces: userAgentWorkspaces,
     streamState: userStreamState,
   };
