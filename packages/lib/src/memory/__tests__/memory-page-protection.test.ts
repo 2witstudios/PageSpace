@@ -91,6 +91,19 @@ describe('memory page deletion protection', () => {
     expect((await findProtectedMemoryPages([])).size).toBe(0);
   });
 
+  it('refuses moves separately from deletes, and says content is still editable', async () => {
+    // `parentId` is user-editable, so a memory page could be moved under an
+    // ordinary page and swept up by THAT page's delete cascade — losing a
+    // profile as a side effect of deleting something unrelated. Refusing the
+    // move closes that route; the message has to make clear it is only the
+    // relocation being refused, not editing.
+    const { MEMORY_PAGE_MOVE_ERROR, MEMORY_PAGE_DELETE_ERROR } = await import('../memory-pages');
+
+    expect(MEMORY_PAGE_MOVE_ERROR).not.toBe(MEMORY_PAGE_DELETE_ERROR);
+    expect(MEMORY_PAGE_MOVE_ERROR).toMatch(/cannot be moved/i);
+    expect(MEMORY_PAGE_MOVE_ERROR).toMatch(/still edit/i);
+  });
+
   it('offers the toggle before the clear-the-page workaround', async () => {
     // Deletion is redundant rather than missing: the toggle already stops the
     // AI using memory entirely, and emptying a page removes its content. The

@@ -25,6 +25,7 @@ import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-servic
 import {
   isProtectedMemoryPage,
   MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
 } from '@pagespace/lib/memory/memory-pages';
 
 /**
@@ -303,6 +304,12 @@ async function recursivelyTrash(
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
+    // `parentId` is user-editable, so a memory page can be moved under an
+    // ordinary page and would otherwise be swept up by that page's cascade —
+    // deleting a profile as a side effect of deleting something else. The
+    // top-level guard in `trashPage` only sees the page it was asked about.
+    if (await isProtectedMemoryPage(child.id)) continue;
+
     const childTriggers = await recursivelyTrash(child.id, tx, context);
     triggers.push(...childTriggers);
   }
@@ -490,6 +497,14 @@ export const pageService = {
 
     // Validate parent change
     if (updates.parentId !== undefined) {
+      // Memory pages stay in their Memory folder. Moving one out is how it ends
+      // up under an ordinary page and inside that page's delete cascade, and it
+      // also breaks the folder link the settings screen offers. Editing the
+      // CONTENT is untouched — only relocation is refused.
+      if (await isProtectedMemoryPage(pageId)) {
+        return { success: false, error: MEMORY_PAGE_MOVE_ERROR, status: 403 };
+      }
+
       const validation = await validatePageMove(pageId, updates.parentId);
       if (!validation.valid) {
         return { success: false, error: validation.error || 'Invalid parent', status: 400 };

@@ -46,6 +46,16 @@ export const MEMORY_PAGE_DELETE_ERROR =
   'Memory pages hold what the AI knows about you and cannot be deleted. To stop the AI using them, turn personalization off in Settings; to erase what one says, clear the page.';
 
 /**
+ * Refusal shown when someone tries to move a memory page out of its folder.
+ *
+ * Relocation is what puts a memory page inside some other page's delete
+ * cascade, and it breaks the folder link the settings screen offers. Only the
+ * MOVE is refused — the page's content stays fully editable.
+ */
+export const MEMORY_PAGE_MOVE_ERROR =
+  'Memory pages live in your Memory folder and cannot be moved. You can still edit what they say.';
+
+/**
  * Whether this page is one of the protected memory pages, or their folder.
  *
  * These are structural, like the Home drive itself: the cron writes to them by
