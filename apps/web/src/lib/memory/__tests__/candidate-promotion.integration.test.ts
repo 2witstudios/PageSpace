@@ -21,6 +21,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { factories } from '@pagespace/db/test/factories';
+import { requireDb } from '@pagespace/db/test/require-db';
 import {
   upsertCandidates,
   findPromotableCandidates,
@@ -59,13 +60,17 @@ describe('candidate promotion (Postgres)', () => {
     try {
       await db.select().from(personalizationCandidates).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      // Missing Postgres is an environment failure, not a reason to report a
+      // green zero-assertion pass. Only an explicit ALLOW_SKIP_DB_TESTS=1 gets
+      // past this.
+      requireDb('candidate-promotion.integration.test.ts', error);
       dbAvailable = false;
     }
   });
 
   it('counts distinct evidence days, not repeated reads of the same message', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    if (!dbAvailable) return;
     const userId = await freshUser();
 
     await upsertCandidates(userId, [claim('rules', DAY1)]);
@@ -89,7 +94,7 @@ describe('candidate promotion (Postgres)', () => {
   });
 
   it('will not promote a claim on the day it was first seen', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    if (!dbAvailable) return;
     const userId = await freshUser();
 
     await upsertCandidates(userId, [claim('rules', DAY1)]);
@@ -103,7 +108,7 @@ describe('candidate promotion (Postgres)', () => {
   });
 
   it('holds bio to three days where the behavioural fields need two', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    if (!dbAvailable) return;
     const userId = await freshUser();
 
     await upsertCandidates(userId, [claim('bio', DAY1), claim('rules', DAY1)]);
@@ -119,7 +124,7 @@ describe('candidate promotion (Postgres)', () => {
   });
 
   it('re-observing a settled claim does not collide with the unique index', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    if (!dbAvailable) return;
     const userId = await freshUser();
 
     await upsertCandidates(userId, [claim('rules', DAY1)]);
@@ -136,7 +141,7 @@ describe('candidate promotion (Postgres)', () => {
   });
 
   it('redacts the verbatim quote once a settled row passes its retention window', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    if (!dbAvailable) return;
     const userId = await freshUser();
 
     await upsertCandidates(userId, [claim('rules', DAY1)]);
