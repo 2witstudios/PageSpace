@@ -221,9 +221,23 @@ export async function checkAndCompactIfNeeded(
     const originalContent = current[field] ?? '';
     const compactedContent = await compactField(userId, field, originalContent);
 
-    if (compactedContent !== originalContent) {
-      await updatePersonalizationPage(userId, field, compactedContent);
+    if (compactedContent === originalContent) continue;
+
+    // Report only what actually landed. `updatePersonalizationPage` refuses a
+    // write when the page was edited during this run (the user's edit wins) or
+    // when the pointer is stale — claiming those as compacted would report a
+    // page as shrunk while it is still over budget, and the next run would
+    // silently do the same thing again.
+    const result = await updatePersonalizationPage(userId, field, compactedContent);
+
+    if (result.written) {
       compactedFields.push(field);
+    } else {
+      loggers.api.warn('Memory compaction: compacted content was not written', {
+        userId,
+        field,
+        reason: result.reason,
+      });
     }
   }
 

@@ -1,4 +1,4 @@
-import { describe, it, vi } from 'vitest';
+import { describe, it, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 /**
@@ -16,9 +16,25 @@ vi.mock('@pagespace/db/schema/personalization', () => ({
   userPersonalization: {},
   personalizationCandidates: {},
 }));
+const readMemoryPages = vi.fn(async () => ({}) as Record<string, string>);
 vi.mock('@pagespace/lib/memory/memory-pages', () => ({
-  readMemoryPages: vi.fn(async () => ({})),
+  readMemoryPages: (...a: unknown[]) => readMemoryPages(...(a as [])),
 }));
+
+// The page writer is the boundary compaction has to respect: it refuses when
+// the user edited the page mid-run, or the pointer is stale.
+const updatePersonalizationPage = vi.fn(
+  async () => ({ written: true }) as { written: boolean; reason?: string }
+);
+vi.mock('../integration-service', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getCurrentPersonalizationPages: (...a: unknown[]) => readMemoryPages(...(a as [])),
+    updatePersonalizationPage: (...a: unknown[]) =>
+      updatePersonalizationPage(...(a as [])),
+  };
+});
 vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
@@ -92,6 +108,47 @@ describe('needsCompaction', () => {
         rules: needsCompaction(oldRestingSize, 'rules'),
       },
       expected: { bio: true, writingStyle: true, rules: true },
+    });
+  });
+});
+
+describe('checkAndCompactIfNeeded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updatePersonalizationPage.mockResolvedValue({ written: true });
+  });
+
+  it('reports a field as compacted only when the write actually landed', async () => {
+    // The page was edited by the user while this run was compacting, so the
+    // write is refused. Reporting it as compacted would claim a page had shrunk
+    // while it is still over budget — and the next run would do the same thing
+    // again, reporting success every night while nothing changed.
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500) });
+    updatePersonalizationPage.mockResolvedValue({
+      written: false,
+      reason: 'page was edited during this run',
+    });
+
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'short compacted bio',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({
+      model: {},
+      provider: 'anthropic',
+      modelName: 'm',
+    } as never);
+
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-1');
+
+    assert({
+      given: 'a refused write for an over-budget page',
+      should: 'report nothing as compacted',
+      actual: { compacted: result.compacted, fields: result.fields },
+      expected: { compacted: false, fields: [] },
     });
   });
 });
