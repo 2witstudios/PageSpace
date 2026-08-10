@@ -81,6 +81,13 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
+  // EXHAUSTIVENESS BACKSTOP — see the twin in `claim/route.ts`. Everything
+  // below is a SUCCESS response, so a refusal reaching it is answered
+  // `200 {ok: true}`. An `if`-chain cannot be checked for completeness, so the
+  // narrowing is written down: adding a refusal to `ReopenConversationOutcome`
+  // without an arm above is a COMPILE error here rather than a silent success.
+  const settled: 'reopened' | 'already_open' = outcome;
+
   // `alreadyOpen` (outcome === 'already_open'): this call did NOT transition
   // the listing — it was already open (e.g. a different pane, tab, or an
   // agent switch that left it open but unshown). The caller needs this to
@@ -89,5 +96,5 @@ export async function POST(request: Request, context: RouteContext) {
   // listing the request never actually opened, possibly still in use
   // elsewhere (review finding — chatgpt-codex-connector on PR #2299,
   // round 15).
-  return NextResponse.json({ ok: true, alreadyOpen: outcome === 'already_open' });
+  return NextResponse.json({ ok: true, alreadyOpen: settled === 'already_open' });
 }
