@@ -9,6 +9,24 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'docker/**'
+      # A BUILD INPUT THAT WAS NOT A TRIGGER, and the asymmetry was silent.
+      # `apps/web/Dockerfile.migrate` does `COPY scripts ./scripts` — one-off
+      # scripts are meant to run on the migrate image, and its own comments say
+      # so — but a script-only change matched none of the paths above, so the
+      # image was never rebuilt and the published tag never gained the file.
+      #
+      # Proved on 2026-08-10: `registry.fly.io/pagespace-web:migrate` did not
+      # contain `scripts/backfill-agent-workspace-nodes.ts` at all. An absolute
+      # path failed identically, ruling out a working-directory explanation, and
+      # a GREEN `Docker Images` run left the Fly tag on the same digest, because
+      # this workflow does not build the migrate image inline — it pulls
+      # `ghcr.io/2witstudios/pagespace-migrate:latest` and retags, so a stale
+      # GHCR `:latest` propagates and a green run proves nothing about contents.
+      #
+      # The rollout step "run it as a one-off machine on the migrate image" was
+      # therefore impossible to perform, which is how the epic's own backfill
+      # gate came to be unrunnable.
+      - 'scripts/**'
       - 'bun.lock'
       - '.github/workflows/docker-images.yml'
 
