@@ -15,8 +15,13 @@ emits everything below.
 
 ## 2026-08 — ⚠️ Minimum upgrade path: workspace membership becomes a node tree (`0255` → `0256`)
 
-**Applies to tenant / self-host deployments that skip releases. Read this before
-upgrading.** Cloud rolls every release in order and needs nothing here.
+**Two separate concerns, with different audiences — read the one that is yours:**
+
+- **The minimum upgrade path** (immediately below) is a DATA-LOSS hazard, and it
+  applies only to tenant / self-host deployments that **skip releases**. Cloud
+  rolls every release in order and is not exposed to it.
+- **The deploy window** (`⚠️ 0256 has a deploy window` further down) is an
+  AVAILABILITY concern and applies to **every** deployment, cloud included.
 
 A workspace's membership (which threads belong to a session) and its layout
 (where each one is shown) used to be two structures — `conversations."workspaceId"`
