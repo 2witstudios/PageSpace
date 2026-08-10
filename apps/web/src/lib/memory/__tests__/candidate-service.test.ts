@@ -294,6 +294,41 @@ describe('upsertCandidates — what the corroboration count is measured against'
   });
 });
 
+describe('retention windows are coherent with the discovery window', () => {
+  it('keeps a pending candidate alive longer than the window that keeps re-observing it', async () => {
+    // Discovery rereads a rolling LOOKBACK_DAYS window. If the stale window
+    // were shorter, a claim could be pruned for inactivity while the very same
+    // messages were still inside the read window — deleted and re-staged on an
+    // endless loop, its occurrence count reset each time, so it could never
+    // reach the corroboration bar however often the user said it.
+    const { STALE_CANDIDATE_DAYS } = await import('../candidate-service');
+    const LOOKBACK_DAYS = 7; // discovery-service
+
+    assert({
+      given: 'the stale-candidate window and the discovery lookback window',
+      should: 'let a claim outlive the window that keeps rediscovering it',
+      actual: STALE_CANDIDATE_DAYS > LOOKBACK_DAYS,
+      expected: true,
+    });
+  });
+
+  it('keeps settled evidence longer than a pending claim survives', async () => {
+    // A promoted claim should not have its justification disappear sooner than
+    // an un-promoted one: the subject is most likely to ask "why does the AI
+    // think this about me?" precisely about claims that DID reach their profile.
+    const { STALE_CANDIDATE_DAYS, SETTLED_EVIDENCE_RETENTION_DAYS } = await import(
+      '../candidate-service'
+    );
+
+    assert({
+      given: 'the pending and settled retention windows',
+      should: 'retain the evidence behind a promoted claim at least as long',
+      actual: SETTLED_EVIDENCE_RETENTION_DAYS > STALE_CANDIDATE_DAYS,
+      expected: true,
+    });
+  });
+});
+
 describe('PROMOTION_THRESHOLD', () => {
   it('holds bio to a stricter bar than the behavioural fields', async () => {
     const { PROMOTION_THRESHOLD } = await import('../candidate-service');

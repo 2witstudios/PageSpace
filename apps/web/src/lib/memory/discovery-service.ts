@@ -23,6 +23,17 @@ import { z } from 'zod';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
+/**
+ * How far back a discovery run reads, in days.
+ *
+ * This window is REREAD IN FULL on every run, which is the single fact that
+ * shapes the rest of the pipeline: the same message is seen again night after
+ * night, so corroboration counts the day the EVIDENCE was written rather than
+ * the day the cron happened to run (see `evidenceAt`). Widening it widens the
+ * re-read, not the corroboration.
+ */
+const LOOKBACK_DAYS = 7;
+
 export interface DiscoveredClaim {
   field: MemoryField;
   claim: string;
@@ -163,7 +174,7 @@ Examples of good rules claims:
  */
 async function gatherRecentConversations(
   userId: string,
-  lookbackDays: number = 7
+  lookbackDays: number = LOOKBACK_DAYS
 ): Promise<ConversationMessage[]> {
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
@@ -249,7 +260,7 @@ async function gatherRecentConversations(
  */
 async function gatherRecentActivity(
   userId: string,
-  lookbackDays: number = 7
+  lookbackDays: number = LOOKBACK_DAYS
 ): Promise<string[]> {
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
