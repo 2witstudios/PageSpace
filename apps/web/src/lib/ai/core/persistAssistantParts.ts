@@ -5,7 +5,7 @@ import {
   extractToolCalls,
   extractToolResults,
 } from '@/lib/ai/core/message-utils';
-import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
+import type { UIMessagePart } from '@/lib/ai/core/stream-channel-registry';
 
 export interface AssistantPersistencePayload {
   content: string;

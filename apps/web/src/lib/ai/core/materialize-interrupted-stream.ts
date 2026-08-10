@@ -11,7 +11,7 @@ import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
-import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
+import type { UIMessagePart } from '@/lib/ai/core/stream-channel-registry';
 
 /**
  * An `ai_stream_sessions` row the CALLER has already proven dead (`isProvablyDead` —

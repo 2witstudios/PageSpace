@@ -40,7 +40,7 @@ import type {
   AccessRevokedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
-import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
+import type { UIMessagePart } from '@/lib/ai/core/stream-channel-registry';
 
 interface ActiveStreamRow {
   messageId: string;

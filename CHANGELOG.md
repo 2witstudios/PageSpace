@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A reply no longer disappears when you look away** — a stream was carried on two separate
+  channels: the one your browser tab was reading, and the one everything else used. They did not
+  carry the same thing, so the moment you stopped being the tab holding the connection — you
+  switched to another chat, flipped between the assistant and an agent, reloaded, or opened the
+  conversation on another device — the reply you came back to was missing its reasoning, its
+  sources, any files it had produced, and the chips showing which commands it had run. Worse, the
+  act of switching told everyone watching that the reply had FINISHED while it was still being
+  written: the Stop button stopped working, the recovery snapshot was thrown away, and the agent
+  carried on running tools and spending credits with nothing showing it. There is now one channel.
+  Whatever your tab sees is exactly what a reload, a second device, or a colleague watching a
+  shared conversation sees, and stepping away does not end anything.
+
 - **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
   sent you out to the dashboard when you clicked it, including conversations that were already open
   in a session. The session was right there and you were simply not taken to it. A conversation you
