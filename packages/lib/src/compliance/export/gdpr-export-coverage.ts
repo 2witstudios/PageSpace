@@ -93,9 +93,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // about the subject's own working context. It used to live in
   // `conversations.workspaceId` (exported under `collectUserMessages`'s
   // boundary); nothing writes that column any more and this table is the only
-  // witness. The column itself survives until the follow-up migration drops
-  // it — its removal is staged separately so the backfill can run between the
-  // two — which is exactly why the export has to read the table and not it.
+  // witness — migration 0256 dropped that column, so the table is not merely
+  // the better source, it is the only one.
   agent_workspace_nodes: 'agentWorkspaces',
   ai_stream_sessions: 'streamState',
 };
@@ -153,27 +152,6 @@ function withReason(reason: string, ...tables: string[]): Record<string, string>
  * substantive, so "n/a" cannot be used to smuggle a table past review.
  */
 export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
-  /*
-   * THE OLD TWO-LEVEL PANE GRID. Excluded because nothing reads or writes these
-   * four tables any longer — `agent_workspace_nodes` replaced them, and IT is
-   * exported (`EXPORTED_TABLES` above), so the subject's workspace membership
-   * and layout travel in full. Exporting these as well would hand the subject a
-   * second, frozen copy of the same facts and invite them to believe the two
-   * disagree about something.
-   *
-   * They are listed rather than deleted because their DROP is a separately
-   * deployable stage: `runMigrations` applies every pending migration in one
-   * invocation, so a drop registered in this release would run before the
-   * backfill that moves their rows into the node tree could execute. The
-   * follow-up migration takes the tables and these four entries together.
-   */
-  ...withReason(
-    'Superseded by `agent_workspace_nodes`, which IS exported and carries the same workspace membership and layout. Nothing has read or written these rows since the node-model cutover; they survive only until the follow-up migration drops them, which is staged after the backfill rather than beside it.',
-    'agent_workspace_pane_columns',
-    'agent_workspace_panes',
-    'agent_workspace_layout_revs',
-    'agent_workspace_layout_ops',
-  ),
   ...withReason(
     CREDENTIAL_MATERIAL,
     'auth_handoff_tokens',

@@ -218,25 +218,3 @@ describe('claimConversationInSessionWith', () => {
     });
   });
 });
-
-describe('the workspace is waiting for the backfill', () => {
-  /**
-   * `awaiting_backfill` is the only refusal on this path that NOBODY can clear
-   * from the outside — not the caller, not a retry, only an operator running the
-   * backfill. It used to flatten into `refused`, which this module turns into
-   * `not_found`, so the one unrecoverable case was the single one that arrived
-   * disguised: the user was told a thread they can see does not exist.
-   *
-   * An adversarial review of this branch found the whole propagation untested —
-   * regressing every site at once left the suite green.
-   */
-  it('keeps its name instead of becoming not_found', async () => {
-    const deps = makeDeps({ admitConversation: vi.fn(async () => 'awaiting_backfill' as const) });
-    expect(await claimConversationInSessionWith(deps, input)).toBe('awaiting_backfill');
-  });
-
-  it('is NOT confused with the generic refusal beside it', async () => {
-    const deps = makeDeps({ admitConversation: vi.fn(async () => 'refused' as const) });
-    expect(await claimConversationInSessionWith(deps, input)).toBe('not_found');
-  });
-});

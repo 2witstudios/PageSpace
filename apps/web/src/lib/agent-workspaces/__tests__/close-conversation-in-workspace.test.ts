@@ -190,7 +190,7 @@ describe('dismissOutcomeOf', () => {
   });
 
   it('collapses every other refusal code', () => {
-    for (const code of ['forbidden_target', 'awaiting_backfill', 'target_deleted', 'session_full']) {
+    for (const code of ['forbidden_target', 'target_deleted', 'session_full']) {
       expect(dismissOutcomeOf({ status: 'refused', code })).toBe('refused');
     }
   });

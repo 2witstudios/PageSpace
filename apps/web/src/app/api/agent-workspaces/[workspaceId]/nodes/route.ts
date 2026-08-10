@@ -121,19 +121,6 @@ export async function POST(request: Request, context: RouteContext) {
     if (result.code === 'forbidden_target') {
       return NextResponse.json({ error: result.detail }, { status: 403 });
     }
-    // 503, because nothing is wrong with the write and nothing the caller can
-    // change would help: this database still holds membership only the previous
-    // model records, and writing would strand it permanently (see
-    // `awaitsBackfill`). It is the SERVER that is not ready, and
-    // it stops being unready when the backfill runs — which is what 503 means
-    // and what neither 400 nor 409 does. A client must not treat it as a
-    // rebase-and-retry, so it carries no snapshot.
-    if (result.code === 'awaiting_backfill') {
-      return NextResponse.json(
-        { error: 'This workspace is not ready yet. Its data is still being migrated.', code: result.code },
-        { status: 503 },
-      );
-    }
     return NextResponse.json(
       { error: 'That write would not leave a valid workspace', code: result.code, detail: result.detail },
       { status: 400 },

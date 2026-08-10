@@ -121,17 +121,6 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  if (outcome === 'awaiting_backfill') {
-    // 503, matching `POST /nodes`. The conversation exists and is the caller's;
-    // the SERVER has not migrated this workspace yet and no action by the
-    // caller changes that. A 404 here would be a lie about a thread the user
-    // can see, and would send them looking for it.
-    return NextResponse.json(
-      { error: 'This session is not ready yet. Its data is still being migrated.', code: 'awaiting_backfill' },
-      { status: 503 },
-    );
-  }
-
   if (outcome === 'session_full') {
     return sessionConversationLimitExceeded(request, auth.userId, workspaceId, ROUTE);
   }
@@ -146,9 +135,22 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
-  // `alreadyInSession` (outcome === 'already_in_session'): this call did NOT
-  // transition anything — same reasoning as the reopen route's
-  // `alreadyOpen`, so a caller superseded mid-flight knows whether it's
-  // safe to roll the listing back out.
-  return NextResponse.json({ ok: true, alreadyInSession: outcome === 'already_in_session' });
+  // EXHAUSTIVENESS BACKSTOP. Everything below this line is a SUCCESS response,
+  // so a refusal that reaches it is answered `200 {ok: true}` — the server
+  // reporting success for a write it declined. This route dispatches with an
+  // `if`-chain, which TypeScript cannot check for completeness on its own, so
+  // the narrowing is written down instead: adding a refusal to
+  // `ClaimConversationOutcome` without an arm above is a COMPILE error here.
+  //
+  // This used to be pinned by a test asserting the 503 arm's status ("deleting
+  // the 503 block lets the request fall through to 200 OK"). That arm and its
+  // test went with the `awaiting_backfill` refusal at migration 0256, taking the
+  // guarantee with them for every code that remains — hence stating it in the
+  // types, where it cannot be deleted by removing a test.
+  const settled: 'claimed' | 'already_in_session' = outcome;
+
+  // `alreadyInSession`: this call did NOT transition anything — same reasoning
+  // as the reopen route's `alreadyOpen`, so a caller superseded mid-flight
+  // knows whether it's safe to roll the listing back out.
+  return NextResponse.json({ ok: true, alreadyInSession: settled === 'already_in_session' });
 }

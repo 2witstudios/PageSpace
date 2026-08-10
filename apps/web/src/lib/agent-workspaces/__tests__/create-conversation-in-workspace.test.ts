@@ -269,25 +269,6 @@ describe('what the membership write answers', () => {
     await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(SessionFullError);
   });
 
-  it('names the backfill in the CAUSE rather than joining the generic refusal', async () => {
-    // This path throws rather than returning an outcome, so the only place the
-    // distinction can survive is the `cause` the boundary logs. "The tree would
-    // not stand up" and "this database has not been migrated" are different
-    // incidents with different responders, and an operator reading
-    // `admit_refused` would have no reason to think about the backfill at all.
-    //
-    // The propagation this asserts was entirely untested until an adversarial
-    // review regressed every site at once and watched the suite stay green.
-    deps.admitConversation = fakeAdmit('awaiting_backfill');
-    const raised = await createConversationInSessionWith(deps, input).then(
-      () => null,
-      (error: unknown) => error,
-    );
-
-    expect(raised).toBeInstanceOf(ConversationUnavailableError);
-    expect(String((raised as { cause?: unknown }).cause)).toContain('awaiting_backfill');
-  });
-
   it('collapses the chat-target INDEX\'s refusal into the generic unavailability', async () => {
     // Two workspaces raced for one conversation and the database settled it.
     // The caller learns nothing more than "not available" — the reason rides

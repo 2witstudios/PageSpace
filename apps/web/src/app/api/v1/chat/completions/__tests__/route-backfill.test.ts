@@ -263,11 +263,6 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
 
     const fullHistory = [
@@ -337,11 +332,6 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
 
     // OpenAI-format messages with no `id` fields, just like pagespace-cli sends
@@ -388,11 +378,6 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
 
     const fullHistory = [
