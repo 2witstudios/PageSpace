@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
+import { streamChannelRegistry } from '@/lib/ai/core/stream-channel-registry';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
@@ -46,7 +46,7 @@ export async function GET(
 
   const { messageId } = await context.params;
 
-  const meta = streamMulticastRegistry.getMeta(messageId);
+  const meta = streamChannelRegistry.getMeta(messageId);
   if (!meta) {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
@@ -115,20 +115,40 @@ export async function GET(
   let pingIntervalId: ReturnType<typeof setInterval> | undefined;
   const clearPingInterval = () => clearInterval(pingIntervalId);
 
-  const unsubscribe = streamMulticastRegistry.subscribe(
-    messageId,
-    (part) => {
-      const chunk = encoder.encode(`data: ${JSON.stringify({ part })}\n\n`);
+  // The channel this joiner watches. `fromSeq` is the client's cursor: it asks for everything
+  // it has not already applied, and gets exactly that. This replaces the skipReplayCount
+  // arithmetic, where the server replayed its whole buffer and the client was told how many
+  // frames to discard — under-skipping duplicated visible text, over-skipping left a silent
+  // permanent gap, and neither was detectable from either side.
+  const channel = streamChannelRegistry.get(messageId);
+  if (!channel) {
+    return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
+  }
+
+  const requestedFromSeq = Number(new URL(request.url).searchParams.get('fromSeq') ?? '0');
+  const fromSeq = Number.isFinite(requestedFromSeq) && requestedFromSeq >= 0
+    ? Math.floor(requestedFromSeq)
+    : 0;
+
+  const unsubscribe = channel.subscribe({
+    fromSeq,
+    onFrame: ({ seq, chunk }) => {
+      const frame = encoder.encode(`data: ${JSON.stringify({ seq, chunk })}\n\n`);
       if (streamController) {
-        streamController.enqueue(chunk);
+        streamController.enqueue(frame);
       } else {
-        preBuffer.push(chunk);
+        preBuffer.push(frame);
       }
     },
-    (aborted) => {
+    onEnd: (end) => {
       clearRecheckTimeout();
       clearPingInterval();
-      const done = encodeDoneFrame(aborted);
+      // An `overflow` end means the cursor names a frame the ring no longer holds. Say so with
+      // the seq that IS available rather than quietly serving a later prefix — the client can
+      // then reseed deliberately instead of rendering a gap it cannot see.
+      const done = end.reason === 'overflow'
+        ? encoder.encode(`data: ${JSON.stringify({ done: true, resumeFromSeq: end.resumeFromSeq })}\n\n`)
+        : encodeDoneFrame(end.aborted);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
@@ -137,7 +157,7 @@ export async function GET(
       }
       streamClosed = true;
     },
-  );
+  });
 
   // finish() deletes entries before notifying subscribers, so subscribe() returns
   // null for both unknown and already-finished streams.

@@ -65,7 +65,7 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * settle, telemetry) is where most of it lives and is the extraction that
  * would pay first; see the entry's docblock.
  */
-const RECORDED_IDENTICAL_LINES = 165;
+const RECORDED_IDENTICAL_LINES = 164;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

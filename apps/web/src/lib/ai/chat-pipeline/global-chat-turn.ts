@@ -13,7 +13,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
@@ -42,10 +42,10 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
-import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { getAllowedDriveIds, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -98,7 +98,6 @@ import {
   attachStreamFinisher,
   createStreamAbortController,
   removeStream,
-  STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
@@ -1309,7 +1308,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // observability — so no separate usage/steps promises are needed.
     let agentRun: RunAgentWithRetryResult | undefined;
 
-    const stream = createUIMessageStream({
+    const sdkStream = createUIMessageStream({
       originalMessages: sanitizedMessages, // full history — UI always sees all messages
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
@@ -1404,10 +1403,6 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               agentCallDepth: agentDispatchDepth,
             },
             maxRetries: 20,
-            onChunk: ({ chunk }) => {
-              const part = chunkToPart(chunk as never);
-              if (part) lifecycle!.pushPart(part);
-            },
             onAbort: () => {
               loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId),
@@ -1440,7 +1435,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // responseMessage; when onFinish never runs, this write stands as the sole record.
         // See Server Stream Durability epic PR 2 — CodeRabbit review.
         {
-          const bufferedParts = lifecycle!.getBufferedParts();
+          const bufferedParts = await lifecycle!.getParts();
           const aborted = isRunAborted({ agentRun, abortSignal });
           const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
           try {
@@ -1605,19 +1600,19 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
 
     // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
     holdHandedOff = true;
-    return createUIMessageStreamResponse({
-      stream,
-      headers: { [STREAM_ID_HEADER]: streamId },
-    });
+
+
+    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId });
 
   } catch (error) {
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
-    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
-    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
-    // silently discard any real partial content the cleanup write below is meant to preserve.
-    const bufferedPartsAtError = lifecycle?.getBufferedParts() ?? [];
+    // Captured before finish() as the most faithful snapshot. The hazard this guarded against
+    // is gone — finish() used to delete the registry entry backing getBufferedParts(), so a
+    // call afterwards saw an empty buffer; a finished channel keeps its ring, so getParts()
+    // still returns real content either way.
+    const bufferedPartsAtError = (lifecycle ? await lifecycle.getParts() : []);
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before onFinish ever got a chance to settle the

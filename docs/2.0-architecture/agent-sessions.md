@@ -354,7 +354,7 @@ that drifts into double generation and double billing.
 **What "one pipeline" does NOT mean, and this section used to imply.** It names the ENTRY.
 It says nothing about the two strategy functions, and they are neither small nor DRY:
 `runPageChatTurn` is ~2,080 lines in one function and `runGlobalChatTurn` ~1,460, with
-**165 substantive lines of 40+ characters byte-identical between them** — measured, and
+**164 substantive lines of 40+ characters byte-identical between them** — measured, and
 clustered rather than scattered, in the epilogue (stream construction, `onFinish`,
 terminal persist, hold settle, telemetry), which is also where the billing settle,
 `releaseHold` and the exactly-once mention latch live. Two copies of the money path. That

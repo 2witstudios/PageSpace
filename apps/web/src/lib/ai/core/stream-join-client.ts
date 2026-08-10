@@ -1,5 +1,5 @@
-import type { UIMessage } from 'ai';
-import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
+import type { UIMessage, UIMessageChunk } from 'ai';
+import { createPartsFolder } from '@/lib/ai/streams/foldChunksToParts';
 
 type UIMessagePart = UIMessage['parts'][number];
 
@@ -19,22 +19,35 @@ export class StreamJoinError extends Error {
 
 /**
  * SSE wire protocol (paired with `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`):
- *   data: {"part": <UIMessagePart>}\n\n      — one accumulated part per frame
- *   data: {"done": true, "aborted": <bool>}\n\n  — end sentinel
- * Anything else (legacy `{text:...}` frames, malformed JSON, frames missing
- * required fields) is silently skipped — `isValidPartFrame` is the gate.
+ *   data: {"seq": <n>, "chunk": <UIMessageChunk>}   — one raw SDK frame, in seq order
+ *   data: {"done": true, "aborted": <bool>}          — end sentinel
+ *   data: {"done": true, "resumeFromSeq": <n>}       — cursor too old; reseed from n
+ *
+ * The frames are the SDK's own `UIMessageChunk`s, and they are folded here by the SAME
+ * reduction the server uses, so a joiner's view is the SDK's view rather than a re-derivation.
+ * That is the whole point of the change: the previous wire carried `chunkToPart`'s four-case
+ * projection, so anything a joiner saw was missing reasoning, files, sources, step boundaries
+ * and the routes' own data parts.
+ *
+ * `onParts` receives the FULL folded parts array plus the seq it reflects, so the caller writes
+ * it with replace semantics. There is no skip-count to get wrong: the cursor is `fromSeq`, and
+ * the server sends exactly what comes after it.
  */
 export async function consumeStreamJoin(
   messageId: string,
   signal: AbortSignal,
-  onChunk: (part: UIMessagePart) => void,
-): Promise<{ aborted: boolean }> {
+  onParts: (parts: UIMessagePart[], seq: number) => void,
+  fromSeq = 0,
+): Promise<{ aborted: boolean; resumeFromSeq?: number }> {
   let response: Response;
   try {
-    response = await fetch(`/api/ai/chat/stream-join/${encodeURIComponent(messageId)}`, {
-      credentials: 'include',
-      signal,
-    });
+    response = await fetch(
+      `/api/ai/chat/stream-join/${encodeURIComponent(messageId)}?fromSeq=${fromSeq}`,
+      {
+        credentials: 'include',
+        signal,
+      },
+    );
   } catch (err) {
     if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
       return { aborted: true };
@@ -52,6 +65,9 @@ export async function consumeStreamJoin(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // One folder per subscription, fed in seq order — the incremental form of the same
+  // reduction the server's checkpoint uses.
+  const folder = createPartsFolder();
 
   try {
     while (true) {
@@ -80,10 +96,18 @@ export async function consumeStreamJoin(
         try {
           const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
           if (parsed.done) {
-            return { aborted: (parsed.aborted as boolean | undefined) ?? false };
+            return {
+              aborted: (parsed.aborted as boolean | undefined) ?? false,
+              resumeFromSeq: parsed.resumeFromSeq as number | undefined,
+            };
           }
-          if (isValidPartFrame(parsed.part)) {
-            onChunk(parsed.part);
+          const chunk = parsed.chunk as UIMessageChunk | undefined;
+          const seq = parsed.seq as number | undefined;
+          // Trust the shape only as far as it is used: a frame needs a string `type` for the
+          // fold to dispatch on, and a numeric seq for the caller's monotonic write gate.
+          if (chunk && typeof (chunk as { type?: unknown }).type === 'string' && typeof seq === 'number') {
+            await folder.push(chunk);
+            onParts(folder.parts, seq);
           }
         } catch {
           // skip malformed SSE lines

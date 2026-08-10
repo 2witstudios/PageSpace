@@ -47,15 +47,15 @@ interface ActiveStreamRow {
   conversationId: string;
   /** ISO timestamp of the stream's start; stamps synthesized bubbles with a `createdAt`. */
   startedAt?: string;
-  /** Last debounced snapshot persisted server-side — see `rawPartsCount` below. */
-  parts?: UIMessagePart[];
   /**
-   * See rawPartsCount's docblock on the schema (packages/db/src/schema/ai-streams.ts) for
-   * why this, not `parts.length`, is the live-replay skip count (`skipReplayCount` below).
-   * Optional here only because an old (pre-rawPartsCount) `active-streams` route build
-   * omits the field entirely mid-rollout.
+   * Last debounced snapshot persisted server-side. Rendered immediately so a rejoining client
+   * is not blank, then replaced wholesale by the first folded write off the channel.
+   *
+   * `rawPartsCount` used to sit beside this as the live-replay skip count. It is gone: the
+   * join is cursor-addressed, so there is no prefix to count and nothing to reconcile. The
+   * column itself is dropped in the contract leaf, one deploy after every reader has moved.
    */
-  rawPartsCount?: number;
+  parts?: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
@@ -293,7 +293,7 @@ export function useChannelStreamSocket(
     // record yet. This is the synchronous fact that says so.
     const joinDelivered = new Set<string>();
 
-    const { addStream, appendPart, setStreamParts, removeStream, clearPageStreams } =
+    const { addStream, setStreamParts, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
     const fireComplete = (
@@ -318,26 +318,41 @@ export function useChannelStreamSocket(
       onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
-    const startConsume = (messageId: string, conversationId?: string, skipReplayCount = 0) => {
+    const startConsume = (
+      messageId: string,
+      conversationId?: string,
+      /**
+       * Whether the bootstrap already seeded a persisted snapshot for this stream.
+       *
+       * This is the ONLY thing the failed-join branch below may key on. It used to key on the
+       * skip count (`skipReplayCount > 0` implied "a snapshot was seeded"), and when that count
+       * went away the obvious substitute — "have we delivered anything yet?" — inverts the
+       * behaviour: a join that fails IMMEDIATELY has delivered nothing, so a seeded snapshot
+       * would be wiped precisely in the case it exists to survive. Caught by the two bootstrap
+       * tests below; keep them.
+       */
+      hadSeededSnapshot = false,
+    ) => {
       if (!claimBootstrapConsumer(messageId)) return;
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
-      // The multicast registry replays its FULL buffer to every new subscriber
-      // (see stream-multicast-registry.subscribe). When we've already seeded the
-      // store with a persisted-parts snapshot, that snapshot is a prefix of the
-      // live buffer, so the first `skipReplayCount` replayed chunks are the same
-      // ones we already applied — skip them to avoid duplicating content.
-      let chunksToSkip = skipReplayCount;
+      // No skip count any more. The join is cursor-addressed (`fromSeq`) and hands back the
+      // FULL folded parts array per frame, so the store takes it with replace semantics and
+      // the bootstrap seed is simply overwritten by the first authoritative fold.
+      //
+      // What this deletes is arithmetic that reconciled two different representations of one
+      // stream: the server's merged snapshot and the registry's raw replay counted frames
+      // differently, so the client had to be told how many raw frames its seed already
+      // covered. Under-skipping duplicated visible text; over-skipping left a silent,
+      // permanent gap. Neither was detectable from either side.
+      let deliveredSeq = 0;
 
-      consumeStreamJoin(messageId, controller.signal, (part) => {
-        if (chunksToSkip > 0) {
-          chunksToSkip -= 1;
-          return;
-        }
+      consumeStreamJoin(messageId, controller.signal, (parts, seq) => {
         joinDelivered.add(messageId);
-        appendPart(messageId, part);
-      })
+        deliveredSeq = seq + 1;
+        setStreamParts(messageId, parts, seq + 1);
+      }, 0)
         .then(() => {
           // Cleanup runs synchronously on unmount but the SSE promise resolves
           // asynchronously after controller.abort(); skip post-teardown effects.
@@ -423,7 +438,7 @@ export function useChannelStreamSocket(
                 }
               },
             );
-          } else if (skipReplayCount === 0) {
+          } else if (!hadSeededSnapshot && deliveredSeq === 0) {
             // When the store was seeded from a persisted snapshot (skipReplayCount > 0), a
             // failed join usually means the originator's process died — its in-memory
             // registry is gone and the join 404s. That snapshot is the only surviving copy
@@ -504,22 +519,13 @@ export function useChannelStreamSocket(
               conversationId: stream.conversationId,
             });
           }
-          // The live SSE replay always delivers the RAW registry buffer (one frame per
-          // pushed chunk), but the persisted snapshot above is server-merged/converged —
-          // fewer, larger entries — so `persistedParts.length` no longer counts how many
-          // raw frames are already reflected in the seed. `rawPartsCount` does (see its
-          // docblock on ActiveStreamRow).
-          //
-          // `||`, deliberately not `??`: the column is NOT NULL DEFAULT 0, so a row
-          // written by a not-yet-updated worker mid-rollout (whose code never sets this
-          // column) reads back as a real `0`, not null/undefined — `??` would use that 0
-          // verbatim and skip nothing, re-delivering the live replay's raw frames on top
-          // of the seeded snapshot and reproducing the exact duplicate-text bug this fix
-          // exists to close. `0` is only ever the CORRECT value when `parts` is also
-          // empty (every write of this column sets it from the same raw buffer snapshot
-          // as `parts`, atomically), so falling through to `persistedParts.length` on any
-          // falsy value is safe for the legitimate zero case too — both are 0 there.
-          startConsume(stream.messageId, stream.conversationId, stream.rawPartsCount || persistedParts.length);
+          // The seed renders immediately so a rejoining client is not blank while the join
+          // opens, and is then simply REPLACED by the first folded write from the channel —
+          // no reconciliation, because both are now the same reduction of the same frames.
+          // (What stood here was the rawPartsCount/`||`-not-`??` arithmetic that reconciled a
+          // merged snapshot against a raw replay. There is no second representation to
+          // reconcile any more, so there is nothing left to get wrong.)
+          startConsume(stream.messageId, stream.conversationId, foldedParts.length > 0);
         }
 
         // The server's word on what is still running. Consumers reconcile any ownership

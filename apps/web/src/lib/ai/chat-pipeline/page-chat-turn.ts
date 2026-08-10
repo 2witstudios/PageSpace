@@ -22,7 +22,6 @@ import {
   stepCountIs,
   hasToolCall,
   createUIMessageStream,
-  createUIMessageStreamResponse,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -49,10 +48,10 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
-import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
@@ -144,7 +143,6 @@ import {
   attachStreamFinisher,
   createStreamAbortController,
   removeStream,
-  STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
@@ -324,12 +322,16 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     });
     if (persisted && mentionNotify) mentionNotified = true;
   };
-  // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
-  // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
-  // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
-  // always see an empty buffer. Falls back to a fresh (empty) capture in the outer catch when
-  // this was never set (i.e. the throw happened somewhere else, before finish() ever ran).
-  let bufferedPartsAtStreamError: ReturnType<StreamLifecycleHandle['getBufferedParts']> | undefined;
+  // Captured by the inner catch (createUIMessageStream construction failure) before it calls
+  // lifecycle.finish().
+  //
+  // The reason this existed is GONE: finish() used to delete the multicast registry entry that
+  // getBufferedParts() read from, so a fresh call afterwards always saw an empty buffer. The
+  // lifecycle now closes over its own channel, and finishing a channel does not clear its ring,
+  // so `getParts()` still returns the real content after finish(). Kept as belt-and-braces —
+  // capturing at the earliest point is still the most faithful snapshot, and the cost is one
+  // fold — but nothing depends on it any more.
+  let bufferedPartsAtStreamError: Awaited<ReturnType<StreamLifecycleHandle['getParts']>> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // True once the stream/error handler owns the hold's release. Any earlier
@@ -1751,7 +1753,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
 
     try {
-      const stream = createUIMessageStream({
+      const sdkStream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
@@ -1882,10 +1884,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 agentCallDepth: agentDispatchDepth,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-              onChunk: ({ chunk }) => {
-                const part = chunkToPart(chunk as never);
-                if (part) lifecycle!.pushPart(part);
-              },
               onAbort: () => {
                 loggers.ai.info('AI Chat API: Stream aborted by user', {
                   userId: maskIdentifier(userId!),
@@ -1930,7 +1928,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // edit/delete's 409 guard, an invisible, permanently-locked ghost row. See
           // Server Stream Durability epic PR 2 — Codex + CodeRabbit review.
           if (chatId && serverAssistantMessageId) {
-            const bufferedParts = lifecycle!.getBufferedParts();
+            const bufferedParts = await lifecycle!.getParts();
             const aborted = isRunAborted({ agentRun, abortSignal });
             const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
             // This write may be the sole record of the message (see the docblock above) — it
@@ -2159,18 +2157,18 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         },
       });
 
+
+
       result = {
-        toUIMessageStreamResponse: () => createUIMessageStreamResponse({
-          stream,
-          headers: { [STREAM_ID_HEADER]: streamId },
-        }),
+        toUIMessageStreamResponse: () =>
+          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId }),
       };
     } catch (streamError) {
       removeStream({ streamId });
       // Captured BEFORE finish() for the same reason as the outer catch below — this inner
       // catch's own finish() call would otherwise clear the buffer before the outer catch's
       // cleanup ever gets a chance to read it.
-      bufferedPartsAtStreamError = lifecycle.getBufferedParts();
+      bufferedPartsAtStreamError = await lifecycle.getParts();
       lifecycle.finish(true);
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -2190,14 +2188,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
-    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
-    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
-    // silently discard any real partial content the cleanup write below is meant to preserve.
-    // Prefers bufferedPartsAtStreamError (captured by the INNER catch above, before ITS OWN
-    // finish() call already cleared the registry) when set — a fresh getBufferedParts() call
-    // here would otherwise always see [] for exactly the createUIMessageStream-threw case this
-    // cleanup exists for.
-    const bufferedPartsAtError = bufferedPartsAtStreamError ?? lifecycle?.getBufferedParts() ?? [];
+    // Prefers the inner catch's earlier capture when set. That preference used to be load-
+    // bearing (finish() cleared the registry backing the old getBufferedParts, so a fresh call
+    // here saw [] for exactly the createUIMessageStream-threw case this cleanup exists for);
+    // it is now merely the more faithful of two working snapshots, since a finished channel
+    // keeps its ring.
+    const bufferedPartsAtError = bufferedPartsAtStreamError ?? (lifecycle ? await lifecycle.getParts() : []);
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before execute-end or onFinish ever got a chance to
