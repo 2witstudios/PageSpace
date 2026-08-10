@@ -101,6 +101,16 @@ export interface AdmitConversationInput<Tx = unknown> {
   workspaceId: string;
   /** The spawning conversation, never evicted by the thing it spawned. */
   excludeTargetId?: string;
+  /**
+   * The pane a HUMAN pointed at, when one did. A preference the placement policy
+   * weighs first — never an instruction, since `open()` still refuses a pane it
+   * may not give up.
+   *
+   * Supplied by the three paths a person drives from a pane — the two mints and
+   * the History claim. Absent for anything an agent or a background path admits:
+   * those add a surface and have no pane to speak for.
+   */
+  activeNodeId?: string;
   /** Work that must land in the SAME transaction as the node. Only the create path has any. */
   within?: (tx: Tx) => Promise<void>;
 }
@@ -111,7 +121,8 @@ export async function claimConversationInSessionWith<Tx>(
     conversationId,
     userId,
     workspaceId,
-  }: { conversationId: string; userId: string; workspaceId: string },
+    activeNodeId,
+  }: { conversationId: string; userId: string; workspaceId: string; activeNodeId?: string },
 ): Promise<ClaimConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null) return 'not_found';
@@ -157,7 +168,11 @@ export async function claimConversationInSessionWith<Tx>(
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
   }
 
-  const admitted = await deps.admitConversation({ conversationId, workspaceId });
+  const admitted = await deps.admitConversation({
+    conversationId,
+    workspaceId,
+    ...(activeNodeId === undefined ? {} : { activeNodeId }),
+  });
   switch (admitted) {
     case 'admitted':
       return 'claimed';

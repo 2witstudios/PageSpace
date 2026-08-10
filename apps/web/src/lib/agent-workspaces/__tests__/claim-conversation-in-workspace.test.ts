@@ -69,6 +69,21 @@ describe('claimConversationInSessionWith', () => {
     });
   });
 
+  it('forwards the pane a human picked into, so the claim does not place blind', async () => {
+    // A claim ADMITS, and admitting places. Reopening a never-bound thread from
+    // a pane's History is a human pointing at a pane, so it carries a
+    // preference for the same reason a mint does — without one the policy takes
+    // whichever pane qualifies first, and the client cannot correct it
+    // afterwards: by then the thread is showing somewhere, which the placement
+    // call reads as "focus it there".
+    expect(await claimConversationInSessionWith(deps, { ...input, activeNodeId: 'node-7' })).toBe('claimed');
+    expect(deps.admitConversation).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      workspaceId: WORKSPACE,
+      activeNodeId: 'node-7',
+    });
+  });
+
   it('has no PLACEMENT flag to pass, because every admission is placed', async () => {
     // There was an `attach` boolean here: `false` minted the node parked — in
     // the workspace, off the grid — so that a claim from the console did not put

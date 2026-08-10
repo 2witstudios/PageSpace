@@ -274,6 +274,18 @@ async function admitConversationNode(input: {
   /** The acting HUMAN, for the binding gate inside the write. */
   actingUserId: string;
   excludeTargetId?: string;
+  /**
+   * WHERE the caller wants it, when a human picked a pane. Only a preference —
+   * `open()` still refuses a pane it may not give up — but without it the policy
+   * falls to "the first pane that qualifies", which is the wrong one the moment
+   * a workspace has two empty panes: the agent lands somewhere the user did not
+   * point at and their own pane stays empty.
+   *
+   * Distinct from `newNodeId` below, which stays server-minted: the client is
+   * authoritative about which EXISTING pane it means, and has no business
+   * naming a node this write may have to create.
+   */
+  activeNodeId?: string;
   within?: WithinNodeWrite;
 }): Promise<AdmitConversationOutcome> {
   const result = await applyWorkspaceMembershipWrite({
@@ -288,6 +300,7 @@ async function admitConversationNode(input: {
         newNodeId: createId(),
         newSplitId: createId(),
         ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
+        ...(input.activeNodeId === undefined ? {} : { activeNodeId: input.activeNodeId }),
       }),
     ...(input.within === undefined ? {} : { within: input.within }),
   });
@@ -431,6 +444,8 @@ export async function claimConversationInSession(input: {
   conversationId: string;
   userId: string;
   workspaceId: string;
+  /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
+  activeNodeId?: string;
 }): Promise<ClaimConversationOutcome> {
   return claimConversationInSessionWith(buildClaimDeps(input.userId), input);
 }
@@ -465,6 +480,8 @@ export async function createConversationInSession(input: {
    * own spawn. Only `spawn_session` has one.
    */
   excludeTargetId?: string;
+  /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
+  activeNodeId?: string;
 }): Promise<void> {
   await createConversationInSessionWith<DbExecutor>(
     {

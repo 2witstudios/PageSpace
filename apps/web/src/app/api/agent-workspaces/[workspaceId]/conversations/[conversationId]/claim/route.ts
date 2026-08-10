@@ -74,9 +74,30 @@ export async function POST(request: Request, context: RouteContext) {
     }
   }
 
+  // WHERE the caller wants it, when a human picked a pane. A preference only —
+  // the placement policy still refuses a pane it may not give up, and an id
+  // naming nothing in this tree loses to the default. The claim admits the
+  // thread, and admitting PLACES, so without one a History pick lands in
+  // whichever pane qualifies first rather than the one it was opened from. An
+  // absent or unusable body is not an error: this route has never required one.
+  let body: unknown = {};
+  try {
+    body = await request.json();
+  } catch {
+    // No body at all is the pre-existing shape, and still a valid claim.
+  }
+  const rawActiveNodeId =
+    body !== null && typeof body === 'object' ? (body as { activeNodeId?: unknown }).activeNodeId : undefined;
+  const activeNodeId = typeof rawActiveNodeId === 'string' && rawActiveNodeId.length > 0 ? rawActiveNodeId : null;
+
   let outcome: Awaited<ReturnType<typeof claimConversationInSession>>;
   try {
-    outcome = await claimConversationInSession({ conversationId, userId: auth.userId, workspaceId });
+    outcome = await claimConversationInSession({
+      conversationId,
+      userId: auth.userId,
+      workspaceId,
+      ...(activeNodeId === null ? {} : { activeNodeId }),
+    });
   } catch (error) {
     loggers.api.error(
       'Session conversation claim failed',

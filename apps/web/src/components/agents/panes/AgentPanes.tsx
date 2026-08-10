@@ -48,13 +48,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { mutate } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
+import type { Cache } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
 import {
+  conversationDirectoryOf,
   indexTargets,
   lookupTarget,
   nodeShowing,
@@ -82,12 +84,10 @@ import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
 import { decideClosePane } from './close-pane';
 import {
-  agentWorkspacesKey,
   isAgentWorkspacesKey,
   isWorkspaceListingKey,
   forgetWorkspaceInCache,
   restoreWorkspaceInCache,
-  type SessionConversationSummary,
   type SessionListEntry,
 } from './workspace-conversations';
 import PaneChat from './PaneChat';
@@ -168,16 +168,53 @@ async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[]
 }
 
 /**
- * The same bulk listing the sidebar polls — SWR dedupes an identical key, so
- * mounting both costs one request, not two. Shared by every pure decision here:
- * the switch decision (`selectPaneAgent`) and the close decision
- * (`decideClosePane`, which needs it to know whether this node's thread still
- * has a listing to close).
+ * Mark the directory probe answered, but only if it is still the SAME one — a
+ * member set that changed while the read was in flight started its own probe,
+ * and stamping this answer onto it would arm readiness against a question
+ * nobody asked.
  */
-async function sessionConversationsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
-  return response.json();
+function markAnswered(
+  current: { signature: string; answered: boolean } | null,
+  signature: string,
+): { signature: string; answered: boolean } | null {
+  return current !== null && current.signature === signature ? { signature, answered: true } : current;
+}
+
+/**
+ * Is this cache entry the session LISTING's body?
+ *
+ * This grid no longer subscribes to that listing — it reads its conversations
+ * from the tree (see `conversationDirectory` below) — but the end-session
+ * rollback still needs the SIDEBAR's row for this workspace, and the sidebar
+ * owns that cache. Read through SWR's cache rather than a hook so a body of an
+ * unexpected shape is refused instead of asserted.
+ */
+function isSessionListingBody(value: unknown): value is { sessions: SessionListEntry[] } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { sessions?: unknown }).sessions)
+  );
+}
+
+/**
+ * This workspace's sidebar row, from ANY open session listing.
+ *
+ * Scoped by the same predicate the cache WRITERS use rather than by one built
+ * key, because a rollback snapshot narrower than the removal it has to undo is
+ * how a live workspace disappears from the sidebar: see `confirmEndSession`.
+ * First match wins — the row is the same workspace whichever scope fetched it,
+ * and the rollback only needs one copy to put back.
+ */
+function findSessionInListingCache(cache: Cache, sessionId: string): SessionListEntry | null {
+  for (const key of cache.keys()) {
+    if (!isWorkspaceListingKey(key)) continue;
+    const body = cache.get(key)?.data;
+    if (!isSessionListingBody(body)) continue;
+    const row = body.sessions.find((session) => session.workspaceId === sessionId);
+    if (row !== undefined) return row;
+  }
+  return null;
 }
 
 export default function AgentPanes({
@@ -202,6 +239,15 @@ export default function AgentPanes({
   const unbindPane = useAgentWorkspaceStore((state) => state.unbindPane);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
+  // NON-REACTIVE by design — see `isSessionListingBody`. Used once, inside the
+  // end-session rollback.
+  // BOTH from the same config, deliberately. `mutate` used to be the bare
+  // top-level import, which targets SWR's DEFAULT cache regardless of the
+  // provider this tree is actually mounted under — so the rollback below could
+  // read its snapshot from one cache and write its removal to another.
+  // `forgetWorkspaceInCache`'s own doc asks callers for the mutate bound to
+  // their cache for exactly this reason; this is that.
+  const { cache, mutate } = useSWRConfig();
 
   const nodes = useMemo(() => tree?.nodes ?? [], [tree]);
   const targetIndex = useMemo(() => indexTargets(tree?.targets ?? []), [tree]);
@@ -253,20 +299,44 @@ export default function AgentPanes({
   pendingMintsRef.current = pendingMints;
 
   /**
-   * Is `nodeId` STILL an unbound node ON THE GRID, waiting on this mint?
+   * Is `nodeId` STILL this mint's to land in — a node ON THE GRID that nothing
+   * else has claimed?
    *
-   * Not merely present, and the grid clause is the part the node model made
-   * necessary. Closing a pane no longer destroys it — it PARKS it — so a node
-   * whose pane the user closed mid-mint still exists, still unbound, and a
-   * check for existence alone would land the result in a rectangle that is no
-   * longer on screen. "The pane is still there waiting" means on the grid.
+   * The grid clause is what stops a result landing in a rectangle the user
+   * closed mid-mint.
+   *
+   * **`mintedTargetId` is the answer to a trap the node model set.** This asked
+   * only whether the pane was still UNBOUND, which was the whole question while
+   * the client was the only thing that could bind one. It is not any more: a
+   * mint's own server write ADMITS what it created, and admitting places —
+   * `admit` → `place` fills exactly this pane, because "only an unbound pane may
+   * be filled ... is what makes the picker path land in the very pane the user
+   * is looking at" (`workspace-membership.ts`). The `session:<id>` broadcast then
+   * binds it here before this check ever runs.
+   *
+   * So the SUCCESS case — the server placed what we asked for, in the pane we
+   * asked for — became indistinguishable from the abandonment case, and both
+   * callers answer abandonment by destroying what they just made: the chat mint
+   * deletes its conversation, the shell mint kills its shell. That is the pane
+   * appearing and then vanishing with nothing said, since both cleanups are
+   * deliberately silent.
+   *
+   * A pane bound to THIS MINT'S OWN target is therefore still this mint's pane.
+   * Bound to anything else, it was genuinely taken, and the caller should still
+   * clean up. Callers that cannot name their target (there are none today) may
+   * omit it and get the old unbound-only rule.
    */
   const stillMinting = useCallback(
-    (nodeId: string, mint: PendingMint) => {
+    (nodeId: string, mint: PendingMint, mintedTargetId?: string) => {
       const outstanding = pendingMintsRef.current[nodeId];
       if (!outstanding || outstanding.kind !== mint.kind || outstanding.agentPageId !== mint.agentPageId) return false;
       const node = findNode(useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [], nodeId);
-      return node !== undefined && node.nodeType === 'pane' && node.target === null && node.parentId !== null;
+      if (node === undefined || node.nodeType !== 'pane' || node.parentId === null) return false;
+      // Still waiting: nothing has bound it, so this mint may fill it.
+      if (node.target === null) return true;
+      // Already carrying what this mint produced — the server got there first,
+      // which is the write landing, not a race being lost.
+      return mintedTargetId !== undefined && node.target.id === mintedTargetId;
     },
     [sessionId],
   );
@@ -313,6 +383,13 @@ export default function AgentPanes({
     paneAssignTokens.current.set(nodeId, token);
     return () => paneAssignTokens.current.get(nodeId) === token;
   }, []);
+  // OBSERVE the same token without taking it — for a handler that has to survive
+  // an await before it knows whether it will act at all. Claiming to find out is
+  // not free: the token is what an in-flight mint reads to decide it was
+  // superseded, and a claim it then never uses would have that mint DELETE the
+  // conversation it just created. Peek across the await; the claim belongs to
+  // whoever actually rebinds the pane.
+  const peekPaneAssign = useCallback((nodeId: string) => paneAssignTokens.current.get(nodeId), []);
 
   // Races the per-node token can't catch, since it is scoped per NODE while
   // these are scoped per CONVERSATION:
@@ -377,90 +454,132 @@ export default function AgentPanes({
     return (shellsData?.shells ?? []).filter((shell) => !bound.has(shell.shellId));
   }, [shellsData, nodes]);
 
-  // This workspace's open conversation listings — shared by the pane bar
-  // selector's SWITCH decision and the grid's CLOSE decision.
-  const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
-    agentWorkspacesKey(driveId),
-    sessionConversationsFetcher,
-    {
-      revalidateOnFocus: false,
-      // BACKSTOP, not the mechanism. `session-directory-listener.ts` applies
-      // `conversation:*` and `session:*` to this exact cache the moment they
-      // happen, so the poll only catches a broadcast lost entirely.
-      refreshInterval: 120_000,
-    },
-  );
-  const currentSessionConversationsEntry = useMemo(
-    () => (sessionsData?.sessions ?? []).find((session) => session.workspaceId === sessionId),
-    [sessionsData, sessionId],
-  );
-  const sessionConversations: SessionConversationSummary[] = useMemo(
-    () => currentSessionConversationsEntry?.conversations ?? [],
-    [currentSessionConversationsEntry],
-  );
-  // Ready only once THIS workspace's entry has actually appeared in the cache —
-  // not merely once a fetch has settled. Two ways "settled" lies: an initial
-  // ERROR leaves `sessionsData` undefined with SWR's `isLoading` already false;
-  // and a cache warm from BEFORE this workspace was spawned (the key is shared
-  // across the drive) answers with real data that has no row for it yet. Both
-  // leave `sessionConversations` reading as `[]`, indistinguishable from "no
-  // thread exists".
-  const sessionKnownToConversationsCache = currentSessionConversationsEntry !== undefined;
+  /**
+   * THIS WORKSPACE'S CONVERSATIONS, from the tree this grid already holds.
+   *
+   * It used to be a second read of `GET /api/agent-workspaces`, and that read
+   * was wrong for a workspace owned by ANOTHER drive member: every filter on
+   * that listing carries `ownerId`, while the grid reached this workspace
+   * through `checkSessionAccess` — drive MEMBERSHIP. A member's own thread
+   * inside a colleague's workspace (which `decideAgentSessionAccess` allows on
+   * purpose — that is what makes workspaces shared working contexts) therefore
+   * rendered its chat and then disabled every control around it, because the
+   * listing never returned the row and readiness never armed. The history list
+   * is that thread's only route back, so the broken path was the only path.
+   *
+   * The tree answers the same question through the gate this grid actually
+   * passed: `useWorkspaceLayoutSync` above reads it from the membership-gated
+   * nodes route and keeps it live on `session:<id>`, the per-workspace room
+   * every member joins. One source, and it is the one that can see this
+   * workspace.
+   */
+  const conversationDirectory = useMemo(() => conversationDirectoryOf(tree), [tree]);
 
-  const liveConversationIds = useMemo(
-    () => (sessionKnownToConversationsCache ? new Set(sessionConversations.map((c) => c.conversationId)) : undefined),
-    [sessionKnownToConversationsCache, sessionConversations],
+  /**
+   * The one re-read this grid makes for a member whose facts never arrived, and
+   * whether it has come back. See the effect below for why a failure counts.
+   */
+  const [directoryProbe, setDirectoryProbe] = useState<{ signature: string; answered: boolean } | null>(null);
+
+  /**
+   * The member set, as one comparable value — what the probe below is keyed on
+   * and what readiness checks its answer against.
+   */
+  const directorySignature = useMemo(
+    () => (conversationDirectory === null ? null : [...conversationDirectory.memberConversationIds].sort().join(',')),
+    [conversationDirectory],
   );
 
-  // A successful mint writes straight into the tree, but the switch DECISION
-  // reads `sessionConversations` from this SWR cache, which only catches up on
-  // its next poll. Left alone, switching away from a freshly-minted agent and
-  // back inside that window re-runs `selectPaneAgent` against a list that still
-  // doesn't know the mint happened — a second mint, a duplicate conversation.
-  const recordMintedConversation = useCallback(
-    (conversationId: string, agentPageId: string | null) => {
-      void mutateSessionConversations((current) => {
-        if (!current) return current;
-        return {
-          sessions: current.sessions.map((session) =>
-            session.workspaceId === sessionId
-              ? {
-                  ...session,
-                  conversations: [{ conversationId, agentPageId, lastMessageAt: null }, ...session.conversations],
-                }
-              : session,
-          ),
-        };
-      }, { revalidate: false });
-    },
-    [mutateSessionConversations, sessionId],
+  /**
+   * Safe to make an agent-keyed decision against. TWO facts, and the second is
+   * not redundant: a structural broadcast adds a member to `nodes` while its
+   * per-viewer facts stay behind (see `conversationDirectoryOf`), so a tree can
+   * be server-read and still hold a conversation whose agent nobody here knows.
+   * Deciding then would read "no thread for this agent" and mint a duplicate.
+   *
+   * **Unresolved is not forever, and that is the third clause.** A missing target
+   * entry means "gone, or not readable by this viewer" just as often as it means
+   * "not fetched yet" — the two are deliberately indistinguishable
+   * (`readWorkspaceNodes` omits both). A member in the first state never gets an
+   * entry, however many times we ask, so blocking on `hasUnresolved` alone left
+   * the switcher and New Conversation dead for the rest of the session on a
+   * thread that was merely deleted. Once the probe below has ASKED and been
+   * answered, whatever is still missing is missing for good: readiness arms and
+   * the switch decides against the members it can actually name. Worst case is a
+   * thread nobody here can identify failing to match, which mints one extra
+   * conversation — strictly better than controls that never come back.
+   */
+  const conversationsReady =
+    conversationDirectory !== null &&
+    (!conversationDirectory.hasUnresolved ||
+      (directoryProbe !== null && directoryProbe.signature === directorySignature && directoryProbe.answered));
+
+  const liveConversationIds = conversationDirectory?.memberConversationIds;
+
+  /**
+   * The membership set, as `decideClosePane` wants it — and `null` while the
+   * directory has not resolved, because a close must never act on an unverified
+   * fact. Membership (not the resolved subset) is the right input: closing a
+   * node is about whether this workspace holds the thread, which is a question
+   * the nodes answer on their own.
+   */
+  const closeDecisionListing = useMemo(
+    () =>
+      conversationDirectory === null
+        ? null
+        : [...conversationDirectory.memberConversationIds].map((conversationId) => ({ conversationId })),
+    [conversationDirectory],
   );
-  // The mirror, for the opposite direction: a successful close stamps
-  // `closedInWorkspaceAt` immediately, but this cache only catches up on its
-  // next poll. Left alone, `selectPaneAgent` still sees the just-closed row as
-  // open, so picking that agent elsewhere reads as `focus` and silently reopens
-  // a conversation the server already considers closed.
-  const recordClosedConversation = useCallback(
-    (conversationId: string) => {
-      void mutateSessionConversations((current) => {
-        if (!current) return current;
-        return {
-          sessions: current.sessions.map((session) =>
-            session.workspaceId === sessionId
-              ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
-              : session,
-          ),
-        };
-      }, { revalidate: false });
-    },
-    [mutateSessionConversations, sessionId],
-  );
-  // `decideClosePane` must not treat "not yet loaded" the same as "loaded and
-  // empty" — a close must never act on an unverified fact, so it gets `null`
-  // until THIS workspace's own entry has appeared.
-  const closeDecisionListing: SessionConversationSummary[] | null = sessionKnownToConversationsCache
-    ? sessionConversations
-    : null;
+
+  /**
+   * ONE authorized re-read when a member arrives with no facts — and the record
+   * that it was answered.
+   *
+   * The `session:<id>` broadcast is structural — it cannot carry per-viewer
+   * titles or agents — so a thread another member just placed lands in `nodes`
+   * alone and leaves the agent-keyed decisions unsafe until someone asks.
+   * Nothing else would ask: the mount-time read already happened, and the
+   * directory events that would otherwise say so ride the OWNER's
+   * `user:<id>:sessions` room, which a non-owner never joins.
+   *
+   * `answered` is what readiness above waits on, and it is set for a FAILED read
+   * too. That is deliberate rather than sloppy: the failure modes it has to
+   * survive are a request that never succeeds (offline, a 5xx) and a target that
+   * can never resolve (deleted, or not this viewer's to read), and treating
+   * either as "still pending" is what left the controls dead for the rest of the
+   * session. Recovery does not depend on this effect retrying — the socket's own
+   * reconnect re-reads the snapshot, and any change to the member set starts a
+   * fresh probe because the signature changes with it.
+   *
+   * BUT A FAILED READ ANSWERS NOTHING, so it is worth exactly one more ask.
+   * `refreshWorkspaceSnapshot` reports failure as `false` rather than throwing,
+   * and that boolean is the one thing here that can tell "we asked and the facts
+   * are not ours to have" from "we never got to ask". Arming on the first
+   * failure conflates them: one dropped request at the moment another member's
+   * thread lands leaves readiness armed against a list missing that thread, and
+   * the switch then reads "no thread for this agent" and mints a DUPLICATE.
+   * Bounded at one retry, and armed either way afterwards — the point is to stop
+   * conflating the two states, not to keep asking until the network agrees.
+   *
+   * Deduplicated by the member set rather than a bare boolean: repeated
+   * broadcasts, and a local mint's own echo, must not each fire a read. The
+   * store's `snapshot.rev < sync.rev` guard handles an older response landing
+   * late.
+   */
+  useEffect(() => {
+    if (conversationDirectory === null || !conversationDirectory.hasUnresolved || directorySignature === null) return;
+    if (directoryProbe !== null && directoryProbe.signature === directorySignature) return;
+    setDirectoryProbe({ signature: directorySignature, answered: false });
+    const ask = async () => {
+      const read = () => useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+      if (await read()) return;
+      await read();
+    };
+    void ask().then(
+      () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+      () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+    );
+  }, [conversationDirectory, directoryProbe, directorySignature, sessionId]);
 
   /**
    * Selection IS an instruction to show the conversation.
@@ -471,29 +590,32 @@ export default function AgentPanes({
    * and costs no write at all; or it is nowhere, and it is PLACED. The store
    * owns both (`openConversation`).
    *
-   * It still waits for the live conversation set before it can risk an EVICTION.
-   * A target already showing never reaches that logic, so that case goes
+   * It still waits for the membership set before it can risk an EVICTION. A
+   * target already showing never reaches that logic, so that case goes
    * immediately; anything else would let a cold reload reproduce the exact
-   * eviction issue #2295 fixes. `sessionKnownToConversationsCache` only flips
-   * false→true once (unlike `sessionConversations`, whose array reference
-   * changes on every poll), so depending on it adds at most one extra run.
+   * eviction issue #2295 fixes. The gate is DIRECTORY RESOLUTION, not full
+   * readiness: placing a conversation needs to know which panes may be
+   * displaced, and that is membership — the unresolved-facts question belongs
+   * to the agent-keyed decisions, and waiting on it here would strand the
+   * initial open behind a re-read it does not need.
    */
+  const directoryResolved = conversationDirectory !== null;
   useEffect(() => {
     if (!initialConversation) return;
     const live = useAgentWorkspaceStore.getState().workspaces[sessionId];
     const alreadyShowing = live ? nodeShowing(live.nodes, 'chat', initialConversation.conversationId) : undefined;
-    if (alreadyShowing === undefined && !sessionKnownToConversationsCache) return;
+    if (alreadyShowing === undefined && !directoryResolved) return;
 
     openConversation(sessionId, initialConversation.conversationId, {
       ...(liveConversationIds === undefined ? {} : { liveConversationIds }),
     });
-    // `liveConversationIds` is deliberately excluded: its identity changes on
-    // every poll and would re-run this on every tick. Reading it in the closure
-    // is exactly as fresh as it needs to be — it is recomputed in the same
-    // render that flips `sessionKnownToConversationsCache`, so whenever this
-    // effect actually re-runs, the closure already has the matching value.
+    // `liveConversationIds` is deliberately excluded: its identity changes with
+    // every tree commit and would re-run this on each one. Reading it in the
+    // closure is exactly as fresh as it needs to be — it is recomputed in the
+    // same render that flips `directoryResolved`, so whenever this effect
+    // actually re-runs, the closure already has the matching value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, initialConversation?.conversationId, openConversation, sessionKnownToConversationsCache]);
+  }, [sessionId, initialConversation?.conversationId, openConversation, directoryResolved]);
 
   // Ending the workspace: confirmed, and gated on the server. `pendingEnd`
   // carries the node whose close raised it, so the shell it pointed at can be
@@ -548,18 +670,15 @@ export default function AgentPanes({
    */
   const closeChatPane = useCallback(
     (nodeId: string, conversationId: string) => {
+      // `closePane` drops the node, and the node IS the membership — so the
+      // switch decision has already stopped seeing this thread by the time this
+      // returns. The local cache patch that used to follow is gone with the
+      // second listing it kept in step; there is one source now, and this line
+      // wrote to it.
       closePane(sessionId, nodeId);
       onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
-      // Instant LOCAL freshness for the switch decision's own cache. The
-      // broader `void mutate(isAgentWorkspacesKey)` that used to follow is gone
-      // with the DELETE it depended on: it was only safe because it ran AFTER
-      // an awaited round trip, and firing it beside a merely-QUEUED drop races
-      // the pump's POST — the revalidation can answer from before the drop
-      // landed and put the row back. Other clients are settled by the funnel's
-      // `conversation:closed` instead (`session-directory-listener.ts`).
-      recordClosedConversation(conversationId);
     },
-    [sessionId, closePane, onConversationClosed, recordClosedConversation],
+    [sessionId, closePane, onConversationClosed],
   );
 
   const handleClosePane = useCallback(
@@ -613,7 +732,23 @@ export default function AgentPanes({
     // DELETE triggers server-side.
     const node = findNode(nodes, pendingEnd.nodeId);
     const shellId = node?.nodeType === 'pane' && node.target?.kind === 'terminal' ? node.target.id : null;
-    const sessionEntrySnapshot = sessionsData?.sessions.find((s) => s.workspaceId === sessionId) ?? null;
+    // The SIDEBAR's row for this workspace, read straight out of SWR's cache
+    // rather than through a subscription. This grid has no other use for that
+    // listing, and subscribing to it just to hold a rollback snapshot would
+    // re-render every pane on the sidebar's poll.
+    //
+    // SCANNED, not fetched by one key, because the rollback has to REACH as far
+    // as the removal does: `forgetWorkspaceInCache` strips this row from every
+    // entry `isWorkspaceListingKey` matches, so a snapshot read from a single
+    // `agentWorkspacesKey(driveId)` can come back empty for a row that was
+    // nonetheless removed — this grid is handed the WORKSPACE's drive, and the
+    // listing may well have been fetched under another scope (the reused-global
+    // case `agentWorkspacesKey`'s own doc comment warns about) or under none.
+    // The row would then be dropped everywhere and restored nowhere, leaving a
+    // still-live workspace missing from the sidebar with only the revalidate to
+    // bring it back — which `restoreWorkspaceInCache` exists precisely because
+    // it cannot be trusted to.
+    const sessionEntrySnapshot = findSessionInListingCache(cache, sessionId);
     forgetWorkspace(sessionId);
     setPendingEnd(null);
     forgetWorkspaceInCache(mutate, sessionId);
@@ -650,7 +785,7 @@ export default function AgentPanes({
       toast.warning('This session had other open conversations, which were also ended.');
     }
     onSessionEnded?.();
-  }, [pendingEnd, nodes, sessionId, sessionsData, forgetWorkspace, closeShell, onSessionEnded]);
+  }, [pendingEnd, nodes, sessionId, cache, mutate, forgetWorkspace, closeShell, onSessionEnded]);
 
   /** Shared by the orphan cleanup's own post-DELETE recheck and the History pick's rollback. */
   const isConversationShownSomewhere = useCallback(
@@ -730,10 +865,15 @@ export default function AgentPanes({
           nextAgentPageId: newAgentPageId,
         });
       }
-      recordClosedConversation(oldConversationId);
+      // The DELETE's expel destroys the node, and that write goes through the
+      // same funnel every other producer does — so `workspace:nodes-updated`
+      // lands on `session:<id>`, which this grid is joined to, and the tree
+      // drops the member on its own. No local patch: the one source settles
+      // itself, and patching beside it would be the second writer this model
+      // exists to delete.
       void mutate(isAgentWorkspacesKey);
     },
-    [sessionId, closeDecisionListing, isConversationShownSomewhere, onConversationClosed, recordClosedConversation],
+    [sessionId, closeDecisionListing, isConversationShownSomewhere, onConversationClosed, mutate],
   );
 
   /**
@@ -778,17 +918,28 @@ export default function AgentPanes({
       if (showsSpinner) beginMint(nodeId, mint);
 
       try {
+        // `activeNodeId` is WHERE, and it is not optional in practice. The mint's
+        // own server write admits what it creates, and admitting places — so
+        // without a preference the shared policy falls to "the first pane that
+        // may be given up", which with two empty panes open is whichever comes
+        // first in grid order rather than the one under the user's cursor. The
+        // agent would appear in a pane they did not pick and theirs would stay
+        // empty. Naming the pane makes the server's placement the user's choice.
         if (agentPageId === null) {
           // The ASSISTANT: no agent page, so the workspace-centric creator is
           // the path (page-agents has no page to hang this on).
-          await post(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations`, { conversationId });
+          await post(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations`, {
+            conversationId,
+            activeNodeId: nodeId,
+          });
         } else {
           await post(`/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`, {
             conversationId,
             sessionId,
+            activeNodeId: nodeId,
           });
         }
-        const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint));
+        const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint, conversationId));
         if (showsSpinner) endMint(nodeId);
         if (superseded) {
           // A NEWER call for this node superseded this one, or the node was
@@ -809,12 +960,16 @@ export default function AgentPanes({
         if (priorConversationId !== null) {
           void closeReplacedConversation(priorConversationId, conversationId, agentPageId);
         }
-        // Local optimistic update for THIS component's own decisions (instant,
-        // no network)...
-        recordMintedConversation(conversationId, agentPageId);
-        // ...and a broader revalidate covering every OTHER
-        // `/api/agent-workspaces**` consumer whose differently-scoped key the
-        // local update can't reach.
+        // `openConversation` above already placed the node, and the node IS the
+        // membership — so this component's own decisions see the mint the
+        // instant it happens, with no cache to patch beside it. The thread's
+        // AGENT arrives a moment later, on the node write's own ack (the pump
+        // adopts the POST's `{rev, nodes, targets}`), and until it does the
+        // agent-keyed controls stay disabled rather than guess.
+        //
+        // The revalidate below is for the SIDEBAR's listing, which is a
+        // different consumer with a different scope and still reads the
+        // ownership-filtered route.
         void mutate(isAgentWorkspacesKey);
         return true;
       } catch (error) {
@@ -840,8 +995,8 @@ export default function AgentPanes({
       liveConversationIds,
       cleanupOrphanedConversation,
       closeReplacedConversation,
-      recordMintedConversation,
       syncConsoleSelection,
+      mutate,
     ],
   );
 
@@ -960,7 +1115,12 @@ export default function AgentPanes({
         try {
           claimResult = await post<{ ok: boolean; alreadyInSession: boolean }>(
             `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/claim`,
-            {},
+            // WHERE, for the same reason a mint says it: the claim ADMITS this
+            // thread, and admitting places. Without a preference the policy
+            // takes the first pane that qualifies, and the `openConversation`
+            // below cannot correct it — by then the thread is already showing
+            // somewhere, which that call reads as "focus it there".
+            { activeNodeId: nodeId },
           );
         } catch (error) {
           const remaining = settleClaim();
@@ -993,10 +1153,11 @@ export default function AgentPanes({
         }
         deferredClaimSuccess.current.delete(conversation.id);
         if ((historyDeleteGenerations.current.get(conversation.id) ?? 0) !== deleteGenerationAtStart) return false;
-        // Only when THIS request actually transitioned the listing —
-        // `recordMintedConversation` has no id-based dedupe, so calling it for
-        // an `alreadyInSession` no-op would prepend a duplicate row.
-        if (!claimResult.alreadyInSession) recordMintedConversation(conversation.id, agentPageId);
+        // The claim admitted the thread server-side; `openConversation` below
+        // places its node locally, and membership IS that node — so there is no
+        // listing row to prepend here, and with it goes the `alreadyInSession`
+        // special case that existed only because the old patch had no id-based
+        // dedupe. The revalidate is the sidebar's.
         void mutate(isAgentWorkspacesKey);
       }
 
@@ -1027,7 +1188,7 @@ export default function AgentPanes({
       cleanupOrphanedConversation,
       closeReplacedConversation,
       isConversationShownSomewhere,
-      recordMintedConversation,
+      mutate,
     ],
   );
 
@@ -1064,7 +1225,7 @@ export default function AgentPanes({
         }
       }
     },
-    [sessionId, unbindPane],
+    [sessionId, unbindPane, mutate],
   );
 
   /**
@@ -1075,15 +1236,69 @@ export default function AgentPanes({
    * stray sidebar rows.
    */
   const handleSwitchAgent = useCallback(
-    (nodeId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
+    async (nodeId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
+      if (conversationDirectory === null) return;
+
+      // NOTE WHO OWNS THIS PANE, because the MRU re-read below can suspend this
+      // handler. It used to be synchronous end to end, so a second pick simply
+      // ran after the first; with an await in the middle, an earlier pick can
+      // resume AFTER a later one has already placed its choice and apply a
+      // decision computed against a tree two selections ago.
+      //
+      // PEEKED, NOT CLAIMED, and the difference is a deleted conversation. This
+      // handler does not yet know whether it will act — `selectPaneAgent` below
+      // can still answer `noop`, which is what re-picking the agent a pane
+      // already shows returns. A claim taken to find out would invalidate a mint
+      // in flight for this same pane, and that mint answers supersession by
+      // DELETING the conversation it just created (see `handlePickAgent`) — the
+      // pane appearing and then silently vanishing, which is the defect this
+      // branch exists to fix. So: observe here, and leave the claiming to
+      // `handlePickAgent`, which takes its own on the mint branch below.
+      const assignAtEntry = peekPaneAssign(nodeId);
+
+      let candidates = conversationDirectory.resolved;
+      // MRU FRESHNESS, bought only where recency can actually decide anything.
+      //
+      // `findOpenForAgent` picks the most recently active match, and the tree's
+      // `lastMessageAt` is only as fresh as the last snapshot: the activity bump
+      // that keeps the sidebar's listing live rides the OWNER's
+      // `user:<id>:sessions` room, which a member working in someone else's
+      // workspace never joins. With one match — the overwhelmingly common
+      // case — recency picks nothing, so the switch stays instant. With two or
+      // more it is the whole decision, so re-read first.
+      if (candidates.filter((candidate) => candidate.agentPageId === nextAgentPageId).length > 1) {
+        await useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+        const refreshed = conversationDirectoryOf(useAgentWorkspaceStore.getState().workspaces[sessionId]);
+        // A failed re-read is not a reason to refuse the switch: the stale
+        // ordering is still a real answer, and it is the one shown on screen.
+        if (refreshed !== null) candidates = refreshed.resolved;
+        // SOMEBODY TOOK THIS PANE while the re-read was in flight — a newer
+        // switch that committed, a History pick, a mint. Whoever it was has
+        // already decided; this one must not decide again on top of it. A newer
+        // switch that decided `noop` took nothing and is correctly invisible
+        // here: it changed the pane no more than this one has.
+        if (peekPaneAssign(nodeId) !== assignAtEntry) return;
+      }
+
       const decision = selectPaneAgent({
-        sessionConversations,
+        sessionConversations: candidates,
         selectedAgentPageId: nextAgentPageId,
         currentAgentPageId,
       });
       if (decision.action === 'noop') return;
       if (decision.action === 'focus-existing') {
-        const node = findNode(nodes, nodeId);
+        // CLAIM IT, now that a decision has actually committed to altering this
+        // node — the rule `decideClosePane` states above, and what makes the
+        // guard's "a newer switch that committed" true rather than aspirational.
+        // Without it this branch is invisible to the peek: two switches that
+        // both take the MRU await, the later one commits, and the earlier one
+        // then resumes against an unchanged token and applies its own decision
+        // on top — a second DELETE for the outgoing thread, and the console
+        // selection dragged back to the agent the user already replaced.
+        beginPaneAssign(nodeId);
+        // Read LIVE rather than from the closure: an await may have passed
+        // above, and the tree can have moved under it.
+        const node = findNode(useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [], nodeId);
         const oldTargetId = node?.nodeType === 'pane' && node.target?.kind === 'chat' ? node.target.id : null;
         openConversation(sessionId, decision.conversationId, {
           activeNodeId: nodeId,
@@ -1098,14 +1313,15 @@ export default function AgentPanes({
       void handlePickAgent(nodeId, nextAgentPageId);
     },
     [
-      nodes,
-      sessionConversations,
+      conversationDirectory,
       sessionId,
       openConversation,
       liveConversationIds,
       closeReplacedConversation,
       handlePickAgent,
       syncConsoleSelection,
+      beginPaneAssign,
+      peekPaneAssign,
     ],
   );
 
@@ -1116,13 +1332,20 @@ export default function AgentPanes({
       try {
         const { shell } = await post<{ shell: { shellId: string; name: string } }>(
           `/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells`,
-          {},
+          // WHERE, for the same reason the chat mint says it: the spawn's own
+          // write ADMITS the terminal, and admitting places. Without a
+          // preference the policy takes the first pane that qualifies, so with
+          // two empty panes the shell opens in the one the user did not click.
+          { activeNodeId: nodeId },
         );
-        const superseded = !stillMinting(nodeId, mint);
+        const superseded = !stillMinting(nodeId, mint, shell.shellId);
         endMint(nodeId);
         if (superseded) {
           // The shell exists server-side already, so close it rather than leave
-          // it running unattached or clobber whatever this node became.
+          // it running unattached or clobber whatever this node became. NOT for
+          // a pane the spawn's own admission already bound to THIS shell — see
+          // `stillMinting`; that is the write landing, and killing the shell
+          // there tore down the terminal the user had just watched appear.
           closeShell(shell.shellId);
           return;
         }
@@ -1181,14 +1404,14 @@ export default function AgentPanes({
           canSplit={canSplit}
           pickableAgents={pickableAgents}
           agentsLoading={agentsLoading}
-          conversationsReady={sessionKnownToConversationsCache}
+          conversationsReady={conversationsReady}
           driveId={driveId}
           sessionId={sessionId}
           chatContext={chatContext}
           hostConversationId={hostConversationId}
           isReadOnly={isReadOnly}
           onSelectAgent={(nextAgentPageId) =>
-            handleSwitchAgent(node.id, resolved?.agentPageId ?? null, nextAgentPageId)
+            void handleSwitchAgent(node.id, resolved?.agentPageId ?? null, nextAgentPageId)
           }
           onSelectPane={() => selectNode(sessionId, node.id)}
           onSplitRight={() => splitPane(sessionId, node.id, 'row')}
@@ -1333,9 +1556,10 @@ function ChatPane({
   pickableAgents: PickableAgent[];
   agentsLoading: boolean;
   /**
-   * Whether THIS workspace's entry has appeared in the switch decision's own
-   * data. Before it has, that list reads as `[]` — indistinguishable from "no
-   * conversation with this agent exists yet" — and a switch to an agent that
+   * Whether this workspace's conversations are known WELL ENOUGH to decide by
+   * agent — the tree has been read from the server, and every thread in it has
+   * its per-viewer facts. Short of that the list is indistinguishable from "no
+   * conversation with this agent exists yet", and a switch to an agent that
    * already HAS a thread would wrongly mint a duplicate. Disabled, not raced.
    */
   conversationsReady: boolean;

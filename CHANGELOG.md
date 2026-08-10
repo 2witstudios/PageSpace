@@ -3,6 +3,32 @@
 All notable user-facing changes to PageSpace are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
+  pane for a global assistant or a page agent worked once per session; every one after it appeared
+  for a moment and then disappeared, with nothing said about why. The session had started placing a
+  new conversation into your pane itself, and the browser was still expecting to do that job — so it
+  read the pane arriving correctly as evidence that something else had claimed it, and quietly
+  deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
+  Pages were never affected. Second, third and fourth panes now open and stay open.
+- **Whatever you open lands in the pane you opened it from** — with more than one empty pane on
+  screen, the session had no way of knowing which one you meant, so it filled whichever came first
+  and left yours blank. It applied to everything you can put in a pane: picking an agent, opening a
+  terminal, and reopening a past conversation from a pane's History. The pane you clicked is now
+  part of the request in all three cases.
+- **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
+  work in that drive's sessions, so a conversation of yours can live in a session someone else
+  started. Opening one of those from your conversation list gave you a pane you could read and type
+  in, but with the agent switcher and New Conversation greyed out and the pane's close button doing
+  nothing, and no explanation for any of it. Those sessions never appear in your sidebar, so that
+  list was the only way back to the conversation and it led somewhere half-broken. The pane now
+  reads what the session contains the same way it reads everything else about it, so its controls
+  work exactly as they do in a session of your own. Nothing changes about whose sandbox the
+  conversation uses, or about which sessions appear in your sidebar.
+
 ## [1.7.1] — 2026-08-10
 
 ### Fixed

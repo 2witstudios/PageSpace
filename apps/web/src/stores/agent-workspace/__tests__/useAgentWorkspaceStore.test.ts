@@ -519,3 +519,49 @@ describe('the editing-store registration', () => {
     expect(useEditingStore.getState().isAnyActive()).toBe(false);
   });
 });
+
+/**
+ * The fact a merely-LOCAL tree cannot be told from a read one without.
+ *
+ * `runCommand` seeds a root client-side at rev 0 so the first click composes
+ * into one write instead of waiting a round trip — which means presence in
+ * `workspaces` is not evidence that any server has answered. Every consumer
+ * whose decision would be wrong against a local-only tree reads this instead.
+ */
+describe('hasServerSnapshot', () => {
+  it('given a workspace only ever seeded locally, should report NO server snapshot', () => {
+    store().openConversation(WS, 'c1');
+    expect(tree()).toBeDefined();
+    expect(tree().hasServerSnapshot).toBe(false);
+  });
+
+  it('given a snapshot has been adopted, should report a server snapshot', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(tree().hasServerSnapshot).toBe(true);
+  });
+
+  it('should flip on a read that CONFIRMS the local seed exactly, changing nothing else', () => {
+    // The one case that isolates `hasServerSnapshot` in the stability
+    // comparison: the server answers with precisely the tree this client
+    // seeded, at the rev it already holds, so every other field the comparison
+    // reads is identical and only `base` goes null → non-null. Without the
+    // flag in that comparison the previous object is kept and the tree reads as
+    // never-read forever — the readiness signal would never arm.
+    store().openConversation(WS, 'c1');
+    expect(tree().hasServerSnapshot).toBe(false);
+
+    store().hydrateFromServer(WS, snapshot(tree().rev, tree().nodes));
+
+    expect(tree().hasServerSnapshot).toBe(true);
+  });
+
+  it('should keep the SAME tree object when an unchanged snapshot is re-adopted', () => {
+    // Referential stability is load-bearing: the sidebar re-seats every listed
+    // workspace on every revalidation, and a fresh object per seat re-renders
+    // every tree in the app.
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    const first = tree();
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(tree()).toBe(first);
+  });
+});
