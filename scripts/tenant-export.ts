@@ -97,6 +97,63 @@ const nullifyOrphanedUserRefs = nullifyOrphanedRefs;
 /** Null out FK references to pages not in the export set. */
 const nullifyOrphanedPageRefs = nullifyOrphanedRefs;
 
+/** The id sets a node's `targetId` can be checked against, by `targetKind`. */
+interface NodeTargetSets {
+  chat: Set<string>;
+  terminal: Set<string>;
+  page: Set<string>;
+}
+
+/**
+ * UNBIND every workspace node whose target does not travel — the polymorphic
+ * analogue of `nullifyOrphanedRefs`, which cannot do this job because there is
+ * no FK to follow: `agent_workspace_nodes.targetId` names a conversation, a
+ * shell or a page ACCORDING TO `targetKind`, and the column itself references
+ * nothing.
+ *
+ * UNBIND, NOT PRUNE, and that is the whole decision here. Dropping the row
+ * would be the intuitive move and it is the wrong one twice over. A pane's
+ * parent split exists to divide space between at least two children —
+ * `validateTree` calls a split with fewer `degenerate_split` — so removing one
+ * pane leaves a tree the tenant REFUSES to read (`nodesFromRows` rejects the
+ * whole set, not the bad row), turning "one thread did not come" into "this
+ * workspace does not open". Repairing that properly means collapsing the split
+ * and reseating fractions, i.e. re-implementing the node algebra inside a SQL
+ * exporter. Nulling the pair instead preserves the tree exactly and lands on a
+ * state the model already spells: an unbound pane rendering the target picker,
+ * which is what a user sees when they split a pane and have not chosen its
+ * contents yet.
+ *
+ * BOTH COLUMNS OR NEITHER. The row parse refuses a half-bound pane outright
+ * (`a pane target needs both a kind and an id, or neither`) and rejects the
+ * whole workspace with it, so clearing one column and leaving the other would
+ * export precisely the unreadable state the paragraph above is avoiding. A row
+ * that arrives here ALREADY half-bound — the database has no CHECK against it —
+ * is cleared for the same reason rather than carried forward.
+ */
+function unbindOutOfBundleTargets(
+  nodes: Record<string, unknown>[],
+  sets: NodeTargetSets,
+): void {
+  for (const node of nodes) {
+    const kind = node.targetKind as string | null;
+    const targetId = node.targetId as string | null;
+    if (kind === null && targetId === null) continue;
+
+    const inBundle =
+      kind !== null && targetId !== null &&
+      (kind === 'chat' ? sets.chat.has(targetId)
+        : kind === 'terminal' ? sets.terminal.has(targetId)
+        : kind === 'page' ? sets.page.has(targetId)
+        : false);
+
+    if (!inBundle) {
+      node.targetKind = null;
+      node.targetId = null;
+    }
+  }
+}
+
 export interface ExportResult {
   manifest: ExportManifest;
   sqlStatements: string;
@@ -266,22 +323,31 @@ export async function exportData(
   ));
 
   /**
-   * Agent sessions — the working contexts the exported conversations are bound
-   * to (`conversations.workspaceId`).
+   * Agent sessions — the working contexts that HOLD the exported conversations.
    *
-   * Carried because the binding is otherwise unrecoverable: a session owns a
-   * thread's filesystem and its pane layout, and `workspaceId` is write-once by
-   * design (moving a thread is a fork, never a rebind), so a migration that
-   * drops it cannot be repaired afterwards. Only the sessions an exported
-   * conversation actually names are pulled — a session is never empty, so
-   * this is the whole set that matters — and only those whose `ownerId`
-   * (NOT NULL, FK'd) is already in the export. The Sprite-identity columns do
-   * NOT travel; see the exclusion allowlist in ./lib/tenant-export-columns.ts.
+   * "Hold" is a chat-bound `agent_workspace_nodes` row, not a column: this used
+   * to map `conversations.workspaceId` off the rows already in hand, and that
+   * column is dropped. It is a query now rather than a projection, which is the
+   * only real difference — the set it produces is the same one.
+   *
+   * Carried because a session owns a thread's filesystem, which is otherwise
+   * unrecoverable. Only the sessions an exported conversation is actually in
+   * are pulled, and only those whose `ownerId` (NOT NULL, FK'd) is already in
+   * the export. The Sprite-identity columns do NOT travel; see the exclusion
+   * allowlist in ./lib/tenant-export-columns.ts.
+   *
+   * The nodes THEMSELVES are carried too, below — membership travels rather
+   * than being rebuilt by the tenant. See ./lib/tenant-export-columns.ts for
+   * why, and `unbindOutOfBundleTargets` above for the one thing that makes
+   * carrying them more than a query.
    */
   const referencedSessionIds = new Set(
-    conversationsData
-      .map((r) => r.workspaceId as string | null)
-      .filter((id): id is string => Boolean(id)),
+    conversationIds.length > 0
+      ? (await queryRows(db, sql.raw(
+          `SELECT DISTINCT "rootId" FROM agent_workspace_nodes`
+          + ` WHERE "targetKind" = 'chat' AND "targetId" IN (${toSqlInList(conversationIds)})`,
+        ))).map((r) => r.rootId as string)
+      : [],
   );
   const agentSessionsDataRaw = referencedSessionIds.size > 0
     ? await queryRows(db, sql.raw(
@@ -295,10 +361,10 @@ export async function exportData(
   // outside this migration degrades to the same shape rather than dangling.
   nullifyOrphanedRefs(agentSessionsData, new Set(driveIds), 'driveId');
 
-  // Threads bound to a session that did not make the cut become plain history
-  // — exactly what `ON DELETE SET NULL` on this column already means.
+  // Threads whose session did not make the cut travel as plain history. There
+  // is nothing to null on them any more: membership was a node, the nodes are
+  // not carried, and a conversation row says nothing about a workspace.
   const exportedSessionIdSet = new Set(agentSessionsData.map((s) => s.id as string));
-  nullifyOrphanedRefs(conversationsData, exportedSessionIdSet, 'workspaceId');
 
   /**
    * The sessions' TERMINALS. Scoped to the sessions that survived the owner
@@ -317,6 +383,44 @@ export async function exportData(
   const agentShellsData = shellsDataRaw.filter(
     (s) => allExportedUserIdSet.has(s.ownerId as string),
   );
+
+  /**
+   * THE SESSIONS' TREES — and therefore their MEMBERSHIP. A thread is in a
+   * workspace exactly when a chat-bound node of that workspace names it, so
+   * this is the table that used to be `conversations.workspaceId`; without it
+   * the tenant opens every session empty and every thread is reachable only
+   * through past-conversation history.
+   *
+   * SCOPED BY `rootId`, WHICH IS WHAT KEEPS A TREE WHOLE. The composite self-FK
+   * `(rootId, parentId) → (rootId, id)` cannot cross workspaces by
+   * construction, so a node's parent is always in this same result set: taking
+   * every row of a carried session takes every parent with it, and no filter
+   * downstream removes rows (the unbinding above rewrites two columns and drops
+   * nothing). A tree therefore travels whole or not at all — there is no
+   * predicate here that could separate a child from its parent. Row ORDER
+   * inside the INSERT is likewise irrelevant: Postgres queues RI checks as
+   * AFTER-ROW triggers fired when the statement completes, so a child listed
+   * before its parent resolves, exactly as the channel-message self-references
+   * do.
+   *
+   * `agent_workspace_node_revs` is NOT carried; the reason is recorded in
+   * ./lib/tenant-export-columns.ts.
+   */
+  const workspaceNodesData = exportedSessionIdSet.size > 0
+    ? await queryRows(db, sql.raw(
+        `SELECT * FROM agent_workspace_nodes WHERE "rootId" IN (${toSqlInList(exportedSessionIdSet)})`,
+      ))
+    : [];
+  unbindOutOfBundleTargets(workspaceNodesData, {
+    // A pane's thread. The conversations carried are the ones the requested
+    // users own plus those on an exported page, so a session owned by a
+    // DISCOVERED user can legitimately hold threads that stay behind.
+    chat: new Set(conversationIds),
+    // A pane's terminal — the shells above, already filtered by owner.
+    terminal: new Set(agentShellsData.map((s) => s.id as string)),
+    // A pane's page, which may be in a drive this migration does not carry.
+    page: pageIdSet,
+  });
 
   // `conversations.agentPageId` FKs `pages` (ON DELETE SET NULL) and is a
   // `type='client'` thread's only page link. A thread whose agent page is
@@ -413,14 +517,42 @@ export async function exportData(
     buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
     buildInsert('tags', cols('tags'), tagsData),
     buildInsert('page_tags', cols('page_tags'), pageTagsData),
-    // `agent_workspaces` precedes `conversations`: `conversations.workspaceId`
-    // FKs it, and a session row also needs its drive and owner, both above.
+    // `agent_workspaces` sits with `conversations` and before it by convention
+    // rather than by an FK now — nothing on a conversation row references a
+    // session. A session row still needs its drive and owner, both above.
     buildInsert('agent_workspaces', cols('agent_workspaces'), agentSessionsData),
     // Both of this table's FKs (`workspaceId`, `ownerId`) are NOT NULL, so it
     // must follow `agent_workspaces` and `users`. It does NOT have to precede
     // `conversations` — nothing references a shell — but it sits with its
     // parent to keep the session's rows together.
     buildInsert('agent_workspace_shells', cols('agent_workspace_shells'), agentShellsData),
+    /**
+     * The session's tree, after the session its `rootId` FKs. Nothing else
+     * constrains its position: `targetId` carries no foreign key, so it does
+     * not have to follow `conversations` or `pages`.
+     *
+     * THE CONFLICT TARGET IS THE PRIMARY KEY, AND IT IS LOAD-BEARING. This
+     * table's `UNIQUE (targetId) WHERE targetKind = 'chat'` is GLOBAL — a
+     * conversation is bound to at most one node anywhere — so a destination
+     * that already holds one of these threads makes the incoming node a
+     * duplicate key. Under the bundle's usual untargeted `ON CONFLICT DO
+     * NOTHING`, Postgres forgives ANY unique violation, and the node would be
+     * skipped in silence: the import reports success and one thread is missing
+     * from the workspace it belongs to, which is the exact failure mode this
+     * table was carried to prevent. Naming `("rootId", "id")` makes the primary
+     * key the only forgiven conflict — a re-imported bundle is still a no-op —
+     * and a collision on the chat index raises, aborting the single
+     * BEGIN/COMMIT the whole bundle replays in. The import fails loudly with
+     * the constraint name, nothing lands, and the operator resolves a real
+     * conflict between two databases rather than discovering it months later
+     * as a thread that is simply not there.
+     */
+    buildInsert(
+      'agent_workspace_nodes',
+      cols('agent_workspace_nodes'),
+      workspaceNodesData,
+      ['rootId', 'id'],
+    ),
     // `conversations` MUST precede `messages`: the latter has a real
     // (non-deferrable) FK onto the former, and the whole bundle replays inside
     // one BEGIN/COMMIT, so an out-of-order INSERT aborts the entire import.
@@ -456,6 +588,7 @@ export async function exportData(
     channelReadStatus: channelReadStatusData.length,
     agentWorkspaces: agentSessionsData.length,
     agentWorkspaceShells: agentShellsData.length,
+    agentWorkspaceNodes: workspaceNodesData.length,
     conversations: conversationsData.length,
     messages: messagesData.length,
     files: filesData.length,

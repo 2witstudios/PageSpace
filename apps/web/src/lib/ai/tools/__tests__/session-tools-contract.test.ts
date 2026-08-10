@@ -14,7 +14,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tool } from 'ai';
-import { createSessionTools, type SessionToolsDeps } from '../session-tools';
+import {
+  createSessionTools,
+  movePaneInputSchema,
+  type PaneGridListing,
+  type PaneGridNodeEntry,
+  type SessionToolsDeps,
+} from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
 
 const USER_ID = 'user-1';
@@ -427,65 +433,95 @@ describe('kill_shell description: "The session\'s sandbox (and every other shell
 // ---------------------------------------------------------------------------
 // The LAYOUT family (issue #2208) — every claim its descriptions make
 // ---------------------------------------------------------------------------
+//
+// The vocabulary moved with the model. These tools used to address a
+// `columnId` + a `paneId`, because the layout WAS two levels; it is now one
+// flat tree in which `parentId` decides both where a node sits and whether it
+// is on screen at all, so there is one address — a nodeId — and "column" is
+// just a container that happens to sit in the root.
 
-const GRID = {
-  columns: [
-    {
-      columnId: 'col-1',
-      widthFraction: 0.6,
-      panes: [
-        { paneId: 'pane-1', kind: 'chat' as const, targetId: 'conv-1', name: 'Planning', heightFraction: 0.7 },
-        { paneId: 'pane-1b', kind: null, targetId: null, name: '', heightFraction: 0.3 },
-      ],
-    },
-    {
-      columnId: 'col-2',
-      widthFraction: 0.4,
-      panes: [{ paneId: 'pane-2', kind: 'terminal' as const, targetId: 'shell-1', name: 'shell-1', heightFraction: null }],
-    },
+const LAYOUT: PaneGridListing = {
+  nodes: [
+    { nodeId: 'root', nodeType: 'root', parentId: null, position: 0, axis: 'row', kind: null, targetId: null, name: '', fraction: null },
+    { nodeId: 'col-1', nodeType: 'split', parentId: 'root', position: 0, axis: 'column', kind: null, targetId: null, name: '', fraction: 0.6 },
+    { nodeId: 'pane-1', nodeType: 'pane', parentId: 'col-1', position: 0, axis: null, kind: 'chat', targetId: 'conv-1', name: 'Planning', fraction: 0.7 },
+    { nodeId: 'pane-1b', nodeType: 'pane', parentId: 'col-1', position: 1, axis: null, kind: null, targetId: null, name: '', fraction: 0.3 },
+    { nodeId: 'pane-2', nodeType: 'pane', parentId: 'root', position: 1, axis: null, kind: 'terminal', targetId: 'shell-1', name: 'shell-1', fraction: 0.4 },
   ],
 };
+
+/** Does the wire refuse "move it to nowhere"? The schema, asked directly. */
+function movePaneRefusesNullDestination(): boolean {
+  return !movePaneInputSchema.safeParse({ nodeId: 'pane-1', toParentId: null }).success;
+}
 
 /** Layout deps on top of the shared fakes — both are OPTIONAL on the interface. */
 function layoutDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return makeDeps({
-    readPaneGrid: vi.fn(async () => GRID),
-    applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: true })),
+    readPaneGrid: vi.fn(async () => LAYOUT),
+    applyLayoutCommand: vi.fn(async () => ({ ok: true as const, changed: true })),
     ...over,
   });
 }
 
-/** The tool-call options a layout tool needs: context PLUS the id its opId derives from. */
+/**
+ * The tool-call options a layout tool needs — and it no longer needs a
+ * `toolCallId`. The old tail derived an idempotency key from one and silently
+ * answered NO_GRID without it; the command is resolved server-side against the
+ * tree under the lock, so a retry re-derives the same command and finds nothing
+ * to do. The absent id is asserted below rather than merely unused here.
+ */
 function layoutOptions(overrides: Partial<ToolExecutionContext> = {}) {
-  return { ...contextOptions(overrides), toolCallId: 'call-abc' };
+  return contextOptions(overrides);
 }
 
-describe('list_panes description: "Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address"', () => {
-  it('returns the grid keyed by exactly the ids the three rearrange verbs take', async () => {
+describe('list_panes description: "Returns the nodeIds that resize_pane/move_pane/arrange_panes address"', () => {
+  it('returns the flat node list keyed by exactly the ids the three rearrange tools take', async () => {
     const deps = layoutDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.list_panes, {}, layoutOptions());
 
-    expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: WORKSPACE_ID, columns: GRID.columns }));
+    expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: WORKSPACE_ID, nodes: LAYOUT.nodes }));
     // The read is per-viewer (security review HIGH 1): the model sees exactly
     // what this user's own layout GET would return, redactions included.
     expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID, USER_ID);
     // The addressability claim, checked rather than assumed: every id the
-    // listing hands out is one the rearrange tools accept.
-    const columnIds = GRID.columns.map((column) => column.columnId);
-    const paneIds = GRID.columns.flatMap((column) => column.panes.map((pane) => pane.paneId));
-    expect(columnIds).toEqual(['col-1', 'col-2']);
-    expect(paneIds).toEqual(['pane-1', 'pane-1b', 'pane-2']);
+    // listing hands out is one the rearrange tools accept, and they take ONE
+    // namespace now rather than two.
+    expect(LAYOUT.nodes.map((node) => node.nodeId)).toEqual([
+      'root',
+      'col-1',
+      'pane-1',
+      'pane-1b',
+      'pane-2',
+    ]);
   });
 
-  it('a workspace with no grid yet is a reportable state, not an error', async () => {
+  it('reports exactly one parentless node — the root — because that is the whole of the flat-tree contract', async () => {
+    // This test PINNED THE OPPOSITE until the one-removal correction: a
+    // `pane-parked` fixture with a null parent, asserted to be reported as "in
+    // the workspace, off the layout". That state is now unspellable at every
+    // layer — `validateTree` returns `null_parent`, `nodeFromRow` throws, and
+    // the `agent_workspace_nodes` root CHECK is biconditional — so a fixture
+    // carrying it was pinning a shape the rest of the system would refuse, and
+    // pinning it in the one place a model reads the layout from.
+    const tools = createSessionTools(layoutDeps());
+    const result = await run(tools.list_panes, {}, layoutOptions());
+    const parentless = (result as { nodes: PaneGridNodeEntry[] }).nodes.filter(
+      (node) => node.parentId === null,
+    );
+    expect(parentless.map((node) => node.nodeId)).toEqual(['root']);
+    expect(parentless[0].nodeType).toBe('root');
+  });
+
+  it('a workspace with no layout yet is a reportable state, not an error', async () => {
     const tools = createSessionTools(layoutDeps({ readPaneGrid: vi.fn(async () => null) }));
     const result = await run(tools.list_panes, {}, layoutOptions());
-    expect(result).toEqual(expect.objectContaining({ success: true, columns: [] }));
+    expect(result).toEqual(expect.objectContaining({ success: true, nodes: [] }));
   });
 });
 
-describe('the layout family description: "Only meaningful inside an agent session with an open pane grid"', () => {
+describe('the layout family description: "Only meaningful inside an agent session"', () => {
   it.each(['list_panes', 'resize_pane', 'move_pane', 'arrange_panes'] as const)(
     '%s refuses a conversation with no workspace, and writes nothing',
     async (name) => {
@@ -495,119 +531,138 @@ describe('the layout family description: "Only meaningful inside an agent sessio
         name === 'list_panes'
           ? {}
           : name === 'resize_pane'
-            ? { columnId: 'col-1', size: 0.5 }
+            ? { nodeId: 'col-1', size: 0.5 }
             : name === 'move_pane'
-              ? { paneId: 'pane-1', toColumnId: 'col-2' }
-              : { columnIds: ['col-2'] };
+              ? { nodeId: 'pane-1', toParentId: 'col-1' }
+              : { nodeIds: ['pane-2'] };
 
       const result = await run(tools[name], input, layoutOptions());
       expect(result.success).toBe(false);
-      expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+      expect(deps.applyLayoutCommand).not.toHaveBeenCalled();
     },
   );
 
   it('refuses an unauthenticated caller before resolving any workspace', async () => {
     const deps = layoutDeps();
     const tools = createSessionTools(deps);
-    const result = await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions({ userId: undefined }));
+    const result = await run(tools.arrange_panes, { nodeIds: ['pane-2'] }, layoutOptions({ userId: undefined }));
     expect(result.success).toBe(false);
     expect(deps.findOwnWorkspace).not.toHaveBeenCalled();
-    expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+    expect(deps.applyLayoutCommand).not.toHaveBeenCalled();
   });
 
-  it('addresses ONLY the caller own workspace — a model cannot name someone else grid', async () => {
+  it('addresses ONLY the caller own workspace — a model cannot name someone else layout', async () => {
     const deps = layoutDeps();
     const tools = createSessionTools(deps);
-    // There is no workspaceId input on any of these tools; the grid is
+    // There is no workspaceId input on any of these tools; the layout is
     // resolved from the caller's own conversation, which is what makes the
-    // verbs route's access check already satisfied by construction.
-    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
+    // route's access check already satisfied by construction.
+    await run(tools.move_pane, { nodeId: 'pane-1', toParentId: 'col-1' }, layoutOptions());
     expect(deps.findOwnWorkspace).toHaveBeenCalledWith(CALLER_CONVERSATION);
-    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WORKSPACE_ID }));
+    expect(deps.applyLayoutCommand).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WORKSPACE_ID }));
+  });
+
+  it('gates every write on the ACTING USER, never on the model word for who is asking', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.resize_pane, { nodeId: 'col-1', size: 0.5 }, layoutOptions());
+    // The acting user reaches the write, where the binding gate spends THEIR
+    // authority — the prompt-injection defence, and the reason this is asserted
+    // rather than left to the runtime.
+    expect(deps.applyLayoutCommand).toHaveBeenCalledWith(expect.objectContaining({ actingUserId: USER_ID }));
   });
 });
 
-describe('resize_pane description: "pass a columnId to set that column\'s width, or a paneId to set that pane\'s height"', () => {
-  it('a columnId becomes resize_column; a paneId becomes resize_pane', async () => {
+describe('resize_pane description: "Set one node share of its parent container"', () => {
+  it('compiles to a resize command on the nodeId given, whatever kind of node it is', async () => {
     const deps = layoutDeps();
     const tools = createSessionTools(deps);
 
-    await run(tools.resize_pane, { columnId: 'col-1', size: 0.35 }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
-      expect.objectContaining({ verb: { type: 'resize_column', columnId: 'col-1', widthFraction: 0.35 } }),
+    await run(tools.resize_pane, { nodeId: 'col-1', size: 0.35 }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'resize', nodeId: 'col-1', fraction: 0.35 } }),
     );
 
-    await run(tools.resize_pane, { paneId: 'pane-1', size: 0.9 }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
-      expect.objectContaining({ verb: { type: 'resize_pane', paneId: 'pane-1', heightFraction: 0.9 } }),
-    );
-  });
-
-  it('refuses BOTH targets and NEITHER — an ambiguous call must not silently pick an axis', async () => {
-    const deps = layoutDeps();
-    const tools = createSessionTools(deps);
-
-    expect((await run(tools.resize_pane, { paneId: 'p', columnId: 'c', size: 0.5 }, layoutOptions())).success).toBe(false);
-    expect((await run(tools.resize_pane, { size: 0.5 }, layoutOptions())).success).toBe(false);
-    expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
-  });
-});
-
-describe('move_pane / arrange_panes descriptions: what they promise the verb does', () => {
-  it('move_pane omits toIndex when the caller did — the reducer reads that as "append"', async () => {
-    const deps = layoutDeps();
-    const tools = createSessionTools(deps);
-
-    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
-      expect.objectContaining({ verb: { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2' } }),
-    );
-
-    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2', toIndex: 0 }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
-      expect.objectContaining({ verb: { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2', toIndex: 0 } }),
-    );
-  });
-
-  it('arrange_panes sends the partial list through verbatim — the reducer owns the prefix rule', async () => {
-    const deps = layoutDeps();
-    const tools = createSessionTools(deps);
-    await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenLastCalledWith(
-      expect.objectContaining({ verb: { type: 'reorder_columns', columnIds: ['col-2'] } }),
+    // A pane and a container take the SAME tool and the same address — the
+    // two-target `paneId`-or-`columnId` ambiguity is gone with the two levels
+    // that made it necessary.
+    await run(tools.resize_pane, { nodeId: 'pane-1', size: 0.9 }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'resize', nodeId: 'pane-1', fraction: 0.9 } }),
     );
   });
 });
 
-describe('the layout family is idempotent per tool call, and never overstates what happened', () => {
-  it('derives the opId from the tool call id, so an SDK retry replays instead of rearranging twice', async () => {
+describe('move_pane / arrange_panes descriptions: what they promise the command does', () => {
+  it('move_pane omits the index when the caller did — the runtime resolves "append" against the live tree', async () => {
     const deps = layoutDeps();
     const tools = createSessionTools(deps);
-    await run(tools.move_pane, { paneId: 'pane-1', toColumnId: 'col-2' }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'move_pane:call-abc' }));
 
-    await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'arrange_panes:call-abc' }));
+    await run(tools.move_pane, { nodeId: 'pane-1', toParentId: 'col-1' }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'move', nodeId: 'pane-1', parentId: 'col-1' } }),
+    );
 
-    await run(tools.resize_pane, { columnId: 'col-1', size: 0.5 }, layoutOptions());
-    expect(deps.applyLayoutVerb).toHaveBeenCalledWith(expect.objectContaining({ opId: 'resize_pane:call-abc' }));
+    await run(tools.move_pane, { nodeId: 'pane-1', toParentId: 'col-1', toIndex: 0 }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'move', nodeId: 'pane-1', parentId: 'col-1', index: 0 } }),
+    );
   });
 
-  it('a total no-op answers success with changed: false and says the grid may have moved on', async () => {
+  it('move_pane REFUSES a null destination — there is nowhere outside the layout to move to', async () => {
+    // The inverse of what this test asserted before the one-removal
+    // correction, when `toParentId: null` was how a pane got closed. Taking a
+    // pane away is `close_pane` now, and it is a destroy: the schema is the
+    // first place that has to stop offering a model the parking space, because
+    // a tool description is the only specification a model ever reads.
+    expect(movePaneRefusesNullDestination()).toBe(true);
+  });
+
+  it('arrange_panes sends the partial list through verbatim — the command owns the prefix rule', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.arrange_panes, { nodeIds: ['pane-2'] }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'arrange', nodeIds: ['pane-2'] } }),
+    );
+
+    await run(tools.arrange_panes, { parentId: 'col-1', nodeIds: ['pane-1b'] }, layoutOptions());
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'arrange', parentId: 'col-1', nodeIds: ['pane-1b'] } }),
+    );
+  });
+});
+
+describe('the layout family never overstates what happened', () => {
+  it('needs no toolCallId — the idempotency key it used to derive from one is gone', async () => {
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+    // No `toolCallId` in the options at all. The old tail bailed to NO_GRID
+    // here, which reported "this workspace has no layout" for a reason that had
+    // nothing to do with the workspace.
+    const result = await run(tools.move_pane, { nodeId: 'pane-1', toParentId: 'col-1' }, layoutOptions());
+    expect(result.success).toBe(true);
+    expect(deps.applyLayoutCommand).toHaveBeenCalledTimes(1);
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ opId: expect.anything() }),
+    );
+  });
+
+  it('a no-op answers success with changed: false and says the layout may have moved on', async () => {
     const tools = createSessionTools(
-      layoutDeps({ applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: false })) }),
+      layoutDeps({ applyLayoutCommand: vi.fn(async () => ({ ok: true as const, changed: false })) }),
     );
-    const result = await run(tools.move_pane, { paneId: 'stale', toColumnId: 'col-2' }, layoutOptions());
+    const result = await run(tools.move_pane, { nodeId: 'stale', toParentId: 'col-1' }, layoutOptions());
 
     expect(result).toEqual(expect.objectContaining({ success: true, changed: false }));
     expect(String((result as { note?: string }).note)).toContain('list_panes');
   });
 
-  it('a contended write reports failure rather than claiming a rearrange that never landed', async () => {
+  it('a refused command reports failure rather than claiming a rearrange that never landed', async () => {
     const tools = createSessionTools(
-      layoutDeps({ applyLayoutVerb: vi.fn(async () => ({ ok: false as const, reason: 'contended' })) }),
+      layoutDeps({ applyLayoutCommand: vi.fn(async () => ({ ok: false as const, reason: 'unknown_node' })) }),
     );
-    const result = await run(tools.arrange_panes, { columnIds: ['col-2'] }, layoutOptions());
-    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'contended' }));
+    const result = await run(tools.arrange_panes, { nodeIds: ['pane-2'] }, layoutOptions());
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'unknown_node' }));
   });
 });

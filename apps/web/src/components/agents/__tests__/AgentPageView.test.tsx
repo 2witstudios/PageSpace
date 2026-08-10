@@ -576,26 +576,34 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
 
-      // A split grid where the deleted conversation is NOT the active pane —
-      // pruning must target the pane actually showing it, not "the active one".
-      useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
-        kind: 'chat',
-        name: 'Conversation',
-        targetId: 'conv-1',
-        agentPageId: 'agent-1',
+      // A grid where the deleted conversation is NOT the focused pane — the
+      // replacement must land where the thread actually WAS, not "wherever the
+      // user happens to be looking".
+      useAgentWorkspaceStore.getState().hydrateFromServer('ses-1', {
+        rev: 1,
+        nodes: [
+          { nodeType: 'root', id: 'ses-1', parentId: null, position: 0, axis: 'row' },
+          { nodeType: 'pane', id: 'n-stale', parentId: 'ses-1', position: 0, target: { kind: 'chat', id: 'conv-1' } },
+          { nodeType: 'pane', id: 'n-other', parentId: 'ses-1', position: 1, target: { kind: 'chat', id: 'conv-9' } },
+        ],
+        targets: [],
       });
-      const originalPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId;
-      useAgentWorkspaceStore.getState().splitRight('ses-1', originalPaneId);
-      useAgentWorkspaceStore.getState().selectPane('ses-1', originalPaneId);
+      useAgentWorkspaceStore.getState().selectNode('ses-1', 'n-other');
 
       conversationsState.lastOnConversationDelete?.('conv-1');
 
+      // A binding is for life, so this is a PLACEMENT, not a rebind: the
+      // replacement takes a node of its own where the stale one was, and the
+      // stale node is DESTROYED. It used to park — a member off the screen —
+      // which is the state this correction removes; a node showing a thread
+      // whose history is gone has nothing left to be a member for.
       await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === originalPaneId);
-        expect(pane?.scope?.targetId).toBe('conv-2');
+        const nodes = useAgentWorkspaceStore.getState().workspaces['ses-1'].nodes;
+        const replacement = nodes.find(
+          (node) => node.nodeType === 'pane' && node.target?.kind === 'chat' && node.target.id === 'conv-2',
+        );
+        expect(replacement?.parentId).toBe('ses-1');
+        expect(nodes.find((node) => node.id === 'n-stale')).toBeUndefined();
       });
     });
 

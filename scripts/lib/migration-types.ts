@@ -16,6 +16,7 @@ export interface ManifestTableCounts {
   channelReadStatus: number;
   agentWorkspaces: number;
   agentWorkspaceShells: number;
+  agentWorkspaceNodes: number;
   conversations: number;
   messages: number;
   files: number;
@@ -128,8 +129,11 @@ export const TABLE_IMPORT_ORDER = [
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',
-  // Before `conversations`: `conversations.workspaceId` FKs here, so the
-  // session rows have to exist before a bound thread can be inserted.
+  // The sessions themselves. This used to sit before `conversations` because
+  // `conversations.workspaceId` FK'd it; that column is gone and nothing on a
+  // conversation row references a session any more, so the position is
+  // convention — a session still needs its `drives` and `users` rows, both
+  // above.
   'agent_workspaces',
   // Immediately after its parent: `agent_workspace_shells.workspaceId` FKs
   // `agent_workspaces` and `ownerId` FKs `users`, both already inserted. The
@@ -137,6 +141,13 @@ export const TABLE_IMPORT_ORDER = [
   // command, and `coldTail`, the scrollback of the last dead incarnation —
   // which is user content with no other home in the bundle.
   'agent_workspace_shells',
+  // A session's TREE, which is also its MEMBERSHIP: a thread is in a workspace
+  // exactly when a chat-bound node names it. `rootId` FKs `agent_workspaces`,
+  // so it follows its parent. Its `targetId` — the conversation, shell or page
+  // a pane shows — is polymorphic and carries NO foreign key, so nothing here
+  // constrains it against `conversations`, `agent_workspace_shells` or `pages`;
+  // out-of-bundle targets are unbound by the exporter instead (tenant-export.ts).
+  'agent_workspace_nodes',
   'conversations',
   'messages',
   'files',

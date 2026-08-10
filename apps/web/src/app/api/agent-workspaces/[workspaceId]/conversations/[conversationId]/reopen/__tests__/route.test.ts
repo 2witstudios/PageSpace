@@ -117,13 +117,16 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(response.status).toBe(404);
   });
 
-  it("429s a session already at MAX_SESSION_CONVERSATIONS, as a quota refusal with the shared human message", async () => {
-    mockReopenConversationInSession.mockResolvedValue('session_full');
+  it('reopens into a workspace at MAX_SESSION_CONVERSATIONS — a member returning consumes no slot', async () => {
+    // The 429 this replaces existed because reopening restored a listing slot
+    // the close had freed. Under a `move` the node never stopped existing:
+    // closing frees no slot and reopening consumes none, so the cap — which now
+    // bounds MEMBERSHIP, enforced where membership is created — has nothing to
+    // say here and `session_full` is not an outcome this route can receive.
+    mockReopenConversationInSession.mockResolvedValue('reopened');
     const response = await post();
-    expect(response.status).toBe(429);
-    const body = await response.json();
-    expect(body.error).toMatch(/maximum number of conversations/i);
-    expect(mockAuditRequest).toHaveBeenCalledWith(
+    expect(response.status).toBe(200);
+    expect(mockAuditRequest).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'security.rate.limited' }),
     );
@@ -141,5 +144,25 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     const response = await post();
     expect(response.status).toBe(401);
     expect(mockCheckSessionAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('the workspace is waiting for the backfill', () => {
+  /**
+   * 503, not 404 and not 200. The conversation exists and is the caller's; the
+   * SERVER has not migrated this workspace yet, and it becomes ready when an
+   * operator runs the backfill — which is what 503 says and what nothing else on
+   * this route does.
+   *
+   * The status is asserted rather than assumed because this route has no
+   * exhaustiveness check: an adversarial review found that deleting the 503
+   * block lets the request fall through to `200 OK`, reporting success for a
+   * write the server refused.
+   */
+  it('answers 503 and names the reason', async () => {
+    mockReopenConversationInSession.mockResolvedValue('awaiting_backfill');
+    const response = await post();
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'awaiting_backfill' });
   });
 });

@@ -1,89 +1,141 @@
 /**
- * Claim a NEVER-BOUND conversation into a session — the only place
- * `conversations.workspaceId` is ever written, whether for a conversation
- * being created fresh (insert sessionless, then claim —
- * `create-conversation-in-workspace.ts` composes this) or one that has
- * existed unbound for years (a page-agent or global-assistant chat opened
- * outside any session, later opened into one from the Agents console).
+ * Claim a NEVER-BOUND conversation into a workspace — which, now that
+ * membership is the node row, is simply CREATING that node.
  *
- * The binding is write-once. It never re-points an already-bound row: a
- * bound thread moving to another session is still a fork, never a rebind
- * (contract invariant 1). What makes this safe despite writing
- * `workspaceId` at all — where the old design forbade any UPDATE of it — is
- * that this only ever moves a row FROM null, and only for its own owner:
- * `conversationRepository.claimConversation`'s guarded UPDATE carries both
- * `workspaceId IS NULL` and `userId = :caller` in its WHERE, so neither an
- * already-bound row nor someone else's row can ever match. That is the
- * exact gap the old H1 finding needed (an unconditional UPDATE with no
- * ownership/state check letting a caller re-point an existing, possibly
- * foreign, conversation) — this primitive can't reproduce it, because a
- * "yes" here always means "this was MY row, and it had never been claimed
- * by anyone, ever, before this call."
+ * This module used to be the only place `conversations.workspaceId` was ever
+ * written, and its whole design was about making that one UPDATE unable to
+ * re-point a binding: `workspaceId IS NULL` and `userId = :caller` rode the
+ * WHERE so neither a bound row nor a foreign one could match. That guard was
+ * correct and it is gone, because the thing it guarded is gone. The binding now
+ * lives in `agent_workspace_nodes`, whose global
+ * `UNIQUE (targetId) WHERE targetKind = 'chat'` says the same sentence as a
+ * DATABASE CONSTRAINT rather than as a WHERE clause a future writer could
+ * forget: a conversation is bound to at most one node anywhere, so a second
+ * workspace claiming it is refused by the index, in the transaction, whatever
+ * the caller checked first.
+ *
+ * What survives unchanged is the OWNERSHIP gate and the drive rules. Those were
+ * never properties of the column; they are properties of who may put whose
+ * thread into which workspace, and no index states them.
  *
  * Pure decision logic over injected deps, per the repo rule that branching
  * which decides lifecycle/access lives in a testable module —
- * `agent-workspaces-runtime.ts` only wires the production deps, wrapping the
- * whole decision in the same per-session advisory lock
- * create/close/reopen already use, so a claim can never race those for the
- * session's last cap slot.
+ * `agent-workspaces-runtime.ts` only wires the production deps.
  */
 
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+/**
+ * How the membership write answered.
+ *
+ * `bound_elsewhere` is the one the database decides: the pre-check below asks
+ * the same question, but between that read and the write another request can
+ * win, and only the unique index is in a position to settle it.
+ */
+export type AdmitConversationOutcome =
+  | 'admitted'
+  | 'already_a_member'
+  | 'session_full'
+  | 'bound_elsewhere'
+  /**
+   * The workspace is waiting for the backfill. Kept distinct for the same
+   * reason `session_full` and `bound_elsewhere` are — except more so: those two
+   * are recoverable by the caller, and this one is not recoverable by anybody
+   * except an operator running the backfill. Folding it into `refused` made the
+   * unrecoverable case the ONLY refusal on this path that arrived disguised, as
+   * `not_found` — telling a user their conversation does not exist, and giving
+   * the operator a log line with no mention of the backfill.
+   */
+  | 'awaiting_backfill'
+  | 'refused';
 
 export type ClaimConversationOutcome =
   | 'claimed'
   | 'already_in_session'
   | 'not_found'
   | 'cross_drive_denied'
-  | 'session_full';
+  | 'session_full'
+  /** The workspace has not been backfilled. Never `not_found`: it exists. */
+  | 'awaiting_backfill';
 
-export interface ClaimConversationInSessionDeps {
+/**
+ * The membership deps every path into a workspace shares.
+ *
+ * `Tx` is the transaction handle the membership write hands to
+ * {@link AdmitConversationInput.within}. It is a type PARAMETER rather than a
+ * concrete Drizzle type so this module stays free of the database entirely —
+ * the wiring supplies both the handle and everything that knows what to do with
+ * one.
+ */
+export interface ClaimConversationInSessionDeps<Tx = unknown> {
   /** Row facts for the ownership/state gates. `conversationRepository.getConversation`, narrowed. */
   findConversation: (conversationId: string) => Promise<{
     userId: string;
     type: string;
     contextId: string | null;
-    workspaceId: string | null;
     isActive: boolean;
   } | null>;
+  /**
+   * The workspace whose tree already holds this thread, or `null`.
+   *
+   * The successor to reading `conversations.workspaceId`: one lookup on the
+   * chat-target index. An ADVISORY read — it decides the answer a caller sees
+   * in the ordinary case, and the index decides it in the racing one.
+   */
+  findWorkspaceOfConversation: (conversationId: string) => Promise<string | null>;
   /** The agent page's drive, or null when the page is missing/trashed/not an agent. */
   findAgentDriveId: (agentPageId: string) => Promise<string | null>;
-  /** The target session's drive and liveness, or null when the session is missing. */
+  /** The target workspace's drive and liveness, or null when the workspace is missing. */
   findSession: (workspaceId: string) => Promise<{ driveId: string | null; endedAt: Date | null } | null>;
-  /** ACTIVE, OPEN conversations already bound to this session — the cap's input. */
-  countActiveConversations: (workspaceId: string) => Promise<number>;
-  /** The guarded UPDATE. `'noop'` means the world changed since the read above — a race, never a silent success. */
-  claimConversation: (input: {
-    conversationId: string;
-    userId: string;
-    workspaceId: string;
-  }) => Promise<'claimed' | 'noop'>;
+  /**
+   * THE MEMBERSHIP WRITE — mint the node that makes this thread a member,
+   * inside the workspace's own locked transaction.
+   *
+   * The cap is enforced in there, against the tree, which is why no
+   * `countActiveConversations` dep survives: a count read out here would be a
+   * number racing the write it was meant to bound.
+   */
+  admitConversation: (input: AdmitConversationInput<Tx>) => Promise<AdmitConversationOutcome>;
 }
 
-export async function claimConversationInSessionWith(
-  deps: ClaimConversationInSessionDeps,
-  { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
+export interface AdmitConversationInput<Tx = unknown> {
+  conversationId: string;
+  workspaceId: string;
+  /** The spawning conversation, never evicted by the thing it spawned. */
+  excludeTargetId?: string;
+  /** Work that must land in the SAME transaction as the node. Only the create path has any. */
+  within?: (tx: Tx) => Promise<void>;
+}
+
+export async function claimConversationInSessionWith<Tx>(
+  deps: ClaimConversationInSessionDeps<Tx>,
+  {
+    conversationId,
+    userId,
+    workspaceId,
+  }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<ClaimConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null) return 'not_found';
-  // The H1 gate — checked before anything else, so no later branch can
-  // answer for a foreign row.
+  // The H1 gate — checked before anything else, so no later branch can answer
+  // for a foreign row. It is the one gate the node table cannot state for us:
+  // the index knows a thread has one home, not whose thread it is.
   if (row.userId !== userId) return 'not_found';
   if (!row.isActive) return 'not_found';
-
-  // Idempotent retry: a double-click, a retried POST after a timeout, or two
-  // panes racing the same claim must not error. No cap check either — this
-  // request did not just consume a NEW slot.
-  if (row.workspaceId === workspaceId) return 'already_in_session';
-
-  // Any OTHER session — including one the caller owns — is refused. This is
-  // the line that keeps H1 fixed: only a truly-never-bound row proceeds.
-  if (row.workspaceId !== null) return 'not_found';
 
   // `'client'` rows are API-managed and have no in-app viewer
   // (`resolveNavigationTarget` already calls them `unavailable`); binding one
   // would hand an API-managed thread a sandbox nothing can display.
   if (row.type !== 'page' && row.type !== 'global') return 'not_found';
+
+  const home = await deps.findWorkspaceOfConversation(conversationId);
+  // Idempotent retry: a double-click, a retried POST after a timeout, or two
+  // panes racing the same claim must not error, and must not consume a second
+  // cap slot for a thread already inside the ceiling.
+  if (home === workspaceId) return 'already_in_session';
+  // Any OTHER workspace — including one the caller owns — is refused. This is
+  // the line that keeps H1 fixed, and unlike the old version it is a
+  // convenience rather than the enforcement: the unique index refuses the same
+  // thing a moment later, whatever raced through here.
+  if (home !== null) return 'not_found';
 
   const sessionRow = await deps.findSession(workspaceId);
   if (sessionRow === null) return 'not_found';
@@ -105,11 +157,27 @@ export async function claimConversationInSessionWith(
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
   }
 
-  if ((await deps.countActiveConversations(workspaceId)) >= MAX_SESSION_CONVERSATIONS) return 'session_full';
-
-  const outcome = await deps.claimConversation({ conversationId, userId, workspaceId });
-  // 'noop' means the world changed between the read above and this write (a
-  // concurrent claim from another tab won, a soft-delete landed, the row got
-  // bound elsewhere) — the same answer a stale read would have produced.
-  return outcome === 'claimed' ? 'claimed' : 'not_found';
+  const admitted = await deps.admitConversation({ conversationId, workspaceId });
+  switch (admitted) {
+    case 'admitted':
+      return 'claimed';
+    case 'already_a_member':
+      return 'already_in_session';
+    case 'session_full':
+      return 'session_full';
+    // Distinct from `not_found` on purpose. The conversation exists, it is the
+    // caller's, and the workspace is real — the server simply has not migrated
+    // it yet, and only an operator can change that. Answering "no such
+    // conversation" would be false and would send the user looking for a thread
+    // that is sitting right there.
+    case 'awaiting_backfill':
+      return 'awaiting_backfill';
+    // The world changed between the reads above and the write: another request
+    // claimed it first, or the tree refused the shape. Both collapse to the
+    // same answer a stale read would have produced — an id-guessing caller
+    // learns nothing from the difference.
+    case 'bound_elsewhere':
+    case 'refused':
+      return 'not_found';
+  }
 }

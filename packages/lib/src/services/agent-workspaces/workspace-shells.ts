@@ -23,7 +23,7 @@
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-worker';
-import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/contract';
+import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/shells-contract';
 import { isShellAgentType, isValidShellCommand } from './shell-types';
 import {
   isUniqueViolation,
@@ -71,6 +71,7 @@ export type SpawnSessionShellResult =
  * than silently renamed — the caller asked for a specific tab label.
  */
 export async function spawnSessionShell({
+  shellId,
   workspaceId,
   ownerId,
   name,
@@ -78,6 +79,11 @@ export async function spawnSessionShell({
   command,
   deps,
 }: {
+  /**
+   * The row's id, when the caller has already minted one — see
+   * `NewSessionShellInput.id`. Omitted, the column mints its own.
+   */
+  shellId?: string;
   workspaceId: string;
   ownerId: string;
   name?: string;
@@ -95,6 +101,7 @@ export async function spawnSessionShell({
 
   try {
     const row = await deps.store.create({
+      ...(shellId === undefined ? {} : { id: shellId }),
       workspaceId,
       ownerId,
       name: plan.name,

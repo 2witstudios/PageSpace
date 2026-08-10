@@ -56,7 +56,6 @@ const base = (overrides: Record<string, unknown> = {}) => ({
   conversationId: CONV,
   rev: 1,
   scope: { kind: 'page' as const, pageId: 'page-1' },
-  workspaceId: SESSION,
   triggeredBy: { userId: 'u1', browserSessionId: 'server' },
   ...overrides,
 });
@@ -78,8 +77,20 @@ describe('useSessionDirectoryListener', () => {
     };
   });
 
+  /**
+   * `created` USED TO DO SURGERY: the payload named a `workspaceId`, so the row
+   * went straight into that session's cache entry with no request. The column is
+   * gone — membership is an `agent_workspace_nodes` row — so the event names the
+   * conversation and nothing else, and there is no key left to aim a patch at.
+   *
+   * Pinned as a RE-READ rather than deleted, because the liveness is the point:
+   * the surgery had already stopped firing for the case it was written for (a
+   * spawned worker arrived with `workspaceId: null` and took the early-return),
+   * which put that sidebar row back on the 120s poll. A re-read is one request;
+   * a poll is up to two minutes.
+   */
   describe('conversation:created — the spawn-appears-without-a-poll case', () => {
-    it('should write the new conversation straight into its session listing, with no request', () => {
+    it('should re-read the session listings — the payload no longer says which one to patch', () => {
       renderHook(() => useSessionDirectoryListener());
 
       fire('conversation:created', base({
@@ -88,7 +99,6 @@ describe('useSessionDirectoryListener', () => {
           title: 'worker',
           type: 'page',
           contextId: 'agent-page-9',
-          workspaceId: SESSION,
           isShared: false,
           createdAt: '2024-01-01T00:00:00.000Z',
           lastMessageAt: null,
@@ -96,45 +106,9 @@ describe('useSessionDirectoryListener', () => {
       }));
 
       expect(mockMutate).toHaveBeenCalledTimes(1);
-      const next = applyMutation(0, listing([{ conversationId: 'conv-old', agentPageId: null, lastMessageAt: null }]));
-      expect(next.sessions[0].conversations[0]).toMatchObject({
-        conversationId: CONV,
-        agentPageId: 'agent-page-9',
-        title: 'worker',
-      });
-      // Most-recent-first: the new row goes to the front.
-      expect(next.sessions[0].conversations.map((c) => c.conversationId)).toEqual([CONV, 'conv-old']);
-      // `{ revalidate: false }` — the write IS the update; no round-trip.
-      expect(mockMutate.mock.calls[0][2]).toEqual({ revalidate: false });
-    });
-
-    it('given the row is already there (the originating surface wrote it optimistically), should MERGE not duplicate', () => {
-      renderHook(() => useSessionDirectoryListener());
-
-      fire('conversation:created', base({
-        conversation: {
-          id: CONV,
-          title: 'worker',
-          type: 'page',
-          contextId: 'agent-page-9',
-          workspaceId: SESSION,
-          isShared: false,
-          createdAt: '2024-01-01T00:00:00.000Z',
-          lastMessageAt: null,
-        },
-      }));
-
-      const next = applyMutation(0, listing([{ conversationId: CONV, agentPageId: 'agent-page-9', lastMessageAt: null }]));
-      expect(next.sessions[0].conversations).toHaveLength(1);
-      expect(next.sessions[0].conversations[0]).toMatchObject({ conversationId: CONV, title: 'worker' });
-    });
-
-    it('given a global conversation with no workspace, should touch no session listing', () => {
-      renderHook(() => useSessionDirectoryListener());
-
-      fire('conversation:created', base({ workspaceId: null, conversation: { id: CONV, title: null, type: 'global', contextId: null, workspaceId: null, isShared: false, createdAt: 'x', lastMessageAt: null } }));
-
-      expect(mockMutate).not.toHaveBeenCalled();
+      // A bare revalidate: no updater, no options — nothing is written locally,
+      // because nothing in the payload says where it would go.
+      expect(mockMutate.mock.calls[0]).toHaveLength(1);
     });
   });
 
@@ -151,21 +125,24 @@ describe('useSessionDirectoryListener', () => {
       expect(next.sessions[0].conversations.map((c) => c.conversationId)).toEqual([CONV, 'conv-newer']);
     });
 
-    it('given a workspace re-binding, should re-read — which row lives where is what this cache holds', () => {
-      renderHook(() => useSessionDirectoryListener());
-
-      fire('conversation:updated', base({ changes: { workspaceId: 'ws-2' } }));
-
-      expect(mockMutate).toHaveBeenCalledTimes(1);
-      expect(mockMutate.mock.calls[0]).toHaveLength(1); // bare revalidate: no updater, no options
-    });
-
-    it('given a listing-membership stamp change, should re-read', () => {
+    /**
+     * `workspaceId` and `closedInWorkspaceAt` used to be members of the changes
+     * bag, and each drove a re-read. Both COLUMNS are gone — membership is a
+     * node row — so neither is a change anything can report.
+     *
+     * Asserted as a NON-outcome rather than simply deleted with the code: "we
+     * stopped writing those branches" and "an unknown key in the changes bag
+     * does not drive a re-read from here" are different claims, and only the
+     * second one stops someone reinstating them. The membership fact itself
+     * rides structurally on `workspace:nodes-updated`, a plane this module
+     * deliberately does not touch.
+     */
+    it('given a changes bag naming no field it handles, should do nothing — that plane moved', () => {
       renderHook(() => useSessionDirectoryListener());
 
       fire('conversation:updated', base({ changes: { closedInWorkspaceAt: null } }));
 
-      expect(mockMutate.mock.calls[0]).toHaveLength(1);
+      expect(mockMutate).not.toHaveBeenCalled();
     });
 
     it('given a rename, should re-read (the row renders the title)', () => {
@@ -185,25 +162,96 @@ describe('useSessionDirectoryListener', () => {
     });
   });
 
-  describe('conversation:closed / :deleted', () => {
-    it.each(['conversation:closed', 'conversation:deleted'])('%s should drop the row from its session listing', (event) => {
+  /**
+   * `conversation:closed` — THE ONE EVENT THAT MUST NEED NO REQUEST.
+   *
+   * This block used to assert a re-read, alongside `:deleted`, on the reasoning
+   * that killed `created`'s surgery: the payload no longer names a workspace,
+   * so there is no key to aim a patch at. That reasoning does not survive
+   * contact with a REMOVAL. Dropping a row needs to know the conversation, not
+   * the workspace, and the cache can find it on its own — a thread is a member
+   * of at most one workspace (the node table's global chat-target uniqueness),
+   * so the sweep matches at most one row.
+   *
+   * Downgrading it to a re-read is what `18-sidebar-directory-live.spec.ts`
+   * caught in CI: with the listing GET blocked at the network — which is how
+   * that spec proves the sidebar reacts to the EVENT and not to a poll — the
+   * closed row never left. In production it left after the 120s backstop, which
+   * is precisely the staleness this plane exists to delete. The test that
+   * should have caught it was this one, and it was asserting the bug.
+   */
+  describe('conversation:closed — served locally, with no request at all', () => {
+    it('should drop the row with a NON-revalidating local write', () => {
       renderHook(() => useSessionDirectoryListener());
 
-      fire(event, base());
+      fire('conversation:closed', base());
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      const [, updater, options] = mockMutate.mock.calls[0];
+      // An updater AND `revalidate: false` — a bare one-argument `mutate` here
+      // is a refetch, which is the regression.
+      expect(updater).toBeTypeOf('function');
+      expect(options).toEqual({ revalidate: false });
+    });
+
+    it('should remove exactly the closed conversation, leaving its siblings', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:closed', base());
 
       const next = applyMutation(0, listing([
         { conversationId: CONV, agentPageId: null, lastMessageAt: null },
-        { conversationId: 'conv-keep', agentPageId: null, lastMessageAt: null },
+        { conversationId: 'conv-survivor', agentPageId: null, lastMessageAt: null },
       ]));
-      expect(next.sessions[0].conversations.map((c) => c.conversationId)).toEqual(['conv-keep']);
+      expect(next.sessions[0].conversations.map((c) => c.conversationId)).toEqual(['conv-survivor']);
     });
 
-    it('given no workspace on the payload, should do nothing', () => {
+    /**
+     * The payload cannot say which workspace, so the updater sweeps all of
+     * them. That is safe rather than broad: the uniqueness index means only one
+     * can hold the thread. Pinned because "sweeps every session" and "corrupts
+     * every session" are one bad filter apart.
+     */
+    it('should leave a session that does not hold the conversation untouched', () => {
       renderHook(() => useSessionDirectoryListener());
 
-      fire('conversation:closed', base({ workspaceId: null }));
+      fire('conversation:closed', base());
 
-      expect(mockMutate).not.toHaveBeenCalled();
+      const other = { workspaceId: 'ws-2', sessionId: 'ws-2', conversations: [
+        { conversationId: 'conv-elsewhere', agentPageId: null, lastMessageAt: null },
+      ] };
+      const next = applyMutation(0, {
+        sessions: [{ workspaceId: SESSION, sessionId: SESSION, conversations: [
+          { conversationId: CONV, agentPageId: null, lastMessageAt: null },
+        ] }, other],
+      });
+      expect(next.sessions[0].conversations).toEqual([]);
+      expect(next.sessions[1].conversations.map((c) => c.conversationId)).toEqual(['conv-elsewhere']);
+    });
+
+    it('given a cache entry that has not loaded, should write nothing rather than throw', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:closed', base());
+
+      expect(applyMutation(0, undefined)).toBeUndefined();
+    });
+  });
+
+  /**
+   * `:deleted` KEEPS ITS RE-READ, and the asymmetry with `:closed` above is
+   * deliberate. A history delete is not only a listing removal — it changes
+   * what other surfaces under this key show — and no spec asks it to survive a
+   * blocked network. Same story as `created`: no key, so a re-read.
+   */
+  describe('conversation:deleted', () => {
+    it('should re-read the session listings', () => {
+      renderHook(() => useSessionDirectoryListener());
+
+      fire('conversation:deleted', base());
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(mockMutate.mock.calls[0]).toHaveLength(1);
     });
   });
 

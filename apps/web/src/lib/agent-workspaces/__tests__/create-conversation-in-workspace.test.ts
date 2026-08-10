@@ -1,336 +1,302 @@
 /**
- * Create-a-conversation-in-a-session, now composed from two independent
- * steps: (1) an ordinary idempotent "insert if missing" (session-agnostic),
- * then (2) `claimConversationInSessionWith` — the ONE place
- * `conversations.workspaceId` is ever written. The property under test is
- * still review finding H1's fix (an already-existing conversation is bound
- * ONLY as an idempotent retry of itself — never adopted, never rebound,
- * never someone else's), but the mechanism moved: claim's own gates now
- * enforce it, not a bespoke check re-implemented in this file.
+ * THE MEMBERSHIP CHOKEPOINT — a conversation and the node that makes it a
+ * member of a workspace, in ONE transaction.
+ *
+ * The property this suite exists for is the ghost: a conversation row that
+ * landed while its membership did not. It is held down structurally rather than
+ * by assertion order — every creator here runs inside `within`, the callback the
+ * membership write hands its transaction to, so a test can prove the creators
+ * were never reachable except through it.
+ *
+ * Three claims, each with its own group:
+ *
+ *  1. **The creators only ever run inside the transaction.** Not "were called
+ *     after" — `admitConversation` is the only thing that can call them at all,
+ *     because it is the only thing holding `within`.
+ *  2. **A creator that throws writes no membership.** The refusal unwinds; the
+ *     fake `admitConversation` below models the rollback by never reporting a
+ *     success it did not complete.
+ *  3. **The gates that run BEFORE the transaction refuse without opening one.**
+ *     A doomed mint must not take the workspace's lock, and must certainly not
+ *     leave a conversation behind.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  createConversationInSessionWith,
-  ConversationUnavailableError,
   AgentNotInSessionDriveError,
+  ConversationUnavailableError,
   SessionFullError,
+  createConversationInSessionWith,
   type CreateConversationInSessionDeps,
 } from '../create-conversation-in-workspace';
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import type { AdmitConversationOutcome } from '../claim-conversation-in-workspace';
 
-// What claim's own `findConversation` reads immediately after the creator
-// step ran, for a genuinely fresh (or freshly-idempotent) page conversation.
-const FRESH_UNBOUND_PAGE_ROW = {
-  userId: 'user-1',
-  type: 'page',
-  contextId: 'agent-1',
-  workspaceId: null,
-  isActive: true,
-};
+/** The transaction handle. Opaque to the module under test, which is the point. */
+const TX = { tx: true };
 
-const FRESH_UNBOUND_GLOBAL_ROW = {
-  userId: 'user-1',
-  type: 'global',
-  contextId: null,
-  workspaceId: null,
-  isActive: true,
-};
-
-let deps: {
+interface MockDeps extends CreateConversationInSessionDeps<typeof TX> {
   createPageConversation: ReturnType<typeof vi.fn>;
   createGlobalConversation: ReturnType<typeof vi.fn>;
   findConversation: ReturnType<typeof vi.fn>;
+  findConversationIn: ReturnType<typeof vi.fn>;
+  findWorkspaceOfConversation: ReturnType<typeof vi.fn>;
   findAgentDriveId: ReturnType<typeof vi.fn>;
   findSession: ReturnType<typeof vi.fn>;
-  countActiveConversations: ReturnType<typeof vi.fn>;
-  claimConversation: ReturnType<typeof vi.fn>;
-};
+  admitConversation: ReturnType<typeof vi.fn>;
+}
 
-const input = (overrides: Partial<{ agentPageId: string | null; workspaceId: string }> = {}) => ({
-  conversationId: 'conv-1',
-  userId: 'user-1',
-  agentPageId: 'agent-1' as string | null,
-  workspaceId: 'ses-1',
-  ...overrides,
-});
+const OWNER = 'user-1';
+const WORKSPACE = 'ws-1';
+const AGENT = 'agent-1';
 
-const run = () => createConversationInSessionWith(deps as CreateConversationInSessionDeps, input());
+/**
+ * A fake membership write that behaves like the real transaction: it runs
+ * `within`, and if `within` throws it reports NOTHING — no outcome, no
+ * membership — exactly as a rollback does.
+ */
+function fakeAdmit(outcome: AdmitConversationOutcome = 'admitted') {
+  return vi.fn(async (request: { within?: (tx: typeof TX) => Promise<void> }) => {
+    if (request.within) await request.within(TX);
+    return outcome;
+  });
+}
 
-beforeEach(() => {
-  deps = {
+function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): MockDeps {
+  return {
     createPageConversation: vi.fn(async () => 'created' as const),
-    createGlobalConversation: vi.fn(async () => {}),
-    findConversation: vi.fn(async () => FRESH_UNBOUND_PAGE_ROW),
+    createGlobalConversation: vi.fn(async () => undefined),
+    findConversation: vi.fn(async () => null),
+    findConversationIn: vi.fn(async () => ({ userId: OWNER, type: 'page', contextId: AGENT })),
+    findWorkspaceOfConversation: vi.fn(async () => null),
     findAgentDriveId: vi.fn(async () => 'drive-1'),
     findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null })),
-    countActiveConversations: vi.fn(async () => 0),
-    claimConversation: vi.fn(async () => 'claimed' as const),
-  };
-});
+    admitConversation: fakeAdmit(),
+    ...overrides,
+  } as MockDeps;
+}
 
-describe('page arm', () => {
-  it('creates session-agnostic, then claims separately — workspaceId never rides the insert', async () => {
-    await run();
-    expect(deps.createPageConversation).toHaveBeenCalledWith({
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      agentPageId: 'agent-1',
-      title: null,
-    });
-    expect(deps.claimConversation).toHaveBeenCalledWith({
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      workspaceId: 'ses-1',
-    });
+const input = {
+  conversationId: 'conv-1',
+  userId: OWNER,
+  agentPageId: AGENT,
+  workspaceId: WORKSPACE,
+};
+
+describe('the conversation and its membership are one transaction', () => {
+  let deps: MockDeps;
+  beforeEach(() => {
+    deps = makeDeps();
   });
 
-  it('accepts an existing row already bound HERE as an idempotent retry', async () => {
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, workspaceId: 'ses-1' });
-    await expect(run()).resolves.toBeUndefined();
-    // Idempotent — claim never re-writes an already-matching binding.
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
+  it('creates the row on the TRANSACTION the membership write supplied', async () => {
+    await createConversationInSessionWith(deps, input);
 
-  it("refuses someone else's conversation — the H1 hijack", async () => {
-    // The old shape silently succeeded here and then UPDATEd the binding,
-    // letting any caller pull a foreign thread into their own sandbox. Now
-    // it's claim's ownership gate that refuses it.
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, userId: 'attacker-target' });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it("refuses rebinding the caller's OWN thread to a different session — a move is a fork", async () => {
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, workspaceId: 'ses-other' });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it('ADOPTS an existing UNBOUND thread — binding a never-claimed row is not a rebind', async () => {
-    // Intentional behavior change from the old design: binding-from-null used
-    // to be refused here too (this file's OWN idempotent-retry check treated
-    // any non-matching-session row as unavailable, including a null one).
-    // Now that the binding is a separately guarded, ownership-checked claim
-    // rather than something only ever allowed inside an INSERT, a caller's
-    // own still-unbound row is exactly what claim exists to bind — see
-    // `claim-conversation-in-workspace.ts`. Not a security regression (still
-    // gated on `userId` matching); every real caller generates a fresh CUID2
-    // for this call, so an actual pre-existing collision doesn't arise by
-    // accident.
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue(FRESH_UNBOUND_PAGE_ROW);
-    await expect(run()).resolves.toBeUndefined();
-    expect(deps.claimConversation).toHaveBeenCalledWith({
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      workspaceId: 'ses-1',
-    });
-  });
-
-  it('refuses a row anchored to a different agent page — the repository\'s existence check has no contextId filter', async () => {
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, contextId: 'agent-other' });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    // Caught before claim is ever reached — an id collision with a
-    // different agent's conversation must not become "which session should
-    // I bind the wrong agent's thread into".
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it('refuses a non-page row wearing the same id', async () => {
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, type: 'global' });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it('a legacy message-owner conflict throws WITHOUT an idempotency escape', async () => {
-    // The sub-bug this pins: the old path answered 201 with a conversationId
-    // that had no row. A conflict means nothing was created and nothing may
-    // be claimed.
-    deps.createPageConversation.mockResolvedValue('message_owner_conflict');
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.findConversation).not.toHaveBeenCalled();
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it('a row that vanished between outcomes is unavailability, not success', async () => {
-    deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-  });
-});
-
-describe('global arm', () => {
-  it('creates session-agnostic through the ownership-guarded resolver, then claims separately', async () => {
-    deps.findConversation.mockResolvedValue(FRESH_UNBOUND_GLOBAL_ROW);
-    await createConversationInSessionWith(
-      deps as CreateConversationInSessionDeps,
-      input({ agentPageId: null }),
-    );
-    expect(deps.createGlobalConversation).toHaveBeenCalledWith({
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      title: null,
-    });
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
-    expect(deps.claimConversation).toHaveBeenCalledWith({
-      conversationId: 'conv-1',
-      userId: 'user-1',
-      workspaceId: 'ses-1',
-    });
-  });
-
-  it('folds EVERY resolver refusal into one unavailability answer', async () => {
-    // Ownership or a history-deleted collision — distinguishing them would
-    // tell an id-guessing caller which one it hit.
-    deps.createGlobalConversation.mockRejectedValue(new Error('ConversationOwnershipError'));
-    await expect(
-      createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
-    ).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.claimConversation).not.toHaveBeenCalled();
-  });
-
-  it('preserves the resolver\'s original error as `cause` for the boundary\'s log (issue #2335)', async () => {
-    const original = new Error('ConversationOwnershipError');
-    deps.createGlobalConversation.mockRejectedValue(original);
-    await expect(
-      createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
-    ).rejects.toMatchObject({ name: 'ConversationUnavailableError', cause: original });
-  });
-});
-
-describe('worker labels', () => {
-  it('a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)', async () => {
-    await createConversationInSessionWith(deps as CreateConversationInSessionDeps, {
-      ...input(),
-      title: 'research worker',
-    });
     expect(deps.createPageConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'research worker' }),
+      { conversationId: 'conv-1', userId: OWNER, agentPageId: AGENT, title: null },
+      TX,
     );
   });
-});
 
-describe('the cross-drive gate (one binding path, review #43)', () => {
-  it("refuses an agent from a DIFFERENT drive — a session's tenant, payer and access all derive from ITS drive", async () => {
-    deps.findAgentDriveId.mockResolvedValue('drive-other');
-    await expect(run()).rejects.toThrow(AgentNotInSessionDriveError);
+  it('creates a GLOBAL thread on that same transaction', async () => {
+    await createConversationInSessionWith(deps, { ...input, agentPageId: null, title: 'Worker' });
+
+    expect(deps.createGlobalConversation).toHaveBeenCalledWith(
+      { conversationId: 'conv-1', userId: OWNER, title: 'Worker' },
+      TX,
+    );
     expect(deps.createPageConversation).not.toHaveBeenCalled();
   });
 
-  it('a GLOBAL session (driveId null) may host any accessible agent — no drive to mismatch against', async () => {
-    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null });
-    await run();
-    expect(deps.createPageConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ agentPageId: 'agent-1' }),
+  it('runs NO creator outside the membership write', async () => {
+    // Structural, not ordering: the only reference to `within` is the one the
+    // membership write holds, so a creator running at all means the transaction
+    // was open. Refusing to admit therefore refuses to create.
+    deps.admitConversation = vi.fn(async () => 'refused' as const);
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
     );
-    expect(deps.claimConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: 'ses-1' }),
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('a creator that throws takes the membership with it', async () => {
+    deps.createGlobalConversation.mockRejectedValue(new Error('owned by someone else'));
+
+    await expect(
+      createConversationInSessionWith(deps, { ...input, agentPageId: null }),
+    ).rejects.toBeInstanceOf(ConversationUnavailableError);
+    // The fake models a rollback: `within` threw, so the write reported nothing.
+    expect(deps.admitConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the spawning conversation through, so a spawn never evicts its own invoker', async () => {
+    await createConversationInSessionWith(deps, { ...input, excludeTargetId: 'conv-caller' });
+
+    expect(deps.admitConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeTargetId: 'conv-caller' }),
     );
   });
 
-  it('the assistant is exempt — it has no drive to mismatch', async () => {
-    deps.findConversation.mockResolvedValue(FRESH_UNBOUND_GLOBAL_ROW);
-    await createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null }));
-    expect(deps.findAgentDriveId).not.toHaveBeenCalled();
-    expect(deps.createGlobalConversation).toHaveBeenCalled();
+  it('passes NO placement flag — every admission is placed, by one policy', async () => {
+    // `attach: false` was the default and meant PARKED: the picker mints its own
+    // unbound pane, so an attached admission would have placed a SECOND one
+    // beside it. The placement policy only ever FILLS an unbound pane before it
+    // splits, so the picker's waiting pane is exactly what it lands in — the
+    // trap the flag existed to dodge is not reachable.
+    await createConversationInSessionWith(deps, input);
+    const [[passed]] = deps.admitConversation.mock.calls;
+    expect(passed).not.toHaveProperty('attach');
+  });
+});
+
+describe('the gates that refuse before a transaction is opened', () => {
+  let deps: MockDeps;
+  beforeEach(() => {
+    deps = makeDeps();
   });
 
-  it('fails CLOSED when the agent cannot be resolved — a trashed or non-agent page never binds', async () => {
+  it('refuses when the workspace does not exist', async () => {
+    deps.findSession.mockResolvedValue(null);
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
+    expect(deps.admitConversation).not.toHaveBeenCalled();
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('admits into an ENDED workspace — lifecycle state never refuses a permitted create', async () => {
+    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date() });
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
+  });
+
+  it('refuses an agent from another DRIVE', async () => {
+    deps.findAgentDriveId.mockResolvedValue('drive-2');
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      AgentNotInSessionDriveError,
+    );
+    expect(deps.admitConversation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing or trashed agent, fail-closed', async () => {
     deps.findAgentDriveId.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
+    expect(deps.admitConversation).not.toHaveBeenCalled();
   });
 
-  it('fails CLOSED when the session cannot be resolved', async () => {
-    deps.findSession.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  it('exempts a GLOBAL workspace from the cross-drive rule', async () => {
+    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null });
+    deps.findAgentDriveId.mockResolvedValue('drive-9');
+
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
   });
 
-  it('a same-drive agent passes the gate and creates', async () => {
-    await expect(run()).resolves.toBeUndefined();
-    expect(deps.createPageConversation).toHaveBeenCalled();
+  it('needs no agent lookup for a global thread', async () => {
+    await createConversationInSessionWith(deps, { ...input, agentPageId: null });
+    expect(deps.findAgentDriveId).not.toHaveBeenCalled();
   });
 });
 
-describe('the per-session conversation cap (issue #2262 finding 2, plus the P1 orphan-row finding on this PR)', () => {
-  // This module is the ONE write path both HTTP routes
-  // (agent-workspaces/[workspaceId]/conversations, page-agents/[agentId]/conversations)
-  // and the session-tools spawn dep (createWorkerSession) funnel through, so a
-  // cap enforced here bounds every conversation-minting entry point at once —
-  // including the ones with no pure-planner preflight of their own.
-  //
-  // Checked BEFORE either creator runs (review finding — chatgpt-codex-
-  // connector, P1): letting the plain row get created regardless, and only
-  // refusing the BINDING afterward, left a blank, sessionless conversation
-  // behind in the caller's history on every ordinary cap-exceeded mint
-  // attempt — creation and binding are decoupled by design, but a doomed
-  // mint must not still leave visible clutter. The atomic claim call remains
-  // the ENFORCED backstop for the narrow race window between this pre-check
-  // and the actual write; this pre-check only short-circuits the common,
-  // non-racy case.
-
-  it('refuses a NEW page conversation BEFORE creating anything when the session is already at its ceiling', async () => {
-    deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
-    await expect(run()).rejects.toThrow(SessionFullError);
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
-    expect(deps.claimConversation).not.toHaveBeenCalled();
+describe('an id that already resolves to something', () => {
+  let deps: MockDeps;
+  beforeEach(() => {
+    deps = makeDeps();
   });
 
-  it('refuses a NEW global conversation BEFORE creating anything when the session is already at its ceiling', async () => {
-    deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
-    await expect(
-      createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
-    ).rejects.toThrow(SessionFullError);
-    expect(deps.createGlobalConversation).not.toHaveBeenCalled();
-  });
-
-  it('allows creation with one conversation slot left', async () => {
-    deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS - 1);
-    await expect(run()).resolves.toBeUndefined();
-    expect(deps.createPageConversation).toHaveBeenCalled();
-  });
-
-  it('lets an IDEMPOTENT RETRY of an existing conversation in THIS session through, even at the ceiling', async () => {
-    // A retry mints nothing new, so the cap must not stand between a caller
-    // and its own already-created, already-bound conversation — the
-    // pre-check's own retry exemption covers this (before the insert is
-    // even attempted a second time), and claim's own `already_in_session`
-    // is the second, independent guarantee of the same idempotency.
-    deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
+  it('accepts a retry of the caller\'s OWN thread with the SAME agent', async () => {
     deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, workspaceId: 'ses-1' });
-    await expect(run()).resolves.toBeUndefined();
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
+    // Read on the transaction, so a row this transaction just inserted — or one
+    // a concurrent insert won the squat race with — is visible to its own check.
+    expect(deps.findConversationIn).toHaveBeenCalledWith('conv-1', TX);
   });
 
-  it('refuses an id bound to a DIFFERENT session at the ceiling with SessionFullError — the pre-check cannot yet tell that apart from "no room", and claim never even runs to give the more specific answer', async () => {
-    // Matches the pre-collapse behavior exactly: the retry-exemption check
-    // only recognizes a row already bound to THIS session as safe to let
-    // through the cap; anything else (including a different session's row)
-    // is indistinguishable from "genuinely no room" at this pre-check layer.
-    deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
+  it('refuses an id anchored to a DIFFERENT agent', async () => {
     deps.createPageConversation.mockResolvedValue('exists');
-    deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, workspaceId: 'ses-other' });
-    await expect(run()).rejects.toThrow(SessionFullError);
-    expect(deps.claimConversation).not.toHaveBeenCalled();
+    deps.findConversationIn.mockResolvedValue({ userId: OWNER, type: 'page', contextId: 'agent-other' });
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
   });
 
-  it('fails CLOSED when the session cannot be resolved, before weighing the cap at all', async () => {
-    deps.findSession.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.countActiveConversations).not.toHaveBeenCalled();
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  it('refuses an id that resolves to SOMEONE ELSE\'S thread', async () => {
+    // The gate the old shape got by composing on top of the claim primitive,
+    // which read the row and refused a foreign owner. The composition is gone;
+    // the gate is not.
+    deps.createPageConversation.mockResolvedValue('exists');
+    deps.findConversationIn.mockResolvedValue({ userId: 'user-2', type: 'page', contextId: AGENT });
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
   });
 
-  it('an ENDED session is a valid create target — lifecycle state never gates a permitted create; the claim reopens the listing (issue #2335)', async () => {
-    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date('2026-01-01') });
-    await expect(run()).resolves.toBeUndefined();
-    expect(deps.createPageConversation).toHaveBeenCalled();
-    expect(deps.claimConversation).toHaveBeenCalled();
+  it('refuses an id that resolves to a GLOBAL thread when a page one was asked for', async () => {
+    deps.createPageConversation.mockResolvedValue('exists');
+    deps.findConversationIn.mockResolvedValue({ userId: OWNER, type: 'global', contextId: null });
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
+  });
+
+  it('refuses an id whose messages belong to someone else', async () => {
+    deps.createPageConversation.mockResolvedValue('message_owner_conflict');
+
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(
+      ConversationUnavailableError,
+    );
+  });
+});
+
+describe('what the membership write answers', () => {
+  let deps: MockDeps;
+  beforeEach(() => {
+    deps = makeDeps();
+  });
+
+  it('a thread the workspace already holds is a success, not an error', async () => {
+    deps.admitConversation = fakeAdmit('already_a_member');
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
+  });
+
+  it('surfaces the cap the TREE enforced', async () => {
+    deps.admitConversation = fakeAdmit('session_full');
+    await expect(createConversationInSessionWith(deps, input)).rejects.toBeInstanceOf(SessionFullError);
+  });
+
+  it('names the backfill in the CAUSE rather than joining the generic refusal', async () => {
+    // This path throws rather than returning an outcome, so the only place the
+    // distinction can survive is the `cause` the boundary logs. "The tree would
+    // not stand up" and "this database has not been migrated" are different
+    // incidents with different responders, and an operator reading
+    // `admit_refused` would have no reason to think about the backfill at all.
+    //
+    // The propagation this asserts was entirely untested until an adversarial
+    // review regressed every site at once and watched the suite stay green.
+    deps.admitConversation = fakeAdmit('awaiting_backfill');
+    const raised = await createConversationInSessionWith(deps, input).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(raised).toBeInstanceOf(ConversationUnavailableError);
+    expect(String((raised as { cause?: unknown }).cause)).toContain('awaiting_backfill');
+  });
+
+  it('collapses the chat-target INDEX\'s refusal into the generic unavailability', async () => {
+    // Two workspaces raced for one conversation and the database settled it.
+    // The caller learns nothing more than "not available" — the reason rides
+    // along as `cause` for the boundary's log.
+    deps.admitConversation = fakeAdmit('bound_elsewhere');
+    const error = await createConversationInSessionWith(deps, input).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ConversationUnavailableError);
+    expect((error as ConversationUnavailableError).message).toBe('conversation_unavailable');
+    expect(((error as ConversationUnavailableError).cause as Error).message).toBe('admit_bound_elsewhere');
   });
 });

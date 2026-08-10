@@ -96,3 +96,23 @@ describe('buildLocationTurnPrompt — "here" guidance', () => {
     expect(result.toLowerCase()).toContain('"here"');
   });
 });
+
+describe('no-location Home drive hint', () => {
+  it('omits any Home reference when no hint is supplied', () => {
+    const result = buildLocationTurnPrompt(undefined);
+    expect(result).not.toContain('driveId:');
+    expect(result).toContain('Do NOT default to the Home drive');
+  });
+
+  it('labels the Home id as off-limits rather than contradicting the guard', () => {
+    // The guard and the hint must read as ONE rule. "Do NOT assume the Home
+    // drive" sitting next to a bare Home driveId leaves the model to resolve a
+    // contradiction, and resolving it wrongly is the exact bug the guard exists
+    // to prevent.
+    const result = buildLocationTurnPrompt({ homeDriveId: 'drv_home' });
+    expect(result).toContain('drv_home');
+    expect(result).toContain('do NOT write here unless');
+    // The guard itself is scoped, not deleted.
+    expect(result).toContain('Do NOT default to the Home drive for general work');
+  });
+});

@@ -15,7 +15,7 @@ Turn a vague or multi-step request into a written plan the user can review, edit
 A plan written from assumptions is worse than no plan, because it looks authoritative. Read first:
 
 - \`read_page\` for a specific page you already have an id for.
-- \`list_pages\` with \`include: 'content'\` to pull a whole subtree in ONE call — prefer this over a series of \`read_page\` calls when you are orienting.
+- \`list_pages\` with \`include: 'content'\` batches page content into one call instead of a \`read_page\` per page — much better when you are orienting. Two things to know: it returns **direct children only** unless you pass \`recursive: true\`, and it is capped (50 pages per call, each page's content clipped at ~8,000 chars). A clipped page comes back with \`contentClipped: true\`; if you need the rest, \`read_page\` it with \`lineStart\` set to \`contentClippedAfterLine + 1\`. Don't assume a full subtree came back just because the call succeeded.
 - \`regex_search\` (content or title), \`glob_search\` (page names/types), \`multi_drive_search\` (across workspaces). There is no tool called \`search\` — use one of these.
 
 Stop gathering when you could defend each step you are about to propose. If a genuine fork remains — two reasonable approaches with different consequences — put it in the plan's open questions rather than silently picking one.

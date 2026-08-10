@@ -521,8 +521,12 @@ export default function MCPSettingsView() {
 
   const generateConfig = (style: 'global' | 'npx' = setupStyle) => {
     const token = selectedToken || '<YOUR_PAGESPACE_MCP_TOKEN_HERE>';
+    // `-p` is load-bearing: @pagespace/cli publishes two bins (`pagespace` and
+    // `pagespace-mcp`) and neither is named `cli`, so without it npx treats
+    // `@pagespace/cli` as the command, finds no such bin, and exits with
+    // "could not determine executable to run".
     const launch = style === 'npx'
-      ? { command: "npx", args: ["-y", "@pagespace/cli", "pagespace-mcp"] }
+      ? { command: "npx", args: ["-y", "-p", "@pagespace/cli", "pagespace-mcp"] }
       : { command: "pagespace", args: ["mcp"] };
     const config = {
       mcpServers: {

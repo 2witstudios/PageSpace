@@ -7,6 +7,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
+  be two separate records of what a session contained, kept in step by convention, so a pane you or
+  an agent opened could take up to two minutes to show up in the list. They are now two views of
+  one thing, so there is nothing to fall out of step.
+- **A thread can no longer go missing from its own session** — a session's membership and its
+  layout were stored separately, and a thread that had no pane was simply absent from the list.
+  Sessions existed with more threads than the sidebar would show. Membership is now the same record
+  as placement, so a thread that is in a session is always visible in it, open or not.
+- **Opening a conversation that is already open in another session says so, instead of leaving a
+  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
+  another session already holds used to fail as a server error. The pane you had just opened stayed
+  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
+  now refused properly and the layout corrects itself straight away.
+- **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
+  tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
+  showed no PageSpace tools at all. Copy it again and it works.
+- **The MCP config the CLI prints after minting a key no longer assumes a global install** — it
+  offered only the form that needs `pagespace` on your PATH, which isn't there if you minted the
+  key through `npx`, and which desktop AI apps often can't find even when it is. It now prints the
+  zero-install form that works either way, and mentions the shorter global-install form as an
+  option.
 - **Panes and sidebars no longer sit blank while the messages are right there in the database** —
   every surface used to keep its own private copy of a conversation and its own theory of when to
   refresh, so a message written from one surface could stay invisible in another until you
@@ -92,8 +113,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   one interval, and a payer who runs out of credits mid-session is disconnected instead of running
   free.
 
+### Changed
+
+- **Closing the last pane no longer ends your session** — it leaves the session open with an empty
+  layout. Ending a session is now only the explicit action on the session row, so there is one way
+  to end one instead of two.
+- **Closing a thread takes it out of the session** — it stops being one of that session's threads
+  and leaves the list. Its history is untouched: you find it again in the agent's own conversation
+  list, and reopening it puts it back. An interim build briefly kept a closed thread in the list,
+  dimmed and off-screen; that is gone, because a thread sitting in a session with nowhere to be was
+  indistinguishable from one that had gone missing through a fault — the exact failure the rest of
+  this work exists to make impossible. Closing is one action with one meaning now, whether you close
+  a pane, close a thread, or end the whole session.
+
 ### Added
 
+- **Agents can close a pane** — they could already open, move, resize and reorder them, but taking
+  one away was only possible as a side effect of moving it "nowhere". That is now its own action,
+  which means an agent tidying up its own layout does exactly what it says.
 - **Your agent workspaces now follow you between devices, and agents can arrange their own** —
   the pane grid in the Agents console used to live partly in your browser's local storage, so the
   same workspace looked different on your laptop and your phone, and a collaborator watching a

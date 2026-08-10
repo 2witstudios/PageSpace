@@ -195,6 +195,22 @@ async function openScenario(name: string): Promise<Scenario> {
     p.on('connect', (client) => {
       client.on('notice', (n) => notices.push(`${n.severity}: ${n.message ?? ''}`));
     });
+    // A pg `Pool` emits `error` for a failure on an IDLE client — never for a
+    // query, which rejects its own promise — and an `error` event with no
+    // listener is an unhandled throw in Node, which fails the whole RUN rather
+    // than any test.
+    //
+    // `afterAll` drops these scratch databases `WITH (FORCE)`, which terminates
+    // whatever is still connected (`57P01`). `pool.end()` resolving is not the
+    // same instant as the socket closing, so a client can still be draining
+    // when the drop lands — and then the suite reports a teardown error over 17
+    // passing tests. It went 16 runs without firing, because it needs the drop
+    // and the drain to overlap; parallel load is enough to arrange that.
+    //
+    // Recorded rather than silently dropped, so a REAL idle-client failure is
+    // still visible in `notices` instead of being swallowed by the fix for a
+    // teardown race.
+    p.on('error', (error: Error) => notices.push(`POOL ERROR: ${error.message}`));
     return p;
   };
   // Mutable so `reconnect()` genuinely swaps the connection every method uses
@@ -274,12 +290,14 @@ async function columnExists(s: Scenario, table: string, column: string): Promise
 describeLive('0247 → 0252 pane grid against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
+    adminPool.on('error', () => {});
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
     // Template at 0246 — BEFORE the pane grid exists, so each scenario can
     // seed a blob and watch the promotion itself run.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
+    templatePool.on('error', () => {});
     try {
       await runMigrations(drizzle(templatePool), preGrid, {
         migrationsSchema: 'drizzle',

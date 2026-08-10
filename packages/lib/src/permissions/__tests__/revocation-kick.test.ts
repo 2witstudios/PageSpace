@@ -217,7 +217,7 @@ describe('kickForDriveMembershipRevocation (shell)', () => {
  *   `conv:C`. Alice revokes Bob's page access. Bob is evicted from the page
  *   and activity rooms — and keeps receiving every
  *   `conversation:message_created` with FULL message content, plus
- *   `workspace:updated` grids, until his socket happens to reconnect.
+ *   `workspace:nodes-updated` trees, until his socket happens to reconnect.
  *
  * Note the asymmetry the finding calls out: conversation UN-SHARE got a
  * bespoke wildcard kick; permission revocation — the wider case — did not.

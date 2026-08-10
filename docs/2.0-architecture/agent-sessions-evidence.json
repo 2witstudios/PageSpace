@@ -92,21 +92,16 @@
       "evidence": [
         {
           "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
-          "name": "should write the new conversation straight into its session listing, with no request",
-          "suite": "web-unit"
-        },
-        {
-          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
-          "name": "given the row is already there (the originating surface wrote it optimistically), should MERGE not duplicate",
+          "name": "should re-read the session listings — the payload no longer says which one to patch",
           "suite": "web-unit"
         },
         {
           "file": "apps/web/src/lib/agent-workspaces/__tests__/create-conversation-in-workspace.test.ts",
-          "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
+          "name": "creates a GLOBAL thread on that same transaction",
           "suite": "web-unit"
         }
       ],
-      "notes": "These three prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. CAVEAT WORTH KEEPING, found by writing that spec: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted. Creation and session-binding are decoupled by design (`create-conversation-in-workspace.ts` — a sessionless conversation is an ordinary state), so `conversation:created` fires first with `workspaceId: null`, which the listener correctly declines to insert anywhere, and it is the CLAIM's `conversation:updated { workspaceId }` that updates the sidebar, via `revalidateWorkspaceListings`. So the no-round-trip property these tests pin is real for the branch they exercise, but the spawn story is served by one event-driven refetch rather than by that branch. Event-driven either way — which is the guarantee — but not request-free, and the difference is worth not overclaiming."
+      "notes": "These prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. THE CAVEAT THAT USED TO SIT HERE IS NOW THE IMPLEMENTATION. It read: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted — creation and membership are decoupled by design, so `conversation:created` fires with `workspaceId: null`, which the listener declines to insert anywhere. That column is now DROPPED (`conversations.workspaceId` / `closedInWorkspaceAt` are gone; membership is an `agent_workspace_nodes` row), so the branch the caveat described as unreachable has been deleted and `conversation:created` re-reads the listing unconditionally. The guarantee is unchanged and the overclaim is gone with the branch: this is event-driven, one refetch, never request-free — which is what the caveat already said was actually happening."
     },
     {
       "id": "sidebar-renders-server-created-conversation-end-to-end",
@@ -410,7 +405,7 @@
         },
         {
           "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
-          "name": "exposes exactly the thirteen tool names",
+          "name": "exposes exactly the fourteen tool names",
           "suite": "web-unit"
         }
       ],

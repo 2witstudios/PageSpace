@@ -2,21 +2,15 @@
 /**
  * BINDING A PANE IS A PERMISSION DECISION (security review HIGH 1, attack B).
  *
- * `workspaceLayoutVerbSchema` lets `ensure` / `assign_pane` /
- * `open_conversation` / `replace_conversation` carry a free `targetId` +
- * `kind`. The verbs route used to validate session access ONLY — never the
- * scope target — so anyone with a workspace of their own could bind an
- * arbitrary conversation, shell, or page id and read the resolved title back
- * out of the response grid. This is the write half of that fix (the read half
- * is `workspace-layout-labels.test.ts`); belt and braces, because the row a
- * bad bind leaves behind outlives the request that made it.
+ * A write payload carries a free `targetId` + `kind`. A route that validated
+ * session access ONLY — never the target — would let anyone with a workspace of
+ * their own bind an arbitrary conversation, shell, or page id and read the
+ * resolved title back out of the response. This is the write half of that fix (the read half is
+ * the label resolution in `workspace-node-runtime.ts`); belt and braces,
+ * because the row a bad bind leaves behind outlives the request that made it.
  */
 import { describe, it, expect, vi } from 'vitest';
-import {
-  workspaceLayoutVerbSchema,
-  type WorkspaceLayoutVerb,
-} from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import { authorizePaneScope, paneScopesOfVerb, type PaneScopeAuthorityDeps } from '../authorize-pane-scope';
+import { authorizePaneScope, type PaneScopeAuthorityDeps } from '../authorize-pane-scope';
 
 const VIEWER = 'viewer-1';
 const WORKSPACE = 'ws-1';
@@ -31,79 +25,7 @@ const deps = (overrides: Partial<PaneScopeAuthorityDeps> = {}): PaneScopeAuthori
 
 const scopeOf = (kind: 'chat' | 'terminal' | 'page', targetId: string | null) => ({
   kind,
-  name: 'whatever the caller claims',
   targetId,
-  agentPageId: null,
-});
-
-describe('paneScopesOfVerb — every verb that can bind a target', () => {
-  it('finds the scope on each of the four scope-carrying verbs', () => {
-    const scope = scopeOf('chat', 'conv-1');
-    const verbs: WorkspaceLayoutVerb[] = [
-      { type: 'ensure', columnId: 'c', paneId: 'p', scope },
-      { type: 'assign_pane', paneId: 'p', scope },
-      { type: 'open_conversation', scope, newColumnId: 'c', newPaneId: 'p' },
-      { type: 'replace_conversation', oldTargetId: 'conv-0', scope },
-    ];
-    for (const verb of verbs) {
-      expect(paneScopesOfVerb(verb), `${verb.type} must expose its scope`).toEqual([scope]);
-    }
-  });
-
-  it('finds nothing on a purely geometric verb', () => {
-    expect(paneScopesOfVerb({ type: 'resize_pane', paneId: 'p', heightFraction: 0.5 })).toEqual([]);
-    expect(paneScopesOfVerb({ type: 'close_pane', paneId: 'p' })).toEqual([]);
-  });
-
-  /**
-   * The two tests above enumerate today's verbs, so they pass unchanged when a
-   * NEW scope-carrying verb is added and left ungated — which is the one
-   * failure that matters here, because an unauthorized pane row outlives the
-   * request that wrote it.
-   *
-   * `paneScopesOfVerb`'s `never` fall-through makes that a compile error, but a
-   * type-level guard proves nothing to a reader of the suite and is invisible
-   * in a CI log. So this reads the discriminated union at RUNTIME and pins the
-   * verb set: adding a verb to `workspaceLayoutVerbSchema` fails here until
-   * someone has decided, in this file, which list it belongs in.
-   */
-  it('pins the verb union, so a new verb cannot be added without classifying it here', () => {
-    // No cast: `workspaceLayoutVerbSchema` is a `z.discriminatedUnion`, so
-    // `.options[i].shape.type.value` is already typed. An `as unknown as {...}`
-    // here would assert the shape rather than read it — and would turn a future
-    // change in zod's internals into a silent pass (every `.value` reading
-    // `undefined`, `declared` becoming `[undefined × 12]`) instead of the
-    // compile error that should stop it.
-    const options = workspaceLayoutVerbSchema.options;
-    const declared = options.map((o) => o.shape.type.value).sort();
-
-    expect(declared).toEqual(
-      [
-        'assign_pane',
-        'close_pane',
-        'ensure',
-        'move_pane',
-        'open_conversation',
-        'reorder_columns',
-        'replace_conversation',
-        'reset_pane',
-        'resize_column',
-        'resize_pane',
-        'split_down',
-        'split_right',
-      ].sort(),
-    );
-
-    // And the split is exactly the one the gate implements: a verb whose schema
-    // declares `scope` must yield it, every other verb must yield nothing.
-    const scopeCarrying = options
-      .filter((o) => 'scope' in o.shape)
-      .map((o) => o.shape.type.value)
-      .sort();
-    expect(scopeCarrying).toEqual(
-      ['assign_pane', 'ensure', 'open_conversation', 'replace_conversation'].sort(),
-    );
-  });
 });
 
 describe('page scopes', () => {

@@ -217,6 +217,7 @@ describe('ai-tools', () => {
         'list_panes',
         'resize_pane',
         'move_pane',
+        'close_pane',
         'arrange_panes',
       ];
       const workspaceOnly = Object.fromEntries(

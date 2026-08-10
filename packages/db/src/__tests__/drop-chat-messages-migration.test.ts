@@ -174,6 +174,8 @@ async function openScenario(name: string): Promise<Scenario> {
 
   const notices: string[] = [];
   const pool = new Pool({ connectionString: urlForDatabase(dbName), max: 1 });
+  // Teardown-race guard — see `workspace-state-drop-migration.test.ts`.
+  pool.on('error', () => {});
   pool.on('connect', (client) => {
     client.on('notice', (n) => notices.push(`${n.severity}: ${n.message ?? ''}`));
   });
@@ -277,6 +279,8 @@ async function columnExists(s: Scenario, table: string, column: string): Promise
 describeLive('0253 against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
+    // Teardown-race guard — see `workspace-state-drop-migration.test.ts`.
+    adminPool.on('error', () => {});
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
     createdDatabases.push(TEMPLATE_DB);
 
@@ -284,6 +288,8 @@ describeLive('0253 against a real Postgres', () => {
     // then disconnect, because a template with open connections cannot be
     // copied.
     const templatePool = new Pool({ connectionString: urlForDatabase(TEMPLATE_DB), max: 1 });
+    // Teardown-race guard — see `workspace-state-drop-migration.test.ts`.
+    templatePool.on('error', () => {});
     try {
       await runMigrations(drizzle(templatePool), baseMigrations, {
         migrationsSchema: 'drizzle',

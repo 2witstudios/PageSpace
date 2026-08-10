@@ -21,9 +21,11 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, ne, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
+import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
@@ -48,8 +50,8 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
-import { applyLayoutVerbForWorkspace, placeWorkerPane } from '@/lib/agent-workspaces/workspace-placement';
-import { readWorkspaceLayoutSnapshot } from '@/lib/agent-workspaces/workspace-layout-runtime';
+import { applyLayoutCommandForWorkspace, layoutCommand } from '@/lib/agent-workspaces/workspace-node-placement';
+import { readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
@@ -368,16 +370,22 @@ async function listWorkspaceWorkers({
         ownerId: conversations.userId,
         isShared: conversations.isShared,
       })
-      .from(conversations)
+      // MEMBERSHIP IS THE JOIN — the node that binds the thread says which
+      // workspace holds it and whether it is on screen, in one row.
+      .from(agentWorkspaceNodes)
+      .innerJoin(conversations, eq(conversations.id, agentWorkspaceNodes.targetId))
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(conversations.workspaceId, workspaceId),
+          eq(agentWorkspaceNodes.rootId, workspaceId),
+          eq(agentWorkspaceNodes.targetKind, 'chat'),
           eq(conversations.isActive, true),
-          // A closed listing is gone from the human's sidebar — `list_sessions`
-          // must agree, or an agent keeps seeing (and dispatching to) a
-          // sibling the user believes they already closed.
-          isNull(conversations.closedInWorkspaceAt),
+          // A thread the human took OFF THE GRID is gone from their pane
+          // surface — `list_sessions` must agree, or an agent keeps seeing
+          // (and dispatching to) a sibling the user believes they closed. It
+          // is the node's own `parentId` now, so the tool's listing and the
+          // grid cannot disagree about which threads are showing.
+          isNotNull(agentWorkspaceNodes.parentId),
         ),
       )
       .orderBy(desc(conversations.createdAt))
@@ -933,22 +941,33 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // bound + not closed) rather than by workspace membership — the old
       // workspace comparison incidentally masked deleted rows.
       if (!conversation.isActive) return null;
+      // MEMBERSHIP, from the tree: which workspace holds this thread, and
+      // whether it is on screen there. Two facts off ONE row, where they used
+      // to be two columns nothing kept in correspondence.
+      const membership = await findChatMembership(db, conversationId);
       return {
         conversationId,
         ownerId: conversation.userId,
         agentPageId: conversationPageId(conversation),
         name: conversation.title ?? '',
-        // The WORKSPACE this conversation is bound to (conversations.workspaceId
-        // — the agent_workspaces.id FK), or null for a workspace-less thread.
+        // The WORKSPACE whose tree holds this thread — the membership read,
+        // through the node's global chat-target index rather than a column.
         // `openOwnSession` requires it non-null (a plain thread is not a
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
-        workspaceId: conversation.workspaceId,
-        // The human closed this conversation's LISTING (it no longer shows in
-        // their sidebar) — `openOwnSession` refuses on this, so a worker verb
-        // can never dispatch new work into, read, or kill a worker the user
-        // has already closed.
-        isClosed: conversation.closedInWorkspaceAt !== null,
+        workspaceId: membership?.workspaceId ?? null,
+        // The human CLOSED this conversation out of its workspace, so its node
+        // is gone. `openOwnSession` refuses on this, so a worker verb can never
+        // dispatch new work into, read, or kill a worker the user has already
+        // closed.
+        //
+        // It used to be "the node is parked" — a row that survived the close
+        // with a null parent. Closing destroys the node, so the absence of a
+        // membership row IS the closed state, which is also why `workspaceId`
+        // above goes null in the same breath. A worker verb addressed at a
+        // closed thread therefore fails the `workspaceId` gate first; this stays
+        // so the answer keeps its own name rather than becoming "never had one".
+        isClosed: membership === null,
       };
     },
 
@@ -977,6 +996,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           userId: ownerId,
           agentPageId,
           workspaceId,
+          // The spawning conversation shares this grid when the worker lands in
+          // the caller's own workspace — never evicted by its own spawn.
+          excludeTargetId: callerConversationId,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -1016,33 +1038,42 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true, workspaceId };
     },
 
-    placeWorkerPane,
-
-    // The layout family's two seams (issue #2208). The read is the SAME
-    // label-joining snapshot the layout GET serves, so a model and a browser
-    // never see different names for the same pane; the write is the same
-    // single writer (`applyWorkspaceLayoutVerb`) behind the verbs route.
+    // The layout family's two seams (issue #2208). The read is the SAME atomic
+    // snapshot the `/nodes` GET serves, so a model and a browser never see
+    // different names — or different trees — for the same workspace; the write
+    // is the same single writer behind that route.
     readPaneGrid: async (workspaceId, viewerId) => {
-      const snapshot = await readWorkspaceLayoutSnapshot(workspaceId, viewerId);
-      if (!snapshot.grid || snapshot.grid.length === 0) return null;
+      const snapshot = await readWorkspaceNodes(workspaceId, viewerId);
+      if (snapshot.nodes.length === 0) return null;
+      // Titles ride BESIDE the tree because they are authority and the tree is
+      // not; the model is one viewer, so they are folded back in here for it.
+      const titles = new Map(snapshot.targets.map((target) => [`${target.kind}:${target.id}`, target.title]));
       return {
-        columns: snapshot.grid.map((column) => ({
-          columnId: column.id,
-          widthFraction: column.widthFraction ?? null,
-          panes: column.panes.map((pane) => ({
-            paneId: pane.id,
-            kind: pane.scope?.kind ?? null,
-            targetId: pane.scope?.targetId ?? null,
-            // Labels are display-only and the snapshot already re-derived them
-            // from the live rows — an unbound pane has none at all.
-            name: pane.scope?.name ?? '',
-            heightFraction: pane.heightFraction ?? null,
-          })),
-        })),
+        nodes: snapshot.nodes.map((node) => {
+          const target = node.nodeType === 'pane' ? node.target : null;
+          return {
+            nodeId: node.id,
+            nodeType: node.nodeType,
+            parentId: node.parentId,
+            position: node.position,
+            axis: node.nodeType === 'pane' ? null : node.axis,
+            kind: target?.kind ?? null,
+            targetId: target?.id ?? null,
+            // A target the viewer may not name resolves to nothing, and the
+            // node still renders — refusing to resolve is deliberately
+            // indistinguishable from "gone".
+            name: target === null ? '' : titles.get(`${target.kind}:${target.id}`) ?? '',
+            fraction: node.nodeType === 'root' ? null : node.fraction ?? null,
+          };
+        }),
       };
     },
 
-    applyLayoutVerb: applyLayoutVerbForWorkspace,
+    // The model names a COMMAND; the server compiles it against the tree it
+    // holds under the lock. A command whose target id no longer exists is
+    // refused by the algebra, never clamped into something else.
+    applyLayoutCommand: async ({ workspaceId, actingUserId, command }) =>
+      applyLayoutCommandForWorkspace({ workspaceId, actingUserId, run: layoutCommand(command) }),
 
     dispatch: dispatchThroughChatPipeline,
 

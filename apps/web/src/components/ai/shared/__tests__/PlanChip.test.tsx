@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 
 const fetchWithAuthMock = vi.fn();
@@ -29,6 +29,30 @@ const toolPart = (toolName: string, state = 'output-available') => ({
 
 const messagesWith = (...parts: unknown[]): UIMessage[] =>
   [{ id: 'm1', role: 'assistant', parts }] as unknown as UIMessage[];
+
+/**
+ * Flush pending effects and microtasks deterministically.
+ *
+ * The "no extra fetch happened" assertions below are negative, so they need a
+ * point at which any fetch that WAS going to fire already has. A fixed sleep
+ * gets that wrong in both directions — it can pass before a slightly-late
+ * request lands, and it can flake on a loaded CI worker. `act` drains React's
+ * effect queue and the microtask queue instead, which is exactly the boundary
+ * these assertions care about, with no wall-clock dependency.
+ */
+const flushEffects = () => act(async () => {});
+
+/**
+ * How a plan tool actually reaches the model on the Global Assistant: set_plan
+ * is not a CORE tool and that route always splits its toolset, so the agent can
+ * only call it wrapped in execute_tool.
+ */
+const wrappedToolPart = (toolName: string, state = 'output-available') => ({
+  type: 'tool-execute_tool',
+  toolName: 'execute_tool',
+  state,
+  input: { tool_name: toolName, parameters: {} },
+});
 
 describe('PlanChip', () => {
   beforeEach(() => {
@@ -98,7 +122,7 @@ describe('PlanChip', () => {
     rerender(
       <PlanChip conversationId="conv-6" messages={messagesWith(toolPart('set_plan', 'input-streaming'))} />,
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushEffects();
     expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
   });
 
@@ -108,7 +132,7 @@ describe('PlanChip', () => {
     await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1));
 
     rerender(<PlanChip conversationId="conv-7" messages={messagesWith(toolPart('create_page'))} />);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushEffects();
     expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -126,7 +150,7 @@ describe('PlanChip revalidation is not wasteful', () => {
     respondWith(BOUND);
     render(<PlanChip conversationId="conv-8" messages={messagesWith(toolPart('set_plan'))} />);
     await screen.findByTitle('Active plan');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushEffects();
     expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
   });
 
@@ -136,7 +160,37 @@ describe('PlanChip revalidation is not wasteful', () => {
     await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1));
 
     rerender(<PlanChip conversationId="conv-9" messages={messagesWith(toolPart('read_page'))} />);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushEffects();
+    expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlanChip sees plan tools wrapped in execute_tool', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    delMock.mockReset();
+  });
+
+  it('re-fetches when set_plan completes via execute_tool', async () => {
+    // Without unwrapping, this component's revalidation is dead code on the
+    // Global Assistant — the one surface where the chip is most visible.
+    respondWith(UNBOUND);
+    const { rerender } = render(<PlanChip conversationId="conv-10" messages={[]} />);
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1));
+
+    respondWith(BOUND);
+    rerender(<PlanChip conversationId="conv-10" messages={messagesWith(wrappedToolPart('set_plan'))} />);
+
+    expect(await screen.findByTitle('Active plan')).toBeTruthy();
+  });
+
+  it('ignores execute_tool wrapping an unrelated tool', async () => {
+    respondWith(UNBOUND);
+    const { rerender } = render(<PlanChip conversationId="conv-11" messages={[]} />);
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1));
+
+    rerender(<PlanChip conversationId="conv-11" messages={messagesWith(wrappedToolPart('create_page'))} />);
+    await flushEffects();
     expect(fetchWithAuthMock).toHaveBeenCalledTimes(1);
   });
 });

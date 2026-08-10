@@ -22,6 +22,8 @@ import { validateCorsOrigin } from './utils/cors-validation';
 import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
 import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
 import { setupErrorHandlers } from '@pagespace/lib/logging/logger-config';
+import { setChainAlertHandler } from '@pagespace/lib/audit/security-audit-alerting';
+import { buildChainAlertHandler } from '@pagespace/lib/audit/chain-alert-payload';
 import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
@@ -392,6 +394,18 @@ async function start() {
     // telemetry (#890 Phase 3). Throws into the catch below → process.exit(1).
     const chMode = probeClickHouseStartup();
     console.log(`✓ ClickHouse analytics tier: ${chMode.mode}`);
+
+    // Route security-audit trust-plane alerts to Sentry. `alertHandler` in
+    // security-audit-alerting.ts is process-local, so the web app's
+    // registration does not cover this process — and the SIEM delivery and
+    // audit-chainer workers here are what fire notifyChainPreflightFailure,
+    // notifyChainAppendVerificationFailure and notifyAnchorPublishFailure.
+    // Without this they all hit `if (!alertHandler) return` and a detected
+    // chain tamper reaches nobody.
+    setChainAlertHandler(
+      buildChainAlertHandler((error, context) => Sentry.captureException(error, context), 'processor')
+    );
+    console.log('✓ Security-audit chain alert handler initialized (Sentry)');
 
     // Initialize content store
     await contentStore.initialize();

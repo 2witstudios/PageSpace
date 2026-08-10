@@ -85,13 +85,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the thirteen-tool surface', () => {
-  it('should export EXACTLY the thirteen tools of the three verb families', () => {
+describe('the fourteen-tool surface', () => {
+  it('should export EXACTLY the fourteen tools of the three verb families', () => {
     const tools = createSessionTools(makeDeps());
     // Workers + shells (frozen since Phase 1) plus the LAYOUT family that
     // issue #2208 added once the pane grid became relational entities.
+    //
+    // `close_pane` is a REPLACEMENT rather than a fourteenth capability: an
+    // agent used to take a pane off the grid with `move_pane(toParentId: null)`,
+    // because null was a legal destination meaning PARKED. There is one place a
+    // node can be now, so that destination is gone and taking a pane away needs
+    // its own verb.
     expect(Object.keys(tools).sort()).toEqual([
       'arrange_panes',
+      'close_pane',
       'kill_session',
       'kill_shell',
       'list_panes',

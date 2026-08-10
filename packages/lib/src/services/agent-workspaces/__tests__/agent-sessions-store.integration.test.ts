@@ -22,8 +22,34 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-workspaces-store';
+
+/**
+ * A SECOND, INDEPENDENT CONNECTION — the only way to observe a lock.
+ *
+ * `db` is one pooled client here, and a test that used it for both sides of a
+ * lock would either deadlock against itself or prove nothing. `pg` is not
+ * hoisted for this package, so it is resolved through `@pagespace/db`'s own
+ * module context — the same physical driver the db package uses.
+ */
+import { createRequire } from 'node:module';
+const requireFromTest = createRequire(import.meta.url);
+const requireFromDb = createRequire(requireFromTest.resolve('@pagespace/db/db'));
+const { Pool } = requireFromDb('pg') as unknown as {
+  Pool: new (config: Record<string, unknown>) => {
+    connect(): Promise<{
+      query(text: string, params?: unknown[]): Promise<unknown>;
+      release(): void;
+    }>;
+    end(): Promise<void>;
+  };
+};
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 2,
+});
 
 const ownerId = createId();
 const driveId = createId();
@@ -47,7 +73,39 @@ const sandboxIds = new Set<string>(['sbx-integration-outbox']);
 
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
-/** A session row (its own id), plus one conversation BOUND to it via conversations.workspaceId. */
+/**
+ * Bind a conversation into a workspace the way membership is expressed: a
+ * root, and a pane node under it whose chat target is the thread. This IS the
+ * binding — `conversations` carries no workspace column any more.
+ */
+async function bindConversation(workspaceId: string, conversationId: string): Promise<void> {
+  const now = new Date();
+  await db.insert(agentWorkspaceNodes).values([
+    {
+      id: `${workspaceId}-root`,
+      rootId: workspaceId,
+      parentId: null,
+      position: 0,
+      nodeType: 'root',
+      axis: 'row',
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: `${conversationId}-pane`,
+      rootId: workspaceId,
+      parentId: `${workspaceId}-root`,
+      position: 0,
+      nodeType: 'pane',
+      targetKind: 'chat',
+      targetId: conversationId,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ]).onConflictDoNothing();
+}
+
+/** A session row (its own id), plus one conversation BOUND to it by a chat node. */
 async function seedSession(
   over: Partial<{ sandboxId: string; spriteInstanceId: string | null; spriteTornDownAt: Date; endedAt: Date }> = {},
 ) {
@@ -72,8 +130,8 @@ async function seedSession(
     title: 'integration',
     type: 'page',
     contextId: agentPageId,
-    workspaceId,
   });
+  await bindConversation(workspaceId, conversationId);
   return workspaceId;
 }
 
@@ -114,6 +172,7 @@ afterAll(async () => {
   await db.delete(pages).where(eq(pages.id, agentPageId));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(eq(users.id, ownerId));
+  await pool.end();
 });
 
 beforeEach(async () => {
@@ -134,8 +193,8 @@ describe('create + findByConversation', () => {
         title: convName,
         type: 'page',
         contextId: agentPageId,
-        workspaceId: created.id,
       });
+      await bindConversation(created.id, conversationId);
       // The payoff of the un-conflation, proven against real Postgres: every
       // thread in a session resolves the one row whose id folds the ONE
       // Sprite key.
@@ -157,17 +216,24 @@ describe('create + findByConversation', () => {
     expect(await store.findByConversation(conversationId)).toBeNull();
   });
 
-  it('deleting a session NULLs the binding and the thread survives as history', async () => {
+  it('deleting a session drops the binding and the thread survives as history', async () => {
     const workspaceId = await seedSession();
-    const [bound] = await db.select().from(conversations).where(eq(conversations.workspaceId, workspaceId));
-    expect(bound).toBeDefined();
+    const [boundNode] = await db
+      .select()
+      .from(agentWorkspaceNodes)
+      .where(eq(agentWorkspaceNodes.rootId, workspaceId));
+    expect(boundNode).toBeDefined();
+    const conversationId = boundNode.targetId ?? conversationIds[conversationIds.length - 1];
 
     await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, workspaceId));
 
-    const [after] = await db.select().from(conversations).where(eq(conversations.id, bound.id));
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
     expect(after).toBeDefined();
-    expect(after.workspaceId).toBeNull();
-    expect(await store.findByConversation(bound.id)).toBeNull();
+    // The node rows cascade from `agent_workspaces`; the thread does not.
+    expect(
+      await db.select().from(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.rootId, workspaceId)),
+    ).toHaveLength(0);
+    expect(await store.findByConversation(conversationId)).toBeNull();
   });
 });
 
@@ -288,6 +354,101 @@ describe('countLive', () => {
     await seedSession({ sandboxId: 'sbx-ended-live', spriteInstanceId: 'i', endedAt: new Date() });
 
     expect(await store.countLive(ownerId)).toBe(before + 1);
+  });
+});
+
+describe('reopenListingIfPopulated — ONE statement AND the workspace lock', () => {
+  /**
+   * `reopenEndedSessionListing` runs after its membership write has committed
+   * and released the workspace lock, so a concurrent `endSession` can destroy
+   * the tree at any point — including between a node count read in the caller
+   * and the stamp that would follow it. That interleave (read-nodes → destroy →
+   * stamp) produces a workspace that is LIVE and holds ZERO nodes, which is the
+   * state the emptiness test exists to prevent, so the test cannot live in the
+   * caller. It is a `WHERE EXISTS` on the same UPDATE as the CAS.
+   *
+   * ONE STATEMENT IS NOT SUFFICIENT, which is the half these sequential cases
+   * cannot show and the last case below does. `EXISTS` takes no lock and reads
+   * its own statement snapshot, so an UNCOMMITTED destroy still looks like a
+   * populated tree. The advisory lock is the other half: `destroyWorkspaceTree`
+   * holds it until it commits, so acquiring it is what makes the answer current.
+   */
+  it('withdraws the end-intent when the workspace holds a tree', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(true);
+    expect((await store.findById(workspaceId))?.endedAt).toBeNull();
+  });
+
+  it('DECLINES when the tree is gone — the destroy won, and a live zero-node workspace must not be minted', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+    // What `destroyWorkspaceTree` leaves behind.
+    await db.delete(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.rootId, workspaceId));
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(endedAt);
+  });
+
+  it('DECLINES when a concurrent re-end moved the stamp — the CAS is not weakened by the new clause', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+    const reEndedAt = new Date(endedAt.getTime() + 1000);
+    await db.update(agentWorkspaces).set({ endedAt: reEndedAt }).where(eq(agentWorkspaces.id, workspaceId));
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(reEndedAt);
+  });
+
+  it('preserves the CONFIRMED-KILL stamp — it withdraws the intent, it does not revive the VM', async () => {
+    // The reason this goes through `planSessionReopen` rather than setting the
+    // column itself: clearing `spriteTornDownAt` without a provision recreates
+    // the stale-attach hazard that stamp exists to prevent.
+    const endedAt = new Date();
+    const spriteTornDownAt = new Date();
+    const workspaceId = await seedSession({ endedAt, spriteTornDownAt });
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(true);
+    const row = await store.findById(workspaceId);
+    expect(row?.endedAt).toBeNull();
+    expect(row?.spriteTornDownAt).toEqual(spriteTornDownAt);
+  });
+
+  it('WAITS for an uncommitted destroy instead of reading around it — the half one statement cannot do', async () => {
+    // THE CASE THE FOUR ABOVE CANNOT REACH, and the reason `withWorkspaceLock`
+    // is in this method: every one of them is sequential, so removing the lock
+    // leaves all four green while the interleave that matters stays open.
+    //
+    // A second connection plays `destroyWorkspaceTree`: it takes the SAME
+    // advisory lock, deletes every node, and holds the transaction open. The
+    // reopen's `EXISTS` alone would read its own snapshot, still see the rows,
+    // and clear `endedAt` — leaving a LIVE workspace with ZERO nodes once the
+    // destroy commits. Under the lock it cannot start until the destroy has
+    // committed, at which point it sees an empty tree and declines.
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+
+    const destroyer = await pool.connect();
+    let reopened: boolean;
+    try {
+      await destroyer.query('BEGIN');
+      await destroyer.query('SELECT pg_advisory_xact_lock(hashtext($1))', [workspaceId]);
+      await destroyer.query('DELETE FROM agent_workspace_nodes WHERE "rootId" = $1', [workspaceId]);
+
+      // Not yet committed. A lock-free reader would still see the nodes here —
+      // which is exactly the read the lock exists to prevent this from making.
+      const racing = store.reopenListingIfPopulated({ workspaceId, endedAt });
+      // Give it long enough to have finished if it were NOT waiting on the lock.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await destroyer.query('COMMIT');
+      reopened = await racing;
+    } finally {
+      destroyer.release();
+    }
+
+    expect(reopened).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(endedAt);
   });
 });
 
@@ -507,9 +668,9 @@ describe('conversation delete', () => {
     // The inversion of the old PK-is-the-FK design: a session hosts many
     // threads, so one thread's deletion says nothing about the workspace.
     const workspaceId = await seedSession({ sandboxId: 'sbx-conv-delete', spriteInstanceId: 'i' });
-    const [bound] = await db.select().from(conversations).where(eq(conversations.workspaceId, workspaceId));
+    const boundId = conversationIds[conversationIds.length - 1];
 
-    await db.delete(conversations).where(eq(conversations.id, bound.id));
+    await db.delete(conversations).where(eq(conversations.id, boundId));
 
     const rows = await db.select().from(agentWorkspaces).where(eq(agentWorkspaces.id, workspaceId));
     expect(rows).toHaveLength(1);

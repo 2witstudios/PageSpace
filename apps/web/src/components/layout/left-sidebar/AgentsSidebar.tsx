@@ -24,9 +24,17 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf, isLastPane, type PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import {
+  artifactRowsOf,
+  conversationPlacement,
+  gridPanesOf,
+  indexTargets,
+  lookupTarget,
+  type MemberPlacement,
+} from '@/stores/agent-workspace/workspace-tree-view';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
-import type { PersistedWorkspaceState } from '@pagespace/lib/agent-workspaces/contract';
 import {
   isAgentWorkspacesKey,
   isWorkspaceListingKey,
@@ -44,20 +52,24 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  * sandbox. Agents are NOT a tree level: they are what you pick when spawning
  * a session or a pane.
  *
- * PANES ARE listed here now — a reversal of this file's earlier stance (the
- * old sidebar's `WorkspaceLeaves` pattern was deliberately not restored, back
- * when a pane was purely local, ephemeral browser state with nothing
- * server-durable to show). Panes are now server-persisted as
- * `agent_workspace_panes` rows behind a rev — the only representation there
- * is — so a session's expansion shows one row per PANE, labelled by its own
- * conversation. This is what actually fixes "switching a pane's agent spawns
- * a new sidebar item instead of updating the one I was looking at": the
- * pane's OWN row now updates in place.
+ * **THE SIDEBAR AND THE PANE GRID ARE TWO RENDERINGS OF ONE TREE.** That is the
+ * whole of this epic, arriving here. A workspace's nodes are seated into
+ * `useAgentWorkspaceStore` from the listing (see the hydration effect below) and
+ * kept live by the owner's own directory-plane broadcast; every row under an
+ * expanded session then reads THAT, never the polled snapshot it came in on.
+ * Nothing is synchronised, because there is only one structure.
  *
- * `session.workspace` arrives from the list GET as those rows projected into
- * the whole-state shape (labels joined at read time). It is `null` for a
- * session with no grid — that session's expansion falls back to the flat
- * `session.conversations` list this sidebar always rendered, unchanged.
+ * Two consequences worth stating, because both were bugs:
+ *
+ *  - A pane an agent placed appears when its broadcast lands rather than up to
+ *    two minutes later, which is the symptom the epic opened with.
+ *  - Every member is visible, and now that is a property of the model rather
+ *    than of this component's diligence. There is one place a node can be, so
+ *    walking the tree IS enumerating the members: there is no second list to
+ *    remember and no dimmed "in the workspace, not on your screen" state to
+ *    render. #2373 — one production workspace showing 2 of its 3 threads,
+ *    another 4 of its 10 — cannot recur, because a thread that is in a
+ *    workspace is in its tree.
  *
  * Two modes, one component:
  * - **Drive-scoped** (`driveId` present): that drive's sessions.
@@ -130,6 +142,27 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
   }, []);
 
+  // SEAT EVERY LISTED WORKSPACE'S TREE. This is the sidebar's only write to the
+  // store's structural half, and after it the rows render from the store alone —
+  // so a broadcast, a pane the user opened in another tab, and this poll all
+  // reach the sidebar through one path instead of three.
+  //
+  // It runs on every revalidation, which is exactly why `hydrateFromServer` has
+  // a no-op early-out: same rev, a base already held, nothing local outstanding
+  // and identical titles means it returns without touching state, so an
+  // unchanged workspace does not re-render its tree twice a minute.
+  useEffect(() => {
+    if (!data) return;
+    const store = useAgentWorkspaceStore.getState();
+    for (const session of data.sessions) {
+      store.hydrateFromServer(session.workspaceId, {
+        rev: session.rev,
+        nodes: session.nodes,
+        targets: session.targets,
+      });
+    }
+  }, [data]);
+
   return (
     <aside
       className={cn(
@@ -186,8 +219,20 @@ interface SessionListEntry {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
   shells: Array<{ shellId: string; name: string }>;
-  /** The saved pane grid — `null` for a session with no grid persisted yet. */
-  workspace: PersistedWorkspaceState | null;
+  /**
+   * THE TREE, as of this read — seated into `useAgentWorkspaceStore` and then
+   * never read from here again.
+   *
+   * The rows below render the STORE, not this. That is the whole of item 4: a
+   * polled snapshot is up to 120 seconds old, and the row's menu used to read it
+   * while the row's close action read the store, so the two could disagree about
+   * whether "Close" meant "take this off the screen" or "close the thread". One
+   * read, one answer, and the answer updates the instant a broadcast lands
+   * rather than at the next poll.
+   */
+  rev: number;
+  nodes: WorkspaceNode[];
+  targets: WorkspaceNodeTarget[];
 }
 
 /** The sessions list changed — revalidate. */
@@ -499,7 +544,21 @@ function SessionGroupHeader({
   );
 }
 
-/** One session: name + running dot, expanding to its conversations (never its panes). */
+/**
+ * One session: name + running dot, expanding to THE WORKSPACE'S MEMBERS —
+ * threads, page panes and shells.
+ *
+ * **It renders the LIVE TREE, out of `useAgentWorkspaceStore`.** The listing
+ * seats that tree (see the hydration effect above) and is then not consulted for
+ * structure again. Two things follow, and both are the point of the epic:
+ *
+ *  - A pane an agent placed shows up when the broadcast lands, not when the
+ *    120-second poll next fires.
+ *  - The row's MENU and the row's ACTION read the same state. They used to read
+ *    two — a server annotation and the store — so a thread could be listed as
+ *    placed while the store knew its pane was gone, and "Close" then meant two
+ *    different things depending on which half you asked.
+ */
 function SessionRow({
   session,
   agentNamesById,
@@ -518,15 +577,47 @@ function SessionRow({
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
-  const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
-  const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
-  const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
-  const selectPane = useAgentWorkspaceStore((state) => state.selectPane);
   const closePane = useAgentWorkspaceStore((state) => state.closePane);
+  const showNode = useAgentWorkspaceStore((state) => state.showNode);
+
+  // THE WORKSPACE OBJECT, selected whole. Never a filter inlined here: a
+  // selector that derives a fresh array on every call defeats `Object.is`, so
+  // zustand sees a change on every store write anywhere and the subscription
+  // loops. Every derivation below is a `useMemo` over this one reference.
+  const tree = useAgentWorkspaceStore((state) => state.workspaces[session.workspaceId]);
+
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const isSelected = selectedSessionId === session.workspaceId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
+
+  /**
+   * THE PAGE ARTIFACTS THIS WORKSPACE HOLDS.
+   *
+   * One walk over one tree. This used to concatenate a second list — the parked
+   * panes — because a member could be in the workspace and nowhere in it, which
+   * was the #2373 fork rebuilt inside the model that was supposed to have
+   * deleted it. `artifactRowsOf` walks the flat list, and the flat list is all
+   * of it.
+   */
+  const artifactRows = useMemo(() => (tree ? artifactRowsOf(tree) : []), [tree]);
+
+  /**
+   * Every thread in this workspace, each annotated with where its node sits.
+   *
+   * The THREAD is the row and the node is an attribute of it — a thread this
+   * workspace does not hold has no node here at all, so this list is keyed
+   * by the listing and never by the tree. What the tree decides is only the
+   * annotation, and it decides it LIVE.
+   */
+  const conversationRows = useMemo(
+    () =>
+      session.conversations.map((conversation) => ({
+        conversation,
+        ...conversationPlacement(tree, conversation.conversationId),
+      })),
+    [session.conversations, tree],
+  );
 
   const openConversation = useCallback(
     (conversation: SessionConversationEntry) => {
@@ -539,95 +630,55 @@ function SessionRow({
     [selectConversation, session.workspaceId],
   );
 
-  /**
-   * A pane (or one of its tabs) addresses a conversation by id/agent alone —
-   * resolve it against the session's own conversation listing for a real
-   * title when one is open, so a pane/tab row's label matches
-   * `conversationLabel`'s exactly. `title` plays no role in `openConversation`
-   * itself (only `conversationId`/`agentPageId` do); this is purely for display.
-   */
-  const conversationEntryForTarget = useCallback(
-    (targetId: string, agentPageId: string | null): SessionConversationEntry =>
-      session.conversations.find((c) => c.conversationId === targetId) ?? {
-        conversationId: targetId,
-        title: null,
-        agentPageId,
-      },
-    [session.conversations],
-  );
-
-  // A row action can target a session that is NOT currently displayed — for
-  // it, `AgentPanes` (and the layout sync it mounts) is not rendered, so the
-  // local store may have never seen its grid. Seat this row's own
-  // server-listing snapshot first, at an unknown rev. Never overwrite a grid
-  // the store already holds: it isn't necessarily fresher, and clobbering it
-  // could just as easily destroy a NEWER one.
-  //
-  // Seating at an unknown rev needs no latch any more (the deleted
-  // `adoptServerWorkspaceAsHydrated` call was exactly that latch): the first
-  // verb this click posts rebases on the server's truth via a single 409 and
-  // replays itself on top, so a stale seed self-corrects instead of having to
-  // be protected from a racing fetch.
-  const ensureLocalWorkspace = useCallback(() => {
-    if (!useAgentWorkspaceStore.getState().workspaces[session.workspaceId] && session.workspace) {
-      hydrateWorkspace(session.workspaceId, session.workspace);
-    }
-    return useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
-  }, [hydrateWorkspace, session.workspaceId, session.workspace]);
-
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
-      // Seat the saved grid first, so the shell opens INTO it — without
-      // this, a click on a non-displayed session's shell row would mint a
-      // fresh one-pane grid that server-wins hydration then overwrites.
-      ensureLocalWorkspace();
       selectSession(session.workspaceId);
-      // `session.conversations` is this row's own already-resolved live
-      // listing (the row couldn't exist here otherwise) — protects a chat
-      // pane showing a conversation closed out of the session from being
-      // silently evicted by an unrelated shell reattach (issue #2295).
-      useAgentWorkspaceStore.getState().openConversation(
-        session.workspaceId,
-        {
-          kind: 'terminal',
-          name: shell.name,
-          targetId: shell.shellId,
-          agentPageId: null,
-        },
-        { liveConversationIds: new Set(session.conversations.map((c) => c.conversationId)) },
-      );
+      // The store's placement policy owns the rest, including the case this used
+      // to hand-roll: a shell already bound to a PARKED node is brought back
+      // rather than opened a second time. `liveConversationIds` protects a chat
+      // pane showing a thread closed out of the workspace from being displaced
+      // by an unrelated shell reattach (issue #2295).
+      useAgentWorkspaceStore.getState().openShell(session.workspaceId, shell.shellId, {
+        liveConversationIds: new Set(session.conversations.map((c) => c.conversationId)),
+      });
     },
-    [ensureLocalWorkspace, selectSession, session.workspaceId, session.conversations],
+    [selectSession, session.workspaceId, session.conversations],
   );
 
   const openSession = useCallback(() => {
-    // Selecting a SESSION opens its most recent conversation — the row is a
-    // workspace, and a workspace opens on its work, not on a placeholder.
-    // With a saved grid, that's the ACTIVE pane's own active tab (falling
-    // back to its first chat pane if the active one isn't a chat at all —
-    // a terminal, say). A shell-first session has no conversations at all,
-    // so fall back to its first shell rather than leave the click a no-op.
+    // Selecting a SESSION opens its most recent work — the row is a workspace,
+    // and a workspace opens on its work, not on a placeholder. The ACTIVE pane
+    // first (falling back to the first chat pane in the grid), then a page pane,
+    // then any listed thread, then a shell.
     setExpanded(true);
-    if (session.workspace) {
-      const panes = panesOf(session.workspace);
-      const activePane = panes.find((p) => p.id === session.workspace!.activePaneId);
+    if (tree) {
+      const index = indexTargets(tree.targets);
+      const panes = gridPanesOf(tree.nodes);
+      const active = panes.find((pane) => pane.id === tree.activeNodeId);
       const chatPane =
-        (activePane?.scope?.kind === 'chat' && activePane.scope.targetId ? activePane : undefined) ??
-        panes.find((p) => p.scope?.kind === 'chat' && p.scope.targetId !== null);
-      if (chatPane?.scope?.kind === 'chat' && chatPane.scope.targetId) {
-        openConversation(conversationEntryForTarget(chatPane.scope.targetId, chatPane.scope.agentPageId));
+        (active?.target?.kind === 'chat' ? active : undefined) ??
+        panes.find((pane) => pane.target?.kind === 'chat');
+      if (chatPane?.target?.kind === 'chat') {
+        const conversationId = chatPane.target.id;
+        selectConversation({
+          sessionId: session.workspaceId,
+          conversationId,
+          // From `targets[]`, which resolved it behind the same gate the title
+          // passed — the listing's own row is the fallback for a thread this
+          // viewer cannot name.
+          agentId:
+            lookupTarget(index, chatPane)?.agentPageId ??
+            session.conversations.find((c) => c.conversationId === conversationId)?.agentPageId ??
+            null,
+        });
         return;
       }
-      // No chat pane at all — a page-only grid still opens on its work:
-      // focus the active page pane (or the first one) rather than falling
-      // through and re-seeding a conversation over it.
-      const pagePane =
-        (activePane?.scope?.kind === 'page' && activePane.scope.targetId ? activePane : undefined) ??
-        panes.find((p) => p.scope?.kind === 'page' && p.scope.targetId !== null);
+      // No chat pane at all — a page-only grid still opens on its work: focus
+      // the active page pane rather than re-seeding a conversation over it.
+      const pagePane = (active?.target?.kind === 'page' ? active : undefined) ?? panes.find((pane) => pane.target?.kind === 'page');
       if (pagePane) {
-        ensureLocalWorkspace();
         selectSession(session.workspaceId);
-        selectPane(session.workspaceId, pagePane.id);
+        useAgentWorkspaceStore.getState().selectNode(session.workspaceId, pagePane.id);
         return;
       }
     }
@@ -638,20 +689,18 @@ function SessionRow({
     }
     const firstShell = session.shells[0];
     if (firstShell) openShell(firstShell);
-  }, [openConversation, openShell, conversationEntryForTarget, ensureLocalWorkspace, selectSession, selectPane, session.workspaceId, session.workspace, session.conversations, session.shells]);
+  }, [tree, openConversation, openShell, selectConversation, selectSession, session.workspaceId, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
-    // Snapshot for rollback, then assume success immediately — the row must
-    // not linger in the sidebar for however long the sandbox-kill round trip
-    // this DELETE triggers server-side actually takes. `session` (the prop)
-    // IS this row's own current cache entry, so it doubles as the snapshot
-    // to restore on failure — no separate cache peek needed.
-    const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.workspaceId] ?? null;
+    // Assume success immediately — the row must not linger in the sidebar for
+    // however long the sandbox-kill round trip this DELETE triggers server-side
+    // actually takes. `session` (the prop) IS this row's own current cache entry,
+    // so it doubles as the snapshot to restore on failure.
     const wasSelected = selectedSessionId === session.workspaceId;
     const previousConversationId = selectedConversationId;
     const previousAgentId = selectedAgentId;
-    // The session leaves the sidebar; its conversations remain as history in
-    // each agent's list. Drop the local grid too — its panes pointed at a
+    // The workspace leaves the sidebar; its conversations remain as history in
+    // each agent's list. Drop the local tree too — its panes pointed at a
     // sandbox that no longer exists.
     forgetWorkspace(session.workspaceId);
     if (wasSelected) selectSession(null);
@@ -660,26 +709,19 @@ function SessionRow({
     try {
       await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
     } catch (error) {
-      // The optimistic assumption was wrong. Restore the grid and the
-      // session's row LOCALLY (from the snapshots above) — a real revalidate
-      // alone isn't enough: it rides the same network whose failure is
-      // plausibly why the DELETE itself failed, so it could easily fail too
-      // and leave the row missing indefinitely (review finding —
-      // chatgpt-codex-connector on PR #2318). A revalidate still follows for
-      // eventual reconciliation, but the restore itself doesn't depend on it.
-      //
-      // Selection restore, and only if NOTHING has claimed it since:
-      // `selectConversation`/`selectSession` also push a URL
-      // (`useAgentSurfaceStore`'s `commit`), so blindly restoring it here
-      // would yank the user back to this session even if they've since
-      // navigated elsewhere during this request's round trip. Restoring via
-      // `selectConversation` with the FULL previous trio, not `selectSession`
-      // alone — `selectSession` treats "was this the same session" against
-      // the NOW-cleared `null`, so it would drop the previously-selected
-      // conversation/agent even though nothing else claimed them (review
-      // finding — chatgpt-codex-connector on PR #2318).
-      if (workspaceSnapshot) hydrateWorkspace(session.workspaceId, workspaceSnapshot);
+      // The optimistic assumption was wrong. Restore the row LOCALLY (a real
+      // revalidate alone isn't enough: it rides the same network whose failure is
+      // plausibly why the DELETE failed, so it could easily fail too and leave
+      // the row missing indefinitely) and re-read the tree, which the store no
+      // longer keeps a snapshot of — the server's copy is the only honest one.
       restoreWorkspaceInCache(mutate, session);
+      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(session.workspaceId);
+      // Selection restore, and only if NOTHING has claimed it since:
+      // `selectConversation`/`selectSession` also push a URL, so blindly
+      // restoring would yank the user back here even if they have navigated
+      // elsewhere during the round trip. Via `selectConversation` with the FULL
+      // previous trio — `selectSession` alone compares against the NOW-cleared
+      // `null` and would drop the conversation and agent with it.
       if (wasSelected && useAgentSurfaceStore.getState().selectedSessionId === null) {
         selectConversation({
           sessionId: session.workspaceId,
@@ -694,11 +736,10 @@ function SessionRow({
       });
       return;
     }
-    // Confirmed — background reconcile only; the grid and sidebar are already right.
+    // Confirmed — background reconcile only; the tree and sidebar are already right.
     void mutate(isWorkspaceListingKey);
   }, [
     forgetWorkspace,
-    hydrateWorkspace,
     mutate,
     selectConversation,
     selectSession,
@@ -716,10 +757,9 @@ function SessionRow({
         );
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
-          // The session's LAST open listing — the server is the authority on
+          // The workspace's LAST open listing — the server is the authority on
           // the never-empty invariant; fall back to the same confirmed
-          // end-session flow the row's own "End session" already uses
-          // (mirrors the pane grid's identical 409 fallback in AgentPanes).
+          // end-session flow the row's own "End session" already uses.
           setConfirmingEnd(true);
           return;
         }
@@ -731,82 +771,37 @@ function SessionRow({
       }
       // Instant sidebar freshness — a local cache patch instead of a full
       // revalidate, so the row leaves the listing without a second, sequential
-      // network round trip on top of the DELETE that just resolved. A
-      // background reconcile still follows, same as every other mutating
-      // action here — it just no longer gates what the user sees.
+      // network round trip on top of the DELETE that just resolved.
       forgetConversationInCache(mutate, session.workspaceId, conversationId);
       void mutate(isAgentWorkspacesKey);
     },
     [mutate, session.workspaceId],
   );
 
-  // Closing a pane's own conversation from the sidebar — a real DELETE
-  // (session-scoped listing), unless another pane in this same grid is ALSO
-  // showing it, in which case there is nothing server-side to do; either
-  // way this pane itself unbinds back to the picker (`resetPane`), the same
-  // recovery a History delete or a failed mint already uses.
-  const closePaneConversation = useCallback(
-    async (paneId: string, conversationId: string) => {
-      // Read the LIVE grid, not the `session.workspace` prop — that's an SWR
-      // snapshot (polled every 20s), so a second pane opened on this same
-      // conversation moments ago could be invisible to it (review finding,
-      // carried over from this row's own tab-era close control).
-      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
-      const shownElsewhere = liveWorkspace
-        ? panesOf(liveWorkspace).some(
-            (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversationId,
-          )
-        : false;
-      if (shownElsewhere) {
-        resetPane(session.workspaceId, paneId);
+  /**
+   * What "Close" means for one thread's row — decided from the SAME live tree
+   * the menu label was decided from.
+   *
+   * With a node here, Close destroys that node, which is what taking the thread
+   * out of this workspace IS. Without one, the workspace does not hold it and
+   * the close goes to the listing route, which answers the same way.
+   *
+   * The old version had to seat a snapshot first (`ensureLocalWorkspace`), because
+   * a row could act on a workspace whose grid was never mounted and a raw store
+   * read came back undefined — at which point "close this pane" silently became
+   * "DELETE this conversation". Every listed workspace is seated now, on every
+   * revalidation, so there is no such gap; and if `tree` is somehow absent the
+   * placement reads `unplaced`, which closes the LISTING rather than guessing.
+   */
+  const closeConversationRow = useCallback(
+    (conversationId: string, placement: MemberPlacement, nodeId: string | null) => {
+      if (placement === 'grid' && nodeId !== null) {
+        closePane(session.workspaceId, nodeId);
         return;
       }
-      try {
-        await del(
-          `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}/conversations/${encodeURIComponent(conversationId)}`,
-        );
-        // The grid never empties (contract invariant 3): if this was the
-        // grid's ONLY pane, prefer rebinding it to another open listing over
-        // leaving it on an empty picker — the same grid-last rebind
-        // `decideClosePane` gives the pane grid's own close control (review
-        // finding — chatgpt-codex-connector on PR #2308). Read the LIVE grid
-        // again (not the snapshot above) — the DELETE's own round trip is
-        // exactly the window a concurrent split/close could land in.
-        const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[session.workspaceId];
-        const rebindTarget =
-          liveWorkspaceNow && isLastPane(liveWorkspaceNow, paneId)
-            ? session.conversations.find((c) => c.conversationId !== conversationId)
-            : undefined;
-        if (rebindTarget) {
-          assignPane(session.workspaceId, paneId, {
-            kind: 'chat',
-            name: 'Conversation',
-            targetId: rebindTarget.conversationId,
-            agentPageId: rebindTarget.agentPageId,
-          });
-        } else {
-          resetPane(session.workspaceId, paneId);
-        }
-        // Instant sidebar freshness — a local cache patch instead of a full
-        // revalidate, so the row leaves the listing without a second,
-        // sequential network round trip on top of the DELETE that just
-        // resolved. A background reconcile still follows, same as every
-        // other mutating action here — it just no longer gates what the
-        // user sees.
-        forgetConversationInCache(mutate, session.workspaceId, conversationId);
-        void mutate(isAgentWorkspacesKey);
-      } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 409) {
-          setConfirmingEnd(true);
-          return;
-        }
-        console.error('Failed to close this conversation:', error);
-        toast.error('Could not close this conversation', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-      }
+      void closeConversation(conversationId);
     },
-    [mutate, session.workspaceId, session.conversations, resetPane, assignPane],
+    [closePane, closeConversation, session.workspaceId],
   );
 
   const conversationLabel = useCallback(
@@ -832,96 +827,23 @@ function SessionRow({
     [],
   );
 
-  // Only chat panes address a conversation — a terminal/still-unbound pane
-  // has nothing to show here (shells get their own section below,
-  // unchanged; page panes get their own rows via `pagePanes`). `null` when
-  // this session has no saved grid yet, so the render falls back to the
-  // flat `session.conversations` list.
-  const chatPanes = useMemo(
-    () =>
-      session.workspace
-        ? panesOf(session.workspace).filter(
-            (pane): pane is PaneState & { scope: { kind: 'chat'; targetId: string } } =>
-              pane.scope?.kind === 'chat' && pane.scope.targetId !== null,
-          )
-        : null,
-    [session.workspace],
-  );
-
-  // Page panes are server-persisted workspace artifacts exactly like chat
-  // panes, so a session's expansion lists them too — a document or task
-  // page opened into the grid (by the picker or by an agent's
-  // `open_page_pane`) was invisible here before, unlike every other pane.
-  // Terminal panes are deliberately NOT listed from the grid: the
-  // `session.shells` section below already covers them, and a second row
-  // per shell would double-list.
-  const pagePanes = useMemo(
-    () =>
-      session.workspace
-        ? panesOf(session.workspace).filter(
-            (pane): pane is PaneState & { scope: { kind: 'page'; targetId: string; name: string } } =>
-              pane.scope?.kind === 'page' && pane.scope.targetId !== null,
-          )
-        : [],
-    [session.workspace],
-  );
-
-  const openPagePane = useCallback(
-    (paneId: string) => {
-      // A page pane has no conversation to select — focus the session and
-      // the existing pane in its grid. The grid must be seated locally
-      // BEFORE `selectPane`, which no-ops on a session the store has never
-      // seen (hydration normally runs inside the very `AgentPanes` this
-      // click is mounting).
-      ensureLocalWorkspace();
+  const openArtifact = useCallback(
+    (nodeId: string) => {
       selectSession(session.workspaceId);
-      selectPane(session.workspaceId, paneId);
+      // Every row here names a node that is IN the tree, so clicking one is
+      // focus and nothing else. It used to branch: a PARKED node had to be moved
+      // back onto the grid first, and that branch was a parked row's only
+      // affordance. There are no parked rows.
+      showNode(session.workspaceId, nodeId);
     },
-    [ensureLocalWorkspace, selectSession, selectPane, session.workspaceId],
-  );
-
-  const closePagePane = useCallback(
-    (paneId: string) => {
-      const workspace = ensureLocalWorkspace();
-      if (!workspace) return;
-      // Closing the LAST pane empties the session, which ends it — route
-      // through the same confirm dialog the chat path's 409 raises rather
-      // than tearing the sandbox down from an innocuous-looking row action.
-      if (isLastPane(workspace, paneId)) {
-        setConfirmingEnd(true);
-        return;
-      }
-      // Anything but 'closed' means the LOCAL grid didn't know this pane —
-      // the row (rendered from the server listing) and the store diverge.
-      // Refresh the listing and let it reconcile rather than acting on a
-      // grid that doesn't contain what was clicked.
-      if (closePane(session.workspaceId, paneId) !== 'closed') {
-        void mutate(isAgentWorkspacesKey);
-        return;
-      }
-      // Persistence is no longer this callback's business: `closePane` mints
-      // a `close_pane` verb and the store posts it, for ANY session — which
-      // is what retires the hand-rolled PUT that used to live here (the old
-      // debounced sync only observed the session `AgentPanes` was
-      // displaying, so a close on any other row reached localStorage only
-      // and got resurrected by the next hydration). The rollback-on-failure,
-      // the `useEditingStore` registration and the error toast go with it:
-      // the queue owns retry, the store owns the editing registration for as
-      // long as anything is unacked, and a give-up re-reads the server's own
-      // truth instead of guessing at a snapshot to restore.
-      //
-      // Refresh the listing so this row's pane list reflects the close
-      // without waiting for the next poll.
-      void mutate(isAgentWorkspacesKey);
-    },
-    [ensureLocalWorkspace, closePane, mutate, session.workspaceId],
+    [selectSession, showNode, session.workspaceId],
   );
 
   return (
     // Per-session test handle, wrapping BOTH the session's own row and its
     // expanded children — so an end-to-end spec can scope "this session's
-    // conversation rows" without depending on which other sessions happen to
-    // be expanded. Used by `18-sidebar-directory-live.spec.ts`.
+    // conversation rows" without depending on which other sessions happen to be
+    // expanded.
     <div data-testid={`sidebar-session-${session.workspaceId}`}>
       <RowMenu
         items={menuItems}
@@ -939,9 +861,9 @@ function SessionRow({
         <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={openSession}>
           {isRunning && (
             // `role="img"` gives the span an accessible-name-bearing role — a
-            // plain `<span aria-label>` is not announced by most screen
-            // readers, since aria-label is only honoured on elements with a
-            // role that supports naming.
+            // plain `<span aria-label>` is not announced by most screen readers,
+            // since aria-label is only honoured on elements with a role that
+            // supports naming.
             <span
               role="img"
               aria-label="Sandbox running"
@@ -969,53 +891,28 @@ function SessionRow({
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {chatPanes
-            ? chatPanes.map((pane) => (
-                <PaneRow
-                  key={pane.id}
-                  pane={pane}
-                  conversationEntryForTarget={conversationEntryForTarget}
-                  conversationLabel={conversationLabel}
-                  selectedConversationId={selectedConversationId}
-                  onOpenConversation={openConversation}
-                  onClose={closePaneConversation}
-                />
-              ))
-            : session.conversations.map((conversation) => (
-                <RowMenu
-                  key={conversation.conversationId}
-                  items={[
-                    {
-                      label: 'Close',
-                      icon: X,
-                      onSelect: () => void closeConversation(conversation.conversationId),
-                      destructive: true,
-                    },
-                  ]}
-                  menuLabel="Conversation actions"
-                  testId="sidebar-conversation-row"
-                  className={cn(
-                    'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                    selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center text-left"
-                    onClick={() => openConversation(conversation)}
-                  >
-                    <span className="truncate">{conversationLabel(conversation)}</span>
-                  </button>
-                </RowMenu>
-              ))}
-          {pagePanes.map((pane) => (
+          {conversationRows.map(({ conversation, placement, nodeId }) => (
+            <ConversationRow
+              key={conversation.conversationId}
+              placement={placement}
+              label={conversationLabel(conversation)}
+              isSelected={selectedConversationId === conversation.conversationId}
+              onOpen={() => openConversation(conversation)}
+              onClose={() => closeConversationRow(conversation.conversationId, placement, nodeId)}
+            />
+          ))}
+          {artifactRows.map((row) => (
             <RowMenu
-              key={pane.id}
+              key={row.key}
               items={[
                 {
+                  // One label, because there is one thing the row can be: open.
+                  // It used to read "Show" for a parked row, which was the
+                  // affordance for a member that was not on screen.
                   label: 'Close',
                   icon: X,
-                  onSelect: () => void closePagePane(pane.id),
+                  onSelect: () =>
+                    row.nodeId === null ? undefined : closePane(session.workspaceId, row.nodeId),
                   destructive: true,
                 },
               ]}
@@ -1025,10 +922,11 @@ function SessionRow({
               <button
                 type="button"
                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                onClick={() => openPagePane(pane.id)}
+                onClick={() => (row.nodeId === null ? undefined : openArtifact(row.nodeId))}
+                title={row.title}
               >
                 <FileText className="size-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{pane.scope.name}</span>
+                <span className="truncate">{row.title}</span>
               </button>
             </RowMenu>
           ))}
@@ -1043,7 +941,7 @@ function SessionRow({
               <span className="truncate">{shell.name}</span>
             </button>
           ))}
-          {(chatPanes ?? session.conversations).length === 0 && pagePanes.length === 0 && (
+          {session.conversations.length === 0 && artifactRows.length === 0 && session.shells.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
         </div>
@@ -1053,49 +951,63 @@ function SessionRow({
 }
 
 /**
- * One PANE's row: labeled by its own conversation, updating in place on an
- * agent switch instead of a sibling row appearing — the fix for "changing
- * the agent in a pane spawns a new sidebar item."
+ * ONE THREAD'S ROW — the single shape the workspace expansion renders for a
+ * conversation (issue #2373).
+ *
+ * There used to be two: a pane-keyed row when the workspace had a grid, and a
+ * conversation-keyed row when it did not. That fork is what made an unplaced
+ * thread invisible, because an open workspace always has a grid. The row is
+ * keyed by the THREAD, and its node — when it has one — decides only what Close
+ * does.
+ *
+ * `placement` comes from the LIVE tree, so the label the user reads and the act
+ * the click performs are the same decision. There are two states rather than
+ * three: this workspace holds a node for the thread, or it does not. The third
+ * — `parked`, a member off the screen, rendered dimmed — is gone with the state
+ * it described.
  */
-function PaneRow({
-  pane,
-  conversationEntryForTarget,
-  conversationLabel,
-  selectedConversationId,
-  onOpenConversation,
+function ConversationRow({
+  placement,
+  label,
+  isSelected,
+  onOpen,
   onClose,
 }: {
-  pane: PaneState & { scope: { kind: 'chat'; targetId: string; agentPageId: string | null } };
-  conversationEntryForTarget: (targetId: string, agentPageId: string | null) => SessionConversationEntry;
-  conversationLabel: (conversation: SessionConversationEntry) => string;
-  selectedConversationId: string | null;
-  onOpenConversation: (conversation: SessionConversationEntry) => void;
-  onClose: (paneId: string, conversationId: string) => void | Promise<void>;
+  placement: MemberPlacement;
+  label: string;
+  isSelected: boolean;
+  onOpen: () => void;
+  onClose: () => void;
 }) {
-  const activeEntry = conversationEntryForTarget(pane.scope.targetId, pane.scope.agentPageId);
-
   return (
     <RowMenu
       items={[
         {
-          label: 'Close',
+          // Same act either way — the thread leaves this workspace — but the
+          // label names what the click actually addresses, which is the node
+          // when there is one and the listing when there is not.
+          label: placement === 'grid' ? 'Close pane' : 'Close conversation',
           icon: X,
-          onSelect: () => void onClose(pane.id, pane.scope.targetId),
+          onSelect: onClose,
           destructive: true,
         },
       ]}
       menuLabel="Conversation actions"
+      testId="sidebar-conversation-row"
+      data-placement={placement}
       className={cn(
-        'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-        selectedConversationId === pane.scope.targetId && 'bg-accent text-foreground',
+        'gap-1.5 rounded-md px-1.5 py-0.5 text-xs hover:bg-accent hover:text-foreground',
+        placement === 'grid' ? 'text-muted-foreground' : 'text-muted-foreground/60',
+        isSelected && 'bg-accent text-foreground',
       )}
     >
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center text-left"
-        onClick={() => onOpenConversation(activeEntry)}
+        onClick={onOpen}
+        title={placement === 'grid' ? label : `${label} (not in this session)`}
       >
-        <span className="truncate">{conversationLabel(activeEntry)}</span>
+        <span className="truncate">{label}</span>
       </button>
     </RowMenu>
   );

@@ -918,7 +918,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 type: 'page',
                 contextId: chatId!,
                 isShared: false,
-                workspaceId: null,
                 title: null,
                 updatedAt: new Date(),
               })
@@ -1537,7 +1536,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
 
     const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation);
+    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
 
     const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
       currentPage: turnLocation.currentPage,

@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { and, eq, isNull, asc, gt, count } from '@pagespace/db/operators';
+import { commands } from '@pagespace/db/schema/commands';
+import { and, eq, isNull, asc, gt, count, inArray } from '@pagespace/db/operators';
 import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer';
 import { STARTER_SKILL_TRIGGERS } from '@pagespace/lib/commands/starter-skills';
 
@@ -71,10 +72,38 @@ export async function runBackfill({ dryRun = false }: { dryRun?: boolean } = {})
     if (batch.length === 0) break;
     cursor = batch[batch.length - 1].userId;
 
+    // A dry run has to account for triggers users ALREADY own, or it reports a
+    // number the real run will not match — an operator sizing the rollout would
+    // be told 6 installs and get 5. One query per batch, dry-run only.
+    const takenByUser = new Map<string, Set<string>>();
+    if (dryRun) {
+      const existing = await db
+        .select({ userId: commands.userId, trigger: commands.trigger })
+        .from(commands)
+        .where(
+          and(
+            inArray(commands.userId, batch.map((r) => r.userId)),
+            inArray(commands.trigger, [...STARTER_SKILL_TRIGGERS]),
+          ),
+        );
+      for (const row of existing) {
+        if (!row.userId) continue;
+        const set = takenByUser.get(row.userId) ?? new Set<string>();
+        set.add(row.trigger);
+        takenByUser.set(row.userId, set);
+      }
+    }
+
     for (const row of batch) {
       summary.scanned++;
       if (dryRun) {
-        summary.installed += STARTER_SKILL_TRIGGERS.length;
+        const taken = takenByUser.get(row.userId);
+        const wouldSkip = STARTER_SKILL_TRIGGERS.filter((t) => taken?.has(t));
+        summary.installed += STARTER_SKILL_TRIGGERS.length - wouldSkip.length;
+        summary.skippedCollision += wouldSkip.length;
+        if (wouldSkip.length > 0) {
+          console.log(`  user ${row.userId}: would keep existing command(s) ${wouldSkip.join(', ')}`);
+        }
         continue;
       }
 

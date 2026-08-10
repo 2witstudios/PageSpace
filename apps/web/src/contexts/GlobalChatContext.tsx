@@ -28,6 +28,7 @@ import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketH
 import { useConversationSubscription } from '@/hooks/useConversationSubscription';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
 import { SessionDirectoryListener } from '@/lib/realtime/session-directory-listener';
+import { WorkspaceNodesListener } from '@/lib/realtime/workspace-nodes-listener';
 
 /**
  * Global Chat Context — two tiers to minimize re-render noise:
@@ -343,6 +344,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
             provider wraps the whole Layout, so one mount covers every sidebar and
             pane strip, and N mounts would mean N revalidations per event. */}
         <SessionDirectoryListener />
+        {/* THE app-wide LAYOUT listener — a sibling of the line above, not a
+            branch inside it. The directory listener owns SWR surgery on the
+            conversation listings; this one owns the node tree in
+            `useAgentWorkspaceStore`, which is not in SWR at all. One mount for
+            the same reason: N copies would be N adoptions per event. */}
+        <WorkspaceNodesListener />
         {children}
       </GlobalChatConfigContext.Provider>
     </GlobalChatConversationContext.Provider>

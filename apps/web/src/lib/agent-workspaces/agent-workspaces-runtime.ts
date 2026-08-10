@@ -17,10 +17,10 @@
  * wrappers that return result unions — never throws — for the routes to map.
  */
 
-import { db, getAdvisoryLockPool } from '@pagespace/db/db';
-import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
-import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { db } from '@pagespace/db/db';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -68,15 +68,24 @@ import {
   resolveDriveMembership,
   canRunCodeForSession,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/contract';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
-import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
+import { createId } from '@paralleldrive/cuid2';
+import { admit, expel } from '@pagespace/lib/agent-workspaces/workspace-membership';
+import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
+import type { DbExecutor } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
+import {
+  applyWorkspaceMembershipWrite,
+  destroyWorkspaceTree,
+  type WithinNodeWrite,
+} from '@/lib/agent-workspaces/workspace-node-runtime';
 import {
   closeConversationInSessionWith,
   type CloseConversationOutcome,
@@ -87,6 +96,7 @@ import {
 } from '@/lib/agent-workspaces/reopen-conversation-in-workspace';
 import {
   claimConversationInSessionWith,
+  type AdmitConversationOutcome,
   type ClaimConversationOutcome,
   type ClaimConversationInSessionDeps,
 } from '@/lib/agent-workspaces/claim-conversation-in-workspace';
@@ -106,7 +116,7 @@ export { isCodeExecutionEnabled };
  * makes "a listing never truncates an owner's real set" structural rather
  * than a two-constants-kept-equal-by-hand invariant (epic Phase 1, D7).
  */
-export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-workspaces/contract';
+export { MAX_ACTIVE_WORKSPACES_PER_OWNER as MAX_ACTIVE_SESSIONS_PER_OWNER } from '@pagespace/lib/agent-workspaces/session-contract';
 
 // ---------------------------------------------------------------------------
 // Lazy singletons — the store reconnects to one DB pool; the host is stateless.
@@ -225,82 +235,111 @@ export async function checkSessionEndAccess(
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-const SESSION_LISTING_LOCK_MAX_RETRIES = 5;
-const SESSION_LISTING_LOCK_RETRY_DELAY_MS = 200;
-
-function sessionListingLockKey(workspaceId: string): string {
-  return 'agent-session-conversations:' + workspaceId;
-}
-
-/** Every retry was met with `lock_busy` — the caller's remedy is a plain retry, not a silent unlocked write. */
-export class SessionListingLockBusyError extends Error {
-  constructor(workspaceId: string) {
-    super(`Could not acquire the session-listing lock for ${workspaceId} after ${SESSION_LISTING_LOCK_MAX_RETRIES} retries`);
-    this.name = 'SessionListingLockBusyError';
-  }
-}
-
-/**
- * Serializes every operation that consumes or frees a session's open-listing
- * slot — create, close, reopen, and (via this same export) the page-agent
- * History delete route's own never-empty guard — via a session-level
- * advisory lock on a DEDICATED connection (`getAdvisoryLockPool`), never
- * `db.transaction`. A transaction would hold the MAIN pool's connection for
- * `fn`'s whole duration; `fn` here always needs a SECOND connection from
- * that same pool (every dependency — `conversationRepository.*`,
- * `resolveOrCreateConversation` — uses the plain, unwrapped `db`), so a
- * `DB_POOL_MAX=1` deployment, or a burst of calls equal to any pool size,
- * would deadlock every caller waiting on a connection the held transaction
- * was never going to release (review finding — chatgpt-codex-connector on
- * PR #2296; this is exactly the hazard `db.ts`'s own doc comment on
- * `getAdvisoryLockPool` warns a session-level lock holder must avoid). The
- * dedicated lock pool sidesteps it entirely: the lock connection and `fn`'s
- * own connection(s) are never drawn from the same pool.
+/*
+ * `withSessionListingLock` USED TO BE HERE, with its retry budget, its
+ * `SessionListingLockBusyError`, and its dedicated-connection advisory lock.
  *
- * `withAdvisoryLock` TRIES the lock (fails fast on contention) rather than
- * blocking the way `pg_advisory_xact_lock` did — retried a bounded few
- * times here. Unlike `start-generation-exclusive.ts`'s BEST-EFFORT
- * degrade-to-unlocked fallback for a duplicate-generation guard, exhausting
- * retries here throws (`SessionListingLockBusyError`): an unlocked
- * create/close/reopen/delete is exactly the cap-violating race this lock
- * exists to prevent, so "proceed anyway" can never be this caller's answer.
+ * It existed to serialize every operation that consumed or freed a workspace's
+ * open-listing slot — create, close, reopen, and the History delete's
+ * never-empty guard — because the cap was a `SELECT count(*)` over
+ * `conversations` and the write it guarded was a different statement on a
+ * different row. Four call sites each had to remember to take it, and it had to
+ * live on a SEPARATE POOL to avoid deadlocking against the very queries it was
+ * protecting (`db.ts`'s `getAdvisoryLockPool` warns about exactly that hazard).
+ *
+ * Membership is one table now, and the cap is a count over the tree inside the
+ * transaction that writes the tree — so the serialization is the lock that
+ * write already takes (`withWorkspaceLock`, per workspace, in the
+ * transaction). One lock for one invariant, and no call site can forget it
+ * because there is no call site: it is inside the funnel.
  */
-export async function withSessionListingLock<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
-  const pool = getAdvisoryLockPool();
-  const lockKey = sessionListingLockKey(workspaceId);
 
-  let attemptsMade = 0;
-  for (;;) {
-    const attempt = await withAdvisoryLock(pool, lockKey, fn);
+/**
+ * THE MEMBERSHIP WRITE, wired.
+ *
+ * Every path that puts a conversation into a workspace — a fresh mint, a claim
+ * of an existing thread, a worker an agent spawned — lands here, and here is one
+ * call: `admit` decided against the tree, persisted by
+ * `applyWorkspaceMembershipWrite` inside the workspace's own locked
+ * transaction. `conversations.workspaceId` is no longer written by anything.
+ *
+ * `within` is the transaction's other half — the conversation row itself, on
+ * the create path. Passing it through rather than running it beside this call
+ * is what makes a thread and its membership one commit.
+ */
+async function admitConversationNode(input: {
+  conversationId: string;
+  workspaceId: string;
+  /** The acting HUMAN, for the binding gate inside the write. */
+  actingUserId: string;
+  excludeTargetId?: string;
+  within?: WithinNodeWrite;
+}): Promise<AdmitConversationOutcome> {
+  const result = await applyWorkspaceMembershipWrite({
+    workspaceId: input.workspaceId,
+    actingUserId: input.actingUserId,
+    run: (nodes) =>
+      admit(nodes, {
+        target: { kind: 'chat', id: input.conversationId },
+        // Server-minted, unlike every other id in this model: there is no
+        // client here to author one, and nothing is applying this write
+        // optimistically.
+        newNodeId: createId(),
+        newSplitId: createId(),
+        ...(input.excludeTargetId === undefined ? {} : { excludeTargetId: input.excludeTargetId }),
+      }),
+    ...(input.within === undefined ? {} : { within: input.within }),
+  });
 
-    if (attempt.outcome === 'acquired') return attempt.result;
-
-    if (attempt.outcome === 'connection_error') {
-      throw attempt.error instanceof Error ? attempt.error : new Error(String(attempt.error));
-    }
-
-    attemptsMade += 1;
-    if (attemptsMade > SESSION_LISTING_LOCK_MAX_RETRIES) {
-      throw new SessionListingLockBusyError(workspaceId);
-    }
-    await new Promise((resolve) => setTimeout(resolve, SESSION_LISTING_LOCK_RETRY_DELAY_MS));
+  if (result.status === 'refused') {
+    if (result.code === 'session_full') return 'session_full';
+    if (result.code === 'bound_elsewhere') return 'bound_elsewhere';
+    // The unrecoverable one, and therefore the one that must NOT arrive as a
+    // generic refusal: every caller below turns `refused` into "no such
+    // conversation", which is both untrue and unactionable when the real answer
+    // is "this workspace has not been migrated yet".
+    if (result.code === 'awaiting_backfill') return 'awaiting_backfill';
+    return 'refused';
   }
+  // Unreachable: a membership write's `baseRev` IS the rev the lock read.
+  // Named rather than folded in, so a `stale` appearing here reads as "the
+  // funnel stopped deciding under the lock", which is a bug.
+  if (result.status === 'stale') return 'refused';
+  // The chat-target index refused it: the conversation is bound to a node in
+  // another workspace. Answered as the refusal it is rather than folded into
+  // `refused`, because a caller can act on the difference.
+  if (result.status === 'conflict') return 'bound_elsewhere';
+
+  if (!result.changed) return 'already_a_member';
+
+  // New work landing in an ENDED workspace reopens its listing — the ONE hook
+  // every admission shares (worker spawns, the HTTP claim route, the global
+  // auto-bind), so a workspace can never hold fresh work while hidden from the
+  // sidebar (issue #2335). Best-effort by design: the membership already
+  // committed above, so a reopen failure must never surface as a creation
+  // failure — the caller would treat an already-admitted conversation as
+  // unavailable and retry into a `SessionFullError` on its own successful bind
+  // (review finding — coderabbitai, PR #2336).
+  await reopenEndedSessionListing(input.workspaceId).catch((error) => {
+    loggers.api.warn('Failed to reopen ended session listing after a successful admission', {
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  return 'admitted';
 }
 
 /**
- * The claim primitive's deps, shared verbatim by both wirings below —
- * `createConversationInSession` needs the exact same row/agent/session/cap
- * facts `claimConversationInSession` does (it composes on top of the same
- * primitive), so this is built once rather than duplicated at both call
- * sites (review finding — simplify pass: the two closures had drifted into
- * an exact copy of each other).
+ * The membership deps every path into a workspace shares.
+ *
+ * `countActiveConversations` is gone from this surface entirely, and its
+ * absence is the point: the cap is decided by `admit` against the tree it is
+ * about to write, inside one locked transaction, so there is no longer a count
+ * that could be read here and acted on a moment later.
  */
-function buildClaimDeps(): ClaimConversationInSessionDeps {
+function buildClaimDeps(actingUserId: string): ClaimConversationInSessionDeps<DbExecutor> {
   return {
-    // Same "ACTIVE, open-listing" predicate create/close/reopen all share —
-    // `countOpenConversations` is just this dep under the name those pure
-    // modules use.
-    countActiveConversations: sessionListingReadDeps().countOpenConversations,
     findConversation: async (conversationId) => {
       const row = await conversationRepository.getConversation(conversationId);
       if (!row) return null;
@@ -308,10 +347,12 @@ function buildClaimDeps(): ClaimConversationInSessionDeps {
         userId: row.userId,
         type: row.type,
         contextId: row.contextId,
-        workspaceId: row.workspaceId,
         isActive: row.isActive,
       };
     },
+    // MEMBERSHIP, from the tree. One lookup on the global chat-target index —
+    // the successor to reading `conversations.workspaceId`.
+    findWorkspaceOfConversation: (conversationId) => findWorkspaceOfChat(db, conversationId),
     findAgentDriveId: async (agentPageId) => {
       const agent = await conversationRepository.getAiAgent(agentPageId);
       return agent?.driveId ?? null;
@@ -320,86 +361,95 @@ function buildClaimDeps(): ClaimConversationInSessionDeps {
       const row = await findSessionRecord(workspaceId);
       return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
     },
-    claimConversation: async ({ conversationId, userId, workspaceId }) => {
-      const outcome = await conversationRepository.claimConversation(conversationId, userId, workspaceId);
-      // New work landing in an ENDED session reopens its listing — the ONE
-      // hook every claim path shares (worker spawns, the HTTP claim route,
-      // the global auto-bind), so a session can never hold fresh work while
-      // hidden from the sidebar (issue #2335). Best-effort by design: on a
-      // CAS miss OR a thrown error, the claim itself still stands (the
-      // binding already committed above) — the next provision revives the
-      // row through the ordinary ensure path regardless. A reopen failure
-      // must therefore never surface as a creation failure: the caller would
-      // treat an ALREADY-BOUND conversation as unavailable and retry into a
-      // SessionFullError or a squat-guard refusal on its own successful bind
-      // (review finding — coderabbitai, PR #2336).
-      if (outcome === 'claimed') {
-        await reopenEndedSessionListing(workspaceId).catch((error) => {
-          loggers.api.warn('Failed to reopen ended session listing after a successful claim', {
-            workspaceId,
-            conversationId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-      return outcome;
-    },
+    admitConversation: (input) => admitConversationNode({ ...input, actingUserId }),
   };
 }
 
 /**
+ * WHICH WORKSPACE HOLDS THIS THREAD — the membership read, and the successor to
+ * every `conversations.workspaceId` lookup in the app.
+ *
+ * One row on the node table's global chat-target index, which is UNIQUE: "a
+ * thread has one workspace" is the database's rule now rather than a column two
+ * writers could disagree about.
+ */
+export async function findWorkspaceOfConversation(conversationId: string): Promise<string | null> {
+  return findWorkspaceOfChat(db, conversationId);
+}
+
+/**
  * Withdraw a session's end-intent (`planSessionReopen` — `endedAt` only, the
- * confirmed-kill stamp stays; see its doc for why) when new work is claimed
+ * confirmed-kill stamp stays; see its doc for why) when new work is admitted
  * into it. CAS-guarded on the `endedAt` this read observed, so a concurrent
  * re-end is never silently erased.
+ *
+ * **ONLY IF THE WORKSPACE ACTUALLY HOLDS A TREE**, and that clause is the other
+ * half of `destroyWorkspaceTree`'s `requireEnded`. This runs AFTER the
+ * admission's transaction has committed and released the workspace lock — it
+ * has to, because a reopen failure must never surface as a creation failure for
+ * a conversation that is already a member (review finding, PR #2336) — so a
+ * concurrent `endSession` can take the lock in between and destroy the tree the
+ * admission just wrote. `requireEnded` catches the interleaving where the
+ * reopen lands first; this catches the one where it lands last.
+ *
+ * Without it that ordering produces the worst of the three possible outcomes: a
+ * workspace that is LIVE, in the sidebar, holding ZERO nodes. Reopening a
+ * workspace with no tree is a contradiction in terms — "there is work in this
+ * session again" said of a session showing nothing — and it is exactly the
+ * zero-pane workspace this epic exists to delete. Declining leaves the end
+ * intact and the thread homeless but re-claimable, which is a state a user can
+ * see and act on.
+ *
+ * The emptiness test is NOT made here. It lives in the same UPDATE as the CAS
+ * (`reopenListingIfPopulated`), because a test made here would be made against
+ * a snapshot the stamp can no longer vouch for: read-nodes → destroy → stamp is
+ * a third ordering that neither guard covers and that produces the very state
+ * both were added to prevent. The `findById` below is only the cheap early exit
+ * for the overwhelming majority — admissions into a session nobody ended —
+ * which must not pay for a second statement at all.
  */
 async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
   const store = await getAgentSessionStore();
   const row = await store.findById(workspaceId);
   if (!row || row.endedAt === null) return;
-  await store.applyStamps({
-    workspaceId,
-    stamps: planSessionReopen(),
-    cas: { endedAt: row.endedAt },
-  });
+  await store.reopenListingIfPopulated({ workspaceId, endedAt: row.endedAt });
 }
 
 /**
- * Claim a NEVER-BOUND conversation into a session — the wiring for
- * `claim-conversation-in-workspace.ts`'s pure decision. Same
- * `withSessionListingLock` key create/close/reopen use, so a claim can never
- * race any of them for the session's last open-listing slot.
+ * Claim a NEVER-BOUND conversation into a workspace — the wiring for
+ * `claim-conversation-in-workspace.ts`'s pure decision.
+ *
+ * No `withSessionListingLock` any more, and that is not an omission. That lock
+ * existed to serialize the cap's count-then-write against other creates and
+ * closes; the count now happens inside `withWorkspaceLock`'s transaction,
+ * against the tree the same transaction writes, so the serialization is the
+ * lock the write already takes. Two locks for one invariant was the shape that
+ * let a node write and a membership write touch one workspace at once.
  */
 export async function claimConversationInSession(input: {
   conversationId: string;
   userId: string;
   workspaceId: string;
 }): Promise<ClaimConversationOutcome> {
-  return withSessionListingLock(input.workspaceId, () => claimConversationInSessionWith(buildClaimDeps(), input));
+  return claimConversationInSessionWith(buildClaimDeps(input.userId), input);
 }
 
 /**
- * Create a conversation and land it in a session. Decision logic lives in the
- * pure module (`create-conversation-in-workspace.ts`) — this is only its
- * production wiring: the squat-guarded repository creator for page threads
- * and the ownership-guarded resolver for global ones (both session-agnostic
- * inserts), composed with `buildClaimDeps()` above so the binding itself
- * goes through the exact same guarded UPDATE `claimConversationInSession`
- * uses — the ONE place `conversations.workspaceId` is ever written.
+ * Create a conversation and make it a member of a workspace, atomically.
+ * Decision logic lives in the pure module
+ * (`create-conversation-in-workspace.ts`) — this is only its production wiring.
+ *
+ * The two creators are handed the TRANSACTION the node write runs in, which is
+ * the whole of this leaf: a conversation row and the node that makes it a
+ * member commit together or not at all. `resolveOrCreateConversation` and
+ * `conversationRepository.createConversation` both already took an optional
+ * executor for exactly this kind of caller; what is new is that this one
+ * supplies it.
  *
  * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
- * when the id cannot be claimed WITH this binding — foreign owner, legacy
- * message-owner conflict, or an existing row whose binding disagrees.
- *
- * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
- * `reopenConversationInSession`/`claimConversationInSession` take — see
- * `withSessionListingLock`'s own doc for why that's a dedicated-pool advisory
- * lock, never `db.transaction`. Without this serialization at all, a create
- * racing a reopen (or a claim) could both read the cap's count before either
- * writes, and both succeed — two operations each individually under
- * `MAX_SESSION_CONVERSATIONS`, together over it (caught in review — the lock
- * previously only coordinated close/reopen against each other, not against
- * create).
+ * when the id cannot be admitted with this binding — foreign owner, legacy
+ * message-owner conflict, an existing row whose anchor disagrees, or a thread
+ * the chat-target index says already has a home.
  */
 export async function createConversationInSession(input: {
   conversationId: string;
@@ -409,68 +459,96 @@ export async function createConversationInSession(input: {
   workspaceId: string;
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
+  /**
+   * The spawning conversation, when it shares this grid — never evicted by its
+   * own spawn. Only `spawn_session` has one.
+   */
+  excludeTargetId?: string;
 }): Promise<void> {
-  return withSessionListingLock(input.workspaceId, () =>
-    createConversationInSessionWith(
-      {
-        ...buildClaimDeps(),
-        createPageConversation: ({ conversationId, userId, agentPageId, title }) =>
-          conversationRepository.createConversation(conversationId, userId, agentPageId, {
-            title: title ?? undefined,
-          }),
-        createGlobalConversation: async ({ conversationId, userId, title }) => {
-          await resolveOrCreateConversation(userId, conversationId, undefined, {
-            title: title ?? undefined,
-          });
-        },
+  await createConversationInSessionWith<DbExecutor>(
+    {
+      ...buildClaimDeps(input.userId),
+      createPageConversation: ({ conversationId, userId, agentPageId, title }, tx) =>
+        conversationRepository.createConversation(conversationId, userId, agentPageId, {
+          title: title ?? undefined,
+          executor: tx,
+        }),
+      createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
+        await resolveOrCreateConversation(userId, conversationId, tx, {
+          title: title ?? undefined,
+        });
       },
-      input,
-    ),
+      findConversationIn: async (conversationId, tx) => {
+        const [row] = await tx
+          .select({
+            userId: conversations.userId,
+            type: conversations.type,
+            contextId: conversations.contextId,
+          })
+          .from(conversations)
+          .where(eq(conversations.id, conversationId))
+          .limit(1);
+        return row ?? null;
+      },
+    },
+    input,
   );
 }
 
 /**
- * The read half of the close/reopen deps — `findConversation` and
- * `countOpenConversations` are IDENTICAL between the two (both weigh the same
- * "is this row open" fact), and the cap's symmetry between close and reopen
- * depends on them staying that way: one copy drifting from the other would
- * silently unbalance which listings count toward `MAX_SESSION_CONVERSATIONS`.
- * The count is the ONE shared `countOpenConversations`
- * (`conversation-cap.ts`) every cap consumer uses — never a local re-write of
- * its predicate (review finding — coderabbitai on PR #2296, generalized in
- * epic Phase 1). Always the plain `db` — `withSessionListingLock`'s lock is
- * on a separate dedicated connection, not a transaction these reads need to
- * share.
+ * The row facts the close/reopen decisions weigh — OWNERSHIP and HISTORY, and
+ * nothing else.
+ *
+ * `workspaceId` and `closedInWorkspaceAt` are gone from this read because they
+ * are gone from the decisions: "is this thread in this workspace" and "is it on
+ * screen" are both answered by the membership write, from the tree, under the
+ * lock. A pre-read of either would be a fact that could go stale between the
+ * check and the act, which is what the two-structure model was made of.
  */
-function sessionListingReadDeps() {
+function conversationOwnerRead() {
   return {
-    findConversation: async (conversationId: string) => {
+    findConversation: async (conversationId: string): Promise<BumpedConversationRow | null> => {
       const [row] = await db
         .select({
-          // Selected so the pure decisions can run their ownership gate: the
-          // session check their routes run is drive-membership-wide and does
-          // NOT answer "is this conversation the caller's".
+          // The workspace check their routes run is drive-membership-wide and
+          // does NOT answer "is this conversation the caller's".
           userId: conversations.userId,
-          workspaceId: conversations.workspaceId,
-          closedInWorkspaceAt: conversations.closedInWorkspaceAt,
           isActive: conversations.isActive,
+          // THE REST IS THE EMIT CONTEXT, read here rather than in a second
+          // query after the write. Close and reopen change no `conversations`
+          // column — membership is a node — so there is no `RETURNING` to carry
+          // these facts the way every other lifecycle write's bump does. This
+          // read already runs on both paths for the ownership gate; widening
+          // its projection is free where a second SELECT would not be.
+          //
+          // The rev is passed through UNBUMPED, deliberately. It is the MESSAGE
+          // plane's watermark, and a membership change writes no message: a
+          // bump here would make every subscribed pane detect a gap and refetch
+          // a transcript that did not change. The directory listener never
+          // consults it.
+          id: conversations.id,
+          rev: conversations.rev,
+          isShared: conversations.isShared,
+          type: conversations.type,
+          contextId: conversations.contextId,
+          title: conversations.title,
+          lastMessageAt: conversations.lastMessageAt,
+          createdAt: conversations.createdAt,
         })
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .limit(1);
-      return row ?? null;
+      return row ? { ...row, rev: Number(row.rev) } : null;
     },
-    countOpenConversations: (workspaceId: string) => countOpenConversations(workspaceId),
   };
 }
 
 /**
- * Close a conversation OUT of its session's listing — the wiring for
- * `close-conversation-in-workspace.ts`'s pure decision. `withSessionListingLock`
- * serializes concurrent closes of THIS session's listings, so two racing
- * closes of the last two open conversations cannot both read "more than one
- * open" and both succeed — the second sees the first's write and gets
- * `last_conversation`.
+ * Close a conversation off its workspace's grid — the wiring for
+ * `close-conversation-in-workspace.ts`'s pure decision. A `move` to no parent,
+ * inside the workspace's own locked transaction, so it serializes against every
+ * other write to that tree rather than against a second lock that only close
+ * and reopen ever took.
  */
 export async function closeConversationInSession(input: {
   conversationId: string;
@@ -478,26 +556,35 @@ export async function closeConversationInSession(input: {
   userId: string;
   workspaceId: string;
 }): Promise<CloseConversationOutcome> {
-  return withSessionListingLock(input.workspaceId, () =>
-    closeConversationInSessionWith(
-      {
-        ...sessionListingReadDeps(),
-        // Repository-owned write: bumps rev and emits `conversation:closed`
-        // (Agent-Session SSoT epic, Phase 2 — one writer, one emitter).
-        closeConversation: (conversationId) =>
-          conversationRepository.closeConversationListing(conversationId),
+  return closeConversationInSessionWith(
+    {
+      ...conversationOwnerRead(),
+      dismissConversation: async ({ conversationId, workspaceId }) => {
+        const result = await applyWorkspaceMembershipWrite({
+          workspaceId,
+          actingUserId: input.userId,
+          run: (nodes) => expel(nodes, { target: { kind: 'chat', id: conversationId } }),
+        });
+        if (result.status === 'refused') {
+          return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
+        }
+        if (result.status === 'stale') return 'refused';
+        return 'dismissed';
       },
-      input,
-    ),
+      // The directory plane. See `announceClosed`'s own doc for why the node
+      // write's `workspace:nodes-updated` does not cover this: that event
+      // carries the TREE, and the sidebar's rows come from the LISTING.
+      announceClosed: (row) => emitConversationLifecycle('closed', row),
+    },
+    input,
   );
 }
 
 /**
- * Reopen a conversation OUT of "closed" and back into its session's
- * listing — the wiring for `reopen-conversation-in-workspace.ts`'s pure
- * decision. Same `withSessionListingLock` key as `closeConversationInSession`,
- * so a reopen can never race a close — or another reopen — of the same
- * session's listings.
+ * Put a conversation back on its workspace's grid — the wiring for
+ * `reopen-conversation-in-workspace.ts`'s pure decision. The same lock and the
+ * same transaction the close takes, so a reopen can never race a close, or
+ * another reopen, or a drag.
  */
 export async function reopenConversationInSession(input: {
   conversationId: string;
@@ -505,30 +592,187 @@ export async function reopenConversationInSession(input: {
   userId: string;
   workspaceId: string;
 }): Promise<ReopenConversationOutcome> {
-  return withSessionListingLock(input.workspaceId, () =>
-    reopenConversationInSessionWith(
-      {
-        ...sessionListingReadDeps(),
-        // Repository-owned write: bumps rev and emits `conversation:reopened`.
-        reopenConversation: (conversationId) =>
-          conversationRepository.reopenConversationListing(conversationId),
+  return reopenConversationInSessionWith(
+    {
+      ...conversationOwnerRead(),
+      // REOPENING IS RE-ADMITTING. There is no `readmit` any more: it was a
+      // `move` back onto the grid, and it existed only because a closed thread
+      // kept a node with no parent. Closing DESTROYS that node, so a thread that
+      // was closed is a member of nothing and putting it back is an ordinary
+      // admission — which is also what re-consults the cap it stopped occupying.
+      readmitConversation: async ({ conversationId, workspaceId }) => {
+        const result = await admitConversationNode({
+          conversationId,
+          workspaceId,
+          actingUserId: input.userId,
+        });
+        switch (result) {
+          case 'admitted':
+            return 'readmitted';
+          case 'already_a_member':
+            return 'already_attached';
+          // Kept distinct through the wiring. Folding it into `refused` here is
+          // what made the caller hear `not_in_session` for a thread that is a
+          // member of nothing only because the workspace is one slot short —
+          // the one refusal on this path a user can actually resolve.
+          case 'session_full':
+            return 'session_full';
+          case 'awaiting_backfill':
+            return 'awaiting_backfill';
+          case 'bound_elsewhere':
+          case 'refused':
+            return 'refused';
+        }
       },
-      input,
-    ),
+      announceReopened: (row) => emitConversationLifecycle('reopened', row),
+    },
+    input,
   );
+}
+
+/** What a history-delete's membership half came to. */
+export type ExpelConversationOutcome = 'expelled' | 'refused';
+
+/**
+ * Remove a conversation from its workspace ENTIRELY — history-deletion's
+ * membership half.
+ *
+ * A thread whose history is gone has no listing to keep and no pane to render:
+ * leaving its node behind would leave a rectangle bound to nothing and a cap
+ * slot nobody could reclaim.
+ *
+ * **The never-empty guard is gone**, and with it the `last_conversation` answer
+ * this function used to be able to give. `requireSurvivor` refused to take a
+ * workspace's last conversation, upholding "a workspace is never empty" — an
+ * invariant that only had teeth while a two-level grid could not represent zero
+ * panes and while "the last one closed" was the inference that ended a session.
+ * An empty tree is an ordinary resting state now, and a session ends when
+ * someone destroys its root. A guard defending a state nobody can reach only
+ * ever fires on legitimate work: here, on deleting the history of the one thread
+ * a workspace happened to be left with.
+ *
+ * `not_a_member` reads as SUCCESS. The removal is addressed by target and
+ * refuses a thread the workspace does not hold, because a caller acting for a
+ * user is owed the truth — this caller is not one of those. It runs behind a
+ * deletion that has already been authorized, and "it was not there" is the state
+ * that deletion asked for.
+ *
+ * **Call this BEFORE the soft-delete, not inside its transaction, AND AGAIN
+ * AFTER IT.** The two writes cannot be made one without threading an executor
+ * through `softDeleteConversation`'s message deactivation, room kicks and emits,
+ * so the ORDER carries the correctness instead — and the order alone only
+ * survives a CRASH, not a concurrent claim.
+ *
+ * Expel-then-delete leaves, on a crash, a thread with intact history that is no
+ * longer in a workspace, which a re-claim fixes. Delete-then-expel would leave a
+ * pane bound to a dead thread and a cap slot nobody can reclaim, which is the
+ * ghost this epic deletes. That much the order settles.
+ *
+ * What it does not settle is the gap ITSELF. Between the expel committing and
+ * `isActive` flipping, the thread is homeless and still alive — precisely the
+ * state a claim admits — so a concurrent claim can bind a node to a thread that
+ * is about to die, and arrive at the delete-then-expel outcome the order was
+ * chosen to avoid. Two things close it, and they close different halves:
+ *
+ *  - The write funnel re-asks liveness ON THE WRITING TRANSACTION and takes
+ *    `FOR SHARE` on the conversation row while it does
+ *    (`readDeletedChatTargets`). That is what makes the two operations
+ *    serialize at all: they need not share a workspace, so the conversation row
+ *    is the only object both of them touch. Either the delete's `UPDATE` waits
+ *    for the claim to commit, or the claim's read waits for the delete and then
+ *    sees `isActive = false` and refuses.
+ *  - **{@link expelAfterDelete}, run unconditionally after the soft-delete**,
+ *    collects the first of those two outcomes: the claim committed, so its node
+ *    exists and is findable — in whatever workspace it chose, which is why that
+ *    function re-resolves rather than reusing the one this delete started from.
+ *    `not_a_member` reads as success, so on the overwhelmingly common path —
+ *    nothing raced — it is one indexed read and no write at all.
+ */
+export async function expelConversationFromSession(input: {
+  conversationId: string;
+  workspaceId: string;
+  actingUserId: string;
+}): Promise<ExpelConversationOutcome> {
+  const result = await applyWorkspaceMembershipWrite({
+    workspaceId: input.workspaceId,
+    actingUserId: input.actingUserId,
+    run: (nodes) => expel(nodes, { target: { kind: 'chat', id: input.conversationId } }),
+  });
+  if (result.status === 'ok') return 'expelled';
+  if (result.status === 'refused' && result.code === 'not_a_member') return 'expelled';
+  loggers.api.error('History delete could not remove the thread from its workspace', undefined, {
+    workspaceId: input.workspaceId,
+    conversationId: input.conversationId,
+    reason: result.status === 'refused' ? result.code : result.status,
+  });
+  return 'refused';
+}
+
+/**
+ * THE SWEEP, run after the soft-delete has committed — the half of a history
+ * delete that catches a thread admitted while it was homeless and still alive.
+ *
+ * **It is sound only because `readDeletedChatTargets` takes `FOR SHARE`**, and
+ * that dependency is the whole design. A claim's liveness read locks the
+ * conversation row for the rest of its transaction, and the soft-delete's
+ * `UPDATE` conflicts with that lock — so by the time this function runs, a
+ * claim that was in flight has necessarily COMMITTED, and its node is visible
+ * to the read below. Without the row lock this is a plain unlocked `SELECT`
+ * racing an uncommitted insert: it would answer `null`, return early, and take
+ * no lock at all, which is exactly how an earlier cut of this function gave up
+ * the case it was meant to cover.
+ *
+ * **It RE-RESOLVES rather than reusing the workspace the delete started from.**
+ * The window makes the thread homeless, and a homeless thread is claimable into
+ * ANY workspace — `claimConversationInSession` proceeds on `home === null` and
+ * never asks the caller to name the one it came from — so the node written in
+ * the race is often in a different session entirely. That is also why no
+ * arrangement of workspace locks could settle this on its own: the two sides
+ * need not share a workspace, and the conversation row is the only thing they
+ * both touch.
+ *
+ * **It is BEST-EFFORT and swallows its own failure.** The delete has already
+ * committed by the time this runs. Letting it throw would take the route's
+ * outer catch, answer 500 for a deletion that fully succeeded, and — worse —
+ * skip the compliance record, the `data.delete` audit event and the broadcast
+ * that tells other clients the thread is gone. A missed sweep leaves one stale
+ * pane; a missed audit record is a compliance hole.
+ *
+ * **Call it UNCONDITIONALLY**, not inside the caller's `if (membership)`. The
+ * pre-delete membership read states a fact about the moment of the read, and a
+ * thread that belonged to nothing THEN can belong to something by the time the
+ * history is gone — which is precisely the case this exists for, and the case a
+ * conditional call cannot reach.
+ */
+export async function expelAfterDelete(input: {
+  conversationId: string;
+  actingUserId: string;
+}): Promise<void> {
+  const { conversationId, actingUserId } = input;
+  try {
+    const workspaceId = await findWorkspaceOfConversation(conversationId);
+    if (workspaceId === null) return;
+    await expelConversationFromSession({ conversationId, workspaceId, actingUserId });
+  } catch (error) {
+    loggers.api.error('Post-delete expel failed; a pane may still be bound to a deleted thread', undefined, {
+      conversationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
  * A plain, lock-free, INFORMATIONAL read — not a guard. Ending a session is a
  * genuinely unconditional act (the sidebar's own "End session" is reachable
- * with any number of open conversations, by design), so this never blocks
+ * with any number of conversations, by design), so this never blocks
  * `endSession`; it exists only so the caller can warn the user when their
  * confirm turned out to destroy more than the empty/near-empty session they
- * thought they were looking at — e.g. a conversation minted in another pane
- * or tab committed between an earlier `last_conversation` 409 and this
- * confirm (caught in review: the advisory lock in `closeConversationInSession`
- * only serializes against OTHER closes, and no lock held for milliseconds
- * around either transaction can prevent a human confirming minutes later).
+ * thought they were looking at.
+ *
+ * It counts MEMBERS now — every thread the workspace holds, on screen or
+ * parked — because that is what ending the session actually destroys. Under the
+ * column it counted "open listings", which was a different set from the one the
+ * grid drew and a different set again from the one the delete would take.
  */
 export async function countOpenConversationsForSession(workspaceId: string): Promise<number> {
   return countOpenConversations(workspaceId);
@@ -744,6 +988,13 @@ export interface SessionConversationEntry {
    */
   ownerId: string;
   isShared: boolean;
+  /**
+   * The NODE that makes this thread a member — its address in the workspace's
+   * tree, and the successor to the `pane.paneId` the deleted annotation used to
+   * bolt on. Always present: without a node there is no membership, so there is
+   * no listing entry to carry one.
+   */
+  nodeId: string;
 }
 
 /**
@@ -787,29 +1038,50 @@ export async function listSessionConversationsBulk(
   const grouped = new Map<string, SessionConversationEntry[]>();
   if (workspaceIds.length === 0) return grouped;
 
+  // MEMBERSHIP IS THE JOIN. `conversations.workspaceId` used to select these
+  // rows and `closedInWorkspaceAt` used to filter them; both are gone, and the
+  // node that binds the thread does the whole job. There is nothing left for
+  // `annotateConversationsWithPanes` to reconcile, which is why that module and
+  // its suite are deleted rather than ported.
+  //
+  // It used to select `parentId IS NOT NULL AS attached` beside each row, so a
+  // caller could tell a thread on screen from one parked. There is one place a
+  // node can be, so presence in this list IS "on screen" and the column has
+  // nothing left to report.
   const rankedConversations = db
     .select({
-      workspaceId: conversations.workspaceId,
-      conversationId: conversations.id,
+      workspaceId: agentWorkspaceNodes.rootId,
+      // EXPLICITLY ALIASED, both of them. Drizzle names a subquery's output
+      // columns after the SOURCE column, so `agent_workspace_nodes.id` and
+      // `conversations.id` both came out as `"id"` and the outer select's
+      // `"id"` was `column reference "id" is ambiguous` (42702) — this listing
+      // failed outright for every caller. It went unnoticed because the suite
+      // that covers it is DB-backed and the shared test database had been
+      // wiped, so it skipped rather than ran.
+      nodeId: sql<string>`${agentWorkspaceNodes.id}`.as('node_id'),
+      conversationId: sql<string>`${conversations.id}`.as('conversation_id'),
       title: conversations.title,
       type: conversations.type,
       contextId: conversations.contextId,
       lastMessageAt: conversations.lastMessageAt,
       ownerId: conversations.userId,
       isShared: conversations.isShared,
-      rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.workspaceId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
+      rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${agentWorkspaceNodes.rootId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
         'row_number',
       ),
     })
-    .from(conversations)
+    .from(agentWorkspaceNodes)
+    .innerJoin(conversations, eq(conversations.id, agentWorkspaceNodes.targetId))
     .where(
       and(
-        inArray(conversations.workspaceId, workspaceIds),
+        inArray(agentWorkspaceNodes.rootId, workspaceIds),
+        eq(agentWorkspaceNodes.targetKind, 'chat'),
+        // HISTORY, and only history. A history-deleted thread is excluded
+        // because its transcript is gone, which is a different fact from where
+        // its node sits — and the reason `expelConversationFromSession` removes
+        // the node too, so this filter is a belt against a row the delete could
+        // not reach rather than the listing's real membership rule.
         eq(conversations.isActive, true),
-        // Closed-from-the-session threads stay out of the listing — but their
-        // HISTORY is untouched (isActive alone still gates that), so a
-        // history-deleted thread stays excluded whichever column caused it.
-        isNull(conversations.closedInWorkspaceAt),
       ),
     )
     .as('ranked_conversations');
@@ -817,6 +1089,7 @@ export async function listSessionConversationsBulk(
   const rows = await db
     .select({
       workspaceId: rankedConversations.workspaceId,
+      nodeId: rankedConversations.nodeId,
       conversationId: rankedConversations.conversationId,
       title: rankedConversations.title,
       type: rankedConversations.type,
@@ -829,7 +1102,6 @@ export async function listSessionConversationsBulk(
     .where(sql`${rankedConversations.rowNumber} <= ${MAX_SESSION_CONVERSATIONS}`);
 
   for (const row of rows) {
-    if (row.workspaceId === null) continue;
     const bucket = grouped.get(row.workspaceId) ?? [];
     bucket.push({
       conversationId: row.conversationId,
@@ -838,6 +1110,7 @@ export async function listSessionConversationsBulk(
       lastMessageAt: row.lastMessageAt,
       ownerId: row.ownerId,
       isShared: row.isShared,
+      nodeId: row.nodeId,
     });
     grouped.set(row.workspaceId, bucket);
   }
@@ -987,9 +1260,66 @@ export async function measureWarmSessionStorage(input: {
   }
 }
 
+/**
+ * END A SESSION: settle the row's lifecycle, then `destroy(rootId)`.
+ *
+ * **The tree operation is the removal, and it is the SAME removal that closes a
+ * pane** — see `destroyWorkspaceTree`. What this function adds is the lifecycle
+ * consequence a pane destroy does not have: a session owns a sandbox, an
+ * `endedAt` and a billing history, and none of that is a fact about a node.
+ *
+ * **THE ORDER IS LOAD-BEARING, and it is lifecycle first.** The two writes are
+ * deliberately not one transaction (a Sprite is outside the database; see
+ * `destroyWorkspaceTree` for the full argument), so what matters is which
+ * interrupted state is survivable:
+ *
+ *  - **Lifecycle, then tree** — a crash in between leaves an ended row and a
+ *    tree that outlived it. Visible, harmless, and cleared by re-issuing the
+ *    DELETE: `endAgentSession` answers `already_ended` as a no-op and the
+ *    destroy then runs. Nothing is billing that nobody is watching, because
+ *    `endAgentSession`'s FIRST durable write is `teardownRequestedAt` — from
+ *    that instant the orphan reconciler owns the VM.
+ *  - **Tree, then lifecycle** — a crash in between leaves the tree gone, the row
+ *    un-stamped, and the Sprite alive with NO teardown request against it. The
+ *    reconciler will not touch it (an explicit recorded intent is what licenses
+ *    it to destroy anything), so it bills until a human notices. That is the one
+ *    failure here that costs money and that no background process can see.
+ *
+ * The tree write is best-effort ON PURPOSE: the session is ended once the row
+ * says so, and reporting a teardown failure because some layout rows outlived it
+ * would tell the caller the compute is still running when it is not.
+ */
 export async function endSession(workspaceId: string): Promise<EndAgentSessionResult> {
   const [store, host] = await Promise.all([getAgentSessionStore(), getSandboxHost()]);
-  return endAgentSession({ workspaceId, deps: { store, host, now: () => new Date() } });
+  const row = await store.findById(workspaceId);
+  const ended = await endAgentSession({ workspaceId, deps: { store, host, now: () => new Date() } });
+  if (!ended.ok) return ended;
+
+  // The acting user is the workspace's OWNER: this write binds nothing, so the
+  // gate has nothing to judge, and the owner is the identity the row itself
+  // carries rather than one this call would have to be told.
+  const ownerId = row?.ownerId;
+  if (ownerId !== undefined) {
+    // `requireEnded` re-reads `endedAt` inside the destroy's own transaction, so
+    // an admission that reopened this session between the stamp above and the
+    // write below keeps its tree instead of having it wiped out from under it.
+    // See the flag's own doc for the ghost that produces.
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerId, requireEnded: true });
+    if (destroyed.status === 'refused' && destroyed.code === 'session_reopened') {
+      // Not a failure: the session is live again because someone put work into
+      // it, and the tree that work created is the one that should stand.
+      loggers.api.info('Session end did not destroy its tree: it was reopened by a concurrent admission', {
+        workspaceId,
+      });
+    } else if (destroyed.status !== 'ok') {
+      loggers.api.error('Session ended but its tree was not destroyed; re-issuing the end will clear it', undefined, {
+        workspaceId,
+        status: destroyed.status,
+        ...(destroyed.status === 'refused' ? { code: destroyed.code } : {}),
+      });
+    }
+  }
+  return ended;
 }
 
 export async function listSessions(filter: AgentSessionListFilter): Promise<AgentSessionDTO[]> {

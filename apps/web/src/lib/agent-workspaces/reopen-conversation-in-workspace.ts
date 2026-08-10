@@ -1,81 +1,124 @@
 /**
- * Reopen a conversation back INTO its session's listing — the undo of
- * `closeConversationInSessionWith`. Restores `conversations.closedInWorkspaceAt`
- * to null so the thread reappears in the sidebar and can host a pane again.
- * Never touches history (`isActive`) — a history-deleted thread is not
- * reachable this way, same as it is excluded from the open listing.
+ * Reopen a conversation back into its workspace — the undo of
+ * `closeConversationInSessionWith`, and an ADMISSION for the same reason that
+ * one is a destroy.
  *
- * Reopening occupies a listing slot exactly like minting a new conversation
- * does (`createConversationInSessionWith`'s `countActiveConversations` and
- * this decision's `countOpenConversations` count the identical set: ACTIVE
- * rows with `closedInWorkspaceAt IS NULL`) — so a session already holding
- * `MAX_SESSION_CONVERSATIONS` open listings refuses a reopen the same way it
- * refuses a new conversation, rather than silently exceeding the cap the
- * create path enforces.
+ * **It mints a node.** There was a version of this that moved an existing one:
+ * closing parked a node rather than removing it, so reopening carried the same
+ * node back onto the grid. Parked is gone, so a closed thread has no node at
+ * all, and putting it back is the ordinary act of taking a thread into a
+ * workspace. Two consequences follow, and both are the honest ones:
  *
- * Pure decision logic over injected deps, per the repo rule that
- * branching which decides lifecycle/access lives in a testable module —
+ *  - **The cap applies again.** A `move`-based reopen consumed no slot, because
+ *    the member never stopped being one. A closed thread DID stop being one — it
+ *    freed its slot on the way out — so returning consumes a slot like any other
+ *    admission, and a workspace that filled up in the meantime refuses.
+ *  - **A reopened thread is PLACED**, by the same policy every admission runs:
+ *    it fills an unbound pane if there is one and splits rather than evicting if
+ *    there is not. It does not return to where it used to sit; a node carries its
+ *    location, not its history.
+ *
+ * **No `history_deleted` special case in the write.** A history-deleted thread's
+ * node was removed by the deletion, so there is nothing here that would tell it
+ * apart from a thread that was merely closed — which is exactly why the
+ * `isActive` gate below survives: "you deleted this" is something a caller can
+ * act on and "there is no such thread here" is not.
+ *
+ * Pure decision logic over injected deps, per the repo rule that branching
+ * which decides lifecycle/access lives in a testable module —
  * `agent-workspaces-runtime.ts` only wires the production deps, wrapping the
- * whole decision in the same per-session transaction + advisory lock
- * `closeConversationInSessionWith`'s wiring uses, so a reopen can never race
- * a close (or another reopen) of the same session's listings.
+ * whole decision in the workspace's own advisory lock and transaction.
  */
 
-import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import type { ConversationCloseSubject } from './close-conversation-in-workspace';
+import { announceWithoutUnsucceeding } from './close-conversation-in-workspace';
 
 export type ReopenConversationOutcome =
   | 'reopened'
   | 'already_open'
   | 'not_in_session'
   | 'history_deleted'
+  /** The workspace awaits the backfill — unrecoverable by the caller. */
+  | 'awaiting_backfill'
+  /**
+   * The cap refused the return. Named rather than folded into `not_in_session`
+   * because the module doc above promises the caller exactly this — "a
+   * workspace that filled up in the meantime refuses" — and a caller can act on
+   * it: close something, then retry. `not_in_session` is the answer that admits
+   * nothing and invites no action, which is the wrong thing to say about a
+   * thread that is merely one slot short of returning.
+   */
   | 'session_full';
 
-export interface ReopenConversationInSessionDeps {
-  /** Row facts for the ownership, foreign-session and idempotency checks. Same shape `closeConversationInSessionWith` reads. */
-  findConversation: (conversationId: string) => Promise<{
-    userId: string;
-    workspaceId: string | null;
-    closedInWorkspaceAt: Date | null;
-    isActive: boolean;
-  } | null>;
+/** How the membership write answered the re-admission. */
+export type ReadmitConversationOutcome =
+  | 'readmitted'
+  | 'already_attached'
+  | 'awaiting_backfill'
+  | 'not_a_member'
+  /** The cap. Distinct from `refused` so the outcome survives the wiring. */
+  | 'session_full'
+  | 'refused';
+
+export interface ReopenConversationInSessionDeps<TRow extends ConversationCloseSubject = ConversationCloseSubject> {
+  /** Row facts for the ownership and history gates. Same shape the close side reads. */
+  findConversation: (conversationId: string) => Promise<TRow | null>;
+  /** THE MEMBERSHIP WRITE — `admit` the thread back into the workspace. */
+  readmitConversation: (input: {
+    conversationId: string;
+    workspaceId: string;
+  }) => Promise<ReadmitConversationOutcome>;
   /**
-   * OPEN (not yet closed) conversations already counted against this
-   * session — the cap's input. Must be read AFTER the lock is held (the
-   * runtime wiring's job), or two concurrent reopens could both read
-   * "room for one more" and both succeed, exceeding the cap.
+   * ANNOUNCE THE REOPEN — `conversation:reopened`. The exact mirror of
+   * `announceClosed`, and missing for the same reason it was: both call sites
+   * were deleted with the `closedInWorkspaceAt` repository writers that used to
+   * hold them.
+   *
+   * The listener answers this one with a RE-READ rather than local surgery, and
+   * that asymmetry is correct: a close names a row to remove and a reopen names
+   * a row the cache does not have, so only one of the two can be served without
+   * asking the server.
    */
-  countOpenConversations: (workspaceId: string) => Promise<number>;
-  /**
-   * The guarded UPDATE: clear `closedInWorkspaceAt` WHERE it is still set.
-   * `'noop'` means a race already reopened it between the idempotency check
-   * above and this write — folded into `already_open`, not an error.
-   */
-  reopenConversation: (conversationId: string) => Promise<'reopened' | 'noop'>;
+  announceReopened: (row: TRow) => void;
 }
 
-export async function reopenConversationInSessionWith(
-  deps: ReopenConversationInSessionDeps,
+export async function reopenConversationInSessionWith<TRow extends ConversationCloseSubject>(
+  deps: ReopenConversationInSessionDeps<TRow>,
   { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<ReopenConversationOutcome> {
   const row = await deps.findConversation(conversationId);
-  if (row === null || row.workspaceId !== workspaceId) return 'not_in_session';
+  if (row === null) return 'not_in_session';
   // OWNERSHIP, before any other branch — see the close side's gate for the
-  // full reasoning. Reopening someone else's deliberately-closed thread is the
-  // mirror of closing their open one: the session check above admits every
-  // drive member, so only this line keeps a listing the owner dismissed from
-  // being pushed back into their sidebar by anyone who can reach the session.
+  // full reasoning. Putting someone else's deliberately-closed thread back on
+  // their grid is the mirror of taking their open one off it: the workspace
+  // check above admits every drive member, so only this line stands between a
+  // thread its owner dismissed and anyone who can reach the workspace.
   if (row.userId !== userId) return 'not_in_session';
-  // A history-deleted target is gone regardless of `closedInWorkspaceAt` —
-  // there is no listing left to restore (mirrors the close side's own
-  // isActive check, which excludes these from `countOpenConversations` too).
+  // A history-deleted target is gone regardless of where its node was — and
+  // its node is gone too. Named separately from `not_in_session` because this
+  // one tells the caller something they can act on.
   if (!row.isActive) return 'history_deleted';
-  if (row.closedInWorkspaceAt === null) return 'already_open';
 
-  // Only checked once the row is confirmed CLOSED, so a retry of an
-  // already-open conversation never trips the cap on its own way out.
-  const openCount = await deps.countOpenConversations(workspaceId);
-  if (openCount >= MAX_SESSION_CONVERSATIONS) return 'session_full';
-
-  const outcome = await deps.reopenConversation(conversationId);
-  return outcome === 'reopened' ? 'reopened' : 'already_open';
+  const outcome = await deps.readmitConversation({ conversationId, workspaceId });
+  switch (outcome) {
+    case 'readmitted':
+      // Only the branch that actually re-admitted. `already_attached` below is
+      // a retry meeting a row that is already there — nothing changed, so
+      // nothing is announced.
+      announceWithoutUnsucceeding(() => deps.announceReopened(row));
+      return 'reopened';
+    // Already on screen: a retry, or a second tab that got there first.
+    case 'already_attached':
+      return 'already_open';
+    // The one refusal a caller can do something about, so it keeps its name.
+    case 'session_full':
+      return 'session_full';
+    // And the one NOBODY can do anything about from here, which is exactly why
+    // it must not arrive as `not_in_session`.
+    case 'awaiting_backfill':
+      return 'awaiting_backfill';
+    case 'not_a_member':
+    case 'refused':
+      return 'not_in_session';
+  }
 }
