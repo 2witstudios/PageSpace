@@ -6,7 +6,7 @@
  * to the actual personalization pages.
  */
 
-import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
+import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { personalizationCandidates } from '@pagespace/db/schema/personalization';

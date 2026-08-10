@@ -932,6 +932,22 @@ export async function collectUserSettings(database: DB, userId: string): Promise
   };
 }
 
+/**
+ * The subject's personalization profile.
+ *
+ * The content lives as pages in their Home drive; the bio/writingStyle/rules
+ * COLUMNS are only a fallback for users the backfill has not reached, and are
+ * cleared once a page holds the content. Reading the columns alone would
+ * therefore return three nulls for every migrated user and quietly understate
+ * the profile — so this resolves the page pointers and reads the pages, falling
+ * back to the column only where no pointer exists.
+ *
+ * The pages are ALSO carried in `pages.json` (they are ordinary pages in a
+ * drive the subject owns). That duplication is deliberate: this file is where a
+ * reader looks to answer "what does the AI know about me?", and a category that
+ * silently emptied itself after a migration is exactly the kind of omission the
+ * export coverage guard exists to prevent.
+ */
 export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
   const result = await database
     .select({
@@ -941,12 +957,46 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       enabled: userPersonalization.enabled,
       createdAt: userPersonalization.createdAt,
       updatedAt: userPersonalization.updatedAt,
+      bioPageId: userPersonalization.bioPageId,
+      writingStylePageId: userPersonalization.writingStylePageId,
+      rulesPageId: userPersonalization.rulesPageId,
     })
     .from(userPersonalization)
     .where(eq(userPersonalization.userId, userId))
     .limit(1);
 
-  return result[0] ?? null;
+  const row = result[0];
+  if (!row) return null;
+
+  const { bioPageId, writingStylePageId, rulesPageId, ...profile } = row;
+  // Truthiness, not `!== null`: a pointer can arrive undefined as well as null
+  // (an older row, or a projection that omits the column), and an undefined id
+  // would otherwise reach `inArray` as a phantom lookup.
+  const pageIds = [bioPageId, writingStylePageId, rulesPageId].filter(
+    (id): id is string => Boolean(id),
+  );
+
+  if (pageIds.length === 0) return profile;
+
+  const memoryPages = await database
+    .select({ id: pages.id, content: pages.content, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(inArray(pages.id, pageIds));
+
+  // A trashed page is content the subject deleted; report it as absent rather
+  // than disclosing what they removed.
+  const contentById = new Map(
+    memoryPages.filter((p) => !p.isTrashed).map((p) => [p.id, p.content ?? '']),
+  );
+
+  return {
+    ...profile,
+    bio: bioPageId ? (contentById.get(bioPageId) ?? null) : profile.bio,
+    writingStyle: writingStylePageId
+      ? (contentById.get(writingStylePageId) ?? null)
+      : profile.writingStyle,
+    rules: rulesPageId ? (contentById.get(rulesPageId) ?? null) : profile.rules,
+  };
 }
 
 /**
