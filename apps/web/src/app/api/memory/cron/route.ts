@@ -28,6 +28,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
+import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   getCurrentPersonalizationPages,
@@ -45,7 +46,15 @@ import {
   type MemoryField,
 } from '@/lib/memory/candidate-service';
 
-const PAYING_TIERS = ['pro', 'founder', 'business'];
+/**
+ * Reuses the constant the settings UI gates on rather than restating it.
+ *
+ * A local copy would let the cron and `isMemoryAvailable` drift: a tier added
+ * to one and not the other means users who are told Memory is available never
+ * have anything learned, or the reverse — learning for users the product says
+ * cannot have it. Neither failure is visible from either side alone.
+ */
+const PAYING_TIERS = [...MEMORY_PAYING_TIERS];
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
