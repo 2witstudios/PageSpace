@@ -160,22 +160,27 @@ export async function runBackfill({
             }
           }
 
-          // Retire the columns we successfully copied, in the SAME transaction.
+          // Retire ALL THREE columns in the SAME transaction — not just the ones
+          // this run copied.
           //
-          // Once a page holds the content the column is not a second copy to
-          // keep in step — it is a fallback for users this backfill has not
-          // reached yet. Leaving it behind is a latent privacy leak: if the user
-          // later deletes the page, `purgeExpiredTrashedPages` hard-deletes it,
-          // `ON DELETE SET NULL` clears the pointer, and the pointer-absent
-          // fallback reads the column again — resurrecting the very content they
-          // deleted the page to remove.
-          if (written.length > 0) {
-            const cleared = Object.fromEntries(written.map((field) => [LEGACY_COLUMN[field], null]));
-            await tx
-              .update(userPersonalization)
-              .set({ ...cleared, updatedAt: new Date() })
-              .where(eq(userPersonalization.userId, row.userId));
-          }
+          // The read path in `personalization-utils` stops consulting a column
+          // the moment its POINTER is set, regardless of what the column holds.
+          // Provisioning above sets all three pointers, so every column is now
+          // unreachable. Clearing only the copied ones would leave a populated,
+          // invisible column behind for any field whose page already had content
+          // (a hand edit made before this ran, say) — and that is a latent
+          // privacy leak, not dead weight: if the user later deletes the page,
+          // `purgeExpiredTrashedPages` hard-deletes it, `ON DELETE SET NULL`
+          // clears the pointer, the pointer-absent fallback switches back on and
+          // resurrects content the user never saw and cannot reach.
+          //
+          // Nothing observable is lost. A column the reader can no longer reach
+          // is not a second copy to keep in step; the page is the source of
+          // truth from here on, which is exactly what the settings screen shows.
+          await tx
+            .update(userPersonalization)
+            .set({ bio: null, writingStyle: null, rules: null, updatedAt: new Date() })
+            .where(eq(userPersonalization.userId, row.userId));
 
           return written;
         });
