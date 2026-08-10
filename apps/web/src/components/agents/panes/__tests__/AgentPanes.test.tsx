@@ -945,6 +945,65 @@ describe('AgentPanes — the pane bar', () => {
   });
 
   /**
+   * A FAILED RE-READ IS NOT A REASON TO REFUSE THE SWITCH — the stale ordering
+   * is still a real answer, and it is the one already on screen.
+   *
+   * The claim worth pinning is that the failure never reaches the caller:
+   * `refreshWorkspaceSnapshot` wraps its whole body and reports failure as
+   * `false`, so this handler resumes normally, keeps the candidates it had, and
+   * runs the token check — rather than rejecting out of a `void`-ed call and
+   * leaving the user's pick to do nothing at all.
+   */
+  it('switches on the stale ordering when the MRU re-read fails', async () => {
+    const seatedNodes = [
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-1'),
+      chatNode('n2', WS, 1, 'conv-2'),
+      chatNode('n3', WS, 2, 'conv-3'),
+    ];
+    const seatedTargets: WorkspaceNodeTarget[] = [
+      { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+      { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+      { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+    ];
+    // Healthy until the pick, so the grid mounts on a real snapshot; the re-read
+    // the switch itself makes is the one that fails.
+    let failNodeReads = false;
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        if (failNodeReads) throw new Error('offline');
+        return jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockDel.mockResolvedValue({});
+    seat(seatedNodes, seatedTargets);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
+
+    failNodeReads = true;
+    // Researcher has TWO threads here, so this takes the re-read branch.
+    const trigger = await findEnabledSelector(/Assistant/);
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+    // It still decides, on the ordering it already had: conv-3 is the most
+    // recently active of Researcher's two, so the focus lands on its pane.
+    // IT STILL DECIDED, on the ordering it already had. Both halves matter:
+    // reaching the outgoing thread's DELETE means the handler resumed past the
+    // failed re-read and ran its token check rather than rejecting out of a
+    // `void`-ed call; and never POSTing means it found Researcher's thread in
+    // the stale candidate list instead of concluding there was none and minting
+    // a duplicate.
+    await waitFor(() =>
+      expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'),
+    );
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  /**
    * THE SAME WINDOW, FROM THE OTHER SIDE. Guarding the await above needs a token
    * saying who owns this pane — but TAKING one to find out is itself a write,
    * and this handler can still decide it has nothing to do: re-picking the agent
