@@ -439,19 +439,39 @@ describe('AgentPanes — closing a pane', () => {
     expect(nodeById('n1')).toBeUndefined();
   });
 
-  it('does nothing while the listing has not resolved — a close never acts on an unverified fact', async () => {
-    // The default route answers `sessions: []`, so THIS workspace's own entry
-    // never appears: "not loaded" is not "loaded and empty". Two panes, so the
-    // last-pane branch (which is decided ABOVE this guard) is not what answers.
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
+  it('does nothing while the directory has not resolved — a close never acts on an unverified fact', async () => {
+    // A tree this browser SEEDED and no server answer has confirmed:
+    // `runCommand` mints a root locally so the first click composes into one
+    // write, so nodes can exist with nothing server-read behind them. "Not
+    // confirmed" is not "confirmed and empty". Split first, so two panes exist
+    // and the last-pane branch (decided ABOVE this guard) is not what answers.
+    //
+    // The node write must NOT settle: the pump folds a successful ack into the
+    // base, which is itself a server confirmation of this tree and would
+    // legitimately resolve the directory.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise<never>(() => {});
+      return jsonOk(defaultFetchRoute(url));
+    });
+    act(() => {
+      useAgentWorkspaceStore.getState().openConversation(WS, 'conv-1');
+    });
+    const seeded = nodesNow().find((node) => node.nodeType === 'pane');
+    act(() => {
+      useAgentWorkspaceStore.getState().splitPane(WS, seeded!.id, 'row');
+    });
+    expect(useAgentWorkspaceStore.getState().workspaces[WS].hasServerSnapshot).toBe(false);
+
     const user = userEvent.setup();
     renderPanes();
 
-    await screen.findAllByTestId('pane-chat');
-    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+    await screen.findByTestId('pane-chat');
+    const chatPaneId = nodeShowingChat('conv-1')!.id;
+    const bars = screen.getAllByTestId('pane-bar');
+    await user.click(within(bars[0]).getByLabelText('Close pane'));
 
     expect(mockDel).not.toHaveBeenCalled();
-    expect(nodeById('n1')?.parentId).toBe(WS);
+    expect(nodeById(chatPaneId)).toBeDefined();
   });
 
   it('is a pure layout close when the listing resolved WITHOUT this thread', async () => {
@@ -747,21 +767,30 @@ describe('AgentPanes — the pane bar', () => {
   });
 
   it('switching to an agent the workspace already has a thread with shows THAT thread, without minting', async () => {
-    mockSessionConversations([
-      { conversationId: 'conv-1', agentPageId: 'agent-1' },
-      { conversationId: 'conv-2', agentPageId: 'agent-2' },
-    ]);
+    // `conv-2` is a MEMBER, which under the node model means it has a node —
+    // membership is the node, so a thread in the workspace with no node is a
+    // state the model cannot hold (and the listing this used to read derived
+    // its rows from those same nodes, so it could not hold it either).
     mockDel.mockResolvedValue({});
     seat(
-      [rootNode, chatNode('n1', WS, 0, 'conv-1')],
+      [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')],
       [CONV_1_TARGET, { id: 'conv-2', kind: 'chat', title: 'Second', lastMessageAt: null, agentPageId: 'agent-2' }],
     );
     const user = userEvent.setup();
-    renderPanes();
+    // conv-2's pane renders as the HOST's own identity — a plain label, no
+    // second agent selector — so the only "Writer" control on screen is the
+    // menu item this test means to click.
+    renderPanes({ hostConversationId: 'conv-2' });
 
-    await screen.findByTestId('pane-chat');
-    await user.click(await findEnabledSelector(/Researcher/));
-    await user.click(await screen.findByText('Writer'));
+    await screen.findAllByTestId('pane-chat');
+    // Opened by KEYBOARD, not pointer: in a split grid the resize handle's
+    // document-level pointer handling swallows Radix's open sequence under
+    // jsdom, and this suite's other selector tests only ever run single-pane.
+    // Enter on the focused trigger is the same open, through a path the
+    // harness does not interfere with.
+    (await findEnabledSelector(/Researcher/)).focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
 
     await waitFor(() => expect(nodeShowingChat('conv-2')).toBeDefined());
     expect(mockPost).not.toHaveBeenCalled();
@@ -796,15 +825,13 @@ describe('AgentPanes — the pane bar', () => {
    * the old node keeps its binding and stays a member until its listing closes.
    */
   it('DESTROYS the outgoing node rather than re-pointing it', async () => {
-    mockSessionConversations([
-      { conversationId: 'conv-1', agentPageId: 'agent-1' },
-      { conversationId: 'conv-2', agentPageId: 'agent-2' },
-    ]);
+    // Exercised through the MINT branch, which is where the replacement is
+    // PLACED into this node's slot. (The focus-existing branch reaches the same
+    // end by a different road — the outgoing thread's DELETE expels its node
+    // server-side — which the test above pins.)
+    mockPost.mockResolvedValue({});
     mockDel.mockResolvedValue({});
-    seat(
-      [rootNode, chatNode('n1', WS, 0, 'conv-1')],
-      [CONV_1_TARGET, { id: 'conv-2', kind: 'chat', title: 'Second', lastMessageAt: null, agentPageId: 'agent-2' }],
-    );
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
     const user = userEvent.setup();
     renderPanes();
 
@@ -816,16 +843,47 @@ describe('AgentPanes — the pane bar', () => {
     // takes the node away and puts a new one in its slot. The node used to
     // survive parked, keeping its binding; there is nowhere for it to survive.
     await waitFor(() => expect(nodeById('n1')).toBeUndefined());
-    expect(panesNow().some((node) => node.target?.kind === 'chat' && node.target.id === 'conv-2')).toBe(true);
+    expect(panesNow().some((node) => node.target?.kind === 'chat' && node.target.id === 'new-id-1')).toBe(true);
   });
 
-  it("is disabled until THIS workspace's entry appears in the switch decision's own data", async () => {
-    // The default route answers `sessions: []` — a warm cache that simply has
-    // no row for this workspace yet, which reads as "no thread exists" and
-    // would make a switch mint a duplicate.
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+  it("is disabled while a thread in this workspace has no resolved agent — the switch can't decide against a partial list", async () => {
+    // Exactly what a structural `session:<id>` broadcast produces: another
+    // member placed `conv-2`, so it is a MEMBER immediately, but the broadcast
+    // carries no per-viewer facts and its agent is unknown here. Deciding
+    // against the resolved subset alone would read "no thread for this agent"
+    // and mint a duplicate.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')], [CONV_1_TARGET]);
     renderPanes();
     expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
+  });
+
+  it('is enabled once every thread in the workspace has its facts', async () => {
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
+    expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled();
+  });
+
+  /**
+   * THE SHARED-WORKSPACE CASE, which is why the grid stopped reading
+   * `GET /api/agent-workspaces` at all: every filter on that listing carries
+   * `ownerId`, so a workspace owned by another drive member is never in it. The
+   * grid reached this workspace through drive MEMBERSHIP, and the tree answers
+   * through that same gate — so the controls come alive on a workspace the
+   * listing will never mention.
+   */
+  it("enables the switch for a workspace the ownership listing never returns — a colleague's workspace", async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      // The listing answers as it does for a workspace you do not own: no row,
+      // ever, however long you wait.
+      if (url !== SESSION_RECORD_URL && url.includes('/api/agent-workspaces') && !url.endsWith('/nodes')) {
+        return jsonOk({ sessions: [] });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
+
+    expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled();
   });
 
   it('has History and Settings tabs that switch the pane body', async () => {

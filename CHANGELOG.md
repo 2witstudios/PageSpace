@@ -7,6 +7,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
+  work in that drive's sessions, so a conversation of yours can live in a session someone else
+  started. Opening one of those from your conversation list gave you a pane you could read and type
+  in, but with the agent switcher and New Conversation greyed out and the pane's close button doing
+  nothing, and no explanation for any of it. Those sessions never appear in your sidebar, so that
+  list was the only way back to the conversation and it led somewhere half-broken. The pane now
+  reads what the session contains the same way it reads everything else about it, so its controls
+  work exactly as they do in a session of your own. Nothing changes about whose sandbox the
+  conversation uses, or about which sessions appear in your sidebar.
 - **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
   sent you out to the dashboard when you clicked it, including conversations that were already open
   in a session. The session was right there and you were simply not taken to it. A conversation you
