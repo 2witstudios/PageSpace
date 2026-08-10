@@ -5,6 +5,8 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import {
   isProtectedMemoryPage,
   MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
+  findProtectedMemoryPages,
 } from '@pagespace/lib/memory/memory-pages';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
@@ -247,10 +249,18 @@ async function trashPage(
   if (withChildren) {
     // Use repository seam for recursive child lookup
     const childPageIds = await pageRepository.getChildIds(page.driveId, page.id);
-    childrenCount = childPageIds.length;
+    const protectedChildIds = await findProtectedMemoryPages(childPageIds);
+    childrenCount = childPageIds.length - protectedChildIds.size;
     const allPageIds = [page.id, ...childPageIds];
 
     for (const targetId of allPageIds) {
+      // This branch recurses independently of pageService.recursivelyTrash, so
+      // it needs its own guard: the check at the top of this function only saw
+      // the page the agent named, not what is underneath it.
+      if (protectedChildIds.has(targetId)) {
+        continue;
+      }
+
       const targetPage = targetId === page.id ? page : await pageRepository.findById(targetId);
       if (!targetPage) {
         continue;
@@ -1284,6 +1294,14 @@ export const pageWriteTools = {
         // targetDriveId === page.driveId deliberately takes the same-drive bar, so
         // a model echoing back the current workspace id can't quietly swap which
         // authorization applies.
+        // Same refusal the HTTP path enforces (pageService.updatePage). Guarded
+        // once here so it covers BOTH implementations below — a cross-drive move
+        // would additionally take the page out of the Home drive the memory
+        // pointers assume.
+        if (await isProtectedMemoryPage(page.id)) {
+          throw new Error(MEMORY_PAGE_MOVE_ERROR);
+        }
+
         const isCrossDrive = !!targetDriveId && targetDriveId !== page.driveId;
 
         return isCrossDrive
