@@ -40,7 +40,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
   drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
   emptying a page erases what it says, so deleting one would only leave the AI's memory with
-  nowhere to live.
+  nowhere to live. They also stay in the Memory folder rather than being moved elsewhere, since a
+  page moved out of it can be swept up by another page's deletion. What they say stays yours to
+  edit either way.
 - **The AI stops recording things about you that do not change how it answers** — the nightly
   process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
   teams, family details and the names of colleagues, none of which affects a reply. It now records
