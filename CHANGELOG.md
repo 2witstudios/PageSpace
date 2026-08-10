@@ -33,11 +33,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **What the AI has learned about you is now a set of pages you can read and edit** — your
   personalization lived in three text boxes in Settings that a nightly process also wrote to, with
-  no indication of what it had added or why. It is now three ordinary pages in a Memory folder in
-  your Home drive: About You, Communication and Rules. You can open them, edit them, and delete
-  them like any other page — and if you delete one, that content stops being sent to the AI rather
-  than quietly reappearing. If you edit a page while the nightly process is running, your edit
-  wins. Settings keeps the on/off switch and links you to the pages.
+  no indication of what it had added or why. It is now three pages in a Memory folder in your Home
+  drive: About You, Communication and Rules. You can open them and edit them like any other page,
+  and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
+  that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
+  The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
+  drive itself, and deleting one would leave the AI's memory with nowhere to live. Empty a page to
+  erase it, or turn personalization off entirely.
 - **The AI stops recording things about you that do not change how it answers** — the nightly
   process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
   teams, family details and the names of colleagues, none of which affects a reply. It now records

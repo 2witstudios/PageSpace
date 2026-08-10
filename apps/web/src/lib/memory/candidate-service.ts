@@ -1,9 +1,15 @@
 /**
  * Memory Candidate Service
  *
- * Manages the staging table for insights awaiting corroboration.
- * Insights must be observed on multiple distinct UTC days before promotion
- * to the actual personalization pages.
+ * The staging table where insights wait for corroboration before they are
+ * allowed anywhere near the user's profile.
+ *
+ * An insight must be supported by messages the user wrote on multiple distinct
+ * UTC days. "Distinct days" means days the EVIDENCE was written on — never days
+ * this cron happened to run. That distinction is the entire guarantee: the
+ * discovery window is reread in full every night, so one unchanged message is
+ * rediscovered on consecutive runs, and counting run-days would promote a
+ * genuine one-off after two or three nights while the user said nothing new.
  */
 
 import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from '@pagespace/db/operators';

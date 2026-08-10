@@ -22,6 +22,10 @@ import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -589,6 +593,14 @@ export const pageService = {
     const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
+    }
+
+    // Memory pages are structural, like the Home drive: the cron writes to them
+    // by pointer and the settings screen links to them, so deleting one leaves
+    // a profile with nowhere to live. Emptying the page is the way to erase the
+    // content; the personalization toggle is the way to stop it being used.
+    if (await isProtectedMemoryPage(pageId)) {
+      return { success: false, error: MEMORY_PAGE_DELETE_ERROR, status: 403 };
     }
 
     // Get page info before trashing

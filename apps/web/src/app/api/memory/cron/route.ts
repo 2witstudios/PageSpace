@@ -7,14 +7,27 @@
  * Pipeline:
  * 1. Get paying users with recent activity
  * 2. For each user:
- *    a. Run discovery passes (blind - doesn't see current profile)
- *    b. Upsert candidates (with day-aware occurrence increment)
- *    c. Promote candidates that meet corroboration criteria
- *    d. Evaluate and integrate promoted candidates into pages
- *    e. Compact if fields exceed budget
- *    f. Prune stale candidates (30-day forgetting)
+ *    a. Run discovery passes (blind — never sees the current profile)
+ *    b. Stage the claims as candidates. Corroboration counts the days the
+ *       EVIDENCE was written on, not the days this cron ran: the discovery
+ *       window is reread in full every night, so cron-day counting would
+ *       promote a one-off after two or three runs.
+ *    c. Find candidates past the per-field day threshold AND first seen before
+ *       today, so nothing discovered today can land today
+ *    d. Evaluate them against the current pages; the evaluator reports which
+ *       candidates it used
+ *    e. Write the pages, subject to the rewrite guards
+ *    f. Settle each candidate on what actually landed — promoted only if it was
+ *       used AND its page write succeeded; declined ones rejected; anything
+ *       blocked stays pending for the next run. An evaluator that never
+ *       reached a decision settles nothing.
+ *    g. Compact any page over budget
+ *    h. Retention: drop candidates not re-observed in 30 days, and redact the
+ *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
+ *       path, including the failure ones.
  *
- * Paying users only: 'pro', 'founder', 'business' subscription tiers
+ * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
+ * settings UI uses, so the two cannot disagree about who gets Memory.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron

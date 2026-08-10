@@ -2,6 +2,10 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, canActorManageDrive, canActorAdministerDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
@@ -212,6 +216,12 @@ async function trashPage(
 
   if (!page) {
     throw new Error(`Page with ID "${pageId}" not found`);
+  }
+
+  // Same protection the HTTP path enforces. An agent asked to "clean up my
+  // drive" must not be able to delete the pages that hold the user's profile.
+  if (await isProtectedMemoryPage(page.id)) {
+    throw new Error(MEMORY_PAGE_DELETE_ERROR);
   }
 
   if (withChildren) {

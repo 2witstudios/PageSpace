@@ -1,12 +1,25 @@
 /**
  * Memory Integration Service
  *
- * Evaluates promoted candidates against the user's current personalization pages
- * and applies updates via whole-field rewrite (not append).
+ * Evaluates corroborated candidates against the user's current memory pages and
+ * applies the result as a whole-page rewrite rather than an append. Rewrite is
+ * what lets the profile correct and forget instead of only growing — and also
+ * what makes a bad generation able to destroy a page the user wrote by hand,
+ * hence the guards.
  *
- * Includes two deterministic guards to prevent destructive rewrites:
- * 1. 40% deletion guard — rejects any rewrite that deletes more than 40% of existing content
- * 2. Per-field budget guard — rejects rewrites exceeding the size limit
+ * Three things bound that risk, all deterministic — none asks a model to police
+ * itself:
+ *
+ * 1. Deletion guard — refuses a rewrite that drops more than 40% of the page.
+ * 2. Budget guard — refuses one over the field's ceiling (see `budgets.ts`).
+ * 3. Optimistic concurrency — the write goes through `applyPageMutation` with
+ *    the revision read moments earlier, so a user editing their own page mid-run
+ *    wins and the candidates stay pending.
+ *
+ * The evaluator reports WHICH candidates it used, and a page write reports
+ * whether a row actually changed, because the caller settles candidates on what
+ * landed. Reporting a write that never happened would retire the claims behind
+ * it permanently.
  */
 
 import { and, eq } from '@pagespace/db/operators';
@@ -64,8 +77,11 @@ const POINTER_COLUMN = {
  *    the user's own page is visible in history rather than appearing from
  *    nowhere.
  *
- * A missing pointer, or a pointer to a trashed page, is a no-op: the user
- * deleted that page and the cron does not resurrect it.
+ * A missing pointer, or a pointer to a trashed page, is a no-op rather than a
+ * reason to recreate anything. Memory pages are protected from deletion (see
+ * `isProtectedMemoryPage`), so this should not be reachable — it is the
+ * defence-in-depth branch for a page that predates the guard, or one removed by
+ * a path that bypasses it.
  */
 export async function updatePersonalizationPage(
   userId: string,

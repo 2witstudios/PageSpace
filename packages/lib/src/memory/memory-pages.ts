@@ -8,7 +8,7 @@
  * Pattern follows `packages/lib/src/commands/starter-skill-installer.ts`.
  */
 
-import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
@@ -34,6 +34,77 @@ const POINTER_COLUMN = {
   writingStyle: 'writingStylePageId',
   rules: 'rulesPageId',
 } as const;
+
+/** Refusal shown when someone tries to trash a memory page or its folder. */
+export const MEMORY_PAGE_DELETE_ERROR =
+  'Memory pages hold what the AI knows about you and cannot be deleted. Clear the page instead, or turn personalization off in Settings.';
+
+/**
+ * Whether this page is one of the protected memory pages, or their folder.
+ *
+ * These are structural, like the Home drive itself: the cron writes to them by
+ * pointer, the settings screen links to them, and provisioning assumes they
+ * exist. Deleting one leaves a user whose profile has nowhere to live — the
+ * pointer nulls, the settings screen shows a dead link, and the next run
+ * silently writes nothing.
+ *
+ * Emptying a page remains the way to erase content, and the personalization
+ * toggle remains the way to stop it being used. Both are reversible and neither
+ * breaks the structure, which is why deletion is refused rather than made to
+ * cascade into cleanup.
+ */
+export async function isProtectedMemoryPage(pageId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: userPersonalization.id })
+    .from(userPersonalization)
+    .where(
+      or(
+        eq(userPersonalization.memoryFolderId, pageId),
+        eq(userPersonalization.bioPageId, pageId),
+        eq(userPersonalization.writingStylePageId, pageId),
+        eq(userPersonalization.rulesPageId, pageId),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(row);
+}
+
+/**
+ * The subset of `pageIds` that are protected memory pages.
+ *
+ * One query for the bulk-delete path, which would otherwise fan out to one
+ * round trip per page.
+ */
+export async function findProtectedMemoryPages(pageIds: string[]): Promise<Set<string>> {
+  if (pageIds.length === 0) return new Set();
+
+  const rows = await db
+    .select({
+      memoryFolderId: userPersonalization.memoryFolderId,
+      bioPageId: userPersonalization.bioPageId,
+      writingStylePageId: userPersonalization.writingStylePageId,
+      rulesPageId: userPersonalization.rulesPageId,
+    })
+    .from(userPersonalization)
+    .where(
+      or(
+        inArray(userPersonalization.memoryFolderId, pageIds),
+        inArray(userPersonalization.bioPageId, pageIds),
+        inArray(userPersonalization.writingStylePageId, pageIds),
+        inArray(userPersonalization.rulesPageId, pageIds),
+      ),
+    );
+
+  const requested = new Set(pageIds);
+  const protectedIds = new Set<string>();
+  for (const row of rows) {
+    for (const id of [row.memoryFolderId, row.bioPageId, row.writingStylePageId, row.rulesPageId]) {
+      if (id && requested.has(id)) protectedIds.add(id);
+    }
+  }
+  return protectedIds;
+}
 
 /**
  * An OPEN transaction. See `starter-skill-installer.ts` for why this is
