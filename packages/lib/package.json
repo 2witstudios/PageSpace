@@ -1652,6 +1652,11 @@
       "import": "./dist/realtime/kick-client.js",
       "require": "./dist/realtime/kick-client.js"
     },
+    "./realtime/voice-bridge-contract": {
+      "types": "./dist/realtime/voice-bridge-contract.d.ts",
+      "import": "./dist/realtime/voice-bridge-contract.js",
+      "require": "./dist/realtime/voice-bridge-contract.js"
+    },
     "./permissions/share-link-service": {
       "types": "./dist/permissions/share-link-service.d.ts",
       "import": "./dist/permissions/share-link-service.js",

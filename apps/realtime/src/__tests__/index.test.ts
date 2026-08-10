@@ -231,6 +231,20 @@ vi.mock('../kick-handler', () => ({
   handleKickRequest: mockHandleKickRequest,
 }));
 
+// The voice attach endpoint receives a LIVE OpenAI ephemeral credential, so
+// what is asserted here is the wiring — that the signature gate runs before the
+// handler sees the body — not the handler's own behaviour (that has its own
+// suite). Mocked so no socket is ever opened by these tests.
+const mockHandleRealtimeAttachRequest = vi.fn().mockResolvedValue({
+  status: 200,
+  body: { success: true, callId: 'rtc_test' },
+});
+
+vi.mock('../voice/attach-handler', () => ({
+  handleRealtimeAttachRequest: mockHandleRealtimeAttachRequest,
+  defaultAttachHandlerDeps: { registry: {}, attach: vi.fn() },
+}));
+
 // ---------------------------------------------------------------------------
 // 2. Mock http.createServer and Socket.IO Server to capture callbacks
 // ---------------------------------------------------------------------------
@@ -697,6 +711,102 @@ describe('requestListener - /api/kick', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
     expect(mockHandleKickRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - /api/realtime/attach', () => {
+  const attachBody = JSON.stringify({
+    callId: 'rtc_abc123',
+    secret: 'ek_secret_value',
+    userId: 'u1',
+    tools: [],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHandleRealtimeAttachRequest.mockResolvedValue({
+      status: 200,
+      body: { success: true, callId: 'rtc_abc123' },
+    });
+  });
+
+  it('given a valid signature, should delegate the RAW body to the attach handler', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The raw body, byte for byte — it is what the HMAC was computed over.
+    expect(mockHandleRealtimeAttachRequest).toHaveBeenCalledWith(expect.anything(), attachBody);
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+  });
+
+  it('given NO signature, should 401 without the handler ever seeing the secret', async () => {
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: {},
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockHandleRealtimeAttachRequest).not.toHaveBeenCalled();
+  });
+
+  it('given an INVALID signature, should 401 without the handler ever seeing the secret', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'forged-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockHandleRealtimeAttachRequest).not.toHaveBeenCalled();
+  });
+
+  it('given the handler rejects, should 500 rather than leaving the request hanging', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockHandleRealtimeAttachRequest.mockRejectedValue(new Error('boom'));
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
   });
 });
 
