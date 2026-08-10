@@ -196,6 +196,34 @@ describe('stream-channel — eviction never hands out a silent gap', () => {
     expect(collect(channel, 1).frames.map((f) => f.seq)).toEqual([1, 2]);
   });
 
+  it('given a large tool-output frame, should charge its REAL size against the budget', async () => {
+    // The hole this closes: tool-output frames carry arbitrarily large payloads and have no
+    // `delta`/`text` string, so a flat estimate charged a multi-megabyte result a few hundred
+    // bytes. The byte budget then bounded nothing and the true worst case was
+    // `maxMemoryFrames × actual size`. One oversized frame must be enough to evict on bytes.
+    const channel = openStreamChannel({ messageId: 'm1', maxMemoryBytes: 50_000 });
+    channel.append(textDelta('small'));
+    channel.append(chunk({
+      type: 'tool-output-available',
+      toolCallId: 'tc1',
+      output: { rows: Array.from({ length: 4000 }, (_, i) => ({ i, pad: 'xxxxxxxxxx' })) },
+    }));
+
+    expect(channel.firstAvailableSeq).toBeGreaterThan(0);
+  });
+
+  it('given a frame that cannot be serialized, should charge it against the budget rather than let it slip under', () => {
+    // A circular payload makes JSON.stringify throw. Charging ~0 there would reopen the hole
+    // for exactly the frames we cannot inspect.
+    const circular: Record<string, unknown> = { type: 'tool-output-available', toolCallId: 'tc1' };
+    circular.self = circular;
+    const channel = openStreamChannel({ messageId: 'm1', maxMemoryBytes: 50_000 });
+    channel.append(textDelta('small'));
+    channel.append(circular as unknown as UIMessageChunk);
+
+    expect(channel.firstAvailableSeq).toBeGreaterThan(0);
+  });
+
   it('given a byte budget, should evict on bytes as well as count', () => {
     const channel = openStreamChannel({ messageId: 'm1', maxMemoryBytes: 200 });
     channel.append(textDelta('x'.repeat(100)));

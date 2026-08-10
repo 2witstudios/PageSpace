@@ -105,7 +105,13 @@ export interface SubscribeReadableOptions {
    * applies the rule above to the wrong side.
    */
   signal?: AbortSignal;
-  /** Pending-buffer caps. Exceeding either closes the stream. See the constants below. */
+  /**
+   * Pending-buffer caps. Exceeding either closes this stream (the channel keeps recording).
+   *
+   * The HTTP response subscriber should pass values well above the defaults: it is the only
+   * subscriber with no resume path, so being cut truncates a user's visible reply instead of
+   * causing a reconnect. Every other subscriber is cheap to drop and re-attach from a seq.
+   */
   maxPendingFrames?: number;
   maxPendingBytes?: number;
 }
@@ -143,37 +149,52 @@ export interface StreamChannel {
 const DEFAULT_MAX_MEMORY_FRAMES = 50_000;
 const DEFAULT_MAX_MEMORY_BYTES = 24 * 1024 * 1024;
 
-/** Pending-buffer caps for an ordinary readable subscriber. */
-export const DEFAULT_MAX_PENDING_FRAMES = 20_000;
-export const DEFAULT_MAX_PENDING_BYTES = 16 * 1024 * 1024;
+/**
+ * Pending-buffer caps for a readable subscriber, when it names none of its own.
+ *
+ * Not exported: nothing outside this module needs the numbers, and shipping exported
+ * constants ahead of their consumer is what the dead-code gate exists to catch. The one
+ * caller that will want its own values is the HTTP response — it is the only subscriber
+ * that cannot be told to resume, so cutting it truncates a user's visible reply rather
+ * than causing a recoverable reconnect. It passes generous caps explicitly when the routes
+ * are wired; the rationale lives on `SubscribeReadableOptions.maxPendingFrames` so it does
+ * not have to survive as an unused symbol in the meantime.
+ */
+const DEFAULT_MAX_PENDING_FRAMES = 20_000;
+const DEFAULT_MAX_PENDING_BYTES = 16 * 1024 * 1024;
 
 /**
- * Caps for the HTTP response subscriber specifically.
+ * Byte cost of a frame, for the ring and pending budgets.
  *
- * It is the one subscriber that cannot be told to resume — cutting it truncates a user's
- * visible reply — so it buys far more headroom before we give up. The code this replaces
- * had no bound here at all (the SDK's own queue grew unchecked), so this is a tightening,
- * just deliberately not an aggressive one.
+ * Text and reasoning deltas are the overwhelming majority of frames and carry their payload
+ * in a single string, so they are measured directly and cheaply.
+ *
+ * Everything else is MEASURED, not estimated, and that matters. A flat estimate here was a
+ * real hole: tool-output frames carry arbitrarily large payloads and have no `delta`/`text`
+ * string, so a 5 MB tool result counted as a few hundred bytes. The byte budget then bounded
+ * nothing, and the only surviving limit was the frame COUNT — i.e. the true worst case was
+ * `maxMemoryFrames × actual frame size`, not `maxMemoryBytes`. The frame-count cap does not
+ * "independently cover" that, whatever an earlier version of this comment claimed: tens of
+ * thousands of multi-megabyte frames is not a bound anyone wants.
+ *
+ * The serialization cost is affordable precisely because these frames are rare — a handful of
+ * tool boundaries per turn against thousands of text deltas — and it buys a budget that means
+ * what it says. `JSON.stringify` can throw on a circular payload; an unmeasurable frame is
+ * charged a deliberately large amount so it counts AGAINST the budget rather than slipping
+ * under it.
  */
-export const RESPONSE_MAX_PENDING_FRAMES = 200_000;
-export const RESPONSE_MAX_PENDING_BYTES = 64 * 1024 * 1024;
+const UNMEASURABLE_FRAME_BYTES = 1024 * 1024;
 
-/**
- * Rough byte cost of a frame, for the ring and pending budgets.
- *
- * Deliberately an estimate, not `JSON.stringify().length`: this runs on every frame of
- * every stream, and serializing a large tool output twice (once to measure, once to send)
- * is a real cost for a number whose only job is to decide when to stop buffering. Text
- * and reasoning deltas — the overwhelming majority — are measured almost exactly;
- * everything else takes a flat estimate, wrong only in the direction of undercounting a
- * big frame, which the frame-count cap independently covers.
- */
 const estimateFrameBytes = (chunk: UIMessageChunk): number => {
   const delta = (chunk as { delta?: unknown }).delta;
   if (typeof delta === 'string') return delta.length + 64;
   const text = (chunk as { text?: unknown }).text;
   if (typeof text === 'string') return text.length + 64;
-  return 512;
+  try {
+    return JSON.stringify(chunk).length + 64;
+  } catch {
+    return UNMEASURABLE_FRAME_BYTES;
+  }
 };
 
 interface Subscriber {

@@ -310,7 +310,16 @@ export const createStreamLifecycle = async (
    *
    * So the snapshot is simply the SDK's own reduction of everything captured, and it is now
    * lossless where it used to drop reasoning, files, sources, step boundaries and the routes'
-   * own `data-*` parts. `rawPartsCount` is still written (as the frame count) because the
+   * own `data-*` parts.
+   *
+   * KNOWN TRUNCATION, carried forward deliberately. `channel.getFrames()` returns what the
+   * memory ring still holds, so once a very long reply evicts its oldest frames this snapshot
+   * silently loses its beginning. The code this replaces truncated too (`capPartsToByteBudget`
+   * dropped the oldest merged content), so this is not a regression — but the ring's frame cap
+   * is reachable by a long multi-step agent run, which is more reachable than the old byte cap
+   * was. It is not fixed here because the fix is the durable frame log: once frames are read
+   * from Postgres rather than from memory, eviction stops being truncation at all. Tracked on
+   * the epic board rather than left as a comment nobody is accountable for. `rawPartsCount` is still written (as the frame count) because the
    * column is NOT NULL and older clients still read it; it is dropped with the parts column
    * in the contract leaf.
    */
