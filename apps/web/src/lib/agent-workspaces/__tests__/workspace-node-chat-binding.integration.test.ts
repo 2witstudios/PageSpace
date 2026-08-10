@@ -33,6 +33,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
+import { createRequire } from 'node:module';
 import { db } from '@pagespace/db/db';
 import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -47,6 +48,7 @@ import {
 } from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
 import {
   readChatTargetHolders,
+  readDeletedChatTargets,
   readWorkspaceNodeSnapshot,
   writeWorkspaceNodes,
 } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
@@ -58,6 +60,22 @@ vi.mock('@/lib/websocket/agent-workspace-events', () => ({
 }));
 
 const { applyWorkspaceNodeWrite, destroyWorkspaceTree } = await import('../workspace-node-runtime');
+
+/**
+ * A SECOND, INDEPENDENT CONNECTION. `db` is one pooled client, so a test that
+ * used it for both sides of a row lock would prove nothing (or deadlock against
+ * itself). `pg` is resolved through `@pagespace/db`'s own module context — the
+ * same physical driver the db package uses.
+ */
+const requireFromTest = createRequire(import.meta.url);
+const requireFromDb = createRequire(requireFromTest.resolve('@pagespace/db/db'));
+const { Pool } = requireFromDb('pg') as unknown as {
+  Pool: new (config: Record<string, unknown>) => {
+    connect(): Promise<{ query(text: string, params?: unknown[]): Promise<unknown>; release(): void }>;
+    end(): Promise<void>;
+  };
+};
+const secondConnection = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
 
 /** Everything this file minted; the owning users cascade the rest away. */
 const ownerIds: string[] = [];
@@ -128,6 +146,77 @@ afterAll(async () => {
   if (ownerIds.length > 0) {
     await db.delete(users).where(inArray(users.id, ownerIds));
   }
+  await secondConnection.end();
+});
+
+describe('the liveness read TAKES A ROW LOCK, which is what closes the delete race', () => {
+  /**
+   * The claim only becomes false-proof because `readDeletedChatTargets` reads
+   * `FOR SHARE`. Without the lock it is a plain `SELECT`: the delete's
+   * `UPDATE … SET "isActive" = false` can commit between that read and the node
+   * write's own commit, and the pane ends up bound to a dead thread.
+   *
+   * The lock mode is a claim about POSTGRES, so a mock cannot settle it and the
+   * conflict table is not evidence that this query takes the lock. It is driven
+   * here: hold `readDeletedChatTargets`' transaction open on one connection and
+   * watch the soft-delete's real UPDATE sit on a second one until its
+   * `lock_timeout` fires.
+   */
+  it('BLOCKS the soft-delete UPDATE for as long as the reading transaction is open', async () => {
+    const conversationId = await createConversation();
+
+    const deleter = await secondConnection.connect();
+    let refusal: unknown = null;
+    try {
+      await db.transaction(async (tx) => {
+        // The claim's liveness check, on the transaction that would write the node.
+        expect(await readDeletedChatTargets(tx, [conversationId])).toEqual([]);
+
+        // The delete's own statement, on a different connection. It must WAIT.
+        await deleter.query("SET lock_timeout = '750ms'");
+        await deleter
+          .query('UPDATE conversations SET "isActive" = false WHERE id = $1', [conversationId])
+          .catch((error: unknown) => {
+            refusal = error;
+          });
+      });
+    } finally {
+      deleter.release();
+    }
+
+    // `lock_timeout` fired, which is only possible if the row was locked.
+    expect(refusal).not.toBeNull();
+    expect(String((refusal as { message?: string }).message)).toMatch(/lock timeout/i);
+
+    // And the delete really did not land — the thread is still alive.
+    const [row] = await db
+      .select({ isActive: conversations.isActive })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(row.isActive).toBe(true);
+  });
+
+  it('lets the delete through once that transaction has ENDED — a shared lock, not a permanent one', async () => {
+    const conversationId = await createConversation();
+
+    await db.transaction(async (tx) => {
+      await readDeletedChatTargets(tx, [conversationId]);
+    });
+
+    const deleter = await secondConnection.connect();
+    try {
+      await deleter.query("SET lock_timeout = '750ms'");
+      await deleter.query('UPDATE conversations SET "isActive" = false WHERE id = $1', [conversationId]);
+    } finally {
+      deleter.release();
+    }
+
+    const [row] = await db
+      .select({ isActive: conversations.isActive })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(row.isActive).toBe(false);
+  });
 });
 
 describe('a conversation already shown by a node in ANOTHER workspace', () => {

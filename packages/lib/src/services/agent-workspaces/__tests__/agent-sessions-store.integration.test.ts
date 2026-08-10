@@ -26,6 +26,31 @@ import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes'
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-workspaces-store';
 
+/**
+ * A SECOND, INDEPENDENT CONNECTION — the only way to observe a lock.
+ *
+ * `db` is one pooled client here, and a test that used it for both sides of a
+ * lock would either deadlock against itself or prove nothing. `pg` is not
+ * hoisted for this package, so it is resolved through `@pagespace/db`'s own
+ * module context — the same physical driver the db package uses.
+ */
+import { createRequire } from 'node:module';
+const requireFromTest = createRequire(import.meta.url);
+const requireFromDb = createRequire(requireFromTest.resolve('@pagespace/db/db'));
+const { Pool } = requireFromDb('pg') as unknown as {
+  Pool: new (config: Record<string, unknown>) => {
+    connect(): Promise<{
+      query(text: string, params?: unknown[]): Promise<unknown>;
+      release(): void;
+    }>;
+    end(): Promise<void>;
+  };
+};
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 2,
+});
+
 const ownerId = createId();
 const driveId = createId();
 const agentPageId = createId();
@@ -147,6 +172,7 @@ afterAll(async () => {
   await db.delete(pages).where(eq(pages.id, agentPageId));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(eq(users.id, ownerId));
+  await pool.end();
 });
 
 beforeEach(async () => {
@@ -331,7 +357,7 @@ describe('countLive', () => {
   });
 });
 
-describe('reopenListingIfPopulated — the withdrawal and its emptiness test are ONE statement', () => {
+describe('reopenListingIfPopulated — ONE statement AND the workspace lock', () => {
   /**
    * `reopenEndedSessionListing` runs after its membership write has committed
    * and released the workspace lock, so a concurrent `endSession` can destroy
@@ -340,6 +366,12 @@ describe('reopenListingIfPopulated — the withdrawal and its emptiness test are
    * stamp) produces a workspace that is LIVE and holds ZERO nodes, which is the
    * state the emptiness test exists to prevent, so the test cannot live in the
    * caller. It is a `WHERE EXISTS` on the same UPDATE as the CAS.
+   *
+   * ONE STATEMENT IS NOT SUFFICIENT, which is the half these sequential cases
+   * cannot show and the last case below does. `EXISTS` takes no lock and reads
+   * its own statement snapshot, so an UNCOMMITTED destroy still looks like a
+   * populated tree. The advisory lock is the other half: `destroyWorkspaceTree`
+   * holds it until it commits, so acquiring it is what makes the answer current.
    */
   it('withdraws the end-intent when the workspace holds a tree', async () => {
     const endedAt = new Date();
@@ -381,6 +413,42 @@ describe('reopenListingIfPopulated — the withdrawal and its emptiness test are
     const row = await store.findById(workspaceId);
     expect(row?.endedAt).toBeNull();
     expect(row?.spriteTornDownAt).toEqual(spriteTornDownAt);
+  });
+
+  it('WAITS for an uncommitted destroy instead of reading around it — the half one statement cannot do', async () => {
+    // THE CASE THE FOUR ABOVE CANNOT REACH, and the reason `withWorkspaceLock`
+    // is in this method: every one of them is sequential, so removing the lock
+    // leaves all four green while the interleave that matters stays open.
+    //
+    // A second connection plays `destroyWorkspaceTree`: it takes the SAME
+    // advisory lock, deletes every node, and holds the transaction open. The
+    // reopen's `EXISTS` alone would read its own snapshot, still see the rows,
+    // and clear `endedAt` — leaving a LIVE workspace with ZERO nodes once the
+    // destroy commits. Under the lock it cannot start until the destroy has
+    // committed, at which point it sees an empty tree and declines.
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+
+    const destroyer = await pool.connect();
+    let reopened: boolean;
+    try {
+      await destroyer.query('BEGIN');
+      await destroyer.query('SELECT pg_advisory_xact_lock(hashtext($1))', [workspaceId]);
+      await destroyer.query('DELETE FROM agent_workspace_nodes WHERE "rootId" = $1', [workspaceId]);
+
+      // Not yet committed. A lock-free reader would still see the nodes here —
+      // which is exactly the read the lock exists to prevent this from making.
+      const racing = store.reopenListingIfPopulated({ workspaceId, endedAt });
+      // Give it long enough to have finished if it were NOT waiting on the lock.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await destroyer.query('COMMIT');
+      reopened = await racing;
+    } finally {
+      destroyer.release();
+    }
+
+    expect(reopened).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(endedAt);
   });
 });
 

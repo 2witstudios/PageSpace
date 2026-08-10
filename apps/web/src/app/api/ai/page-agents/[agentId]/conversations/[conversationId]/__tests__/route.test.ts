@@ -488,7 +488,10 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       const context = createContext(mockAgentId, mockConversationId);
       await DELETE(request, context);
 
-      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(expelAfterDelete).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        actingUserId: mockUserId,
+      });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
       );
@@ -508,7 +511,10 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(response.status).toBe(200);
       expect(expelConversationFromSession).not.toHaveBeenCalled();
-      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(expelAfterDelete).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        actingUserId: mockUserId,
+      });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
       );

@@ -535,14 +535,15 @@ async function commitUnderLock(input: {
       // The order defends against the second and not the first.
       //
       // Asked HERE it needs no executor threading and no second lock, and it
-      // NARROWS the window rather than closing it — the honest claim, because a
-      // plain SELECT takes no row lock: the delete's `UPDATE` can still commit
+      // closes the window rather than merely narrowing it — but ONLY because
+      // the read takes `FOR SHARE` on the conversation row. A plain SELECT
+      // takes no lock, and the delete's `UPDATE` would still be free to commit
       // between this read and this transaction's own commit, leaving a node
-      // bound to a thread that has just died. What closes THAT residue is on
-      // the delete's side, not here: it runs a SECOND expel after the
-      // soft-delete, which the workspace lock serializes against exactly this
-      // transaction (see `expelConversationFromSession`). The two are a pair;
-      // neither is sufficient. Only INTRODUCED targets are
+      // bound to a thread that had just died. With the row lock the two
+      // serialize on the one object both sides touch, which no arrangement of
+      // WORKSPACE locks could do — a claim may land in a workspace the delete
+      // has never heard of. See `readDeletedChatTargets` for the lock mode and
+      // the verification. Only INTRODUCED targets are
       // checked, so a resize or a move that re-sends an existing pane never
       // pays for it, and a pane whose thread died under it is not made
       // un-draggable by a write that binds nothing new.

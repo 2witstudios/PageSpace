@@ -309,6 +309,27 @@ export async function readChatTargetHolders(
  * reach this with one: `authorizePaneScope` refuses an unknown conversation as
  * `forbidden_target` first, and that 403 has to win so a caller cannot use this
  * answer as an existence oracle.
+ *
+ * **`FOR SHARE`, and it is the whole difference between narrowing this race and
+ * closing it.** A plain `SELECT` takes no lock, so a history-delete's `UPDATE
+ * … SET "isActive" = false` could still commit between this read and this
+ * transaction's own commit, leaving a node bound to a thread that had just
+ * died. `FOR SHARE` conflicts with the `FOR NO KEY UPDATE` a plain `UPDATE`
+ * acquires, so the two serialize on the CONVERSATION ROW — the one thing both
+ * sides touch, and the reason no arrangement of workspace locks could ever have
+ * settled it (a claim may land in a workspace the delete has never heard of).
+ *
+ * Whichever gets the row first, the outcome is a state someone asked for: the
+ * claim first, and the delete waits, so the node exists and is visible to the
+ * post-delete sweep that removes it; the delete first, and the claim's read
+ * blocks, then sees `isActive = false` and refuses. Verified against this
+ * repo's Postgres rather than taken from the lock-conflict table: holding
+ * `FOR SHARE` open makes the soft-delete's `UPDATE` sit until `lock_timeout`.
+ *
+ * SHARE and not UPDATE, because concurrent claims of ONE conversation must
+ * still both be allowed to read it — the single-node rule is the unique index's
+ * to enforce, not this lock's — and because a shared lock is what makes this
+ * cost nothing on the ordinary path, where no delete is racing anybody.
  */
 export async function readDeletedChatTargets(
   executor: DbExecutor,
@@ -320,7 +341,8 @@ export async function readDeletedChatTargets(
   const live = await executor
     .select({ id: conversations.id })
     .from(conversations)
-    .where(and(inArray(conversations.id, [...targetIds]), eq(conversations.isActive, true)));
+    .where(and(inArray(conversations.id, [...targetIds]), eq(conversations.isActive, true)))
+    .for('share');
 
   const alive = new Set(live.map((row) => row.id));
   return targetIds.filter((id) => !alive.has(id));

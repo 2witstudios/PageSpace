@@ -674,18 +674,19 @@ export type ExpelConversationOutcome = 'expelled' | 'refused';
  * is about to die, and arrive at the delete-then-expel outcome the order was
  * chosen to avoid. Two things close it, and they close different halves:
  *
- *  - The write funnel re-asks liveness ON THE WRITING TRANSACTION
- *    (`readDeletedChatTargets`), which refuses any claim whose liveness read
- *    would otherwise have been a pre-lock snapshot. That leaves one window: a
- *    claim that read `isActive = true` before the flip committed and writes its
- *    node after.
- *  - **A SECOND EXPEL, after the soft-delete**, closes that one, and it is the
- *    workspace lock that makes it work rather than the repetition: a claim in
- *    flight holds that lock, so the second expel queues behind it and removes
- *    whatever it wrote; a claim that starts later queues behind the second
- *    expel and then meets an `isActive` that is already false. `not_a_member`
- *    reads as success, so on the overwhelmingly common path — nothing raced —
- *    the second call is one indexed read and no write at all.
+ *  - The write funnel re-asks liveness ON THE WRITING TRANSACTION and takes
+ *    `FOR SHARE` on the conversation row while it does
+ *    (`readDeletedChatTargets`). That is what makes the two operations
+ *    serialize at all: they need not share a workspace, so the conversation row
+ *    is the only object both of them touch. Either the delete's `UPDATE` waits
+ *    for the claim to commit, or the claim's read waits for the delete and then
+ *    sees `isActive = false` and refuses.
+ *  - **{@link expelAfterDelete}, run unconditionally after the soft-delete**,
+ *    collects the first of those two outcomes: the claim committed, so its node
+ *    exists and is findable — in whatever workspace it chose, which is why that
+ *    function re-resolves rather than reusing the one this delete started from.
+ *    `not_a_member` reads as success, so on the overwhelmingly common path —
+ *    nothing raced — it is one indexed read and no write at all.
  */
 export async function expelConversationFromSession(input: {
   conversationId: string;
@@ -708,28 +709,46 @@ export async function expelConversationFromSession(input: {
 }
 
 /**
- * The SECOND expel, run after the soft-delete — see
- * {@link expelConversationFromSession}'s doc for the window it closes.
+ * THE SWEEP, run after the soft-delete has committed — the half of a history
+ * delete that catches a thread admitted while it was homeless and still alive.
  *
- * Two things about it are not obvious and both were review findings against a
- * first cut that inlined it in each route:
+ * **It is sound only because `readDeletedChatTargets` takes `FOR SHARE`**, and
+ * that dependency is the whole design. A claim's liveness read locks the
+ * conversation row for the rest of its transaction, and the soft-delete's
+ * `UPDATE` conflicts with that lock — so by the time this function runs, a
+ * claim that was in flight has necessarily COMMITTED, and its node is visible
+ * to the read below. Without the row lock this is a plain unlocked `SELECT`
+ * racing an uncommitted insert: it would answer `null`, return early, and take
+ * no lock at all, which is exactly how an earlier cut of this function gave up
+ * the case it was meant to cover.
  *
- *  1. **It re-resolves the workspace; it does not reuse the one the delete
- *     started with.** The window makes the thread HOMELESS, and a homeless
- *     thread is claimable into ANY workspace (`claimConversationInSession`
- *     proceeds on `home === null`), so the node that gets written in the race
- *     is very often in a DIFFERENT session than the one the delete expelled it
- *     from. Aimed at the original workspace, this would find `not_a_member`,
- *     report success, and leave the pane exactly where the race put it.
- *  2. **It is BEST-EFFORT and swallows its own failure.** The delete has
- *     already committed by the time this runs. Letting it throw would take the
- *     route's outer catch, answer 500 for a deletion that fully succeeded, and
- *     — worse — skip the compliance record, the `data.delete` audit event and
- *     the broadcast that tells other clients the thread is gone. A missed
- *     second expel leaves one stale pane; a missed audit record is a
- *     compliance hole.
+ * **It RE-RESOLVES rather than reusing the workspace the delete started from.**
+ * The window makes the thread homeless, and a homeless thread is claimable into
+ * ANY workspace — `claimConversationInSession` proceeds on `home === null` and
+ * never asks the caller to name the one it came from — so the node written in
+ * the race is often in a different session entirely. That is also why no
+ * arrangement of workspace locks could settle this on its own: the two sides
+ * need not share a workspace, and the conversation row is the only thing they
+ * both touch.
+ *
+ * **It is BEST-EFFORT and swallows its own failure.** The delete has already
+ * committed by the time this runs. Letting it throw would take the route's
+ * outer catch, answer 500 for a deletion that fully succeeded, and — worse —
+ * skip the compliance record, the `data.delete` audit event and the broadcast
+ * that tells other clients the thread is gone. A missed sweep leaves one stale
+ * pane; a missed audit record is a compliance hole.
+ *
+ * **Call it UNCONDITIONALLY**, not inside the caller's `if (membership)`. The
+ * pre-delete membership read states a fact about the moment of the read, and a
+ * thread that belonged to nothing THEN can belong to something by the time the
+ * history is gone — which is precisely the case this exists for, and the case a
+ * conditional call cannot reach.
  */
-export async function expelAfterDelete(conversationId: string, actingUserId: string): Promise<void> {
+export async function expelAfterDelete(input: {
+  conversationId: string;
+  actingUserId: string;
+}): Promise<void> {
+  const { conversationId, actingUserId } = input;
   try {
     const workspaceId = await findWorkspaceOfConversation(conversationId);
     if (workspaceId === null) return;
