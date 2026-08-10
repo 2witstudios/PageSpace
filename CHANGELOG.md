@@ -13,7 +13,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   new conversation into your pane itself, and the browser was still expecting to do that job — so it
   read the pane arriving correctly as evidence that something else had claimed it, and quietly
   deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
-  Pages were never affected. Second, third and fourth panes now open and stay open.
+  Pages were never affected. Second, third and fourth panes now open and stay open — and they open
+  in the pane you picked into. With more than one empty pane on screen the session had no way of
+  knowing which one you meant, so it filled whichever came first and left yours blank; the pane you
+  clicked is now part of the request.
 - **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
   work in that drive's sessions, so a conversation of yours can live in a session someone else
   started. Opening one of those from your conversation list gave you a pane you could read and type

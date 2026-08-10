@@ -615,6 +615,8 @@ describe('AgentPanes — the mint lifecycle', () => {
       expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
         conversationId: 'new-id-1',
         sessionId: 'ses-1',
+        // The pane the user picked into — without it the server places blind.
+        activeNodeId: 'n1',
       }),
     );
     await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
@@ -678,6 +680,28 @@ describe('AgentPanes — the mint lifecycle', () => {
     await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
     // The whole point: nothing tears down what the mint just made.
     expect(mockDel).not.toHaveBeenCalled();
+  });
+
+  it('lands the conversation in the pane the user picked into, not whichever was empty first', async () => {
+    // TWO unbound panes. The mint carries no placement preference today, so the
+    // server's `open()` policy falls to `panes.find(canReplace)` — the FIRST
+    // unbound pane in grid order — which is n1 while the user clicked n2.
+    seat([rootNode, paneNode('n1', WS, 0, null), paneNode('n2', WS, 1, null)], []);
+    mockPost.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    // The SECOND picker — the pane the user is actually looking at.
+    const pickers = await screen.findAllByText('Researcher');
+    await user.click(pickers[1]);
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    // The mint has to say WHERE, or the server places blind.
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+      conversationId: 'new-id-1',
+      sessionId: 'ses-1',
+      activeNodeId: 'n2',
+    });
   });
 
   it('still cleans up when the pane was taken by something ELSE mid-mint', async () => {
@@ -881,6 +905,7 @@ describe('AgentPanes — the pane bar', () => {
       expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
         conversationId: 'new-id-1',
         sessionId: 'ses-1',
+        activeNodeId: 'n1',
       }),
     );
   });

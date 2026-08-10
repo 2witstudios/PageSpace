@@ -101,6 +101,13 @@ export interface AdmitConversationInput<Tx = unknown> {
   workspaceId: string;
   /** The spawning conversation, never evicted by the thing it spawned. */
   excludeTargetId?: string;
+  /**
+   * The pane a HUMAN pointed at, when one did. A preference the placement policy
+   * weighs first — never an instruction, since `open()` still refuses a pane it
+   * may not give up. Absent for anything an agent or a background path admits:
+   * those add a surface and have no pane to speak for.
+   */
+  activeNodeId?: string;
   /** Work that must land in the SAME transaction as the node. Only the create path has any. */
   within?: (tx: Tx) => Promise<void>;
 }

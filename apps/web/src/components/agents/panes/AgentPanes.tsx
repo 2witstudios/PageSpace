@@ -806,14 +806,25 @@ export default function AgentPanes({
       if (showsSpinner) beginMint(nodeId, mint);
 
       try {
+        // `activeNodeId` is WHERE, and it is not optional in practice. The mint's
+        // own server write admits what it creates, and admitting places — so
+        // without a preference the shared policy falls to "the first pane that
+        // may be given up", which with two empty panes open is whichever comes
+        // first in grid order rather than the one under the user's cursor. The
+        // agent would appear in a pane they did not pick and theirs would stay
+        // empty. Naming the pane makes the server's placement the user's choice.
         if (agentPageId === null) {
           // The ASSISTANT: no agent page, so the workspace-centric creator is
           // the path (page-agents has no page to hang this on).
-          await post(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations`, { conversationId });
+          await post(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations`, {
+            conversationId,
+            activeNodeId: nodeId,
+          });
         } else {
           await post(`/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`, {
             conversationId,
             sessionId,
+            activeNodeId: nodeId,
           });
         }
         const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint, conversationId));

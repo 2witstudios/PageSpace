@@ -139,6 +139,7 @@ export async function createConversationInSessionWith<Tx>(
     workspaceId,
     title = null,
     excludeTargetId,
+    activeNodeId,
   }: {
     conversationId: string;
     userId: string;
@@ -149,6 +150,8 @@ export async function createConversationInSessionWith<Tx>(
     title?: string | null;
     /** The spawning conversation, never evicted by the thing it spawned. */
     excludeTargetId?: string;
+    /** The pane a human picked into — see {@link AdmitConversationInput.activeNodeId}. */
+    activeNodeId?: string;
   },
 ): Promise<void> {
   // Cheap, early exits before opening a transaction. Unlike the version this
@@ -178,6 +181,7 @@ export async function createConversationInSessionWith<Tx>(
     conversationId,
     workspaceId,
     ...(excludeTargetId === undefined ? {} : { excludeTargetId }),
+    ...(activeNodeId === undefined ? {} : { activeNodeId }),
     // THE SHARED TRANSACTION. Everything below runs on the same executor as the
     // node write, so a creator that throws takes the node with it and a node
     // the database refuses takes the conversation with it. Neither can outlive
