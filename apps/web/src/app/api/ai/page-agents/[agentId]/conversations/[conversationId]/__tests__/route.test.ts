@@ -69,6 +69,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   expelConversationFromSession: vi.fn(),
+  expelAfterDelete: vi.fn(),
   findWorkspaceOfConversation: vi.fn(),
   // Real semantics for the mock: just run `fn` — the route's own tests
   // aren't about lock contention (that's `agent-workspaces-runtime`'s own
@@ -82,7 +83,11 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
-import { expelConversationFromSession, findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  expelAfterDelete,
+  expelConversationFromSession,
+  findWorkspaceOfConversation,
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -474,6 +479,21 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
   });
 
   describe('the membership half of a history delete', () => {
+    it('runs the SECOND expel, and runs it AFTER the history is gone', async () => {
+      // The twin of the global route's — see it for why the order is the whole
+      // content of the assertion.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      await DELETE(request, context);
+
+      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
+      );
+    });
+
     it("DELETES a thread that is its workspace's last conversation", async () => {
       // See the global route's twin: the never-empty guard defended a state
       // nobody can reach any more, so its 409 only ever refused legitimate work.

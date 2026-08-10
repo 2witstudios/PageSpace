@@ -43,6 +43,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   expelConversationFromSession: vi.fn(),
+  expelAfterDelete: vi.fn(),
   findWorkspaceOfConversation: vi.fn(),
   // Pass-through: these DELETE-route tests are about the guard-then-delete
   // sequence at the call site, not lock contention (that's
@@ -53,7 +54,11 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { expelConversationFromSession, findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  expelAfterDelete,
+  expelConversationFromSession,
+  findWorkspaceOfConversation,
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -399,6 +404,24 @@ describe('DELETE /api/ai/global/[id]', () => {
   });
 
   describe('the membership half of a history delete', () => {
+    it('runs the SECOND expel, and runs it AFTER the history is gone', async () => {
+      // Nothing pinned this call, so deleting the line left both DELETE suites
+      // green (review finding). The ORDER is the whole content of it: before
+      // the soft-delete it would be the first expel again; after it, it is the
+      // sweep that catches a claim admitted while the thread was homeless and
+      // still alive.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+
+      const request = createDeleteRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+      await DELETE(request, context);
+
+      expect(expelAfterDelete).toHaveBeenCalledWith(mockConversationId, mockUserId);
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
+      );
+    });
+
     it("DELETES a thread that is its workspace's last conversation", async () => {
       // The never-empty guard is gone, and with it the `last_conversation` 409.
       // It refused this delete to uphold "a workspace is never empty" — an

@@ -3,7 +3,11 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { expelConversationFromSession, findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  expelAfterDelete,
+  expelConversationFromSession,
+  findWorkspaceOfConversation,
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -272,10 +276,7 @@ export async function DELETE(
       // Ordered deliberately — see `expelConversationFromSession`'s doc for
       // why the survivable failure is the one that can happen here.
       await conversationRepository.softDeleteConversation(agentId, conversationId);
-      // AND AGAIN — the twin of the global route's second expel. The order
-      // alone survives a crash but not a concurrent claim, and the workspace
-      // lock is what makes the repeat sufficient. See the expel's own doc.
-      await expelConversationFromSession({ conversationId, workspaceId, actingUserId: auth.userId });
+      await expelAfterDelete(conversationId, auth.userId);
     } else {
       // Not a member of any workspace — no listing to protect, no lock needed.
       await conversationRepository.softDeleteConversation(agentId, conversationId);

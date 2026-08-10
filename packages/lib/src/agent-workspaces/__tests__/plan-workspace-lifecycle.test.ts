@@ -327,7 +327,6 @@ describe('planSessionReopen', () => {
   });
 });
 
-
 describe('planAgentSessionLifecycle — reprovision (heal a row whose Sprite is unusable)', () => {
   it('given a provisioned row, should create while CASing against the old pointer', () => {
     const plan = planAgentSessionLifecycle({ row: row(), intent: 'reprovision', canRun: true, now: NOW });

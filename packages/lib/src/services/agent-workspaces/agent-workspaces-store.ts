@@ -25,6 +25,7 @@
  */
 
 import { planSessionReopen, type AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { withWorkspaceLock } from './workspace-lock';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
 /** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
@@ -243,11 +244,16 @@ export interface AgentSessionStore {
    * read-nodes → destroy → stamp produces exactly the state the check exists to
    * prevent: a LIVE workspace, in the sidebar, holding ZERO nodes.
    *
-   * So the emptiness test is a `WHERE EXISTS` on the same UPDATE as the CAS.
-   * Postgres evaluates it against the row version the statement locks, so there
-   * is no window between the asking and the writing. Answers whether the
-   * withdrawal landed; `false` means the tree went, or a concurrent re-end moved
-   * `endedAt`, and both are states the caller must leave alone.
+   * So the emptiness test is a `WHERE EXISTS` on the same UPDATE as the CAS,
+   * and the whole statement runs under the workspace's advisory lock. One
+   * statement alone is not sufficient: `EXISTS` takes no lock and reads this
+   * statement's snapshot, so an UNCOMMITTED destroy still looks like a
+   * populated tree. The lock is what makes the answer current, because the
+   * destroy holds it until it commits.
+   *
+   * Answers whether the withdrawal landed; `false` means the tree went, or a
+   * concurrent re-end moved `endedAt`, and both are states the caller must
+   * leave alone.
    */
   reopenListingIfPopulated(input: { workspaceId: string; endedAt: Date }): Promise<boolean>;
   /**
@@ -593,21 +599,39 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       // the stamp. Splitting it into a read plus `applyStamps` reintroduces
       // exactly the interleave this exists to close.
       //
+      // UNDER THE WORKSPACE LOCK, and one statement inside it. Both halves are
+      // needed and neither substitutes for the other:
+      //
+      //  * ONE STATEMENT, so the emptiness test and the stamp cannot be split
+      //    by anything at all.
+      //  * THE LOCK, because a lone `EXISTS` is not enough. It takes no lock on
+      //    `agent_workspace_nodes` and is evaluated against this statement's
+      //    snapshot, so a destroy that has deleted every node and NOT YET
+      //    COMMITTED is invisible to it — the rows still look present, the
+      //    UPDATE proceeds, the destroy commits, and the workspace is left LIVE
+      //    with ZERO nodes, which is the exact state this method exists to make
+      //    unreachable. `destroyWorkspaceTree` runs under
+      //    `pg_advisory_xact_lock`, released only at its commit, so acquiring
+      //    the same lock means the destroy has finished and its deletions are
+      //    visible to the snapshot taken after.
+      //
       // WHICH columns are withdrawn stays the planner's decision
       // (`planSessionReopen` — `endedAt` only, the confirmed-kill stamp
       // survives, and its doc carries the reason). Only the CONDITION is new.
-      const updated = await db
-        .update(agentWorkspaces)
-        .set({ ...stampColumns(planSessionReopen()), updatedAt: now() })
-        .where(
-          and(
-            eq(agentWorkspaces.id, workspaceId),
-            eq(agentWorkspaces.endedAt, endedAt),
-            sql`EXISTS (SELECT 1 FROM ${agentWorkspaceNodes} WHERE ${agentWorkspaceNodes.rootId} = ${workspaceId})`,
-          ),
-        )
-        .returning({ id: agentWorkspaces.id });
-      return updated.length > 0;
+      return withWorkspaceLock(workspaceId, async (tx) => {
+        const updated = await tx
+          .update(agentWorkspaces)
+          .set({ ...stampColumns(planSessionReopen()), updatedAt: now() })
+          .where(
+            and(
+              eq(agentWorkspaces.id, workspaceId),
+              eq(agentWorkspaces.endedAt, endedAt),
+              sql`EXISTS (SELECT 1 FROM ${agentWorkspaceNodes} WHERE ${agentWorkspaceNodes.rootId} = ${workspaceId})`,
+            ),
+          )
+          .returning({ id: agentWorkspaces.id });
+        return updated.length > 0;
+      });
     },
 
     async requestTeardown({ workspaceId, sandboxId, spriteInstanceId, at }) {

@@ -708,6 +708,41 @@ export async function expelConversationFromSession(input: {
 }
 
 /**
+ * The SECOND expel, run after the soft-delete — see
+ * {@link expelConversationFromSession}'s doc for the window it closes.
+ *
+ * Two things about it are not obvious and both were review findings against a
+ * first cut that inlined it in each route:
+ *
+ *  1. **It re-resolves the workspace; it does not reuse the one the delete
+ *     started with.** The window makes the thread HOMELESS, and a homeless
+ *     thread is claimable into ANY workspace (`claimConversationInSession`
+ *     proceeds on `home === null`), so the node that gets written in the race
+ *     is very often in a DIFFERENT session than the one the delete expelled it
+ *     from. Aimed at the original workspace, this would find `not_a_member`,
+ *     report success, and leave the pane exactly where the race put it.
+ *  2. **It is BEST-EFFORT and swallows its own failure.** The delete has
+ *     already committed by the time this runs. Letting it throw would take the
+ *     route's outer catch, answer 500 for a deletion that fully succeeded, and
+ *     — worse — skip the compliance record, the `data.delete` audit event and
+ *     the broadcast that tells other clients the thread is gone. A missed
+ *     second expel leaves one stale pane; a missed audit record is a
+ *     compliance hole.
+ */
+export async function expelAfterDelete(conversationId: string, actingUserId: string): Promise<void> {
+  try {
+    const workspaceId = await findWorkspaceOfConversation(conversationId);
+    if (workspaceId === null) return;
+    await expelConversationFromSession({ conversationId, workspaceId, actingUserId });
+  } catch (error) {
+    loggers.api.error('Post-delete expel failed; a pane may still be bound to a deleted thread', undefined, {
+      conversationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * A plain, lock-free, INFORMATIONAL read — not a guard. Ending a session is a
  * genuinely unconditional act (the sidebar's own "End session" is reachable
  * with any number of conversations, by design), so this never blocks
