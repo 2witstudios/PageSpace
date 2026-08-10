@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { seedUser, type SeededUser } from '../support/db';
 import { sessionPost, sessionDelete, sessionGet } from '../support/http';
+import { closePane as closePaneCommand } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { authedContext } from '../fixtures/chat.fixture';
 
 /**
@@ -209,21 +211,28 @@ async function dropChatNodeServerSide(
   if (!read.ok()) {
     throw new Error(`dropChatNodeServerSide: read answered ${read.status()}: ${(await read.text()).slice(0, 500)}`);
   }
-  const tree = (await read.json()) as {
-    rev: number;
-    nodes: Array<{ id: string; nodeType: string; target: { kind: string; id: string } | null }>;
-  };
+  const tree = (await read.json()) as { rev: number; nodes: WorkspaceNode[] };
   const node = tree.nodes.find(
     (candidate) =>
       candidate.nodeType === 'pane' && candidate.target?.kind === 'chat' && candidate.target.id === conversationId,
   );
   if (!node) throw new Error(`dropChatNodeServerSide: no chat node holds ${conversationId}`);
 
+  // COMPILED THROUGH THE SAME COMMAND THE BROWSER RUNS, not hand-rolled as
+  // `{put: [], drop: [nodeId]}`. A bare drop is not what closing a pane is: the
+  // node's parent split may be left holding one child, which `validateTree`
+  // refuses as `degenerate_split` — so the hand-rolled version 400s on exactly
+  // the grid this spec builds. `closePane` composes the destroy with the
+  // collapse, and driving it here is what keeps this test on the real path
+  // rather than on a second, simpler one that only looks like it.
+  const command = closePaneCommand(tree.nodes, { nodeId: node.id });
+  if (!command.ok) throw new Error(`dropChatNodeServerSide: closePane refused: ${command.code}`);
+
   const response = await sessionPost(
     request,
     `/api/agent-workspaces/${encodeURIComponent(sessionId)}/nodes`,
     user,
-    { baseRev: tree.rev, put: [], drop: [node.id] },
+    { baseRev: tree.rev, put: command.write.put, drop: command.write.drop },
   );
   if (!response.ok()) {
     throw new Error(

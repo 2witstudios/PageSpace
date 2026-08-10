@@ -262,6 +262,15 @@ beforeEach(() => {
     isLoading: false,
   });
   mockFetchWithAuth.mockImplementation(async (url: string) => jsonOk(defaultFetchRoute(url)));
+  // A RESOLVED PROMISE BY DEFAULT, so no test depends on another having set one.
+  // `vi.clearAllMocks()` clears calls but NOT implementations, so `del` used to
+  // arrive here carrying whatever `mockResolvedValue` the previous test left on
+  // it — and the terminal-close test relied on that leak without saying so.
+  // When the chat close stopped issuing a DELETE, the leak stopped too:
+  // `closeShell`'s `void del(...).catch(...)` got `undefined` back and threw
+  // inside a React event handler. Every test still passed and the RUN exited 1
+  // on the unhandled error.
+  mockDel.mockResolvedValue(undefined);
 });
 
 

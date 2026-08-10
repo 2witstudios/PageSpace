@@ -428,7 +428,7 @@ describe('the conversation:closed announcement', () => {
 
   it('announces NOTHING for a hand-off — the same thread on a different node', async () => {
     // THE CASE A `drop`-shaped implementation gets wrong. The write drops
-    // `pane-a` and puts `pane-c` holding the same conversation; the thread
+    // `pane-b` and puts `pane-c` holding the same conversation; the thread
     // never left the workspace, so telling every subscriber it closed would be
     // a lie the sidebar acts on.
     const result = await write({
