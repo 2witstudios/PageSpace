@@ -3,7 +3,7 @@
 All notable user-facing changes to PageSpace are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.7.1] — 2026-08-10
+## [Unreleased]
 
 ### Fixed
 
@@ -16,6 +16,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   reads what the session contains the same way it reads everything else about it, so its controls
   work exactly as they do in a session of your own. Nothing changes about whose sandbox the
   conversation uses, or about which sessions appear in your sidebar.
+
+## [1.7.1] — 2026-08-10
+
+### Fixed
+
 - **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
   sent you out to the dashboard when you clicked it, including conversations that were already open
   in a session. The session was right there and you were simply not taken to it. A conversation you
