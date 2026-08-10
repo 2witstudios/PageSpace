@@ -119,11 +119,20 @@ export interface AgentPanesProps {
   /** Fired after the workspace was ended — the host owns what renders next. */
   onSessionEnded?: () => void;
   /**
-   * Fired after a conversation's LISTING closed. `next` is always `null` now:
-   * closing never rebinds a pane to a replacement, because the grid is allowed
-   * to be empty. The shape is kept so a host tracking "current conversation"
-   * independently of the tree can decide for itself what a closed conversation
-   * means for whatever it is showing elsewhere.
+   * Fired after a conversation's LISTING closed. TWO callers, and `next` is what
+   * tells them apart:
+   *
+   *  - A direct close sends `next: null`. Closing never rebinds a pane to a
+   *    replacement, because the grid is allowed to be empty — so there is
+   *    nothing to hand the host but the fact.
+   *  - The cleanup after a mint or a switch sends the REPLACEMENT's id, because
+   *    there the thread that closed was displaced by one the user is now looking
+   *    at. `AgentPageView` branches on exactly that: a non-null `next` whose
+   *    `nextAgentPageId` is its own page navigates to it instead of minting.
+   *
+   * The shape is kept so a host tracking "current conversation" independently of
+   * the tree can decide for itself what a closed conversation means for whatever
+   * it is showing elsewhere.
    */
   onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   /**
@@ -499,18 +508,17 @@ export default function AgentPanes({
   );
 
   /**
-   * Take the node out of the grid and close its conversation's listing — silent
-   * on success, since closing a listing never touches history.
+   * Destroy the node and close its conversation's listing — silent on success,
+   * since closing a listing never touches history.
    *
-   * The node PARKS rather than vanishing, so the thread's row stays in the
-   * sidebar right up until the DELETE confirms it is gone. There is no rebind
-   * branch any more: the grid is allowed to be empty.
+   * There is no rebind branch any more: the grid is allowed to be empty, so
+   * nothing has to be found to put in the gap.
    */
   const closeConversationListing = useCallback(
     async (nodeId: string, conversationId: string) => {
-      // Layout first, and deliberately: parking is reversible and instant, and
-      // the alternative — waiting on the DELETE — is what made a close feel like
-      // the app had ignored it.
+      // Layout first, and deliberately: the local write is instant and the
+      // broadcast reconciles it, where the alternative — waiting on the DELETE —
+      // is what made a close feel like the app had ignored it.
       closePane(sessionId, nodeId);
       try {
         await del(

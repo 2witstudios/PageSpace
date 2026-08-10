@@ -234,8 +234,15 @@ export function resolveChatClaims(params: {
 export type DerivationNoteCode =
   /** A column holding no panes. It renders nothing today and would be a `degenerate_split` tomorrow. */
   | 'empty_column_dropped'
-  /** A column id that collided with a pane id — legal in two tables, impossible in one. */
+  /** A column id that collided with an id already taken — legal in two tables, impossible in one. */
   | 'column_id_renamed'
+  /**
+   * A pane already held the id `rootSeedFor` mints for this workspace, so the
+   * root took a suffixed one. Worth reporting rather than swallowing: the
+   * derived id is what makes a client's seed and the server's the SAME write, so
+   * a renamed root is a workspace that quietly does not have that property.
+   */
+  | 'root_id_renamed'
   /** `kind` without `targetId`, or the reverse. Half a binding is a corrupt pane, not a partial one. */
   | 'pane_target_half_bound'
   /** `kind` outside `'chat' | 'terminal' | 'page'`. The old column had no check constraint. */
@@ -774,7 +781,19 @@ export function deriveWorkspaceNodes(
   // after its workspace. A renamed root loses the convergence above and keeps
   // the migration correct, which is the right way round.
   const seed = rootSeedFor(workspaceId);
-  const rootId = ids.allocate(seed.id, 'root').id;
+  const allocatedRoot = ids.allocate(seed.id, 'root');
+  if (allocatedRoot.renamed) {
+    // REPORTED, not swallowed. Every other rename on this path emits a note, and
+    // this one costs more than a name: the workspace keeps a correct tree but
+    // loses the convergence the derived id exists to provide, and nothing else
+    // in the run would say so.
+    note(
+      'root_id_renamed',
+      workspaceId,
+      `a pane already holds the id this workspace's root derives from; the root is "${allocatedRoot.id}"`,
+    );
+  }
+  const rootId = allocatedRoot.id;
   const nodes: WorkspaceNode[] = [{ ...seed, id: rootId }];
 
   // ---------------------------------------------------------------------
@@ -877,7 +896,10 @@ export function deriveWorkspaceNodes(
       note(
         'column_id_renamed',
         entry.column.id,
-        `column id collides with a pane id in the same workspace; the split is "${allocated.id}"`,
+        // Not "collides with a pane" any more: the ROOT is allocated before the
+        // columns and now prefers the workspace's own id, so it is a second
+        // thing this can collide with.
+        `column id is already taken in this workspace; the split is "${allocated.id}"`,
       );
     }
     const split: SplitNode = {

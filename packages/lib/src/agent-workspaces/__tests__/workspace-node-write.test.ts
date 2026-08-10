@@ -208,6 +208,33 @@ describe('an id that names two nodes', () => {
     expect(decision.code).toBe('duplicate_id');
   });
 
+  it('refuses a conflicting repeat of an id the workspace ALREADY HOLDS', () => {
+    // The half the tree cannot see, and the reason the check is on the payload.
+    // `upsertNodes` keys `changed` by id and REPLACES a stored node in place, so
+    // the second copy silently wins and the validated tree holds exactly one —
+    // `duplicate_id` never fires. `changedPut` meanwhile keeps both, so
+    // `persist.put` used to carry one conflict key twice and Postgres answered
+    // "cannot affect row a second time": a 500 for a payload the caller should
+    // have been told was a 400.
+    const decision = decide(TWO_PANES, {
+      put: [
+        pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p1' } }),
+        pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p2' } }),
+      ],
+    });
+    expect(decision.status).toBe('invalid');
+    if (decision.status !== 'invalid') return;
+    expect(decision.code).toBe('duplicate_id');
+  });
+
+  it('collapses an identical repeat of a STORED id too, which is a retry, not a conflict', () => {
+    const bound = pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p1' } });
+    const decision = decide(TWO_PANES, { put: [bound, { ...bound }] });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    expect(decision.persist.put.filter((node) => node.id === 'pane-a')).toHaveLength(1);
+  });
+
   it('collapses the same id said twice IDENTICALLY, because that payload means one thing', () => {
     // Not a relaxation of the check above: the two namings there disagree about
     // `position`, so the tree they describe is ambiguous and stays refused.

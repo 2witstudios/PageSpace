@@ -119,6 +119,24 @@ describe('deriveWorkspaceNodes — the structure it produces', () => {
     expect(derived.rows[0]?.id).toBe(rootSeedFor('w1').id);
   });
 
+  it('reports it when a pane already holds the id the root derives from', () => {
+    // The rename keeps the migration correct and silently costs the workspace
+    // the seed-convergence the derived id exists for. Every other rename on this
+    // path emits a note; this one has more to say than those do, so it must not
+    // be the one that goes unreported.
+    const derived = deriveWorkspaceNodes(
+      source({
+        workspaceId: 'w1',
+        columns: [column('c1', 0)],
+        panes: [pane('w1', 'c1', 0, chat('t1'))],
+        conversations: [member('t1')],
+      }),
+    );
+    assertWritable(derived);
+    expect(derived.notes.map((entry) => entry.code)).toContain('root_id_renamed');
+    expect(derived.rows[0]?.id).not.toBe('w1');
+  });
+
   it('turns a multi-pane column into a split of axis column, panes in order', () => {
     const derived = deriveWorkspaceNodes(
       source({

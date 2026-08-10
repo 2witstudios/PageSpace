@@ -128,27 +128,39 @@ function sameNode(left: WorkspaceNode, right: WorkspaceNode): boolean {
  * Every first command against an empty tree failed.
  *
  * **Identical only, deliberately.** Two DIFFERENT nodes claiming one id is a
- * real fault with a real code, and collapsing it last-wins would judge a tree on
- * whichever half survived and then store that half silently. Those repeats are
- * left in place so the validator still refuses them. What is dropped is
- * strictly the repetition that says nothing: same id, same everything
- * {@link sameNode} compares, so the payload means the same with it as without.
+ * real fault: collapsing it last-wins would judge a tree on whichever half
+ * survived and then store that half silently. So this REFUSES that payload
+ * itself, with the validator's own code and wording, rather than collapsing it
+ * and rather than passing it on for {@link validateTree} to catch.
  *
- * Done HERE rather than at the seed's call site because the duplicate must also
- * leave `persist.put`: a multi-row `INSERT … ON CONFLICT DO UPDATE` carrying one
- * key twice is a Postgres error ("cannot affect row a second time"), so a fix
- * that only satisfied the validator would trade the 400 for a 500.
+ * **Refusing here is not belt-and-braces; the validator cannot see it.** A
+ * repeat whose id is ALREADY STORED never reaches the tree as two nodes:
+ * {@link upsertNodes} keys `changed` by id and replaces in place, so the second
+ * copy silently wins and `next` holds exactly one. `duplicate_id` fires only
+ * when the id is NEW and both copies are appended. The two halves then part
+ * ways: `changedPut` is filtered from this list, which still held both, so
+ * `persist.put` carried one conflict key twice and a multi-row
+ * `INSERT … ON CONFLICT DO UPDATE` raised "cannot affect row a second time" — a
+ * 500 where the caller should have been told 400. That is why the check lives
+ * on the payload, where both copies are still visible, instead of on the tree.
  */
-function collapseRepeats(incoming: readonly WorkspaceNode[]): WorkspaceNode[] {
+type CollapsedPut =
+  | { status: 'ok'; nodes: WorkspaceNode[] }
+  | { status: 'conflict'; id: string };
+
+function collapseRepeats(incoming: readonly WorkspaceNode[]): CollapsedPut {
   const kept: WorkspaceNode[] = [];
   const byId = new Map<string, WorkspaceNode>();
   for (const node of incoming) {
     const seen = byId.get(node.id);
-    if (seen !== undefined && sameNode(seen, node)) continue;
+    if (seen !== undefined) {
+      if (!sameNode(seen, node)) return { status: 'conflict', id: node.id };
+      continue;
+    }
     byId.set(node.id, node);
     kept.push(node);
   }
-  return kept;
+  return { status: 'ok', nodes: kept };
 }
 
 /**
@@ -230,10 +242,23 @@ export function decideNodeWrite(request: NodeWriteRequest): NodeWriteDecision {
   if (baseRev !== rev) return { status: 'stale' };
 
   // The payload's nodes, with any node it named twice IDENTICALLY reduced to
-  // one. See {@link collapseRepeats}: the root seed arrives from both ends of a
-  // first write, and everything below — the validated tree, the change
-  // measurement, the storage instruction — must see one of it.
-  const incoming = collapseRepeats(put.map(nodeOfWire));
+  // one — and a payload that named one id twice DIFFERENTLY refused outright.
+  // See {@link collapseRepeats}: the root seed arrives from both ends of a first
+  // write, so everything below (the validated tree, the change measurement, the
+  // storage instruction) must see one of it; and a conflicting repeat has to be
+  // caught here, because a repeat of a STORED id never reaches the tree as two
+  // nodes for `validateTree` to refuse.
+  const collapsed = collapseRepeats(put.map(nodeOfWire));
+  if (collapsed.status === 'conflict') {
+    return {
+      status: 'invalid',
+      code: 'duplicate_id',
+      // The validator's own wording, so one fault reads the same to the caller
+      // whichever of the two places notices it.
+      detail: `id "${collapsed.id}" names more than one node; ids are unique`,
+    };
+  }
+  const incoming = collapsed.nodes;
 
   // 3. VALIDITY OF THE RESULT. Drop then upsert, so an id named in BOTH
   //    resolves as PUT WINS — which is the decision `persistedWrite` below
