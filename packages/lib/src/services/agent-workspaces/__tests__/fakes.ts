@@ -21,6 +21,7 @@ import type {
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type { AgentSessionRecord, AgentSessionStore } from '../agent-workspaces-store';
 import { stampColumns } from '../agent-workspaces-store';
+import { planSessionReopen } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
 import type { SessionShellRecord, SessionShellStore } from '../workspace-shells-store';
 
@@ -61,7 +62,7 @@ export interface FakeAgentSessionStore {
   /** Models `machine_sprite_reclaims`: sandboxId → spriteInstanceId. */
   reclaims: Map<string, string | null>;
   calls: { create: number; updateSpriteIdentity: number };
-  /** conversationId → workspaceId, modelling `conversations.workspaceId`. */
+  /** conversationId → workspaceId, modelling the chat-bound node that IS membership. */
   conversationBindings: Map<string, string>;
 }
 
@@ -83,8 +84,8 @@ export function makeAgentSessionStore(
     },
 
     async findByConversation(conversationId) {
-      // Models conversations.workspaceId: a thread with no binding (or whose
-      // session is gone) resolves to null, never to a fallback.
+      // Models the chat-bound node: a thread with no binding (or whose session
+      // is gone) resolves to null, never to a fallback.
       const workspaceId = conversationBindings.get(conversationId);
       if (workspaceId === undefined) return null;
       return rows.get(workspaceId) ?? null;
@@ -211,6 +212,20 @@ export function makeAgentSessionStore(
       if (cas?.sandboxId !== undefined && (row.sandboxId ?? null) !== (cas.sandboxId ?? null)) return false;
       if (cas?.endedAt !== undefined && (row.endedAt?.getTime() ?? null) !== (cas.endedAt?.getTime() ?? null)) return false;
       rows.set(workspaceId, { ...row, ...columns, updatedAt: now() });
+      return true;
+    },
+
+    async reopenListingIfPopulated({ workspaceId, endedAt }) {
+      const row = rows.get(workspaceId);
+      if (!row) return false;
+      // BOTH conditions or neither, which is what the real one buys by putting
+      // them in one statement: a fake that checked emptiness separately would
+      // let a test pass over the interleave the single statement exists to make
+      // impossible.
+      if ((row.endedAt?.getTime() ?? null) !== endedAt.getTime()) return false;
+      const holdsATree = [...conversationBindings.values()].includes(workspaceId);
+      if (!holdsATree) return false;
+      rows.set(workspaceId, { ...row, ...stampColumns(planSessionReopen()), updatedAt: now() });
       return true;
     },
 

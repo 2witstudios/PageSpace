@@ -24,7 +24,7 @@
  *    (moving a thread is a fork).
  */
 
-import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { planSessionReopen, type AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
 /** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
@@ -228,6 +228,28 @@ export interface AgentSessionStore {
     stamps: AgentSessionRowStamps;
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
+  /**
+   * Withdraw an end-intent, but ONLY while the workspace still holds a tree —
+   * as ONE statement, which is the whole reason this is not `applyStamps` with
+   * a condition the caller checks first.
+   *
+   * The caller (`reopenEndedSessionListing`) runs after its own membership write
+   * has committed and released the workspace lock, because a reopen failure must
+   * never surface as a creation failure for a conversation that is already a
+   * member (review finding, PR #2336). That means a concurrent `endSession` can
+   * destroy the tree at any point — INCLUDING between a read of the node count
+   * and the stamp that follows it. Checking emptiness in the caller therefore
+   * decides on a snapshot the update can no longer vouch for, and the interleave
+   * read-nodes → destroy → stamp produces exactly the state the check exists to
+   * prevent: a LIVE workspace, in the sidebar, holding ZERO nodes.
+   *
+   * So the emptiness test is a `WHERE EXISTS` on the same UPDATE as the CAS.
+   * Postgres evaluates it against the row version the statement locks, so there
+   * is no window between the asking and the writing. Answers whether the
+   * withdrawal landed; `false` means the tree went, or a concurrent re-end moved
+   * `endedAt`, and both are states the caller must leave alone.
+   */
+  reopenListingIfPopulated(input: { workspaceId: string; endedAt: Date }): Promise<boolean>;
   /**
    * Record the durable teardown INTENT, BEFORE the kill. The one stamp written
    * ahead of its IO: its entire job is to survive a crash between "we decided to
@@ -561,6 +583,30 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       // row was deleted) is not a refusal — matches the prior unconditional
       // behavior.
       if (!cas) return true;
+      return updated.length > 0;
+    },
+
+    async reopenListingIfPopulated({ workspaceId, endedAt }) {
+      // ONE statement, and see the interface doc for why that is the whole
+      // point: both conditions are evaluated against the row version this
+      // UPDATE locks, so a destroy cannot slip between the emptiness test and
+      // the stamp. Splitting it into a read plus `applyStamps` reintroduces
+      // exactly the interleave this exists to close.
+      //
+      // WHICH columns are withdrawn stays the planner's decision
+      // (`planSessionReopen` — `endedAt` only, the confirmed-kill stamp
+      // survives, and its doc carries the reason). Only the CONDITION is new.
+      const updated = await db
+        .update(agentWorkspaces)
+        .set({ ...stampColumns(planSessionReopen()), updatedAt: now() })
+        .where(
+          and(
+            eq(agentWorkspaces.id, workspaceId),
+            eq(agentWorkspaces.endedAt, endedAt),
+            sql`EXISTS (SELECT 1 FROM ${agentWorkspaceNodes} WHERE ${agentWorkspaceNodes.rootId} = ${workspaceId})`,
+          ),
+        )
+        .returning({ id: agentWorkspaces.id });
       return updated.length > 0;
     },
 

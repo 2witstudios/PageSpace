@@ -331,6 +331,59 @@ describe('countLive', () => {
   });
 });
 
+describe('reopenListingIfPopulated — the withdrawal and its emptiness test are ONE statement', () => {
+  /**
+   * `reopenEndedSessionListing` runs after its membership write has committed
+   * and released the workspace lock, so a concurrent `endSession` can destroy
+   * the tree at any point — including between a node count read in the caller
+   * and the stamp that would follow it. That interleave (read-nodes → destroy →
+   * stamp) produces a workspace that is LIVE and holds ZERO nodes, which is the
+   * state the emptiness test exists to prevent, so the test cannot live in the
+   * caller. It is a `WHERE EXISTS` on the same UPDATE as the CAS.
+   */
+  it('withdraws the end-intent when the workspace holds a tree', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(true);
+    expect((await store.findById(workspaceId))?.endedAt).toBeNull();
+  });
+
+  it('DECLINES when the tree is gone — the destroy won, and a live zero-node workspace must not be minted', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+    // What `destroyWorkspaceTree` leaves behind.
+    await db.delete(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.rootId, workspaceId));
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(endedAt);
+  });
+
+  it('DECLINES when a concurrent re-end moved the stamp — the CAS is not weakened by the new clause', async () => {
+    const endedAt = new Date();
+    const workspaceId = await seedSession({ endedAt });
+    const reEndedAt = new Date(endedAt.getTime() + 1000);
+    await db.update(agentWorkspaces).set({ endedAt: reEndedAt }).where(eq(agentWorkspaces.id, workspaceId));
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(false);
+    expect((await store.findById(workspaceId))?.endedAt).toEqual(reEndedAt);
+  });
+
+  it('preserves the CONFIRMED-KILL stamp — it withdraws the intent, it does not revive the VM', async () => {
+    // The reason this goes through `planSessionReopen` rather than setting the
+    // column itself: clearing `spriteTornDownAt` without a provision recreates
+    // the stale-attach hazard that stamp exists to prevent.
+    const endedAt = new Date();
+    const spriteTornDownAt = new Date();
+    const workspaceId = await seedSession({ endedAt, spriteTornDownAt });
+
+    expect(await store.reopenListingIfPopulated({ workspaceId, endedAt })).toBe(true);
+    const row = await store.findById(workspaceId);
+    expect(row?.endedAt).toBeNull();
+    expect(row?.spriteTornDownAt).toEqual(spriteTornDownAt);
+  });
+});
+
 describe('recordStorageMeasurement', () => {
   it('given a live row, should persist the measurement', async () => {
     const workspaceId = await seedSession({ sandboxId: 'sbx-1', spriteInstanceId: 'i' });

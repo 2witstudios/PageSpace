@@ -150,6 +150,14 @@ export async function DELETE(
       // Ordered deliberately — see `expelConversationFromSession`'s doc for
       // why the survivable failure is the one that can happen here.
       await globalConversationRepository.softDeleteConversation(userId, id);
+      // AND AGAIN, because the order alone survives a crash but not a
+      // concurrent claim: in the gap above the thread is homeless and still
+      // alive, which is exactly what a claim admits. The workspace lock does
+      // the work — an in-flight claim holds it, so this queues behind and takes
+      // whatever it bound; a later one queues behind this and then meets an
+      // `isActive` that is already false. `not_a_member` reads as success, so
+      // when nothing raced this is one indexed read and no write.
+      await expelConversationFromSession({ conversationId: id, workspaceId, actingUserId: userId });
     } else {
       await globalConversationRepository.softDeleteConversation(userId, id);
     }

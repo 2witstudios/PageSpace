@@ -49,9 +49,9 @@
  *
  * ─── Production procedure ──────────────────────────────────────────────────
  * 1. Ship the release carrying `0255`. `.github/workflows/docker-images.yml`
- *    runs the migration one-shot and THEN deploys web, in that order and with
- *    nothing between them, so the app that reads nodes is live within minutes
- *    of the tables existing.
+ *    runs the migration one-shot, then deploys realtime, then deploys web — one
+ *    job, no pause, and nothing in it that runs this script. The app that reads
+ *    nodes is therefore live within minutes of the tables existing.
  * 2. Run this DRY and read the census. **It must exit 0.** A non-zero exit is
  *    one of: a workspace SKIPPED, a write that failed, or members ≠ pane nodes.
  * 3. Run with `--apply` as a one-off machine on the migrate image, and require

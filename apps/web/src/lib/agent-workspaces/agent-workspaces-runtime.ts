@@ -71,7 +71,6 @@ import {
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
-import { planSessionReopen } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -383,16 +382,37 @@ export async function findWorkspaceOfConversation(conversationId: string): Promi
  * confirmed-kill stamp stays; see its doc for why) when new work is admitted
  * into it. CAS-guarded on the `endedAt` this read observed, so a concurrent
  * re-end is never silently erased.
+ *
+ * **ONLY IF THE WORKSPACE ACTUALLY HOLDS A TREE**, and that clause is the other
+ * half of `destroyWorkspaceTree`'s `requireEnded`. This runs AFTER the
+ * admission's transaction has committed and released the workspace lock — it
+ * has to, because a reopen failure must never surface as a creation failure for
+ * a conversation that is already a member (review finding, PR #2336) — so a
+ * concurrent `endSession` can take the lock in between and destroy the tree the
+ * admission just wrote. `requireEnded` catches the interleaving where the
+ * reopen lands first; this catches the one where it lands last.
+ *
+ * Without it that ordering produces the worst of the three possible outcomes: a
+ * workspace that is LIVE, in the sidebar, holding ZERO nodes. Reopening a
+ * workspace with no tree is a contradiction in terms — "there is work in this
+ * session again" said of a session showing nothing — and it is exactly the
+ * zero-pane workspace this epic exists to delete. Declining leaves the end
+ * intact and the thread homeless but re-claimable, which is a state a user can
+ * see and act on.
+ *
+ * The emptiness test is NOT made here. It lives in the same UPDATE as the CAS
+ * (`reopenListingIfPopulated`), because a test made here would be made against
+ * a snapshot the stamp can no longer vouch for: read-nodes → destroy → stamp is
+ * a third ordering that neither guard covers and that produces the very state
+ * both were added to prevent. The `findById` below is only the cheap early exit
+ * for the overwhelming majority — admissions into a session nobody ended —
+ * which must not pay for a second statement at all.
  */
 async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
   const store = await getAgentSessionStore();
   const row = await store.findById(workspaceId);
   if (!row || row.endedAt === null) return;
-  await store.applyStamps({
-    workspaceId,
-    stamps: planSessionReopen(),
-    cas: { endedAt: row.endedAt },
-  });
+  await store.reopenListingIfPopulated({ workspaceId, endedAt: row.endedAt });
 }
 
 /**
@@ -637,14 +657,35 @@ export type ExpelConversationOutcome = 'expelled' | 'refused';
  * deletion that has already been authorized, and "it was not there" is the state
  * that deletion asked for.
  *
- * **Call this BEFORE the soft-delete, not inside its transaction.** The two
- * writes cannot be made one without threading an executor through
- * `softDeleteConversation`'s message deactivation, room kicks and emits — so
- * instead the ORDER is chosen so the survivable failure is the one that can
- * happen. Expel-then-delete can leave a thread with intact history that is no
+ * **Call this BEFORE the soft-delete, not inside its transaction, AND AGAIN
+ * AFTER IT.** The two writes cannot be made one without threading an executor
+ * through `softDeleteConversation`'s message deactivation, room kicks and emits,
+ * so the ORDER carries the correctness instead — and the order alone only
+ * survives a CRASH, not a concurrent claim.
+ *
+ * Expel-then-delete leaves, on a crash, a thread with intact history that is no
  * longer in a workspace, which a re-claim fixes. Delete-then-expel would leave a
  * pane bound to a dead thread and a cap slot nobody can reclaim, which is the
- * ghost this epic deletes, pointing the other way.
+ * ghost this epic deletes. That much the order settles.
+ *
+ * What it does not settle is the gap ITSELF. Between the expel committing and
+ * `isActive` flipping, the thread is homeless and still alive — precisely the
+ * state a claim admits — so a concurrent claim can bind a node to a thread that
+ * is about to die, and arrive at the delete-then-expel outcome the order was
+ * chosen to avoid. Two things close it, and they close different halves:
+ *
+ *  - The write funnel re-asks liveness ON THE WRITING TRANSACTION
+ *    (`readDeletedChatTargets`), which refuses any claim whose liveness read
+ *    would otherwise have been a pre-lock snapshot. That leaves one window: a
+ *    claim that read `isActive = true` before the flip committed and writes its
+ *    node after.
+ *  - **A SECOND EXPEL, after the soft-delete**, closes that one, and it is the
+ *    workspace lock that makes it work rather than the repetition: a claim in
+ *    flight holds that lock, so the second expel queues behind it and removes
+ *    whatever it wrote; a claim that starts later queues behind the second
+ *    expel and then meets an `isActive` that is already false. `not_a_member`
+ *    reads as success, so on the overwhelmingly common path — nothing raced —
+ *    the second call is one indexed read and no write at all.
  */
 export async function expelConversationFromSession(input: {
   conversationId: string;

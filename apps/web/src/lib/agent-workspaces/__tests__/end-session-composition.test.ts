@@ -33,6 +33,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const calls: string[] = [];
 
+/**
+ * What the composition REPORTED. The refusal arms are indistinguishable by
+ * return value — `endSession` answers the lifecycle result whatever the tree
+ * write says — so the log line is the only observable difference between "the
+ * tree outlived the end" (an operator's problem) and "someone reopened the
+ * session" (nobody's).
+ */
+const logged = { error: [] as string[], info: [] as string[] };
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      error: (message: string) => logged.error.push(message),
+      info: (message: string) => logged.info.push(message),
+      warn: (message: string) => logged.info.push(message),
+    },
+  },
+}));
+
 const endAgentSession = vi.fn(async () => {
   calls.push('endAgentSession');
   return { ok: true as const, spriteTornDown: true };
@@ -73,6 +92,8 @@ const runtime = await import('../agent-workspaces-runtime');
 
 beforeEach(() => {
   calls.length = 0;
+  logged.error.length = 0;
+  logged.info.length = 0;
   endAgentSession.mockClear();
   destroyWorkspaceTree.mockClear();
 });
@@ -107,17 +128,27 @@ describe('endSession', () => {
     expect(call[0].requireEnded).toBe(true);
   });
 
-  it('treats a REOPENED session as a non-failure — the newer work keeps its tree', async () => {
-    // The admission won the race, so the session is live again on purpose. The
-    // end is stale, not broken: nothing is logged as an error and the caller
-    // still hears that the lifecycle end succeeded, because it did.
+  it('treats a REOPENED session as a non-failure — INFO, never the error every other refusal logs', async () => {
+    // The assertion is the LOG, not the return value: `endSession` answers the
+    // lifecycle result whatever the destroy says, so asserting `ok` here would
+    // pass with the whole `session_reopened` arm deleted — it would be a copy of
+    // the `no_root` test below.
+    //
+    // What the arm actually changes is the report. An admission winning this
+    // race is a session someone deliberately put work back into, so it is not a
+    // "session ended but its tree was not destroyed" fault for an operator to
+    // chase; every other refusal is.
     destroyWorkspaceTree.mockResolvedValueOnce({
       status: 'refused',
       code: 'session_reopened',
       detail: 'reopened',
     } as never);
     const result = await runtime.endSession('ws-1');
+
     expect(result.ok).toBe(true);
+    expect(logged.error).toEqual([]);
+    expect(logged.info).toHaveLength(1);
+    expect(logged.info[0]).toContain('reopened');
   });
 
   it('does NOT destroy the tree when the lifecycle end failed', async () => {

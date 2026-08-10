@@ -253,6 +253,12 @@ type WriteProducer = (
  * with it, and the error reaches the caller unchanged — which is what lets the
  * conversation layer keep its own error vocabulary instead of flattening every
  * failure into a layout code.
+ *
+ * **It runs BEFORE the binding gate, not after** — see the ordering comment at
+ * the call site, which is load-bearing in both directions. That also makes this
+ * the place to put a PRECONDITION that has to be read under the lock:
+ * `destroyWorkspaceTree`'s `requireEnded` throws from here, and throwing before
+ * the gate means the transaction unwinds having touched nothing at all.
  */
 export type WithinNodeWrite = (tx: DbExecutor) => Promise<void>;
 
@@ -315,7 +321,7 @@ async function commitUnderLock(input: {
   /** Who the answer's titles are for; `null` resolves none, for callers that discard the body. */
   viewerId: TargetViewerId;
   produce: WriteProducer;
-  /** See {@link WithinNodeWrite}. Runs once the write is DECIDED and GATED, and before it is persisted. */
+  /** See {@link WithinNodeWrite}. Runs once the write is DECIDED, before the gate and before it is persisted. */
   within?: WithinNodeWrite;
   /**
    * Mint the root when the workspace has none, before the producer runs.
@@ -528,11 +534,15 @@ async function commitUnderLock(input: {
       // to avoid, arrived at through concurrency instead of through a crash.
       // The order defends against the second and not the first.
       //
-      // Asked HERE it needs no executor threading and no second lock: the row
-      // is read on the transaction that is about to write the node, so the
-      // delete either commits before (and this refuses) or after (and it is
-      // serialized behind a node this transaction has already written, which
-      // the delete's own expel then removes). Only INTRODUCED targets are
+      // Asked HERE it needs no executor threading and no second lock, and it
+      // NARROWS the window rather than closing it — the honest claim, because a
+      // plain SELECT takes no row lock: the delete's `UPDATE` can still commit
+      // between this read and this transaction's own commit, leaving a node
+      // bound to a thread that has just died. What closes THAT residue is on
+      // the delete's side, not here: it runs a SECOND expel after the
+      // soft-delete, which the workspace lock serializes against exactly this
+      // transaction (see `expelConversationFromSession`). The two are a pair;
+      // neither is sufficient. Only INTRODUCED targets are
       // checked, so a resize or a move that re-sends an existing pane never
       // pays for it, and a pane whose thread died under it is not made
       // un-draggable by a write that binds nothing new.

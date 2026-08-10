@@ -195,6 +195,7 @@ export function planSessionReopen(): AgentSessionRowStamps {
   return { endedAt: null };
 }
 
+
 /** Has the VM behind this session's name changed since the row last looked? */
 function instanceMoved(row: AgentSessionLifecycleRow, live: LiveSpriteInstance): boolean {
   return live.sandboxId !== row.sandboxId || (live.spriteInstanceId ?? null) !== (row.spriteInstanceId ?? null);
