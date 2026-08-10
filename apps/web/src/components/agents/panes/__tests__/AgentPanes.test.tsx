@@ -683,9 +683,9 @@ describe('AgentPanes — the mint lifecycle', () => {
   });
 
   it('lands the conversation in the pane the user picked into, not whichever was empty first', async () => {
-    // TWO unbound panes. The mint carries no placement preference today, so the
-    // server's `open()` policy falls to `panes.find(canReplace)` — the FIRST
-    // unbound pane in grid order — which is n1 while the user clicked n2.
+    // TWO unbound panes. Without a placement preference the server's `open()`
+    // policy falls to `panes.find(canReplace)` — the FIRST unbound pane in grid
+    // order, n1 — while the user clicked n2. So the mint has to name the pane.
     seat([rootNode, paneNode('n1', WS, 0, null), paneNode('n2', WS, 1, null)], []);
     mockPost.mockResolvedValue({});
     const user = userEvent.setup();
@@ -889,6 +889,61 @@ describe('AgentPanes — the pane bar', () => {
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
   });
 
+  /**
+   * THE AWAIT WINDOW. The MRU re-read made this handler suspend, and nothing
+   * invalidated an earlier invocation across it — so a pick the user had already
+   * replaced could resume and act on a decision computed two selections ago,
+   * taking the outgoing thread's DELETE with it.
+   */
+  it('a superseding pick on the same pane cancels the one waiting on the MRU re-read', async () => {
+    // agent-1 ("Researcher") has TWO threads here, so switching to it takes the
+    // re-read branch and suspends. agent-2 ("Writer") has none, so the second
+    // pick decides straight away and mints.
+    const nodeReads: Array<(value: unknown) => void> = [];
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise((resolve) => nodeReads.push(resolve));
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat(
+      [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2'), chatNode('n3', WS, 2, 'conv-3')],
+      [
+        { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+        { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+        { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+      ],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
+
+    const pick = async (agent: RegExp) => {
+      const trigger = await screen.findByRole('button', { name: /Assistant/ });
+      await waitFor(() => expect(trigger).not.toBeDisabled());
+      trigger.focus();
+      await user.keyboard('{Enter}');
+      await user.click(await screen.findByRole('menuitem', { name: agent }));
+    };
+
+    await pick(/Researcher/); // suspends on the re-read
+    await pick(/Writer/); // supersedes it, and mints
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // NOW let the first pick's re-read come back, so its handler resumes.
+    await act(async () => {
+      for (const resolve of nodeReads) resolve(jsonOk({ rev: 1, nodes: nodesNow(), targets: [] }));
+      await Promise.resolve();
+    });
+
+    // Resuming, the stale pick would call `openConversation` for agent-1's
+    // most-recent thread — which is already on the grid, so it takes the FOCUS
+    // to that pane, off the conversation the second pick just made for the user.
+    const minted = nodeShowingChat('new-id-1');
+    expect(minted).toBeDefined();
+    expect(useAgentWorkspaceStore.getState().workspaces[WS].activeNodeId).toBe(minted!.id);
+  });
+
   it('switching to an agent with no thread here mints one', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     mockPost.mockResolvedValue({});
@@ -937,15 +992,38 @@ describe('AgentPanes — the pane bar', () => {
     expect(panesNow().some((node) => node.target?.kind === 'chat' && node.target.id === 'new-id-1')).toBe(true);
   });
 
-  it("is disabled while a thread in this workspace has no resolved agent — the switch can't decide against a partial list", async () => {
+  it("is disabled while a thread's facts are still being fetched — the switch can't decide against a partial list", async () => {
     // Exactly what a structural `session:<id>` broadcast produces: another
     // member placed `conv-2`, so it is a MEMBER immediately, but the broadcast
     // carries no per-viewer facts and its agent is unknown here. Deciding
     // against the resolved subset alone would read "no thread for this agent"
-    // and mint a duplicate.
+    // and mint a duplicate. The re-read is held open, so this is the window
+    // where the answer is genuinely still coming.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise<never>(() => {});
+      return jsonOk(defaultFetchRoute(url));
+    });
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')], [CONV_1_TARGET]);
     renderPanes();
     expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
+  });
+
+  /**
+   * AND IT COMES BACK. A missing target entry means "gone, or not readable by
+   * this viewer" exactly as often as "not fetched yet" — the two are
+   * deliberately indistinguishable — so a thread that was simply DELETED would
+   * otherwise leave the switcher and New Conversation dead for the rest of the
+   * session, however many times we asked. Once the re-read has been answered,
+   * whatever is still missing is missing for good.
+   */
+  it('arms once the re-read has been answered, even if the facts never arrived', async () => {
+    // The default route answers the nodes GET with a non-snapshot body, so the
+    // probe settles WITHOUT resolving conv-2 — a permanently absent target.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')], [CONV_1_TARGET]);
+    renderPanes();
+    await waitFor(async () =>
+      expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled(),
+    );
   });
 
   it('is enabled once every thread in the workspace has its facts', async () => {

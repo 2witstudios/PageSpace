@@ -176,6 +176,19 @@ async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[]
  * owns that cache. Read through SWR's cache rather than a hook so a body of an
  * unexpected shape is refused instead of asserted.
  */
+/**
+ * Mark the directory probe answered, but only if it is still the SAME one — a
+ * member set that changed while the read was in flight started its own probe,
+ * and stamping this answer onto it would arm readiness against a question
+ * nobody asked.
+ */
+function markAnswered(
+  current: { signature: string; answered: boolean } | null,
+  signature: string,
+): { signature: string; answered: boolean } | null {
+  return current !== null && current.signature === signature ? { signature, answered: true } : current;
+}
+
 function isSessionListingBody(value: unknown): value is { sessions: SessionListEntry[] } {
   return (
     typeof value === 'object' &&
@@ -430,13 +443,43 @@ export default function AgentPanes({
   const conversationDirectory = useMemo(() => conversationDirectoryOf(tree), [tree]);
 
   /**
+   * The one re-read this grid makes for a member whose facts never arrived, and
+   * whether it has come back. See the effect below for why a failure counts.
+   */
+  const [directoryProbe, setDirectoryProbe] = useState<{ signature: string; answered: boolean } | null>(null);
+
+  /**
+   * The member set, as one comparable value — what the probe below is keyed on
+   * and what readiness checks its answer against.
+   */
+  const directorySignature = useMemo(
+    () => (conversationDirectory === null ? null : [...conversationDirectory.memberConversationIds].sort().join(',')),
+    [conversationDirectory],
+  );
+
+  /**
    * Safe to make an agent-keyed decision against. TWO facts, and the second is
    * not redundant: a structural broadcast adds a member to `nodes` while its
    * per-viewer facts stay behind (see `conversationDirectoryOf`), so a tree can
    * be server-read and still hold a conversation whose agent nobody here knows.
    * Deciding then would read "no thread for this agent" and mint a duplicate.
+   *
+   * **Unresolved is not forever, and that is the third clause.** A missing target
+   * entry means "gone, or not readable by this viewer" just as often as it means
+   * "not fetched yet" — the two are deliberately indistinguishable
+   * (`readWorkspaceNodes` omits both). A member in the first state never gets an
+   * entry, however many times we ask, so blocking on `hasUnresolved` alone left
+   * the switcher and New Conversation dead for the rest of the session on a
+   * thread that was merely deleted. Once the probe below has ASKED and been
+   * answered, whatever is still missing is missing for good: readiness arms and
+   * the switch decides against the members it can actually name. Worst case is a
+   * thread nobody here can identify failing to match, which mints one extra
+   * conversation — strictly better than controls that never come back.
    */
-  const conversationsReady = conversationDirectory !== null && !conversationDirectory.hasUnresolved;
+  const conversationsReady =
+    conversationDirectory !== null &&
+    (!conversationDirectory.hasUnresolved ||
+      (directoryProbe !== null && directoryProbe.signature === directorySignature && directoryProbe.answered));
 
   const liveConversationIds = conversationDirectory?.memberConversationIds;
 
@@ -456,27 +499,42 @@ export default function AgentPanes({
   );
 
   /**
-   * ONE authorized re-read when a member arrives with no facts.
+   * ONE authorized re-read when a member arrives with no facts — and the record
+   * that it was answered.
    *
    * The `session:<id>` broadcast is structural — it cannot carry per-viewer
    * titles or agents — so a thread another member just placed lands in `nodes`
-   * alone and leaves `conversationsReady` false until someone asks. Nothing else
-   * would: the mount-time read already happened, and the directory events that
-   * would otherwise say so ride the OWNER's `user:<id>:sessions` room, which a
-   * non-owner never joins.
+   * alone and leaves the agent-keyed decisions unsafe until someone asks.
+   * Nothing else would ask: the mount-time read already happened, and the
+   * directory events that would otherwise say so ride the OWNER's
+   * `user:<id>:sessions` room, which a non-owner never joins.
    *
-   * Deduplicated by the id set rather than a bare boolean: repeated broadcasts,
-   * and a local mint's own echo, must not each fire a read. The store's own
-   * `snapshot.rev < sync.rev` guard handles an older response landing late.
+   * `answered` is what readiness above waits on, and it is set for a FAILED read
+   * too. That is deliberate rather than sloppy: the failure modes it has to
+   * survive are a request that never succeeds (offline, a 5xx) and a target that
+   * can never resolve (deleted, or not this viewer's to read), and treating
+   * either as "still pending" is what left the controls dead for the rest of the
+   * session. Recovery does not depend on this effect retrying — the socket's own
+   * reconnect re-reads the snapshot, and any change to the member set starts a
+   * fresh probe because the signature changes with it.
+   *
+   * Deduplicated by the member set rather than a bare boolean: repeated
+   * broadcasts, and a local mint's own echo, must not each fire a read. The
+   * store's `snapshot.rev < sync.rev` guard handles an older response landing
+   * late.
    */
-  const resolvedRefreshRef = useRef<string | null>(null);
   useEffect(() => {
-    if (conversationDirectory === null || !conversationDirectory.hasUnresolved) return;
-    const signature = [...conversationDirectory.memberConversationIds].sort().join(',');
-    if (resolvedRefreshRef.current === signature) return;
-    resolvedRefreshRef.current = signature;
-    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
-  }, [conversationDirectory, sessionId]);
+    if (conversationDirectory === null || !conversationDirectory.hasUnresolved || directorySignature === null) return;
+    if (directoryProbe !== null && directoryProbe.signature === directorySignature) return;
+    setDirectoryProbe({ signature: directorySignature, answered: false });
+    void useAgentWorkspaceStore
+      .getState()
+      .refreshWorkspaceSnapshot(sessionId)
+      .then(
+        () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+        () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+      );
+  }, [conversationDirectory, directoryProbe, directorySignature, sessionId]);
 
   /**
    * Selection IS an instruction to show the conversation.
@@ -1120,6 +1178,15 @@ export default function AgentPanes({
     async (nodeId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
       if (conversationDirectory === null) return;
 
+      // CLAIM THIS NODE, because the MRU re-read below can suspend this handler.
+      // It used to be synchronous end to end, so a second pick simply ran after
+      // the first; with an await in the middle, an earlier pick can resume AFTER
+      // a later one has already placed its choice and apply a decision computed
+      // against a tree two selections ago. Same token `handlePickAgent` uses —
+      // and it takes its own on the mint branch below, which is why this only
+      // ever guards the branches that act here.
+      const isCurrent = beginPaneAssign(nodeId);
+
       let candidates = conversationDirectory.resolved;
       // MRU FRESHNESS, bought only where recency can actually decide anything.
       //
@@ -1136,6 +1203,9 @@ export default function AgentPanes({
         // A failed re-read is not a reason to refuse the switch: the stale
         // ordering is still a real answer, and it is the one shown on screen.
         if (refreshed !== null) candidates = refreshed.resolved;
+        // A newer pick for this pane landed while the re-read was in flight. It
+        // has already decided; this one must not decide again on top of it.
+        if (!isCurrent()) return;
       }
 
       const decision = selectPaneAgent({
@@ -1169,6 +1239,7 @@ export default function AgentPanes({
       closeReplacedConversation,
       handlePickAgent,
       syncConsoleSelection,
+      beginPaneAssign,
     ],
   );
 
