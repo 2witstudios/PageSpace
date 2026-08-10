@@ -30,11 +30,12 @@ import {
   gridPanesOf,
   indexTargets,
   lookupTarget,
+  paneNodesOf,
   type MemberPlacement,
 } from '@/stores/agent-workspace/workspace-tree-view';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
-import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import {
   isAgentWorkspacesKey,
   isWorkspaceListingKey,
@@ -42,6 +43,7 @@ import {
   forgetConversationInCache,
   restoreWorkspaceInCache,
 } from '@/components/agents/panes/workspace-conversations';
+import { decideClosePane } from '@/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
@@ -756,13 +758,11 @@ function SessionRow({
           `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
       } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 409) {
-          // The workspace's LAST open listing — the server is the authority on
-          // the never-empty invariant; fall back to the same confirmed
-          // end-session flow the row's own "End session" already uses.
-          setConfirmingEnd(true);
-          return;
-        }
+        // No 409 branch: the server stopped refusing the last close in the
+        // node-tree cutover, so the `last_conversation` fallback that used to
+        // live here was dead code. The last-pane end-session it reached for is
+        // decided on the client now, by `decideClosePane` — see
+        // `closeConversationRow` below.
         console.error('Failed to close this conversation:', error);
         toast.error('Could not close this conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
@@ -793,15 +793,51 @@ function SessionRow({
    * revalidation, so there is no such gap; and if `tree` is somehow absent the
    * placement reads `unplaced`, which closes the LISTING rather than guessing.
    */
+  /**
+   * Destroy one of this workspace's nodes from a sidebar row — through the SAME
+   * decision the pane's own close button takes.
+   *
+   * It used to call `closePane` directly, which meant the sidebar could empty a
+   * workspace's tree in a way the grid refuses to: two affordances for one act,
+   * disagreeing about the last one. `decideClosePane` is that act, so both go
+   * through it and the last row raises the confirm this row already owns.
+   *
+   * `canEndSession: true` is a fact about THIS listing, not an assumption. It
+   * is filtered `{ownerId: auth.userId}` (`GET /api/agent-workspaces`), so every
+   * session here is the viewer's own, and `decideAgentSessionEndAccess` allows
+   * the owner unconditionally — release-of-compute needs no capability. The
+   * pane grid, which can be mounted on someone else's workspace, resolves the
+   * real answer from the session record instead.
+   */
+  const closeNodeRow = useCallback(
+    (nodeId: string) => {
+      const decision = decideClosePane({
+        panes: tree ? paneNodesOf(tree.nodes) : [],
+        nodeId,
+        // This row's own listing — the same fact the grid feeds the decision,
+        // from the poll that produced the row.
+        activeConversations: session.conversations,
+        canEndSession: true,
+      });
+      if (decision.action === 'end-session') {
+        setConfirmingEnd(true);
+        return;
+      }
+      if (decision.action === 'noop') return;
+      closePane(session.workspaceId, nodeId);
+    },
+    [closePane, session.workspaceId, session.conversations, tree],
+  );
+
   const closeConversationRow = useCallback(
     (conversationId: string, placement: MemberPlacement, nodeId: string | null) => {
       if (placement === 'grid' && nodeId !== null) {
-        closePane(session.workspaceId, nodeId);
+        closeNodeRow(nodeId);
         return;
       }
       void closeConversation(conversationId);
     },
-    [closePane, closeConversation, session.workspaceId],
+    [closeNodeRow, closeConversation],
   );
 
   const conversationLabel = useCallback(
@@ -911,8 +947,7 @@ function SessionRow({
                   // affordance for a member that was not on screen.
                   label: 'Close',
                   icon: X,
-                  onSelect: () =>
-                    row.nodeId === null ? undefined : closePane(session.workspaceId, row.nodeId),
+                  onSelect: () => (row.nodeId === null ? undefined : closeNodeRow(row.nodeId)),
                   destructive: true,
                 },
               ]}

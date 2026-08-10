@@ -1832,6 +1832,11 @@
       "import": "./dist/agent-workspaces/workspace-node-write.js",
       "require": "./dist/agent-workspaces/workspace-node-write.js"
     },
+    "./agent-workspaces/workspace-node-membership-diff": {
+      "types": "./dist/agent-workspaces/workspace-node-membership-diff.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-membership-diff.js",
+      "require": "./dist/agent-workspaces/workspace-node-membership-diff.js"
+    },
     "./agent-workspaces/workspace-node-chat-binding": {
       "types": "./dist/agent-workspaces/workspace-node-chat-binding.d.ts",
       "import": "./dist/agent-workspaces/workspace-node-chat-binding.js",

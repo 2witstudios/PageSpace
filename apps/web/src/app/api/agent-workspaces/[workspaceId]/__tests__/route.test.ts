@@ -76,6 +76,7 @@ describe('GET /api/agent-workspaces/[workspaceId]', () => {
     expect(await response.json()).toEqual({
       session: { workspaceId: SESSION_ID, dto: true },
       sandboxEligible: true,
+      canEndSession: true,
     });
     // The full centralized canRunCode verdict for THIS requester against the
     // session's own coordinates (review #2326): payer tier alone enabled
@@ -94,7 +95,33 @@ describe('GET /api/agent-workspaces/[workspaceId]', () => {
     expect(await response.json()).toEqual({
       session: { workspaceId: SESSION_ID, dto: true },
       sandboxEligible: false,
+      canEndSession: true,
     });
+  });
+
+  /**
+   * `canEndSession` — the second capability the client cannot compute.
+   *
+   * Ending is gated by `checkSessionEndAccess`, which is STRICTER than the
+   * `checkSessionAccess` that let the caller reach this row at all (owner
+   * always; otherwise drive owner/admin AND real code-execution capability).
+   * The pane grid asks for it so closing the last pane does not offer an
+   * end-session confirm to someone the DELETE below would refuse.
+   */
+  it('reports canEndSession: false for a member who may reach the session but not end it', async () => {
+    mockCheckSessionEndAccess.mockResolvedValue({ allowed: false, reason: 'delete_authority_required' });
+
+    const response = await get();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      session: { workspaceId: SESSION_ID, dto: true },
+      sandboxEligible: true,
+      canEndSession: false,
+    });
+    // The SAME check the DELETE is gated by, asked about the same session — not
+    // a second rule that could drift from it.
+    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith(AUTH_USER.userId, SESSION_ID);
   });
 
   it('given a never-provisioned session (no row), should answer { session: null } with 200 — NOT 404', async () => {

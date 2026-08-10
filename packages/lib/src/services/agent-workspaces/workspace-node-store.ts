@@ -349,6 +349,68 @@ export async function readDeletedChatTargets(
 }
 
 /**
+ * One conversation directory row per id — exactly the facts a
+ * `conversation:closed` announcement is addressed with.
+ *
+ * The projection is not a judgement call: it is what `emitContextFromRow`
+ * consumes (`conversationId`, `rev`, `scope` — derived from `type`/`contextId`/
+ * `userId` — `ownerId`, `isShared`). Nothing more is read because nothing more
+ * is sent, and a wider projection would invite a caller to make a decision out
+ * of a display fact.
+ *
+ * **A plain read: no `FOR SHARE`, unlike {@link readDeletedChatTargets}.** That
+ * lock exists because liveness is a PRECONDITION there — the write is only
+ * sound if the thread is still alive when it commits, so the read and the write
+ * have to serialize on the conversation row. Nothing here is a precondition.
+ * The membership change has already been decided; these are the display facts
+ * an announcement is addressed with, and a row that changes underneath them
+ * costs an announcement carrying a title from a moment ago. Taking a row lock
+ * for that would make every close wait behind every rename of the same thread,
+ * to buy nothing.
+ *
+ * `rev` is passed through UNBUMPED, matching every other membership
+ * announcement: it is the MESSAGE plane's watermark and a membership change
+ * writes no message, so bumping it would make every subscribed pane detect a
+ * gap and refetch a transcript that did not change.
+ *
+ * A missing id yields no row rather than an error — an announcement has nothing
+ * to address without one, and the caller drops it.
+ */
+export interface ConversationDirectoryRow {
+  id: string;
+  rev: number;
+  userId: string;
+  isShared: boolean;
+  type: string;
+  contextId: string | null;
+}
+
+export async function readConversationDirectoryRows(
+  executor: DbExecutor,
+  conversationIds: readonly string[],
+): Promise<ConversationDirectoryRow[]> {
+  if (conversationIds.length === 0) return [];
+  const { conversations } = await import('@pagespace/db/schema/conversations');
+
+  const rows = await executor
+    .select({
+      id: conversations.id,
+      rev: conversations.rev,
+      userId: conversations.userId,
+      isShared: conversations.isShared,
+      type: conversations.type,
+      contextId: conversations.contextId,
+    })
+    .from(conversations)
+    .where(inArray(conversations.id, [...conversationIds]));
+
+  // `rev` is a bigint; node-postgres hands int8 back as text rather than risk a
+  // silent precision loss. Coerced here for the same reason the join read above
+  // coerces its own — so nothing downstream has to remember.
+  return rows.map((row) => ({ ...row, rev: Number(row.rev) }));
+}
+
+/**
  * Persist a decided write and mint the workspace's next rev.
  *
  * Takes {@link PersistedNodeWrite} — the storage instruction `decideNodeWrite`

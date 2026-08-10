@@ -7,6 +7,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
+  requests that removed the same thing, and the second one arrived to find the first had already
+  done it. The pane closed correctly either way, so the error was pure noise; there is one request
+  now.
+- **Closing the last pane asks whether to end the session again** — it had started leaving you in an
+  empty grid with nothing to do, which was not what anyone wanted. You get the same confirm the
+  sidebar's "End session" uses, and Cancel leaves everything exactly as it was. Closing the last
+  conversation row in the sidebar now asks the same question, instead of quietly emptying the
+  session.
+- **A conversation removed from a session leaves the sidebar however it was removed** — closing a
+  pane, closing a sidebar row, an agent closing one on your behalf, or ending the session. Only one
+  of those used to tell the sidebar, so a thread you had just closed could sit in the list for up to
+  two minutes.
+- **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
+  removes it from your session failed, every later attempt to close it reported success and did
+  nothing, leaving a pane that could not be closed. The close is attempted properly now.
 - **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
   be two separate records of what a session contained, kept in step by convention, so a pane you or
   an agent opened could take up to two minutes to show up in the list. They are now two views of

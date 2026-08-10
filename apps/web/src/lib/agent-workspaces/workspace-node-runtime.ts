@@ -62,18 +62,25 @@ import {
   conflictingChatTargets,
   isChatTargetUniqueViolation,
 } from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
+import { removedChatTargets } from '@pagespace/lib/agent-workspaces/workspace-node-membership-diff';
 import {
   awaitsBackfill,
   readChatTargetHolders,
+  readConversationDirectoryRows,
   readDeletedChatTargets,
   readWorkspaceNodeSnapshot,
   readWorkspaceNodeSnapshots,
   withWorkspaceLock,
   writeWorkspaceNodes,
+  type ConversationDirectoryRow,
   type DbExecutor,
   type WorkspaceNodeSnapshot,
 } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
 import { broadcastWorkspaceNodesUpdated } from '@/lib/websocket/agent-workspace-events';
+import { conversationEvents } from '@/lib/websocket/conversation-events';
+import { emitContextFromRow } from '@/lib/repositories/conversation-rev';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { announceWithoutUnsucceeding } from './close-conversation-in-workspace';
 import { authorizePaneTargets, introducedPaneTargets, paneScopeDeps } from './authorize-pane-scope';
 
 /**
@@ -159,6 +166,32 @@ async function readWorkspaceOwnerId(executor: DbExecutor, workspaceId: string): 
     .where(eq(agentWorkspaces.id, workspaceId))
     .limit(1);
   return rows[0]?.ownerId ?? null;
+}
+
+/**
+ * Announce `conversation:closed` for every thread a committed write removed
+ * from its workspace — the directory plane's half of a membership change.
+ *
+ * Fire-and-forget in both directions a broadcast can fail. A rejected promise
+ * is swallowed with a log, matching `emitConversationLifecycle`'s own policy;
+ * a SYNCHRONOUS throw is caught by {@link announceWithoutUnsucceeding}, which
+ * is the one that would otherwise matter — the write is already committed, so
+ * letting it propagate would report a failure for something that happened, and
+ * the retry would find the node gone and report "not there" a second time.
+ * The sidebar's 120s backstop poll covers the announcement that never lands.
+ */
+function announceClosedConversations(rows: readonly ConversationDirectoryRow[]): void {
+  for (const row of rows) {
+    announceWithoutUnsucceeding(() => {
+      void conversationEvents.closed(emitContextFromRow(row)).catch((error: unknown) => {
+        loggers.api.warn('conversation lifecycle event emission failed', {
+          conversationId: row.id,
+          kind: 'closed',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+    });
+  }
 }
 
 /**
@@ -559,11 +592,13 @@ async function commitUnderLock(input: {
       }
     }
 
-    // A write that produces the tree already stored mints no rev and broadcasts
-    // nothing — which is what makes a retried POST observably, and not merely
-    // structurally, a no-op.
+    // A write that produces the tree already stored mints no rev, broadcasts
+    // nothing, and announces nothing — which is what makes a retried POST
+    // observably, and not merely structurally, a no-op. The empty `closed` here
+    // is not a shortcut: a tree identical to the one stored removed nothing, so
+    // the diff below would answer `[]` for it anyway.
     if (!decision.changed) {
-      return { kind: 'ok' as const, snapshot: before, changed: false, ownerId: null };
+      return { kind: 'ok' as const, snapshot: before, changed: false, ownerId: null, closed: [] };
     }
 
     const rev = await writeWorkspaceNodes(tx, { workspaceId, write: decision.persist });
@@ -573,7 +608,26 @@ async function commitUnderLock(input: {
     // needs it to reach the owner's own sessions room; see
     // `broadcastWorkspaceNodesUpdated` for why that room and no other.
     const ownerId = await readWorkspaceOwnerId(tx, workspaceId);
-    return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true, ownerId };
+    // THE DIRECTORY PLANE'S HALF OF THIS WRITE, read here and emitted after the
+    // commit (see the `outcome.changed` block below).
+    //
+    // Membership IS the node, so a chat node leaving the tree is the thread
+    // leaving the workspace — and the sidebar's rows come from the LISTING, not
+    // the tree, so `workspace:nodes-updated` cannot take one out of the listing
+    // cache. Announcing from HERE rather than from the close route is what makes
+    // the announcement a property of the write instead of a property of which
+    // client happened to call which endpoint: a pane drop, the sidebar's row
+    // drop, an agent tool's close and an end-session all pass through this
+    // funnel, and only one of them ever went through the route that announced.
+    //
+    // `decision.nodes` is the FINAL tree, never `decision.persist.drop` — a
+    // hand-off drops a target from one node and puts it on another in the same
+    // write, and that must announce nothing. See `removedChatTargets`.
+    const closed = await readConversationDirectoryRows(
+      tx,
+      removedChatTargets(before.nodes, decision.nodes),
+    );
+    return { kind: 'ok' as const, snapshot: { rev, nodes: decision.nodes }, changed: true, ownerId, closed };
   }).catch((error: unknown) => {
     // OUTSIDE the transaction body on purpose — this runs once the rollback has
     // ALREADY unwound. A refusal raised after `within` wrote cannot RETURN,
@@ -646,6 +700,13 @@ async function commitUnderLock(input: {
       nodes: outcome.snapshot.nodes,
       ownerId: outcome.ownerId,
     });
+    // The DIRECTORY plane's `conversation:closed`, one per thread this write
+    // took out of the workspace. Read inside the transaction (see above),
+    // emitted only AFTER it committed and only when something changed — so a
+    // replayed POST, which mints no rev and produces the tree already stored,
+    // announces nothing, exactly as it broadcasts nothing. A rolled-back write
+    // never reaches here at all: `outcome` is `refused` or `conflict`.
+    announceClosedConversations(outcome.closed);
   }
   return { status: 'ok', snapshot, changed: outcome.changed };
 }

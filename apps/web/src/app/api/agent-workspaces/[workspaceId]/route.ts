@@ -1,11 +1,13 @@
 /**
  * One agent session — status / ensure+provision / end.
  *
- * GET    → 200 { session: AgentSessionDTO | null }
+ * GET    → 200 { session: AgentSessionDTO | null, sandboxEligible, canEndSession }
  *   `{ session: null }` whether the session never existed OR is someone
  *   else's — never a 404 or a 403: the same answer either way, so a probe
  *   learns nothing from it. (Post-unconflation every spawned session has a
  *   row from birth; null here means the id resolves to nothing you may see.)
+ *   The two booleans are capabilities the client cannot compute for itself —
+ *   both are resolved server-side and both are absent when `session` is null.
  *
  * POST   → 200 { session } — provision the EXISTING session's sandbox,
  *   idempotent by the session id (a re-POST resumes). No body: sessions are
@@ -112,7 +114,20 @@ export async function GET(request: Request, context: RouteContext) {
     driveId: row.driveId,
     ownerId: row.ownerId,
   });
-  return NextResponse.json({ session: toAgentSessionDTO(row), sandboxEligible });
+  // Whether THIS REQUESTER may end this workspace — the same `checkSessionEndAccess`
+  // the DELETE below is gated by, resolved here for the same reason
+  // `sandboxEligible` is: the client cannot compute it. Ending is STRICTER than
+  // reaching the session (owner always; otherwise drive owner/admin AND real
+  // code-execution capability), so a member who may use but not end one would
+  // otherwise be offered the last-pane end confirm and handed a 404 for obeying
+  // it. Read-only and already behind the same access gate as the row itself, so
+  // it discloses nothing the caller could not learn by pressing the button.
+  const endAccess = await checkSessionEndAccess(auth.userId, workspaceId);
+  return NextResponse.json({
+    session: toAgentSessionDTO(row),
+    sandboxEligible,
+    canEndSession: endAccess.allowed,
+  });
 }
 
 const PROVISION_FAILURE_STATUS: Record<string, number> = {
