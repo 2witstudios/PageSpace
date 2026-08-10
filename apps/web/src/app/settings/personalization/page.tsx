@@ -158,6 +158,9 @@ export default function PersonalizationSettingsPage() {
             <Switch
               id="personalization-enabled"
               checked={enabled}
+              // Belt and braces with the early return in the handler: this makes
+              // the control visibly inert while a write is in flight, and the
+              // handler guard is what actually holds if a change still lands.
               disabled={isTogglePending}
               onCheckedChange={handleToggleEnabled}
             />
