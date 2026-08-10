@@ -6,7 +6,7 @@
  * to the actual personalization pages.
  */
 
-import { and, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
+import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { personalizationCandidates } from '@pagespace/db/schema/personalization';
@@ -29,6 +29,9 @@ export const PROMOTION_THRESHOLD: Record<MemoryField, number> = {
   writingStyle: 2,
   rules: 2,
 };
+
+/** The field names, as runtime values, for building per-field SQL predicates. */
+const MEMORY_FIELD_NAMES = Object.keys(PROMOTION_THRESHOLD) as MemoryField[];
 
 /** Candidates not re-observed within this many days are forgotten. */
 export const STALE_CANDIDATE_DAYS = 30;
@@ -225,6 +228,24 @@ export async function findPromotableCandidates(
 ): Promise<typeof personalizationCandidates.$inferSelect[]> {
   const cutoff = promotionCutoff(now);
 
+  // One (field = X AND occurrences >= N) branch per field, OR'd together.
+  //
+  // Built from PROMOTION_THRESHOLD so the constant stays the single source of
+  // truth. Deliberately NOT a parameterised `CASE field WHEN 'bio' THEN $n`:
+  // the bound parameters carry no type, so Postgres cannot resolve `integer >=
+  // unknown` and the whole query fails with 42883 — every cron run, for every
+  // user. Nothing here is user input (the thresholds are compile-time
+  // constants and the field names are our own enum), so there is no value in
+  // parameterising them.
+  const meetsThreshold = or(
+    ...MEMORY_FIELD_NAMES.map((field) =>
+      and(
+        eq(personalizationCandidates.field, field),
+        gte(personalizationCandidates.occurrences, PROMOTION_THRESHOLD[field])
+      )
+    )
+  );
+
   return db
     .select()
     .from(personalizationCandidates)
@@ -234,12 +255,7 @@ export async function findPromotableCandidates(
         isNull(personalizationCandidates.promotedAt),
         isNull(personalizationCandidates.rejectedAt),
         lt(personalizationCandidates.firstSeenAt, cutoff),
-        // Per-field threshold, derived from PROMOTION_THRESHOLD so the constant
-        // stays the single source of truth rather than drifting from the SQL.
-        sql`${personalizationCandidates.occurrences} >= CASE ${personalizationCandidates.field}
-          WHEN 'bio' THEN ${PROMOTION_THRESHOLD.bio}
-          WHEN 'writingStyle' THEN ${PROMOTION_THRESHOLD.writingStyle}
-          ELSE ${PROMOTION_THRESHOLD.rules} END`
+        meetsThreshold
       )
     );
 }
