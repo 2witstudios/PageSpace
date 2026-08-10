@@ -340,27 +340,12 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'A per-instance STREAMING CHECKPOINT, not a durable record: `parts` is the debounced replay buffer a reconnecting client resumes from, and a completed turn is committed to `messages`, which the bundle carries. Every other column names SOURCE-instance runtime — `stream_id` (the in-process abort-registry key, UNIQUE-indexed, so a carried duplicate also collides), `browser_session_id`, `last_heartbeat_at`, `abort_requested_at`, `raw_parts_count` (a replay cursor with no live multicast to count against). Carrying a `status = streaming` row would manufacture a phantom live stream in the tenant that no worker will ever finish and no abort can reach.',
 
   /*
-   * THE OLD TWO-LEVEL PANE GRID USED TO BE EXCLUDED HERE — four entries, on the
-   * grounds that ARRANGEMENT was not worth the bundle weight. Migration 0256
-   * dropped all four tables, so there is nothing left to exclude and the
-   * entries went with them.
-   *
-   * The decision they recorded still matters, because `agent_workspace_nodes`
-   * inherited it. MEMBERSHIP used to be `conversations.workspaceId`, an
-   * ordinary carried column, while the pane grid beside it was excluded because
-   * arrangement was judged not worth carrying. This epic merged those two
-   * structures into one table, which merged the two decisions into one: the
-   * only way to keep dropping the arrangement was to start dropping the
-   * membership with it, and a tenant whose every session opens empty — every
-   * thread present but reachable only through past-conversation history — is
-   * the ghost this epic exists to delete, arriving through the export path
-   * instead of the write path.
-   *
-   * So `agent_workspace_nodes` IS CARRIED (`TABLE_IMPORT_ORDER`, with its spec
-   * in `TENANT_EXPORT_COLUMNS` and its query in `tenant-export.ts`). Membership
-   * travelled before and travels now; arrangement rides along, which costs the
-   * bundle a handful of small rows per session and is no longer separable from
-   * the thing that had to travel anyway.
+   * The four `agent_workspace_pane_*` / `_layout_*` tables used to be excluded
+   * here, on the grounds that ARRANGEMENT was not worth the bundle weight.
+   * Migration 0256 dropped all four, so there is nothing left to exclude. Why
+   * their successor `agent_workspace_nodes` is CARRIED instead is in the note
+   * above this object — arrangement and membership became one table, and
+   * membership always travelled.
    */
 
   /**
