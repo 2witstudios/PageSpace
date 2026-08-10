@@ -41,10 +41,36 @@ export type CloseConversationOutcome = 'closed' | 'already_closed' | 'not_in_ses
 export type DismissConversationOutcome = 'dismissed' | 'not_a_member' | 'refused';
 
 /**
- * The row facts this decision gates on. Deliberately the MINIMUM: the deps are
- * generic over whatever richer row the caller's read actually returns (see
- * `announceClosed`), so the production wiring can hand its emit context
- * straight through without this module having to name it.
+ * Read a membership write's answer as a dismissal or a refusal — POSITIVELY
+ * narrowed, which is the whole point of it existing as a function.
+ *
+ * The wiring used to narrow away `refused` and `stale` inline and let
+ * everything else fall through to `dismissed`. That fallthrough covered `ok`
+ * **and** `conflict`, and a conflict is a ROLLED-BACK write: the route answered
+ * 200 "closed" and wrote a `data.write` audit event for a close that never
+ * happened. Latent rather than live — a pure destroy introduces no binding, so
+ * it cannot currently raise the chat-target conflict — but it is exactly the
+ * class `commitUnderLock` documents at length, and both neighbouring call sites
+ * already guard it (`admitConversationNode` handles `conflict` explicitly,
+ * `expelConversationFromSession` is exhaustive-safe via `if (status === 'ok')`).
+ *
+ * Lives here, beside the type it produces, so it is testable without the
+ * database the wiring is bolted to.
+ */
+export function dismissOutcomeOf(result: { status: string; code?: string }): DismissConversationOutcome {
+  if (result.status === 'ok') return 'dismissed';
+  if (result.status === 'refused' && result.code === 'not_a_member') return 'not_a_member';
+  return 'refused';
+}
+
+/**
+ * The row facts this decision gates on, and now the WHOLE row it reads.
+ *
+ * The deps used to be generic over whatever richer row the caller's read
+ * returned, so `announceClosed` could be handed its emit context without this
+ * module naming it. That dep is gone — the write funnel announces — so these
+ * two columns are the entire input, and a generic that abstracts over nothing
+ * would only make a reader look for the part that uses it.
  */
 export interface ConversationCloseSubject {
   /**
@@ -54,14 +80,15 @@ export interface ConversationCloseSubject {
    */
   userId: string;
   /**
-   * History soft-delete. A history-deleted thread has no listing left to
-   * close; its node is removed by the delete itself, so closing one is
-   * `already_closed` rather than an act with anything to do.
+   * History soft-delete. A history-deleted thread has no listing left to close,
+   * so once the membership write confirms there is no node either, the answer
+   * is `already_closed`. It is read AFTER that write, never instead of it — see
+   * the comment on the `dismissConversation` call.
    */
   isActive: boolean;
 }
 
-export interface CloseConversationInSessionDeps<TRow extends ConversationCloseSubject = ConversationCloseSubject> {
+export interface CloseConversationInSessionDeps {
   /**
    * Row facts for the ownership gate.
    *
@@ -70,43 +97,44 @@ export interface CloseConversationInSessionDeps<TRow extends ConversationCloseSu
    * lock, which is the only place the answer cannot go stale between the check
    * and the act.
    */
-  findConversation: (conversationId: string) => Promise<TRow | null>;
-  /** THE MEMBERSHIP WRITE — `destroy` the thread's node. */
+  findConversation: (conversationId: string) => Promise<ConversationCloseSubject | null>;
+  /**
+   * THE MEMBERSHIP WRITE — `destroy` the thread's node.
+   *
+   * **It announces, too, and that is why there is no `announceClosed` dep.**
+   * The directory plane still has to hear about a close: closing is a node
+   * `destroy`, whose `workspace:nodes-updated` carries the TREE, while the
+   * sidebar's rows come from the LISTING (`AgentsSidebar`'s `conversationRows`
+   * is "keyed by the listing and never by the tree", and the store the tree
+   * event feeds deliberately ignores workspaces it is not already tracking), so
+   * the structural broadcast cannot take a row out of the listing cache.
+   * Regression caught by `apps/e2e/tests/18-sidebar-directory-live.spec.ts`,
+   * which blocks the listing fetch at the network so that only the event can
+   * move the row.
+   *
+   * What changed is WHERE that announcement is made. It used to be a dep here,
+   * on the theory that this function is the only place that knows a close
+   * happened — true of this ROUTE, and false of the workspace. Membership is
+   * the node, so a chat node leaving the tree is the thread leaving the
+   * workspace however it left: a pane drop, the sidebar's row drop, an agent
+   * tool's close, an end-session. Only one of those ever came through here, so
+   * the announcement fired for one producer out of four. It is emitted from the
+   * write funnel now (`commitUnderLock` → `announceClosedConversations`), which
+   * every one of them passes through, and keeping a dep here as well would
+   * double-emit for this one.
+   */
   dismissConversation: (input: {
     conversationId: string;
     workspaceId: string;
   }) => Promise<DismissConversationOutcome>;
-  /**
-   * ANNOUNCE THE CLOSE ON THE DIRECTORY PLANE — `conversation:closed`.
-   *
-   * A dep rather than a caller-side follow-up because THIS function is the only
-   * place that knows a close actually happened: every other answer below is a
-   * refusal wearing the same shape, and a caller re-deriving "did it close" from
-   * the returned string is a second copy of this switch.
-   *
-   * **Why it exists at all, since the membership write already broadcasts.**
-   * Closing is a node `destroy`, and that write emits `workspace:nodes-updated`
-   * — the TREE plane. The sidebar's rows are not the tree: `AgentsSidebar`'s
-   * `conversationRows` is "keyed by the listing and never by the tree", and the
-   * store the tree event feeds deliberately ignores workspaces it is not
-   * already tracking. So the structural broadcast cannot, even in principle,
-   * take a row out of the listing cache — only the directory event can, and
-   * for the window in which nothing emitted one, a closed thread stayed in the
-   * sidebar until the 120s backstop poll. Regression caught by
-   * `apps/e2e/tests/18-sidebar-directory-live.spec.ts`, which blocks the
-   * listing fetch at the network so that only the event can move the row.
-   *
-   * Fire-and-forget by contract: a broadcast that fails must not un-succeed a
-   * committed close.
-   */
-  announceClosed: (row: TRow) => void;
 }
 
 /**
  * Make an announcement keep the promise its type already makes.
  *
- * `announceClosed` and `announceReopened` are declared fire-and-forget: a
- * broadcast that fails must not un-succeed a committed write. Both return
+ * The directory announcements — `announceReopened` here, and the write funnel's
+ * own `announceClosedConversations` — are declared fire-and-forget: a broadcast
+ * that fails must not un-succeed a committed write. Both return
  * `void`, so a rejected promise is already nobody's problem — but a SYNCHRONOUS
  * throw from the injected callback is not. It propagates out of the caller and
  * turns a committed membership change into a reported failure, and the retry
@@ -126,8 +154,8 @@ export function announceWithoutUnsucceeding(announce: () => void): void {
   }
 }
 
-export async function closeConversationInSessionWith<TRow extends ConversationCloseSubject>(
-  deps: CloseConversationInSessionDeps<TRow>,
+export async function closeConversationInSessionWith(
+  deps: CloseConversationInSessionDeps,
   { conversationId, userId, workspaceId }: { conversationId: string; userId: string; workspaceId: string },
 ): Promise<CloseConversationOutcome> {
   const row = await deps.findConversation(conversationId);
@@ -146,15 +174,25 @@ export async function closeConversationInSessionWith<TRow extends ConversationCl
   // Refuses as `not_in_session` — the same shape a nonexistent id gets, so an
   // id-guessing caller cannot tell "not yours" from "not there".
   if (row.userId !== userId) return 'not_in_session';
-  if (!row.isActive) return 'already_closed';
 
+  // ATTEMPTED REGARDLESS OF `isActive`, and the order is the fix.
+  //
+  // A history-deleted thread has no listing left to close, so this used to
+  // return `already_closed` right here, BEFORE the write — and the route
+  // answers 200 `{ok: true}` for it. That is only sound if a dead thread never
+  // has a node, which is exactly the state a FAILED expel leaves behind:
+  // `expelConversationFromSession` logs and returns `refused` when the
+  // membership write does not land, the soft-delete proceeds anyway, and the
+  // node survives bound to a dead thread. Every later close then answered
+  // "already closed, nothing to do" having written nothing, so the pane was
+  // unclosable and said so in the only way a success can — silently.
+  //
+  // Attempting the write costs a dead thread one indexed lookup that answers
+  // `not_a_member`, and repairs the one case where it does not. Nothing is owed
+  // to the directory plane either way: the `deleted` event already fired.
   const outcome = await deps.dismissConversation({ conversationId, workspaceId });
   switch (outcome) {
     case 'dismissed':
-      // AFTER the write, and only on the branch that wrote. Announcing beside
-      // the call would announce the refusals too, which is the failure mode
-      // that reads as "the row vanished and came back".
-      announceWithoutUnsucceeding(() => deps.announceClosed(row));
       return 'closed';
     // "This workspace does not hold that thread" and "the tree would not take
     // the removal" collapse to one answer, the same shape a nonexistent id gets.
@@ -165,7 +203,16 @@ export async function closeConversationInSessionWith<TRow extends ConversationCl
     // the first one removed the node, so the second genuinely finds no member.
     // The distinction the old `already_parked` drew — "it is already where you
     // asked" — needed a node that survived the close, and none does.
+    //
+    // The ONE exception is the history-deleted thread, and it is where
+    // `already_closed` now lives: no listing, no node, nothing to do, and the
+    // caller already passed the ownership gate above so this discloses nothing
+    // a guesser could use. Reaching it through the write rather than ahead of
+    // it is the whole point — a dead thread that DOES still have a node gets
+    // that node removed and answers `closed`, where the old ordering answered
+    // "already closed" and wrote nothing, forever.
     case 'not_a_member':
+      return row.isActive ? 'not_in_session' : 'already_closed';
     case 'refused':
       return 'not_in_session';
   }

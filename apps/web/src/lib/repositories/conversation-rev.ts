@@ -131,9 +131,23 @@ export function emitConversationLifecycle(
   });
 }
 
-/** Build the emitter context from a bumped row + the acting principal. */
+/**
+ * Build the emitter context from a bumped row + the acting principal.
+ *
+ * Takes a `Pick` rather than a whole {@link BumpedConversationRow}, matching
+ * {@link scopeFromRow} beside it: these five columns are the entire input, and
+ * declaring the whole row would force a caller that reads only what an
+ * announcement is addressed with (`readConversationDirectoryRows`) to read
+ * title, timestamps and liveness it will never send. Every existing caller
+ * passes a full row and still type-checks — this only widens what is accepted.
+ */
+export type ConversationEmitSubject = Pick<
+  BumpedConversationRow,
+  'id' | 'rev' | 'userId' | 'isShared' | 'type' | 'contextId'
+>;
+
 export function emitContextFromRow(
-  row: BumpedConversationRow,
+  row: ConversationEmitSubject,
   triggeredBy?: ConversationEventTriggeredBy,
 ): ConversationEmitContext {
   return {

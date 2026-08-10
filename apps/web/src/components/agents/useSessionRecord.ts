@@ -36,6 +36,17 @@ export interface SessionRecordResponse {
    * resolve a payer against).
    */
   sandboxEligible?: boolean;
+  /**
+   * Whether this VIEWER may end this workspace. Server-resolved for the same
+   * reason as `sandboxEligible`: ending is gated by `checkSessionEndAccess`,
+   * which is stricter than the access that let them reach the session at all
+   * (owner always; otherwise drive owner/admin AND real code-execution
+   * capability), and none of those inputs are on the client.
+   *
+   * `undefined` when `session` is null, and read as FALSE by callers — offering
+   * an act that 404s is worse than not offering it.
+   */
+  canEndSession?: boolean;
 }
 
 async function sessionFetcher(url: string): Promise<SessionRecordResponse> {

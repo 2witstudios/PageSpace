@@ -20,6 +20,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   another session already holds used to fail as a server error. The pane you had just opened stayed
   on screen, showing nothing, until something else happened to refresh the layout. The attempt is
   now refused properly and the layout corrects itself straight away.
+- **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
+  requests that removed the same thing, and the second one arrived to find the first had already
+  done it. The pane closed correctly either way, so the error was pure noise; there is one request
+  now.
+- **Closing the last pane asks whether to end the session again** — it had started leaving you in an
+  empty grid with nothing to do, which was not what anyone wanted. You get the same confirm the
+  sidebar's "End session" uses, and Cancel leaves everything exactly as it was. Closing the last
+  conversation row in the sidebar now asks the same question, instead of quietly emptying the
+  session.
+- **A conversation removed from a session leaves the sidebar however it was removed** — closing a
+  pane, closing a sidebar row, an agent closing one on your behalf, or ending the session. Only one
+  of those used to tell the sidebar, so a thread you had just closed could sit in the list for up to
+  two minutes.
+- **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
+  removes it from your session failed, every later attempt to close it reported success and did
+  nothing, leaving a pane that could not be closed. The close is attempted properly now.
 - **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
   tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
   showed no PageSpace tools at all. Copy it again and it works.

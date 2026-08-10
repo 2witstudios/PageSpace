@@ -50,7 +50,7 @@ import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lu
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
@@ -213,6 +213,13 @@ export default function AgentPanes({
   // picker's Shell/reattach buttons mustn't flash disabled on every mount.
   const { data: sessionRecordData } = useSessionRecord(sessionId);
   const canRunSandbox = sessionRecordData?.sandboxEligible ?? true;
+  // Defaults to FALSE, unlike `canRunSandbox` above — and the asymmetry is
+  // deliberate. An optimistic sandbox flag costs a button that flashes
+  // enabled; an optimistic END flag costs a confirm dialog raised for someone
+  // the server will refuse, and the user has already agreed to destroy their
+  // session by the time they learn that. Until the record resolves, closing
+  // the last pane just closes it.
+  const canEndSession = sessionRecordData?.canEndSession ?? false;
 
   // The tree is SERVER-AUTHORITATIVE: the store posts each edit as its own
   // write-set, and this hook supplies the other direction — the mount-time
@@ -508,41 +515,49 @@ export default function AgentPanes({
   );
 
   /**
-   * Destroy the node and close its conversation's listing — silent on success,
-   * since closing a listing never touches history.
+   * Close a chat pane: ONE write, and it is the node drop.
    *
-   * There is no rebind branch any more: the grid is allowed to be empty, so
-   * nothing has to be found to put in the gap.
+   * **This used to send two, and they destroyed the same thing.** The store's
+   * `closePane` queues a `drop` that the pump POSTs to `/nodes`, and this
+   * function then awaited `DELETE …/conversations/{id}` — whose `expel` is a
+   * destroy of that same node. Both take the workspace's advisory lock, the
+   * drop normally wins, and the DELETE's expel then finds no node:
+   * `not_a_member` → `not_in_session` → 404 → "Could not close this
+   * conversation". The pane closed anyway (nothing rolls the drop back), so the
+   * toast was pure noise; under lock contention the same race produced the 500
+   * variant instead.
+   *
+   * Making the route idempotent would have silenced it in four lines and left
+   * the double-write permanent in a model whose premise is one fact, one
+   * writer. The listing is derived from the nodes now
+   * (`workspace-conversations-runtime.ts` builds it from
+   * `agentWorkspaceNodes WHERE targetKind = 'chat'`; there is no
+   * `closedInWorkspaceAt` column left), so the node drop IS the close for the
+   * sidebar exactly as it is for the tree, and the DELETE was a second writer
+   * for a fact the node write already owns.
+   *
+   * The directory `conversation:closed` the route used to emit is not lost — it
+   * moved INTO the write funnel (`commitUnderLock`), which every producer
+   * passes through. It was already not firing for most of them: the drop
+   * usually beat the DELETE, so `announceClosed` ran on a branch that was
+   * seldom taken, and the sidebar's own row-close never went through the route
+   * at all.
+   *
+   * Synchronous now, and nothing awaits it — so no rebind branch, no catch, no
+   * toast on the success path.
    */
-  const closeConversationListing = useCallback(
-    async (nodeId: string, conversationId: string) => {
-      // Layout first, and deliberately: the local write is instant and the
-      // broadcast reconciles it, where the alternative — waiting on the DELETE —
-      // is what made a close feel like the app had ignored it.
+  const closeChatPane = useCallback(
+    (nodeId: string, conversationId: string) => {
       closePane(sessionId, nodeId);
-      try {
-        await del(
-          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
-        );
-      } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 409) {
-          // The workspace's LAST open listing — the server is the authority on
-          // the never-empty invariant, so fall back to the confirmed
-          // end-workspace flow.
-          setPendingEnd({ nodeId });
-          return;
-        }
-        console.error('Failed to close this conversation:', error);
-        toast.error('Could not close this conversation', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-        return;
-      }
       onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+      // Instant LOCAL freshness for the switch decision's own cache. The
+      // broader `void mutate(isAgentWorkspacesKey)` that used to follow is gone
+      // with the DELETE it depended on: it was only safe because it ran AFTER
+      // an awaited round trip, and firing it beside a merely-QUEUED drop races
+      // the pump's POST — the revalidation can answer from before the drop
+      // landed and put the row back. Other clients are settled by the funnel's
+      // `conversation:closed` instead (`session-directory-listener.ts`).
       recordClosedConversation(conversationId);
-      // Instant sidebar freshness — the closed listing's row leaves every open
-      // `/api/agent-workspaces**` poll without waiting on its interval.
-      void mutate(isAgentWorkspacesKey);
     },
     [sessionId, closePane, onConversationClosed, recordClosedConversation],
   );
@@ -555,9 +570,21 @@ export default function AgentPanes({
         panes: paneNodesOf(nodes),
         nodeId,
         activeConversations: closeDecisionListing,
+        canEndSession,
       });
 
       if (decision.action === 'noop') return;
+
+      // ABOVE `beginPaneAssign`, and that placement is the point of putting it
+      // here rather than below with the others. That call's own comment says to
+      // fire it "only once a decision ACTUALLY commits to altering this node";
+      // an end-session raises a confirm and writes nothing, and the user may
+      // cancel — which then costs nothing, because nothing was invalidated and
+      // nothing was mutated (`onOpenChange(false)` just clears `pendingEnd`).
+      if (decision.action === 'end-session') {
+        setPendingEnd({ nodeId });
+        return;
+      }
 
       // Only once a decision ACTUALLY commits to altering this node: a stale
       // close attempt that changed nothing must not invalidate a genuinely
@@ -574,9 +601,9 @@ export default function AgentPanes({
         return;
       }
 
-      void closeConversationListing(nodeId, decision.conversationId);
+      closeChatPane(nodeId, decision.conversationId);
     },
-    [nodes, closePane, sessionId, closeShell, closeDecisionListing, closeConversationListing, beginPaneAssign],
+    [nodes, closePane, sessionId, closeShell, closeDecisionListing, closeChatPane, beginPaneAssign, canEndSession],
   );
 
   const confirmEndSession = useCallback(async () => {
