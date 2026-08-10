@@ -5,8 +5,8 @@
  * anyway on the way in, so the gate is one function in one place for both
  * entry points." It did not. `openOwnGrid` resolved the caller's conversation
  * to its workspace and stopped; neither wired dep checked anything
- * (`readPaneGrid` → `readWorkspaceLayoutSnapshot`, `applyLayoutVerb` →
- * `applyLayoutVerbForWorkspace`). `checkSessionAccess` was imported by the
+ * (`readPaneGrid` → the layout snapshot, `applyLayoutCommand` → the layout
+ * writer). `checkSessionAccess` was imported by the
  * runtime and used only by `resolveWorkerPlacement`.
  *
  * The attack the structural argument misses: a conversation→workspace binding
@@ -24,7 +24,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tool } from 'ai';
-import { createSessionTools, type SessionToolsDeps } from '../session-tools';
+import { createSessionTools, type PaneGridListing, type SessionToolsDeps } from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
 
 /** Alice's workspace. Mallory's worker conversation is bound into it. */
@@ -32,15 +32,10 @@ const ALICE_WORKSPACE = 'ws-alice';
 const MALLORY = 'mallory';
 const MALLORY_WORKER_CONVERSATION = 'conv-mallory-worker';
 
-const GRID = {
-  columns: [
-    {
-      columnId: 'col-1',
-      widthFraction: null,
-      panes: [
-        { paneId: 'pane-1', kind: 'chat' as const, targetId: 'conv-alice-private', name: 'Q3 layoffs plan', heightFraction: null },
-      ],
-    },
+const LAYOUT: PaneGridListing = {
+  nodes: [
+    { nodeId: 'root', nodeType: 'root', parentId: null, position: 0, axis: 'row', kind: null, targetId: null, name: '', fraction: null },
+    { nodeId: 'pane-1', nodeType: 'pane', parentId: 'root', position: 0, axis: null, kind: 'chat', targetId: 'conv-alice-private', name: 'Q3 layoffs plan', fraction: null },
   ],
 };
 
@@ -68,8 +63,8 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: false, output: '' })),
       send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),
     },
-    readPaneGrid: vi.fn(async () => GRID),
-    applyLayoutVerb: vi.fn(async () => ({ ok: true as const, applied: true })),
+    readPaneGrid: vi.fn(async () => LAYOUT),
+    applyLayoutCommand: vi.fn(async () => ({ ok: true as const, changed: true })),
     newId: vi.fn(() => 'minted-id'),
     ...over,
   };
@@ -85,9 +80,9 @@ async function run(toolDef: Tool, input: unknown): Promise<Record<string, unknow
 /** Every layout tool, with an input that would otherwise succeed. */
 const LAYOUT_CALLS: Array<[string, unknown]> = [
   ['list_panes', {}],
-  ['resize_pane', { columnId: 'col-1', size: 0.5 }],
-  ['move_pane', { paneId: 'pane-1', toColumnId: 'col-1' }],
-  ['arrange_panes', { columnIds: ['col-1'] }],
+  ['resize_pane', { nodeId: 'pane-1', size: 0.5 }],
+  ['move_pane', { nodeId: 'pane-1', toParentId: 'root' }],
+  ['arrange_panes', { nodeIds: ['pane-1'] }],
 ];
 
 let deps: SessionToolsDeps;
@@ -106,7 +101,7 @@ describe('a revoked member whose worker is still bound into the victim\'s worksp
       expect(result.success, `${toolName} must refuse a revoked caller`).toBe(false);
       // The reads and the writes both stop at the gate.
       expect(deps.readPaneGrid).not.toHaveBeenCalled();
-      expect(deps.applyLayoutVerb).not.toHaveBeenCalled();
+      expect(deps.applyLayoutCommand).not.toHaveBeenCalled();
       // Nothing about the victim's grid leaks into the refusal.
       expect(JSON.stringify(result)).not.toContain('Q3 layoffs plan');
       expect(JSON.stringify(result)).not.toContain('conv-alice-private');
@@ -125,11 +120,11 @@ describe('a caller who still has session access', () => {
     deps = makeDeps({ checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })) });
   });
 
-  it('list_panes reads the grid, labelled for THAT viewer', async () => {
+  it('list_panes reads the layout, labelled for THAT viewer', async () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.list_panes as Tool, {});
     expect(result.success).toBe(true);
-    expect(result.columns).toEqual(GRID.columns);
+    expect(result.nodes).toEqual(LAYOUT.nodes);
     // The label join is per-viewer (review HIGH 1) — the tool must say who is
     // reading, not just which workspace.
     expect(deps.readPaneGrid).toHaveBeenCalledWith(ALICE_WORKSPACE, MALLORY);
@@ -137,9 +132,13 @@ describe('a caller who still has session access', () => {
 
   it('a rearrange reaches the single writer', async () => {
     const tools = createSessionTools(deps);
-    const result = await run(tools.resize_pane as Tool, { columnId: 'col-1', size: 0.5 });
+    const result = await run(tools.resize_pane as Tool, { nodeId: 'pane-1', size: 0.5 });
     expect(result.success).toBe(true);
-    expect(deps.applyLayoutVerb).toHaveBeenCalled();
+    // And it carries the ACTING USER through, whose authority the write's
+    // binding gate spends — never the model's word for who is asking.
+    expect(deps.applyLayoutCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: ALICE_WORKSPACE, actingUserId: MALLORY }),
+    );
   });
 });
 

@@ -1,38 +1,43 @@
 /**
- * `countOpenConversations` — THE open-conversation cap predicate, against a
- * REAL Postgres.
+ * `countOpenConversations` — THE membership count, against a REAL Postgres.
  *
- * The whole point of `conversation-cap.ts` (epic "Agent-Session Single Source
- * of Truth", Phase 1 / D7) is that the predicate
+ * The predicate it executes has gone from a three-column conjunction over
+ * `conversations`
  *
  *   workspaceId = $1 AND isActive = true AND closedInWorkspaceAt IS NULL
  *
- * exists EXACTLY ONCE, because it used to be written out three times and three
- * copies is three chances for one of them to drift and unbalance which
- * listings count toward `MAX_SESSION_CONVERSATIONS`. Every consumer — the
- * claim path, close/reopen, the tool layer's advisory spawn pre-count, the
- * end-session warning — injects a `vi.fn()` for it, which is correct for those
- * suites and leaves the actual SQL asserted NOWHERE: a re-inlined second copy
- * that quietly dropped a clause would go green in every one of them. This
- * suite is the one place the statement itself is executed and pinned.
+ * to one over the node table
+ *
+ *   rootId = $1 AND targetKind = 'chat' AND targetId IS NOT NULL
+ *
+ * and the shrinkage is the whole point of this leaf: membership was three facts
+ * that had to be kept in agreement at four call sites, and it is now one row.
+ * The two clauses that disappeared did not become someone else's job — they
+ * stopped existing. A history-deleted thread has its NODE removed by the delete
+ * (`expelConversationFromSession`), and so does a CLOSED one: closing is the
+ * same single removal, not a move to somewhere off the screen.
+ *
+ * An earlier cut of this model let a closed thread keep a parentless node and
+ * stay a member, and this suite pinned that. It is gone — a member is somewhere
+ * or is not a member — so closing frees a cap slot again and reopening is an
+ * ordinary admission that consumes one.
  *
  * It also pins the `executor` parameter, which exists so a caller holding its
- * own connection (a transaction, a lock-scoped client) is counted ON THAT
- * CONNECTION rather than having this module reach for the shared pool
- * underneath it. That is a property no mock can express: it is only true or
- * false against a real database with real transaction visibility.
+ * own connection is counted ON THAT CONNECTION rather than having this module
+ * reach for the shared pool underneath it — the property the membership write
+ * depends on, and one no mock can express.
  *
  * Requires DATABASE_URL → a Postgres with migrations applied. Deliberately
  * does NOT skip when the database is unreachable: a silently-skipping cap test
- * is indistinguishable from no cap test at all, which is the hole this file
- * was written to close.
+ * is indistinguishable from no cap test at all.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { countOpenConversations } from '../conversation-cap';
@@ -62,30 +67,69 @@ async function createWorkspace(): Promise<string> {
 }
 
 /**
- * One conversation row, seeded directly: what is under test is a COUNT over
- * existing state, so the rows are state, not the output of a writer.
+ * One conversation and, when it has a home, the NODE that is its membership —
+ * seeded directly: what is under test is a COUNT over existing state, so the
+ * rows are state, not the output of a writer.
+ *
+ * EVERY seeded node is under the root, because there is nowhere else. The
+ * `attached` option this helper used to take chose between a node under the
+ * root and one with `parentId: null` — "in the workspace, off the screen" —
+ * and that state no longer exists at any layer: `validateTree` calls it
+ * `null_parent`, `nodeFromRow` throws on it, and the table's root CHECK is
+ * biconditional, so the database refuses the row outright.
  */
 async function seedConversation(opts: {
   workspaceId: string | null;
   isActive?: boolean;
-  closedInWorkspaceAt?: Date | null;
   executor?: Executor;
 }): Promise<string> {
   const id = createId();
-  await (opts.executor ?? db).insert(conversations).values({
+  const executor = opts.executor ?? db;
+  await executor.insert(conversations).values({
     id,
     userId: ownerIds[0],
     type: 'page',
     contextId: agentPageId,
-    workspaceId: opts.workspaceId,
     isActive: opts.isActive ?? true,
-    closedInWorkspaceAt: opts.closedInWorkspaceAt ?? null,
+    updatedAt: new Date(),
+  });
+  if (opts.workspaceId !== null) {
+    await executor.insert(agentWorkspaceNodes).values({
+      id: createId(),
+      rootId: opts.workspaceId,
+      parentId: await rootOfWorkspace(opts.workspaceId, executor),
+      position: 0,
+      nodeType: 'pane',
+      targetKind: 'chat',
+      targetId: id,
+      updatedAt: new Date(),
+    });
+  }
+  return id;
+}
+
+/** The workspace's root node id, minted on first use. Every tree needs one. */
+async function rootOfWorkspace(workspaceId: string, executor: Executor): Promise<string> {
+  const [existing] = await executor
+    .select({ id: agentWorkspaceNodes.id })
+    .from(agentWorkspaceNodes)
+    .where(and(eq(agentWorkspaceNodes.rootId, workspaceId), eq(agentWorkspaceNodes.nodeType, 'root')))
+    .limit(1);
+  if (existing) return existing.id;
+  const id = createId();
+  await executor.insert(agentWorkspaceNodes).values({
+    id,
+    rootId: workspaceId,
+    parentId: null,
+    position: 0,
+    nodeType: 'root',
+    axis: 'row',
     updatedAt: new Date(),
   });
   return id;
 }
 
-describe('countOpenConversations — the one open-listing predicate, on a real database', () => {
+describe('countOpenConversations — the one membership count, on a real database', () => {
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) {
       throw new Error(
@@ -118,7 +162,7 @@ describe('countOpenConversations — the one open-listing predicate, on a real d
   // WHAT COUNTS
   // ---------------------------------------------------------------------------
 
-  it('counts conversations bound to the workspace that are history-alive and not closed in it', async () => {
+  it('counts every conversation the workspace HOLDS', async () => {
     const workspaceId = await createWorkspace();
 
     expect(await countOpenConversations(workspaceId)).toBe(0);
@@ -144,18 +188,31 @@ describe('countOpenConversations — the one open-listing predicate, on a real d
   // WHAT DOES NOT COUNT
   // ---------------------------------------------------------------------------
 
-  it('does not count a history-deleted conversation (isActive = false)', async () => {
+  it('counts every node the workspace holds, because holding one IS membership', async () => {
+    // THIS TEST USED TO SEED A THREAD "off the grid" — a node with
+    // `parentId: null` — and assert it still counted, on the reasoning that
+    // closing was a MOVE and a moved thread was still a member. The one-removal
+    // correction deleted that state: closing DESTROYS the node, so there is no
+    // longer a way to be a member and not be somewhere, and the database now
+    // refuses the row the old fixture inserted.
+    //
+    // What the old test was really pinning survives and is stronger for it: the
+    // count is of MEMBERSHIP, and membership is the presence of a row. Nothing
+    // about where the row sits enters the predicate.
     const workspaceId = await createWorkspace();
     await seedConversation({ workspaceId });
-    await seedConversation({ workspaceId, isActive: false });
+    await seedConversation({ workspaceId });
 
-    expect(await countOpenConversations(workspaceId)).toBe(1);
+    expect(await countOpenConversations(workspaceId)).toBe(2);
   });
 
-  it('does not count a conversation closed out of the workspace listing (closedInWorkspaceAt set)', async () => {
+  it('does not count a history-deleted thread, because the delete takes its NODE too', async () => {
+    // `isActive` is not in the predicate any more. What keeps a deleted thread
+    // out of the count is that `expelConversationFromSession` removes its node,
+    // so this seeds the state that write leaves: a row with no membership.
     const workspaceId = await createWorkspace();
     await seedConversation({ workspaceId });
-    await seedConversation({ workspaceId, closedInWorkspaceAt: new Date() });
+    await seedConversation({ workspaceId: null, isActive: false });
 
     expect(await countOpenConversations(workspaceId)).toBe(1);
   });
@@ -172,11 +229,10 @@ describe('countOpenConversations — the one open-listing predicate, on a real d
     expect(await countOpenConversations(theirs)).toBe(2);
   });
 
-  it('does not count an unbound conversation (workspaceId IS NULL)', async () => {
+  it('does not count a thread that belongs to no workspace at all', async () => {
     const workspaceId = await createWorkspace();
-    // A plain chat with no session. `eq(workspaceId, $1)` is never true of
-    // NULL, so a session's cap is not consumed by threads outside every
-    // session.
+    // A plain chat with no membership row. It has no `rootId` to match, so no
+    // workspace's cap is consumed by threads outside every workspace.
     await seedConversation({ workspaceId: null });
 
     expect(await countOpenConversations(workspaceId)).toBe(0);
@@ -186,24 +242,36 @@ describe('countOpenConversations — the one open-listing predicate, on a real d
   // CLOSE / REOPEN SYMMETRY
   // ---------------------------------------------------------------------------
 
-  it('drops the count when a conversation is closed and restores it when reopened', async () => {
+  it('FREES A SLOT on close and consumes one on reopen — both are the one removal and an ordinary admission', async () => {
+    // THE INVERSE OF WHAT THIS PINNED BEFORE, and the inversion is the point.
+    // This test asserted the count was UNMOVED by a close, because closing was
+    // a `move` to no parent and the thread stayed a member. Closing is a
+    // `destroy` now — the single removal — so a closed thread is a member of
+    // nothing, its slot is freed, and reopening it is an ordinary admission
+    // that consumes one again (which is why `reopen` can answer `session_full`).
+    //
+    // The old shape only worked because a parentless pane was storable. It is
+    // not: the root CHECK is biconditional.
     const workspaceId = await createWorkspace();
     await seedConversation({ workspaceId });
     const toggled = await seedConversation({ workspaceId });
     expect(await countOpenConversations(workspaceId)).toBe(2);
 
-    // Closing is only ever stamping the column; history (`isActive`) is
-    // untouched, which is why reopening can be exactly its inverse.
-    await db
-      .update(conversations)
-      .set({ closedInWorkspaceAt: new Date() })
-      .where(eq(conversations.id, toggled));
+    // Closing: the node is destroyed, and the slot goes with it.
+    await db.delete(agentWorkspaceNodes).where(eq(agentWorkspaceNodes.targetId, toggled));
     expect(await countOpenConversations(workspaceId)).toBe(1);
 
-    await db
-      .update(conversations)
-      .set({ closedInWorkspaceAt: null })
-      .where(eq(conversations.id, toggled));
+    // Reopening: a new node, seated under the root like any other admission.
+    await db.insert(agentWorkspaceNodes).values({
+      id: createId(),
+      rootId: workspaceId,
+      parentId: await rootOfWorkspace(workspaceId, db),
+      position: 1,
+      nodeType: 'pane',
+      targetKind: 'chat',
+      targetId: toggled,
+      updatedAt: new Date(),
+    });
     expect(await countOpenConversations(workspaceId)).toBe(2);
   });
 
@@ -216,11 +284,10 @@ describe('countOpenConversations — the one open-listing predicate, on a real d
     await seedConversation({ workspaceId });
 
     await db.transaction(async (tx) => {
-      // Two more rows that exist only inside this transaction. A lock-holding
-      // caller (`withSessionListingLock` → create/close/reopen) writes exactly
-      // like this and then re-counts before deciding, so a count that reached
-      // for the pool would decide against state its own transaction has
-      // already changed.
+      // Two more rows that exist only inside this transaction. The membership
+      // write does exactly this — it decides the cap against the tree it is
+      // about to change, inside its own transaction — so a count that reached
+      // for the pool would decide against state it has already changed.
       await seedConversation({ workspaceId, executor: tx });
       await seedConversation({ workspaceId, executor: tx });
 

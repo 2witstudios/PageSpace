@@ -15,16 +15,18 @@
  *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
- *  - **No conversation writes.** `conversations.workspaceId` is the thread→session
- *    binding, set once at conversation creation by the squat-guarded repository
- *    path. This store READS that binding (`findByConversation` — how a chat
- *    turn resolves its working context) but never writes it: a store that could
- *    bind threads would be a second, unguarded way to move a thread's
- *    filesystem, which the model forbids (moving a thread is a fork).
+ *  - **No membership writes.** A thread belongs to a workspace by virtue of a
+ *    row in `agent_workspace_nodes` bound to it, written by exactly one funnel
+ *    (`applyWorkspaceMembershipWrite`). This store READS that binding
+ *    (`findByConversation` — how a chat turn resolves its working context) but
+ *    never writes it: a store that could bind threads would be a second,
+ *    unguarded way to move a thread's filesystem, which the model forbids
+ *    (moving a thread is a fork).
  */
 
-import type { AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/contract';
+import { planSessionReopen, type AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { withWorkspaceLock } from './workspace-lock';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
 /** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
 export interface AgentSessionRecord {
@@ -86,9 +88,10 @@ export interface AgentSessionStore {
   findById(workspaceId: string): Promise<AgentSessionRecord | null>;
   /**
    * Resolve a conversation's session — how a chat turn finds its working
-   * context. Reads `conversations.workspaceId` and returns the session row, or
-   * null when the thread has no session (a plain chat) or the FK was nulled by
-   * a session delete. THE lookup the tool layer folds its Sprite key from:
+   * context. Reads the node bound to the conversation and returns its
+   * workspace row, or null when the thread is a member of none (a plain chat,
+   * or one whose workspace was deleted — the node's `rootId` FK cascades).
+   * THE lookup the tool layer folds its Sprite key from:
    * every conversation in one session resolves the same row, which is what
    * makes sandbox sharing structural rather than wired.
    */
@@ -227,6 +230,33 @@ export interface AgentSessionStore {
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   /**
+   * Withdraw an end-intent, but ONLY while the workspace still holds a tree —
+   * as ONE statement, which is the whole reason this is not `applyStamps` with
+   * a condition the caller checks first.
+   *
+   * The caller (`reopenEndedSessionListing`) runs after its own membership write
+   * has committed and released the workspace lock, because a reopen failure must
+   * never surface as a creation failure for a conversation that is already a
+   * member (review finding, PR #2336). That means a concurrent `endSession` can
+   * destroy the tree at any point — INCLUDING between a read of the node count
+   * and the stamp that follows it. Checking emptiness in the caller therefore
+   * decides on a snapshot the update can no longer vouch for, and the interleave
+   * read-nodes → destroy → stamp produces exactly the state the check exists to
+   * prevent: a LIVE workspace, in the sidebar, holding ZERO nodes.
+   *
+   * So the emptiness test is a `WHERE EXISTS` on the same UPDATE as the CAS,
+   * and the whole statement runs under the workspace's advisory lock. One
+   * statement alone is not sufficient: `EXISTS` takes no lock and reads this
+   * statement's snapshot, so an UNCOMMITTED destroy still looks like a
+   * populated tree. The lock is what makes the answer current, because the
+   * destroy holds it until it commits.
+   *
+   * Answers whether the withdrawal landed; `false` means the tree went, or a
+   * concurrent re-end moved `endedAt`, and both are states the caller must
+   * leave alone.
+   */
+  reopenListingIfPopulated(input: { workspaceId: string; endedAt: Date }): Promise<boolean>;
+  /**
    * Record the durable teardown INTENT, BEFORE the kill. The one stamp written
    * ahead of its IO: its entire job is to survive a crash between "we decided to
    * kill" and "the kill was confirmed", so that the orphan reconciler can finish
@@ -342,14 +372,22 @@ export function revivedAgentSessionColumns(input: {
  * pin it rather than asserting "some recent timestamp".
  */
 export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentWorkspaces }, { machineSpriteReclaims }, { conversations }] =
-    await Promise.all([
-      import('@pagespace/db/db'),
-      import('@pagespace/db/operators'),
-      import('@pagespace/db/schema/agent-workspaces'),
-      import('@pagespace/db/schema/machine-sprite-reclaims'),
-      import('@pagespace/db/schema/conversations'),
-    ]);
+  const [
+    { db },
+    { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc },
+    { agentWorkspaces },
+    { machineSpriteReclaims },
+    // The membership table. `conversations` is no longer imported here at all:
+    // this store never read anything from it but the thread→workspace binding,
+    // and that binding is a node now.
+    { agentWorkspaceNodes },
+  ] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/agent-workspaces'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/agent-workspace-nodes'),
+  ]);
 
   return {
     async findById(workspaceId) {
@@ -362,15 +400,26 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     },
 
     async findByConversation(conversationId) {
-      // conversations.workspaceId is the binding; a null FK (plain chat, or a
-      // session deleted out from under its history) resolves to null, never to
-      // some fallback session — the tool layer's no-session denial depends on
-      // that honesty.
+      // THE NODE is the binding. `agent_workspace_nodes_chat_target_idx` is
+      // UNIQUE on `targetId` where `targetKind = 'chat'` — globally — so this
+      // is a single-row lookup on a unique index and "a thread has one
+      // workspace" is the database's rule rather than a column two writers
+      // could disagree about.
+      //
+      // A thread with no node (a plain chat, or one whose workspace was
+      // deleted — the `rootId` FK cascades) resolves to null, never to some
+      // fallback session: the tool layer's no-session denial depends on that
+      // honesty, exactly as it did when the binding was a column.
       const [row] = await db
         .select({ session: agentWorkspaces })
-        .from(conversations)
-        .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, conversations.workspaceId))
-        .where(eq(conversations.id, conversationId))
+        .from(agentWorkspaceNodes)
+        .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, agentWorkspaceNodes.rootId))
+        .where(
+          and(
+            eq(agentWorkspaceNodes.targetKind, 'chat'),
+            eq(agentWorkspaceNodes.targetId, conversationId),
+          ),
+        )
         .limit(1);
       return (row?.session as AgentSessionRecord) ?? null;
     },
@@ -541,6 +590,48 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       // behavior.
       if (!cas) return true;
       return updated.length > 0;
+    },
+
+    async reopenListingIfPopulated({ workspaceId, endedAt }) {
+      // ONE statement, and see the interface doc for why that is the whole
+      // point: both conditions are evaluated against the row version this
+      // UPDATE locks, so a destroy cannot slip between the emptiness test and
+      // the stamp. Splitting it into a read plus `applyStamps` reintroduces
+      // exactly the interleave this exists to close.
+      //
+      // UNDER THE WORKSPACE LOCK, and one statement inside it. Both halves are
+      // needed and neither substitutes for the other:
+      //
+      //  * ONE STATEMENT, so the emptiness test and the stamp cannot be split
+      //    by anything at all.
+      //  * THE LOCK, because a lone `EXISTS` is not enough. It takes no lock on
+      //    `agent_workspace_nodes` and is evaluated against this statement's
+      //    snapshot, so a destroy that has deleted every node and NOT YET
+      //    COMMITTED is invisible to it — the rows still look present, the
+      //    UPDATE proceeds, the destroy commits, and the workspace is left LIVE
+      //    with ZERO nodes, which is the exact state this method exists to make
+      //    unreachable. `destroyWorkspaceTree` runs under
+      //    `pg_advisory_xact_lock`, released only at its commit, so acquiring
+      //    the same lock means the destroy has finished and its deletions are
+      //    visible to the snapshot taken after.
+      //
+      // WHICH columns are withdrawn stays the planner's decision
+      // (`planSessionReopen` — `endedAt` only, the confirmed-kill stamp
+      // survives, and its doc carries the reason). Only the CONDITION is new.
+      return withWorkspaceLock(workspaceId, async (tx) => {
+        const updated = await tx
+          .update(agentWorkspaces)
+          .set({ ...stampColumns(planSessionReopen()), updatedAt: now() })
+          .where(
+            and(
+              eq(agentWorkspaces.id, workspaceId),
+              eq(agentWorkspaces.endedAt, endedAt),
+              sql`EXISTS (SELECT 1 FROM ${agentWorkspaceNodes} WHERE ${agentWorkspaceNodes.rootId} = ${workspaceId})`,
+            ),
+          )
+          .returning({ id: agentWorkspaces.id });
+        return updated.length > 0;
+      });
     },
 
     async requestTeardown({ workspaceId, sandboxId, spriteInstanceId, at }) {

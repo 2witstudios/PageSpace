@@ -1,22 +1,24 @@
 /**
- * Close ONE conversation OUT of its session's listing.
+ * Close ONE conversation OFF its workspace's grid.
  *
- * DELETE → 200 { ok: true } — the session's grid act (a pane-close-lifecycle
- * audit follow-up): closing the last PANE bound to a conversation closes THAT
- * listing, uniformly for page-agent and assistant threads alike (there is no
- * page to hang a page-agents-scoped delete on for an assistant thread, same
- * reason the sibling POST in this family exists). This is NOT the
- * history-deleting `ai/page-agents/[agentId]/conversations/[conversationId]`
- * DELETE — closing a listing never touches a thread's history (see
- * `conversations.closedInWorkspaceAt`'s doc).
+ * DELETE → 200 { ok: true } — a `move` of the thread's node to no parent. The
+ * thread stays a MEMBER of the workspace and stays in its listing; only its
+ * location changes. This is NOT the history-deleting
+ * `ai/page-agents/[agentId]/conversations/[conversationId]` DELETE — closing
+ * never touches a thread's history, and (unlike that route) never removes it
+ * from the workspace either.
  *
- * A session is never empty (contract invariant 3): closing the session's LAST
- * open listing is refused with 409 — the client's remedy is to end the
- * session instead, a different act on a different route.
+ * **`last_conversation` is gone from this route.** It refused the close of a
+ * workspace's last open listing, because that left a workspace holding nothing
+ * — contract invariant 3. A `move` cannot produce that state: every member is
+ * still a member afterwards, however few are on screen. Closing the last thread
+ * now leaves an EMPTY GRID and a workspace that still holds all its threads,
+ * exactly as closing the last PANE already did. Ending a workspace stays an
+ * explicit act on a different route.
  *
  * Gated by the ordinary session access check (identity + drive membership),
- * NOT the end-access check — closing one listing is a routine write, not the
- * capability-gated act of tearing down the session's sandbox. Not
+ * NOT the end-access check — closing one thread is a routine write, not the
+ * capability-gated act of tearing down the workspace's sandbox. Not
  * found/denied answer the family's uniform 404 (review #2261/5).
  */
 
@@ -64,25 +66,6 @@ export async function DELETE(request: Request, context: RouteContext) {
     // conversation some OTHER session owns — an id-guessing caller learns
     // nothing either way.
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  }
-
-  if (outcome === 'last_conversation') {
-    // A never-empty-session refusal, not an authorization failure (same
-    // reasoning as `quota-response.ts`'s `security.rate.limited` — the caller
-    // has every right to this session and has simply run out of something to
-    // close; the remedy is ending the session, not being granted access).
-    auditRequest(request, {
-      eventType: 'security.rate.limited',
-      userId: auth.userId,
-      resourceType: 'agent_session',
-      resourceId: workspaceId,
-      details: { reason: 'last_conversation', conversationId, route: ROUTE },
-      riskScore: 0,
-    });
-    return NextResponse.json(
-      { error: 'This is the only open conversation in the session — end the session instead.', reason: 'last_conversation' },
-      { status: 409 },
-    );
   }
 
   if (outcome === 'closed') {

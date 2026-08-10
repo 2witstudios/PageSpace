@@ -26,7 +26,16 @@
  * existed, unused, and knip found it (review finding): a type that spans the
  * two planes is a type whose values cannot be routed without re-deciding which
  * plane they belong to, which is the distinction this module exists to make
- * unavoidable. Consumers take the narrower union they actually mean.
+ * unavoidable.
+ *
+ * The two NARROWER unions went the same way, and for the same reason rather
+ * than a different one. Removing the spanning union left
+ * `ConversationContentEventName` and `ConversationDirectoryEventName` with no
+ * consumer at all — dead exports that knip reports and that read as an API
+ * somebody is using. A consumer that wants one derives it from the const map in
+ * one line (`(typeof CONVERSATION_DIRECTORY_EVENTS)[keyof typeof
+ * CONVERSATION_DIRECTORY_EVENTS]`), which is the same type and cannot drift from
+ * the map it names.
  */
 
 /** Content plane: what happened to the messages inside one conversation. */
@@ -50,8 +59,3 @@ export const CONVERSATION_EVENTS = {
   ...CONVERSATION_CONTENT_EVENTS,
   ...CONVERSATION_DIRECTORY_EVENTS,
 } as const;
-
-export type ConversationContentEventName =
-  (typeof CONVERSATION_CONTENT_EVENTS)[keyof typeof CONVERSATION_CONTENT_EVENTS];
-export type ConversationDirectoryEventName =
-  (typeof CONVERSATION_DIRECTORY_EVENTS)[keyof typeof CONVERSATION_DIRECTORY_EVENTS];

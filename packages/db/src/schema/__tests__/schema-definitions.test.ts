@@ -192,9 +192,10 @@ describe('Schema definitions', () => {
       expect(conversations.messagesRelations).toBeDefined();
     });
 
-    it('pins closedInWorkspaceAt — listing membership, kept separate from isActive (history soft-delete)', () => {
-      expect(conversations.conversations.closedInWorkspaceAt).toBeDefined();
-    });
+    // `closedInWorkspaceAt` was pinned here as "listing membership, kept
+    // separate from isActive". Both it and `workspaceId` are gone: membership
+    // is a node row, and closing a thread out of a workspace destroys that
+    // node rather than stamping a column.
   });
 
   describe('notifications schema', () => {

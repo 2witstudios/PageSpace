@@ -24,8 +24,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * The rev bump, as a statement fragment — for the LIFECYCLE writes here that
  * cannot use `bumpConversationRev`.
  *
- * Those writes carry guarded WHEREs (`isDistinctFrom`, `isNull(title)`,
- * `isNull(closedInWorkspaceAt)`) and `.returning()` the full row, where
+ * Those writes carry guarded WHEREs (`isDistinctFrom`, `isNull(title)`) and
+ * `.returning()` the full row, where
  * `bumpConversationRev` matches on id alone; one of them is an upsert. So they
  * stay hand-written, and this at least makes the bump ONE spelling rather than
  * nine copies of `sql`...``.
@@ -35,6 +35,17 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * for the same reason `unified-message-scope.ts` gives.
  */
 const revBump = () => sql`${conversations.rev} + 1`;
+
+/**
+ * The slice of a Drizzle client a conversation write needs — satisfied by the
+ * pooled `db` and by a transaction alike.
+ *
+ * It exists so the membership chokepoint can hand its own transaction to the
+ * creator: a conversation row and the node that makes it a member of a
+ * workspace are one fact, so they are one commit. Type-only, so nothing about
+ * the default pooled path changes.
+ */
+type ConversationWriteExecutor = Pick<typeof db, 'select' | 'insert'>;
 
 // Types for repository operations
 export interface AiAgent {
@@ -54,8 +65,6 @@ export interface ConversationStats {
   lastMessageContent: string | null;
   conversationUserId: string | null;
   isShared: boolean | null;
-  /** The session (workspace) this thread was born into — null for a plain page chat. */
-  workspaceId: string | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -149,6 +158,7 @@ export function generateTitle(preview: string): string {
 async function hasConflictingMessageOwner(
   conversationId: string,
   userId: string,
+  executor: ConversationWriteExecutor = db,
 ): Promise<boolean> {
   // Unified `messages` (Phase 4 / D6). Scoped by conversationId alone, exactly
   // as before — the point of the check is "does this id already hold someone
@@ -163,7 +173,7 @@ async function hasConflictingMessageOwner(
   // NULL (not true), so they are excluded either way — but the exclusion is
   // deliberate, and a reader should not have to reconstruct it from three-
   // valued logic.
-  const [conflicting] = await db
+  const [conflicting] = await executor
     .select({ id: messages.id })
     .from(messages)
     .where(and(
@@ -193,9 +203,8 @@ export const conversationRepository = {
    * so every caller — including pre-existing ones — gets this guarantee.
    *
    * Returns WHAT HAPPENED rather than void, because the difference is
-   * load-bearing for session binding: `workspaceId` is written ONLY on the
-   * INSERT (a thread is BORN into its session — contract invariant 1), so a
-   * caller that needed the binding must know the insert did not happen.
+   * load-bearing for session binding: a caller that needed the thread to be
+   * admitted into a workspace must know whether its own insert happened.
    * Callers that only need idempotent ensure-exists semantics can ignore the
    * result exactly as before.
    */
@@ -211,11 +220,9 @@ export const conversationRepository = {
    * nothing — routes never decide whether to broadcast (SSoT §3), and a fourth
    * creator appearing later should not have to rediscover that.
    *
-   * The emit is a genuine no-op for today's sidebars: `session-directory-
-   * listener` drops a `created` event carrying no `workspaceId`, and these rows
-   * always have `workspaceId: null`. Emitting anyway costs one broadcast and
-   * buys consistency across all three creators — the alternative is a silent
-   * exception that the next in-app viewer for API threads would have to find.
+   * Emitting costs one broadcast and buys consistency across all three
+   * creators — the alternative is a silent exception that the next in-app
+   * viewer for API threads would have to find.
    */
   async createApiConversation(values: {
     id: string;
@@ -234,22 +241,39 @@ export const conversationRepository = {
     conversationId: string,
     userId: string,
     pageId: string,
-    opts?: { isShared?: boolean; title?: string; triggeredBy?: ConversationEventTriggeredBy }
+    opts?: {
+      isShared?: boolean;
+      title?: string;
+      triggeredBy?: ConversationEventTriggeredBy;
+      /**
+       * Run every statement on THIS executor rather than the pooled `db`.
+       *
+       * The membership chokepoint passes the transaction its node write runs
+       * in, so a conversation and the node that makes it a member of a
+       * workspace commit together or not at all — see
+       * `create-conversation-in-workspace.ts`. Everything here is already
+       * session-agnostic (there is no `workspaceId` parameter and no column
+       * anywhere to write), so the executor is the ONLY thing this option
+       * changes.
+       */
+      executor?: ConversationWriteExecutor;
+    }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
-    const [existing] = await db
+    const executor = opts?.executor ?? db;
+    const [existing] = await executor
       .select({ id: conversations.id })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
       .limit(1);
     if (existing) return 'exists';
 
-    const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId);
+    const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId, executor);
     if (hasConflictingOwner) return 'message_owner_conflict';
 
-    // Always session-agnostic: this never writes `workspaceId` (there is no
-    // param for it). A conversation that needs a session gets one afterward,
-    // via `claimConversationInSession` — see `claim-conversation-in-workspace.ts`.
-    const [inserted] = await db
+    // Always session-agnostic: this never writes membership. A conversation
+    // that needs a workspace is admitted into one by the membership write —
+    // see `create-conversation-in-workspace.ts`.
+    const [inserted] = await executor
       .insert(conversations)
       .values({
         id: conversationId,
@@ -257,7 +281,6 @@ export const conversationRepository = {
         type: 'page',
         contextId: pageId,
         isShared: opts?.isShared ?? false,
-        workspaceId: null,
         title: opts?.title ?? null,
         updatedAt: new Date(),
       })
@@ -377,46 +400,23 @@ export const conversationRepository = {
     return 'set';
   },
 
-  /**
-   * Bind a NEVER-BOUND conversation to a session — the only UPDATE of
-   * `conversations.workspaceId` anywhere in the codebase, and unable to
-   * re-point one: `workspaceId IS NULL` in the WHERE makes a rebind attempt
-   * match zero rows rather than depending on a check the caller could skip.
-   * `userId` rides the WHERE too, so ownership is enforced by the write
-   * itself, closing the read-then-write gap that made the H1 rebind finding
-   * exploitable in the old create-then-UPDATE shape. See
-   * `claim-conversation-in-workspace.ts` for the full gate this backs.
+  /*
+   * `claimConversation` USED TO BE HERE, and its deletion is the point of this
+   * change rather than a side effect of it. It was the only UPDATE of
+   * `conversations.workspaceId` (a column that is itself now gone), carefully
+   * guarded (`workspaceId IS NULL AND userId = :caller`) so a binding could
+   * never be re-pointed. That guard is not weakened, it is SUPERSEDED:
+   * membership is a row in
+   * `agent_workspace_nodes`, whose global `UNIQUE (targetId) WHERE targetKind
+   * = 'chat'` states "a thread has one workspace" as a database constraint
+   * rather than as a WHERE clause a future writer could forget. Nothing in this
+   * repository writes membership; `applyWorkspaceMembershipWrite` is the one
+   * funnel, and it is a transaction rather than a statement, so the row and its
+   * membership can no longer land separately.
    *
-   * `closedInWorkspaceAt` is cleared in the same statement: a row whose former
-   * session was deleted (FK `ON DELETE SET NULL`) can arrive here
-   * `workspaceId`-null but still stamped closed, and binding it without
-   * clearing would produce a bound-but-invisible thread that holds no cap
-   * slot and shows in no listing.
+   * `closeConversationListing` / `reopenConversationListing` went the same way,
+   * for the same reason — see the note where they used to be.
    */
-  async claimConversation(conversationId: string, userId: string, workspaceId: string): Promise<'claimed' | 'noop'> {
-    const [updated] = await db
-      .update(conversations)
-      .set({
-        workspaceId,
-        closedInWorkspaceAt: null,
-        updatedAt: new Date(),
-        // Lifecycle mutation → rev bump, same statement (SSoT §3 clause 2).
-        rev: revBump(),
-      })
-      .where(and(
-        eq(conversations.id, conversationId),
-        eq(conversations.userId, userId),
-        isNull(conversations.workspaceId),
-        eq(conversations.isActive, true),
-      ))
-      .returning();
-    if (!updated) return 'noop';
-    emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, {
-      workspaceId: workspaceId,
-      closedInWorkspaceAt: null,
-    });
-    return 'claimed';
-  },
 
   /**
    * Get an AI_CHAT agent by ID
@@ -516,8 +516,7 @@ export const conversationRepository = {
         lm.last_message_role as "lastMessageRole",
         lm.last_message_content as "lastMessageContent",
         conv."userId" as "conversationUserId",
-        conv."isShared" as "isShared",
-        conv."workspaceId" as "workspaceId"
+        conv."isShared" as "isShared"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"
@@ -707,34 +706,29 @@ export const conversationRepository = {
     }
   },
 
-  /**
-   * Close a conversation OUT of its session's listing (`closedInWorkspaceAt`
-   * stamp; never touches history soft-delete). The write, its rev bump, and
-   * the `conversation:closed` emission live here so the session runtime's
-   * wiring cannot skip any of the three (SSoT §3 clause 1).
+  /*
+   * `closeConversationListing` / `reopenConversationListing` USED TO BE HERE.
+   * They stamped and cleared `conversations.closedInWorkspaceAt` — a column
+   * that is itself now gone — which meant
+   * "not in the workspace's listing" while a pane row meant "on screen" — two
+   * facts about one thread, written by two paths, and the reason a thread could
+   * be in a workspace and invisible in it.
+   *
+   * Closing is now a `destroy` of the thread's node and reopening an
+   * admission, both through `applyWorkspaceMembershipWrite`.
+   *
+   * **Their `conversation:closed` / `conversation:reopened` emits moved WITH
+   * them — they were not superseded.** This comment used to claim the
+   * structural `workspace:nodes-updated` broadcast covered them, on the
+   * reasoning that the fact which changed is the node's location. It does not,
+   * and the claim cost a release's worth of staleness: that broadcast carries
+   * the TREE, and the sidebar's conversation rows are keyed by the LISTING and
+   * never by the tree (`AgentsSidebar.tsx`), into an SWR cache the tree event
+   * never touches. So a server-side close removed no row until the 120s
+   * backstop poll. The emits now live at the close/reopen chokepoints in
+   * `agent-workspaces-runtime.ts`; see `announceClosed` in
+   * `close-conversation-in-workspace.ts`.
    */
-  async closeConversationListing(conversationId: string): Promise<'closed' | 'noop'> {
-    const [updated] = await db
-      .update(conversations)
-      .set({ closedInWorkspaceAt: new Date(), updatedAt: new Date(), rev: revBump() })
-      .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInWorkspaceAt)))
-      .returning();
-    if (!updated) return 'noop';
-    emitConversationLifecycle('closed', { ...updated, rev: Number(updated.rev) });
-    return 'closed';
-  },
-
-  /** Reopen a closed listing (clear the stamp). Twin of closeConversationListing. */
-  async reopenConversationListing(conversationId: string): Promise<'reopened' | 'noop'> {
-    const [updated] = await db
-      .update(conversations)
-      .set({ closedInWorkspaceAt: null, updatedAt: new Date(), rev: revBump() })
-      .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInWorkspaceAt)))
-      .returning();
-    if (!updated) return 'noop';
-    emitConversationLifecycle('reopened', { ...updated, rev: Number(updated.rev) });
-    return 'reopened';
-  },
 
   /**
    * Get a conversations row by ID. Returns null if no row exists (legacy conversation).

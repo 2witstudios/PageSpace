@@ -305,12 +305,29 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             // The grid's pane binding is repointed regardless: a pane still
             // showing the now-gone `staleConversationId` is a dangling reference
             // no matter what this page's OWN `current` has moved on to.
-            useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
-              kind: 'chat',
-              name: 'New conversation',
-              targetId: created.conversationId,
-              agentPageId: page.id,
-            });
+            // The node showing the now-gone conversation is a dangling
+            // reference whatever this page's own `current` has moved on to.
+            //
+            // Addressed as a PLACEMENT, not as a rebind. A binding is for life,
+            // so the fresh conversation cannot be pointed at the stale node; it
+            // gets a node of its own in that slot, and the stale one parks —
+            // still a member of the workspace, still one click from the sidebar,
+            // which is strictly better than the pane it used to overwrite in
+            // place. `activeNodeId` is how "here, in this rectangle" is said to
+            // the placement policy.
+            const workspaceNodes =
+              useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [];
+            const staleNode = workspaceNodes.find(
+              (node) =>
+                node.nodeType === 'pane' &&
+                node.target?.kind === 'chat' &&
+                node.target.id === staleConversationId,
+            );
+            if (staleNode) {
+              useAgentWorkspaceStore
+                .getState()
+                .openConversation(sessionId, created.conversationId, { activeNodeId: staleNode.id });
+            }
           }
           // Only follow the replacement as THIS page's own view if the user
           // hasn't already navigated elsewhere while the mint was in flight.

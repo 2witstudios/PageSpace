@@ -42,18 +42,23 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
-  countOpenConversationsForSession: vi.fn(),
+  expelConversationFromSession: vi.fn(),
+  expelAfterDelete: vi.fn(),
+  findWorkspaceOfConversation: vi.fn(),
   // Pass-through: these DELETE-route tests are about the guard-then-delete
   // sequence at the call site, not lock contention (that's
   // `agent-workspaces-runtime`'s own test suite).
-  withSessionListingLock: vi.fn((_sessionId: string, fn: () => Promise<unknown>) => fn()),
 }));
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  expelAfterDelete,
+  expelConversationFromSession,
+  findWorkspaceOfConversation,
+} from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -328,10 +333,10 @@ describe('DELETE /api/ai/global/[id]', () => {
       mockConversation({ isActive: false })
     );
 
-    // Default: irrelevant unless the conversation fixture overrides
-    // workspaceId — a plenty-large count so the never-empty guard never
-    // trips by accident in tests that don't care about it.
-    vi.mocked(countOpenConversationsForSession).mockResolvedValue(5);
+    // Default: the thread belongs to no workspace, so the membership half is
+    // never reached. Tests about the guard set a workspace explicitly.
+    vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+    vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
   });
 
   describe('authentication', () => {
@@ -388,93 +393,137 @@ describe('DELETE /api/ai/global/[id]', () => {
       );
     });
 
-    it('does not take the session lock for a plain (non-session-bound) conversation', async () => {
+    it('does not touch membership for a thread that belongs to no workspace', async () => {
       const request = createDeleteRequest(mockConversationId);
       const context = createContext(mockConversationId);
 
       await DELETE(request, context);
 
-      expect(withSessionListingLock).not.toHaveBeenCalled();
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
     });
   });
 
-  describe('the session never-empty guard and reopen race (review findings: chatgpt-codex-connector on PR #2296)', () => {
-    it("refuses to delete a session-bound conversation that is its session's LAST open listing", async () => {
-      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
-        mockConversation({ workspaceId: 'ses_1', closedInWorkspaceAt: null })
+  describe('the membership half of a history delete', () => {
+    it('runs the SECOND expel, and runs it AFTER the history is gone', async () => {
+      // Nothing pinned this call, so deleting the line left both DELETE suites
+      // green (review finding). The ORDER is the whole content of it: before
+      // the soft-delete it would be the first expel again; after it, it is the
+      // sweep that catches a claim admitted while the thread was homeless and
+      // still alive.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+
+      const request = createDeleteRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+      await DELETE(request, context);
+
+      expect(expelAfterDelete).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        actingUserId: mockUserId,
+      });
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
       );
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(1);
+    });
+
+    it('runs the second expel on the NO-MEMBERSHIP branch too — the race that branch had no answer for', async () => {
+      // A review finding on this PR. Both delete routes read
+      // membership, then delete; the `if` branch compensates for a claim landing
+      // in that gap and the `else` branch did not. A thread with no workspace is
+      // precisely what `claimConversationInSession` admits (it proceeds on
+      // `home === null`), so the uncompensated branch is the one the race is
+      // most likely to hit — and it left a live node bound to an inactive
+      // thread, holding its chat-target index slot with nothing to reclaim it.
+      //
+      // The sweep must run AFTER the soft-delete: before it, it is just the
+      // first expel again and the window is still open behind it.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockConversationId);
       const context = createContext(mockConversationId);
       const response = await DELETE(request, context);
-      const body = await response.json();
 
-      expect(response.status).toBe(409);
-      expect(body.reason).toBe('last_conversation');
-      expect(globalConversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
+      expect(expelAfterDelete).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        actingUserId: mockUserId,
+      });
+      expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(globalConversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
+      );
+    });
+
+    it("DELETES a thread that is its workspace's last conversation", async () => {
+      // The never-empty guard is gone, and with it the `last_conversation` 409.
+      // It refused this delete to uphold "a workspace is never empty" — an
+      // invariant that meant something only while a two-level grid could not
+      // represent zero panes and while closing the last one ended the session.
+      // An empty tree is an ordinary resting state, so the refusal defended
+      // nothing and fired only on legitimate deletions.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
+
+      const request = createDeleteRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalled();
+      // Still audited as an ordinary deletion. The `security.rate.limited`
+      // event that used to ride the `last_conversation` refusal is gone with the
+      // refusal; this is the event that was always the real record.
       expect(auditRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ eventType: 'security.rate.limited' }),
+        expect.objectContaining({ eventType: 'data.delete' }),
       );
     });
 
-    it('allows deleting a session-bound conversation when another open listing remains in the same session', async () => {
-      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
-        mockConversation({ workspaceId: 'ses_1', closedInWorkspaceAt: null })
-      );
-      vi.mocked(countOpenConversationsForSession).mockResolvedValue(2);
+    it('deletes when the workspace holds another conversation, removing the membership FIRST', async () => {
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('expelled');
 
       const request = createDeleteRequest(mockConversationId);
       const context = createContext(mockConversationId);
       const response = await DELETE(request, context);
 
       expect(response.status).toBe(200);
+      expect(expelConversationFromSession).toHaveBeenCalledWith({
+        conversationId: mockConversationId,
+        workspaceId: 'ses_1',
+        actingUserId: mockUserId,
+      });
       expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
     });
 
-    it('takes the session lock (but not the never-empty guard) for a conversation ALREADY closed out of its session — a closed delete must still serialize against a concurrent reopen', async () => {
-      vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
-        mockConversation({ workspaceId: 'ses_1', closedInWorkspaceAt: new Date('2026-01-01') })
-      );
+    it('500s without deleting history when the membership write itself fails', async () => {
+      // The ordering that makes the survivable failure the one that can happen:
+      // a thread out of its workspace with intact history is re-claimable, a
+      // pane bound to a dead thread is not.
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue('ses_1');
+      vi.mocked(expelConversationFromSession).mockResolvedValue('refused');
 
       const request = createDeleteRequest(mockConversationId);
       const context = createContext(mockConversationId);
       const response = await DELETE(request, context);
 
-      expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
-      expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
-      expect(withSessionListingLock).toHaveBeenCalledWith('ses_1', expect.any(Function));
-    });
-
-    it('still soft-deletes a row whose session was cleared between the pre-lock read and the lock-held read — detached is not the same as history-deleted', async () => {
-      vi.mocked(globalConversationRepository.getConversationById)
-        .mockResolvedValueOnce(mockConversation({ workspaceId: 'ses_1', closedInWorkspaceAt: null }))
-        .mockResolvedValueOnce(mockConversation({ workspaceId: null, closedInWorkspaceAt: null }));
-
-      const request = createDeleteRequest(mockConversationId);
-      const context = createContext(mockConversationId);
-      const response = await DELETE(request, context);
-
-      expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
-      expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
-    });
-
-    it('is idempotent when a concurrent request already deleted the row before this one entered the lock', async () => {
-      vi.mocked(globalConversationRepository.getConversationById)
-        .mockResolvedValueOnce(mockConversation({ workspaceId: 'ses_1', closedInWorkspaceAt: null }))
-        .mockResolvedValueOnce(null);
-
-      const request = createDeleteRequest(mockConversationId);
-      const context = createContext(mockConversationId);
-      const response = await DELETE(request, context);
-
-      expect(response.status).toBe(200);
-      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(response.status).toBe(500);
       expect(globalConversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('legacy shapes', () => {
+    it('deletes a thread whose workspace vanished — no membership left to remove', async () => {
+      // The node's `rootId` FK cascades, so a deleted workspace takes its
+      // membership with it and this reads as "belongs to nothing".
+      vi.mocked(findWorkspaceOfConversation).mockResolvedValue(null);
+
+      const request = createDeleteRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(expelConversationFromSession).not.toHaveBeenCalled();
+      expect(globalConversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockUserId, mockConversationId);
     });
   });
 

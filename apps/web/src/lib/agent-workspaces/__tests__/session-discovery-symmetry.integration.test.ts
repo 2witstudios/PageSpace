@@ -30,9 +30,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { factories } from '@pagespace/db/test/factories';
 import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -125,11 +126,17 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
       workspace: workspaceId,
     });
     expect(spawnedInto).toEqual({ ok: true, workspaceId });
-    const [memberWorker] = await db
-      .select()
-      .from(conversations)
-      .where(eq(conversations.id, memberWorkerId));
-    expect(memberWorker.workspaceId).toBe(workspaceId);
+    // MEMBERSHIP IS THE NODE. This asserted `conversations.workspaceId`, which
+    // nothing writes since membership moved to the tree — so it compared two
+    // nulls and passed for no reason.
+    const [memberWorkerNode] = await db
+      .select({ rootId: agentWorkspaceNodes.rootId })
+      .from(agentWorkspaceNodes)
+      .where(
+        and(eq(agentWorkspaceNodes.targetKind, 'chat'), eq(agentWorkspaceNodes.targetId, memberWorkerId)),
+      )
+      .limit(1);
+    expect(memberWorkerNode?.rootId).toBe(workspaceId);
 
     // 3. The workspace's OWNER sees everything in their own workspace,
     // unchanged — including the member's thread title. (Their shared listing

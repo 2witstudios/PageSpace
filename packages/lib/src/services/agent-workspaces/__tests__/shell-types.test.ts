@@ -6,7 +6,7 @@ import {
   resolveShellLaunchSpec,
   isValidShellCommand,
 } from '../shell-types';
-import { SHELL_AGENT_TYPES } from '../../../agent-workspaces/contract';
+import { SHELL_AGENT_TYPES } from '../../../agent-workspaces/shells-contract';
 import { isValidShellName } from '../../../agent-workspaces/plan-spawn-worker';
 
 describe('isShellAgentType', () => {

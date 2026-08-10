@@ -22,8 +22,27 @@ import {
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
-import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
+import { admit } from '@pagespace/lib/agent-workspaces/workspace-membership';
+import { createId } from '@paralleldrive/cuid2';
 import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';
+import { applyWorkspaceMembershipWrite } from './workspace-node-runtime';
+
+/**
+ * The shell row could not be reserved — an invalid or duplicate name, or a lost
+ * race. Thrown so the membership transaction UNWINDS: a node binding a terminal
+ * that does not exist is precisely the dangling pane this chokepoint prevents,
+ * and returning a refusal from inside the transaction would commit one.
+ *
+ * Private: `spawnShell` catches the unwind by seeing the write refused, and
+ * reports the shell service's own reason rather than this class.
+ */
+class ShellSpawnRefused extends Error {
+  constructor() {
+    super('shell_spawn_refused');
+    this.name = 'ShellSpawnRefused';
+  }
+}
 
 let shellStorePromise: ReturnType<typeof createDbSessionShellStore> | null = null;
 
@@ -32,18 +51,72 @@ export function getSessionShellStore(): Promise<SessionShellStore> {
   return shellStorePromise;
 }
 
+/**
+ * Open a shell in a workspace — the ROW and the node that makes it a member,
+ * in one transaction.
+ *
+ * The same chokepoint the conversation path goes through, for the same reason.
+ * A shell row landing without a node is a terminal the workspace holds and
+ * cannot show: `agent_workspace_shells.workspaceId` said it was there while the
+ * pane rows said it was not, which is the two-structure split this epic deletes
+ * wearing a different hat. Here the node IS the membership, and the shell's own
+ * row is created on the transaction that writes it.
+ *
+ * **It arrives ON SCREEN**, because there is nowhere else for a member to be.
+ * It used to arrive PARKED — in the workspace, off the grid — to avoid placing a
+ * SECOND pane beside the one the shells route's own client mints and then binds.
+ * That is no longer the trade: the placement policy this admission runs fills an
+ * UNBOUND pane and splits only when there is none, so the client's waiting pane
+ * IS what gets filled, and the client's own bind afterwards asks for a state the
+ * node is already in. Two panes for one shell was in fact the OLD outcome — the
+ * parked node and the client's bound one both held the same shell, invisibly,
+ * because terminals carry no uniqueness index.
+ */
 export async function spawnShell(input: {
   workspaceId: string;
   ownerId: string;
   name?: string;
 }): Promise<SpawnSessionShellResult> {
-  const store = await getSessionShellStore();
-  return spawnSessionShell({
-    workspaceId: input.workspaceId,
-    ownerId: input.ownerId,
-    name: input.name,
-    deps: { store, now: () => new Date() },
-  });
+  // The shell's id is minted HERE rather than by the column's default, because
+  // the node that binds it is decided against the tree BEFORE the row exists —
+  // inside the same transaction, so a server-generated id would not be knowable
+  // in time. Caller-minted ids are the node model's own convention anyway.
+  const shellId = createId();
+  let spawned: SpawnSessionShellResult = { ok: false, reason: 'error' };
+
+  try {
+    const written = await applyWorkspaceMembershipWrite({
+      workspaceId: input.workspaceId,
+      actingUserId: input.ownerId,
+      run: (nodes) =>
+        admit(nodes, {
+          target: { kind: 'terminal', id: shellId },
+          newNodeId: createId(),
+          newSplitId: createId(),
+        }),
+      within: async (tx) => {
+        const store = await createDbSessionShellStore(tx);
+        spawned = await spawnSessionShell({
+          shellId,
+          workspaceId: input.workspaceId,
+          ownerId: input.ownerId,
+          name: input.name,
+          deps: { store, now: () => new Date() },
+        });
+        // The shell service's refusals — an invalid name, a `(workspaceId,
+        // name)` collision — have to take the node with them, so they unwind
+        // rather than return.
+        if (!spawned.ok) throw new ShellSpawnRefused();
+      },
+    });
+    if (written.status !== 'ok') return { ok: false, reason: 'error' };
+    return spawned;
+  } catch (error) {
+    // The row was refused and the node went back with it. The caller gets the
+    // shell service's own reason, which is the one they can act on.
+    if (error instanceof ShellSpawnRefused) return spawned;
+    throw error;
+  }
 }
 
 export async function listShells(workspaceId: string): Promise<ShellDTO[]> {

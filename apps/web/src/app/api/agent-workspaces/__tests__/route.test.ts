@@ -7,7 +7,7 @@ const {
   mockListSessions,
   mockListShellsBulk,
   mockListSessionConversationsBulk,
-  mockReadWorkspaceGridsBulk,
+  mockReadWorkspaceNodesBulk,
   mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
@@ -20,13 +20,14 @@ const {
   mockSpawnShell,
   mockFindSessionRecord,
   mockClaimConversationInSession,
+  mockFindWorkspaceOfConversation,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockListSessions: vi.fn(),
   mockListShellsBulk: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
-  mockReadWorkspaceGridsBulk: vi.fn(),
+  mockReadWorkspaceNodesBulk: vi.fn(),
   mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
@@ -39,6 +40,7 @@ const {
   mockSpawnShell: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockClaimConversationInSession: vi.fn(),
+  mockFindWorkspaceOfConversation: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -71,17 +73,14 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
+  findWorkspaceOfConversation: (...args: unknown[]) => mockFindWorkspaceOfConversation(...args),
 }));
 vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));
-// `workspaceListEntryFromGrid` stays REAL — the point of the list's
-// `workspace` field now is that it is derived from the pane rows, so mocking
-// the derivation would test nothing.
-vi.mock('@/lib/agent-workspaces/workspace-layout-runtime', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/agent-workspaces/workspace-layout-runtime')>()),
-  readWorkspaceGridsBulk: (...args: unknown[]) => mockReadWorkspaceGridsBulk(...args),
+vi.mock('@/lib/agent-workspaces/workspace-node-runtime', () => ({
+  readWorkspaceNodesBulk: (...args: unknown[]) => mockReadWorkspaceNodesBulk(...args),
 }));
 
 import { GET, POST } from '../route';
@@ -123,7 +122,7 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
-  mockReadWorkspaceGridsBulk.mockResolvedValue(new Map());
+  mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
 
@@ -132,15 +131,19 @@ describe('GET /api/agent-workspaces', () => {
     const response = await GET(new Request('http://localhost/api/agent-workspaces'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      // Every thread carries its placement (issue #2373). `pane: null` here
-      // because this session has no grid — the point being that the thread is
-      // LISTED regardless, which is what the sidebar renders from now.
+      // The listing is handed through UNCHANGED. Every entry already carries
+      // its own `nodeId` and `attached`, read off the node that decided the
+      // thread is in this workspace at all — so there is nothing for the route
+      // to annotate it with, and `annotateConversationsWithPanes` is deleted
+      // rather than ported (issue #2373).
       sessions: [
         {
           ...SESSION_DTO,
           shells: [SHELL_DTO],
-          conversations: [{ ...CONVERSATION_ENTRY, pane: null }],
-          workspace: null,
+          conversations: [CONVERSATION_ENTRY],
+          rev: 0,
+          nodes: [],
+          targets: [],
         },
       ],
     });
@@ -149,48 +152,30 @@ describe('GET /api/agent-workspaces', () => {
     expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
     expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
-    // Pane labels are a permissioned join (security review HIGH 1) — the bulk
-    // read names the viewer it is resolving for.
-    expect(mockReadWorkspaceGridsBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
-  });
-
-  it('given a session with pane rows, should attach the grid as `workspace` in the whole-state shape', async () => {
-    const columns = [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }];
-    mockReadWorkspaceGridsBulk.mockResolvedValue(new Map([['ses-1', columns]]));
-    const response = await GET(new Request('http://localhost/api/agent-workspaces'));
-    const body = await response.json();
-    // The wire shape a pre-verbs client still expects, rebuilt from rows: the
-    // two view-state fields carry defaults, because no column stores them.
-    expect(body.sessions[0].workspace).toEqual({
-      id: 'ses-1',
-      columns,
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    });
+    // The tree is a permissioned join (security review HIGH 1) — the bulk read
+    // names the viewer it is resolving titles for.
+    expect(mockReadWorkspaceNodesBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
   });
 
   /**
-   * ONE LIST, NOT TWO (issue #2373). The route used to hand back the flat
-   * conversations AND the grid and let the client choose; `AgentsSidebar` chose
-   * the grid, so a thread with no pane row was invisible. Placement is
-   * best-effort, so that was the ordinary state of a freshly created thread —
-   * production carried 1 of 3 and 6 of 10 such threads.
+   * ONE LIST, NOT TWO (issue #2373), and now one ROW. The route used to hand
+   * back the flat conversations AND the grid and let the client choose;
+   * `AgentsSidebar` chose the grid, so a thread with no pane row was invisible.
+   *
+   * The reconciliation that fixed it is gone too, because there is nothing left
+   * to reconcile: membership is the node, so `attached` is read off the same row
+   * that put the thread in the listing. A thread OFF the grid is in the list
+   * with `attached: false` — a resting state, not an absence — and this is the
+   * guard that replaces the deleted annotation's suite.
    */
-  it('annotates each thread with its pane, and LISTS a thread that has none', async () => {
+  it('LISTS a thread that is off the grid, carrying its node and its state', async () => {
     mockListSessionConversationsBulk.mockResolvedValue(
-      new Map([['ses-1', [CONVERSATION_ENTRY, { ...CONVERSATION_ENTRY, conversationId: 'conv-unplaced' }]]]),
-    );
-    mockReadWorkspaceGridsBulk.mockResolvedValue(
       new Map([
         [
           'ses-1',
           [
-            {
-              id: 'col-1',
-              panes: [
-                { id: 'pane-1', scope: { kind: 'chat', targetId: CONVERSATION_ENTRY.conversationId } },
-              ],
-            },
+            { ...CONVERSATION_ENTRY, nodeId: 'node-1', attached: true },
+            { ...CONVERSATION_ENTRY, conversationId: 'conv-parked', nodeId: 'node-2', attached: false },
           ],
         ],
       ]),
@@ -200,21 +185,42 @@ describe('GET /api/agent-workspaces', () => {
     const conversations = body.sessions[0].conversations;
 
     expect(conversations).toHaveLength(2);
-    expect(conversations[0].pane).toEqual({ paneId: 'pane-1', columnId: 'col-1', orderIndex: 0 });
-    // The one the old shape dropped on the floor.
-    expect(conversations[1].conversationId).toBe('conv-unplaced');
-    expect(conversations[1].pane).toBeNull();
+    expect(conversations[0]).toMatchObject({ nodeId: 'node-1', attached: true });
+    // The one the old shape dropped on the floor, and the one a `close` now
+    // produces: still a member, still listed, simply not on screen.
+    expect(conversations[1]).toMatchObject({ conversationId: 'conv-parked', nodeId: 'node-2', attached: false });
+  });
 
-    // The annotation and the geometry AGREE, because both derive from one
-    // grid read (`route.ts` reads `grid` once and passes it to both). Their
-    // disagreeing is the shape of the original bug — two views of placement
-    // that could drift — so it is worth an assertion even though the geometry
-    // itself is already covered by 'should attach the grid as `workspace`'
-    // above, which predates this PR. (An earlier revision of this test claimed
-    // that coverage did not exist. It did; I had searched for it badly.)
-    const placedPaneId = conversations[0].pane.paneId;
-    expect(body.sessions[0].workspace.columns[0].panes[0].id).toBe(placedPaneId);
-    expect(body.sessions[0].workspace.columns[0].id).toBe(conversations[0].pane.columnId);
+  /**
+   * THE TREE, per session — the sidebar's own source now that it renders the
+   * live tree out of the store instead of this snapshot. The legacy `workspace`
+   * grid above stays for the rolling-deploy window; nothing client-side reads it.
+   */
+  it('attaches each session\'s node tree, so the sidebar can seat it', async () => {
+    const nodes = [
+      { nodeType: 'root', id: 'ses-1', parentId: null, position: 0, axis: 'row' },
+      { nodeType: 'pane', id: 'n1', parentId: 'ses-1', position: 0, target: { kind: 'chat', id: 'conv-1' } },
+    ];
+    const targets = [
+      { id: 'conv-1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: 'agent-1' },
+    ];
+    mockReadWorkspaceNodesBulk.mockResolvedValue(new Map([['ses-1', { rev: 7, nodes, targets }]]));
+
+    const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+
+    expect(body.sessions[0].rev).toBe(7);
+    expect(body.sessions[0].nodes).toEqual(nodes);
+    expect(body.sessions[0].targets).toEqual(targets);
+    // Resolved once per VIEWER, so the read is authorized for whoever asked.
+    expect(mockReadWorkspaceNodesBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
+  });
+
+  it('answers an empty tree at rev 0 for a workspace the node read did not return', async () => {
+    // "Never written" and "vanished between the two reads" get the same honest
+    // answer — the client seats both identically rather than keeping stale nodes.
+    mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
+    const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+    expect(body.sessions[0]).toMatchObject({ rev: 0, nodes: [], targets: [] });
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
@@ -524,6 +530,8 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     mockCanPrincipalViewPage.mockResolvedValue(true);
     mockGetConversation.mockResolvedValue(UNBOUND_PAGE_CONVERSATION);
     mockClaimConversationInSession.mockResolvedValue('claimed');
+    // MEMBERSHIP, from the tree — the successor to reading the row's own column.
+    mockFindWorkspaceOfConversation.mockResolvedValue(null);
   });
 
   it('spawns a session and claims the existing conversation — createConversationInSession is never called', async () => {
@@ -590,8 +598,8 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
-  it('409s a conversation already bound to a session', async () => {
-    mockGetConversation.mockResolvedValue({ ...UNBOUND_PAGE_CONVERSATION, workspaceId: 'ses-other' });
+  it('409s a conversation that some workspace\'s tree already holds', async () => {
+    mockFindWorkspaceOfConversation.mockResolvedValue('ses-other');
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
     expect(mockSpawnSession).not.toHaveBeenCalled();

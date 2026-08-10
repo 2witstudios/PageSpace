@@ -66,6 +66,12 @@ describe('tool registry — internal consistency', () => {
         'list_panes',
         'resize_pane',
         'move_pane',
+        // `close_pane` joins the family as a REPLACEMENT, not an addition:
+        // `move_pane(toParentId: null)` used to carry taking a pane off the
+        // grid, and that destination is gone with the parked state it named.
+        // Chat-only for the same reason as the rest, so the public
+        // workspace-tool count (and every doc that cites it) is unchanged.
+        'close_pane',
         'arrange_panes',
       ]),
     );

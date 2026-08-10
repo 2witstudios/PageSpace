@@ -6,7 +6,7 @@ import {
   listSessionShells,
   toShellDTO,
 } from '../workspace-shells';
-import { shellDtoSchema } from '../../../agent-workspaces/contract';
+import { shellDtoSchema } from '../../../agent-workspaces/shells-contract';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { NOW, OWNER_ID, SESSION_ID, makeSessionShellStore, makeShellRecord, makeSpriteHost } from './fakes';
 

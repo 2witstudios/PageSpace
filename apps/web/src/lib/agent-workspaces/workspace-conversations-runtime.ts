@@ -20,6 +20,7 @@ import { db } from '@pagespace/db/db';
 import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { pages } from '@pagespace/db/schema/core';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
@@ -82,6 +83,8 @@ export interface PaginatedPastConversationsResult {
  * placeholder, so a global conversation can never be placeholder-only in a
  * committed state.
  */
+
+
 const hasActiveMessage = exists(
   db
     .select({ one: sql`1` })
@@ -188,6 +191,32 @@ export function decodeCursor(cursor: string): { sortKey: string; id: string } | 
 }
 
 /**
+ * The chat-bound nodes, as a joinable relation — a thread's MEMBERSHIP.
+ *
+ * A plain `leftJoin` on `agent_workspace_nodes` would also match this thread's
+ * page and terminal siblings, so the `targetKind = 'chat'` predicate has to sit
+ * INSIDE the joined relation rather than in the outer WHERE: in the outer one it
+ * would turn the left join into an inner one for every row it did not match, and
+ * quietly drop every conversation that belongs to no workspace.
+ *
+ * At most one row per conversation by construction — the table's global
+ * `UNIQUE (targetId) WHERE targetKind = 'chat'` — so this join can never
+ * multiply the listing.
+ *
+ * BUILT PER CALL, not once at module scope. A subquery alias is cheap to
+ * construct, and building it at import time makes importing this module do
+ * query-builder work — which every suite that mocks `db` then has to model,
+ * for a value none of them use.
+ */
+function membershipNodeRelation() {
+  return db
+    .select({ targetId: agentWorkspaceNodes.targetId, rootId: agentWorkspaceNodes.rootId })
+    .from(agentWorkspaceNodes)
+    .where(eq(agentWorkspaceNodes.targetKind, 'chat'))
+    .as('membership_node');
+}
+
+/**
  * Cursor pagination is unidirectional ("older than `cursor`") on purpose —
  * not a `direction: 'before' | 'after'` toggle like
  * `globalConversationRepository.listConversationsPaginated`'s. This listing's
@@ -207,6 +236,7 @@ export async function listAllConversationsPaginated(
   options: ListAllConversationsPaginatedInput = {},
 ): Promise<PaginatedPastConversationsResult> {
   const { limit = 20, cursor } = options;
+  const membershipNode = membershipNodeRelation();
   const maxLimit = Math.min(Math.max(limit, 1), 100);
 
   const conditions = [
@@ -215,10 +245,10 @@ export async function listAllConversationsPaginated(
     hasActiveMessage,
   ];
 
-  // Deliberately NOT filtering out `closedInWorkspaceAt IS NOT NULL` here: a
-  // conversation closed from its session is still valid past-conversation
-  // HISTORY, just no longer part of the session's LIVE tree — that exclusion
-  // belongs to `listSessionConversationsBulk` (the sidebar), not this listing.
+  // Deliberately NOT filtering by where a thread's node SITS: a conversation
+  // closed off its workspace's grid is still valid past-conversation HISTORY,
+  // just parked — and a thread in no workspace at all is history too. This
+  // listing is about what a user has said, not about what is on screen.
 
   if (filter.driveId) {
     const driveId = filter.driveId;
@@ -226,7 +256,7 @@ export async function listAllConversationsPaginated(
     // mode — there is no drive for it to belong to.
     conditions.push(sql`(
       (${conversations.type} = 'page' AND ${pages.driveId} = ${driveId})
-      OR (${isNotNull(conversations.workspaceId)} AND ${agentWorkspaces.driveId} = ${driveId})
+      OR (${isNotNull(membershipNode.rootId)} AND ${agentWorkspaces.driveId} = ${driveId})
       OR (${conversations.type} = 'client' AND ${conversations.contextId} = ${driveId})
     )`);
   }
@@ -249,14 +279,20 @@ export async function listAllConversationsPaginated(
       lastMessageAt: recencyExpr,
       sortKeyValue: sortKeyExpr,
       createdAt: conversations.createdAt,
-      workspaceId: conversations.workspaceId,
+      // MEMBERSHIP, from the tree — the node that binds this thread names the
+      // workspace it belongs to, where this used to read the conversation's own
+      // column. Nothing else about this listing changes: a thread OFF the grid
+      // is still a member and still past-conversation history, and a thread in
+      // no workspace at all still has a null here.
+      workspaceId: membershipNode.rootId,
       sessionName: agentWorkspaces.name,
       sessionEndedAt: agentWorkspaces.endedAt,
       pageTitle: pages.title,
       driveId: resolvedDriveIdExpr,
     })
     .from(conversations)
-    .leftJoin(agentWorkspaces, eq(conversations.workspaceId, agentWorkspaces.id))
+    .leftJoin(membershipNode, eq(membershipNode.targetId, conversations.id))
+    .leftJoin(agentWorkspaces, eq(agentWorkspaces.id, membershipNode.rootId))
     .leftJoin(pages, and(eq(conversations.contextId, pages.id), eq(conversations.type, 'page')))
     .where(and(...conditions))
     .orderBy(desc(sortKeyExpr), desc(conversations.id))

@@ -45,8 +45,8 @@ import {
   type AgentSessionListFilter,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
-import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
-import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
+import { findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
@@ -113,40 +113,48 @@ export async function GET(request: Request) {
 
   try {
     const sessions = await listSessions(filter);
-    // Children in TWO bulk queries, however many sessions listed — this is
+    // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).
     const workspaceIds = sessions.map((session) => session.workspaceId);
-    const [shellsBySession, conversationsBySession, gridBySession] = await Promise.all([
+    const [shellsBySession, conversationsBySession, nodesBySession] = await Promise.all([
       listShellsBulk(workspaceIds),
       listSessionConversationsBulk(workspaceIds),
-      readWorkspaceGridsBulk(workspaceIds, auth.userId),
+      // THE NODE TREE, one per listed session — the sidebar's own source now
+      // that it renders the live tree out of the store instead of a polled
+      // grid snapshot. One statement for one workspace and for fifty, and the
+      // titles are resolved once per viewer beside the nodes, never inside
+      // them.
+      readWorkspaceNodesBulk(workspaceIds, auth.userId),
     ]);
     const withChildren = sessions.map((session) => {
-      const grid = gridBySession.get(session.workspaceId) ?? null;
+      // Every workspace ASKED FOR has an entry; this fallback covers only a
+      // session that vanished between `listSessions` and the node read. An
+      // empty tree at rev 0 is the honest answer for it, and the same one a
+      // never-written workspace gets — the client seats both identically.
+      const tree = nodesBySession.get(session.workspaceId) ?? { rev: 0, nodes: [], targets: [] };
       return {
         ...session,
         shells: shellsBySession.get(session.workspaceId) ?? [],
-        // THE list of threads in this workspace — one collection, every thread,
-        // each annotated with where it sits in the grid if it is placed at all
-        // (issue #2373).
+        // THE list of threads in this workspace, and there is nothing left to
+        // annotate it with (issue #2373). Membership IS the node row, so each
+        // entry carries its `nodeId` — read off the same row that decided the
+        // thread is here at all.
         //
-        // This and `workspace` below used to be two lists the client chose
-        // between, and the choice was wrong in the common case: an open
-        // workspace always has a grid, so `AgentsSidebar` always rendered the
-        // pane branch, and a thread with no pane row was invisible. Placement
-        // is best-effort by design, and a thread created without `placeInGrid`
-        // is never placed at all, so "created but not placed" is a resting
-        // state this list must serve, not a transient to wait out.
-        conversations: annotateConversationsWithPanes(
-          conversationsBySession.get(session.workspaceId) ?? [],
-          grid,
-        ),
-        // The grid's GEOMETRY — column widths, pane heights, ordering — for the
-        // pane surface to render. Deliberately no longer the sidebar's source
-        // for "which threads exist": that question has exactly one answer now,
-        // and it is the list above.
-        workspace: workspaceListEntryFromGrid(session.workspaceId, grid),
+        // `annotateConversationsWithPanes` existed to reconcile this listing
+        // with a separate grid, and it is deleted rather than ported: a listing
+        // and a grid that come from one table cannot disagree, so there is no
+        // correspondence left to maintain. Every entry here is on screen, which
+        // is why the `attached` boolean that used to ride beside `nodeId` is
+        // gone too: a thread in this list is in the tree, and the tree is what
+        // the grid draws.
+        conversations: conversationsBySession.get(session.workspaceId) ?? [],
+        // THE TREE. `{rev, nodes, targets}` — the same shape `GET
+        // /[workspaceId]/nodes` answers, so the sidebar's seat and a pane
+        // surface's own read are one function on the client, not two.
+        rev: tree.rev,
+        nodes: tree.nodes,
+        targets: tree.targets,
       };
     });
     return NextResponse.json({ sessions: withChildren });
@@ -189,8 +197,11 @@ export async function GET(request: Request) {
  * `firstThing: 'claim', conversationId` swaps it again for claiming an
  * EXISTING, never-session-bound conversation the caller owns as the
  * session's first thing, instead of minting a brand-new one —
- * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), the
- * ONE place `conversations.workspaceId` is ever written. `driveId`/`agentPageId`
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), which
+ * ADMITS the thread — one node in `agent_workspace_nodes`, which is what
+ * membership is. It used to write `conversations.workspaceId`; nothing writes
+ * that column now, and it survives only until the follow-up migration drops
+ * it. `driveId`/`agentPageId`
  * are derived from the claimed row itself (a `type: 'page'` row's own agent;
  * a `type: 'global'` row takes the caller's `driveId`, same three-shape
  * ambiguity as the ordinary mint path below) — a caller-supplied
@@ -287,7 +298,11 @@ export async function POST(request: Request) {
       // else, or was history-deleted — an id-guessing caller learns nothing.
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
-    if (row.workspaceId !== null) {
+    // MEMBERSHIP, from the tree — one lookup on the node table's global
+    // chat-target index. An ADVISORY preflight: the claim's own decision asks
+    // the same question, and the unique index settles the racing case, so this
+    // exists to answer the ordinary one before a workspace row is minted.
+    if ((await findWorkspaceOfConversation(conversationId)) !== null) {
       return NextResponse.json(
         { error: 'That conversation already belongs to a session' },
         { status: 409 },

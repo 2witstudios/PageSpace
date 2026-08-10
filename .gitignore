@@ -197,3 +197,7 @@ skills-lock.json
 
 # Vercel CLI local project-link metadata
 .vercel/
+
+# Review/audit reports written by agents about a branch. They are pinned to
+# SHAs a squash-merge erases, so they are working notes, never repo content.
+.pu-reports/

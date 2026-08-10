@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
@@ -1248,7 +1248,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Join an agent workspace's LAYOUT room (`session:<id>`) — where
-  // rev-carrying `workspace:updated` pane-grid events fan out (epic Phase 3).
+  // rev-carrying `workspace:nodes-updated` tree events fan out.
   // Authorization is the SAME one session-access decision the web routes run
   // (`checkAgentSessionAccess` → `decideAgentSessionAccess`): a session is a
   // drive-level workspace, so access is drive access. Deliberately NOT

@@ -129,18 +129,73 @@ describe('runImport', () => {
       });
     }
 
-    it('restores the conversation⇄session binding, rev, closed-listing stamp and shared flag', async () => {
+    it('restores the conversation rev and shared flag', async () => {
       await reimport('conversation');
 
       const rows = (await db.execute(sql.raw(
-        `SELECT "workspaceId", rev, "closedInWorkspaceAt", "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
+        `SELECT rev, "isShared" FROM conversations WHERE id = '${FIXTURES.conversations.pageChat.id}'`,
       ))).rows as Record<string, unknown>[];
 
       expect(rows).toHaveLength(1);
-      expect(rows[0].workspaceId).toBe(FIXTURES.agentWorkspaces.workspace.id);
       expect(Number(rows[0].rev)).toBe(FIXTURES.conversations.pageChat.rev);
-      expect(rows[0].closedInWorkspaceAt).not.toBeNull();
       expect(rows[0].isShared).toBe(true);
+      // The conversation⇄session BINDING used to be asserted here, off
+      // `conversations."workspaceId"` and `"closedInWorkspaceAt"`. Both columns
+      // are dropped — a thread's workspace is an `agent_workspace_nodes` row —
+      // so the assertion moved to the test below rather than disappearing.
+    });
+
+    /**
+     * MEMBERSHIP SURVIVES THE ROUND TRIP. This is the assertion that used to
+     * live on `conversations."workspaceId"`: after the import, the thread is in
+     * the workspace, and it is in it because a chat-bound node says so. Without
+     * this the tenant's sessions open empty and the threads are reachable only
+     * through past-conversation history.
+     */
+    it('restores the thread\'s membership in its session, and the tree that holds it', async () => {
+      await reimport('nodes');
+
+      const rows = (await db.execute(sql.raw(
+        `SELECT id, "parentId", position, "nodeType", axis, "targetKind", "targetId"`
+        + ` FROM agent_workspace_nodes WHERE "rootId" = '${FIXTURES.agentWorkspaces.workspace.id}' ORDER BY id`,
+      ))).rows as Record<string, unknown>[];
+      const byId = new Map(rows.map((r) => [r.id as string, r]));
+
+      expect(rows).toHaveLength(2);
+
+      const root = byId.get('test_agent_node_root_001')!;
+      expect(root.nodeType).toBe('root');
+      expect(root.parentId).toBeNull();
+      expect(root.axis).toBe('row');
+
+      // THE BINDING. Both halves of the pair, since either alone is a corrupt
+      // pane the tenant's row parse refuses.
+      const pane = byId.get('test_agent_node_pane_001')!;
+      expect(pane.nodeType).toBe('pane');
+      expect(pane.parentId).toBe('test_agent_node_root_001');
+      expect(pane.targetKind).toBe('chat');
+      expect(pane.targetId).toBe(FIXTURES.conversations.pageChat.id);
+    });
+
+    /**
+     * …and the counter beside it does NOT travel, which is the other half of
+     * the decision. `rev` is issued by the source database and held by clients
+     * as `baseRev`; the tenant's read COALESCEs a missing row to 0 and its
+     * first write mints 1.
+     */
+    it('leaves the node rev behind, and the workspace still reads as its tree at rev 0', async () => {
+      await reimport('node-revs');
+
+      const revs = (await db.execute(sql.raw(
+        `SELECT count(*) AS count FROM agent_workspace_node_revs`,
+      ))).rows as Record<string, unknown>[];
+      expect(Number(revs[0].count)).toBe(0);
+
+      // The nodes are there regardless — "no rev row" is not "no workspace".
+      const nodes = (await db.execute(sql.raw(
+        `SELECT count(*) AS count FROM agent_workspace_nodes WHERE "rootId" = '${FIXTURES.agentWorkspaces.workspace.id}'`,
+      ))).rows as Record<string, unknown>[];
+      expect(Number(nodes[0].count)).toBe(2);
     });
 
     it('carries the agent session the conversation is bound to, without its source-fleet Sprite identity', async () => {
@@ -353,6 +408,94 @@ describe('runImport', () => {
     const userCount = Number((usersResult.rows as Record<string, unknown>[])[0].count);
     // Should have 3 users (owner, member, outsider from seed) - not 5
     expect(userCount).toBe(3);
+
+    // The nodes INSERT arbitrates on its PRIMARY KEY rather than on every
+    // unique index (see the chat-collision block below), and this is the half
+    // of that narrowing which must NOT change: re-inserting a row identical to
+    // one already there is still a silent no-op, because Postgres consults the
+    // arbiter index first and never speculatively inserts. Were it otherwise,
+    // the row's own chat binding would collide with itself and every re-import
+    // of an already-imported bundle would abort.
+    const nodesResult = await db.execute(sql.raw(`SELECT count(*) as count FROM agent_workspace_nodes`));
+    expect(Number((nodesResult.rows as Record<string, unknown>[])[0].count)).toBe(2);
+  });
+
+  /**
+   * A CHAT-INDEX COLLISION FAILS THE BUNDLE, LOUDLY.
+   *
+   * `UNIQUE (targetId) WHERE targetKind = 'chat'` is GLOBAL — a conversation is
+   * bound to at most one node anywhere — so a destination that already holds
+   * one of the incoming threads cannot take the incoming node too. The bundle's
+   * usual untargeted `ON CONFLICT DO NOTHING` would forgive that violation like
+   * any other and SKIP the row: a successful-looking import with a thread
+   * missing from the workspace it belongs to, discovered months later by the
+   * user who lost it. The nodes INSERT names its primary key as the conflict
+   * target instead, so only "already imported" is forgiven and this raises,
+   * aborting the single transaction the whole bundle replays in.
+   */
+  describe('a conversation already bound in the destination', () => {
+    const DEST_WORKSPACE = 'test_agent_session_dest_001';
+    const DEST_ROOT = 'test_agent_node_dest_root';
+    const DEST_PANE = 'test_agent_node_dest_pane';
+
+    beforeEach(async () => {
+      // The bundle was exported in the outer beforeEach. Now make the
+      // destination hold the SAME thread under a different session — the state
+      // two databases that were never one arrive in.
+      await truncateAll(db);
+      await seedFixtures(db);
+      await db.execute(sql.raw(
+        `DELETE FROM agent_workspace_nodes WHERE "rootId" = '${FIXTURES.agentWorkspaces.workspace.id}'`,
+      ));
+      await db.execute(sql.raw(
+        `DELETE FROM agent_workspaces WHERE id = '${FIXTURES.agentWorkspaces.workspace.id}'`,
+      ));
+      await db.execute(sql.raw(
+        `INSERT INTO agent_workspaces (id, "driveId", "ownerId", name, "createdAt", "updatedAt")`
+        + ` VALUES ('${DEST_WORKSPACE}', '${FIXTURES.drives.shared.id}', '${FIXTURES.users.owner.id}', 'Tenant session', NOW(), NOW())`,
+      ));
+      await db.execute(sql.raw(
+        `INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", axis, "createdAt", "updatedAt")`
+        + ` VALUES ('${DEST_ROOT}', '${DEST_WORKSPACE}', NULL, 0, 'root', 'row', NOW(), NOW())`,
+      ));
+      await db.execute(sql.raw(
+        `INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", "targetKind", "targetId", "createdAt", "updatedAt")`
+        + ` VALUES ('${DEST_PANE}', '${DEST_WORKSPACE}', '${DEST_ROOT}', 0, 'pane', 'chat', '${FIXTURES.conversations.pageChat.id}', NOW(), NOW())`,
+      ));
+    });
+
+    it('fails the import and names the constraint, rather than dropping the node', async () => {
+      await expect(
+        runImport({
+          bundleDir,
+          databaseUrl: getTestDatabaseUrl(),
+          fileStoragePath: path.join(tmpDir, 'target-chat-collision'),
+          dryRun: false,
+        }),
+      ).rejects.toThrow('agent_workspace_nodes_chat_target_idx');
+    });
+
+    it('lands nothing at all — the collision aborts the whole bundle', async () => {
+      await runImport({
+        bundleDir,
+        databaseUrl: getTestDatabaseUrl(),
+        fileStoragePath: path.join(tmpDir, 'target-chat-collision-2'),
+        dryRun: false,
+      }).catch(() => {});
+
+      // The destination's own binding is intact…
+      const dest = (await db.execute(sql.raw(
+        `SELECT "rootId" FROM agent_workspace_nodes WHERE "targetKind" = 'chat' AND "targetId" = '${FIXTURES.conversations.pageChat.id}'`,
+      ))).rows as Record<string, unknown>[];
+      expect(dest).toHaveLength(1);
+      expect(dest[0].rootId).toBe(DEST_WORKSPACE);
+
+      // …and the incoming session did not half-land beside it.
+      const incoming = (await db.execute(sql.raw(
+        `SELECT id FROM agent_workspaces WHERE id = '${FIXTURES.agentWorkspaces.workspace.id}'`,
+      ))).rows as Record<string, unknown>[];
+      expect(incoming).toHaveLength(0);
+    });
   });
 
   it('copies file blobs to target storage path', async () => {

@@ -208,7 +208,7 @@ describe('toPortableExport', () => {
       notifications: [{ id: 'n1', type: 't', title: 'T', message: 'M', metadata: null, isRead: false, createdAt: D1, readAt: null }],
       displayPreferences: [{ preferenceType: 'theme', enabled: true, updatedAt: D2 }],
       personalization: { bio: 'b', writingStyle: null, rules: null, enabled: true, createdAt: D1, updatedAt: D2 },
-      agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [] }],
+      agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [], nodes: [] }],
       streamState: [{ messageId: 'sm1', conversationId: 'c1', status: 'complete', parts: [{ type: 'text', text: 'hi' }], startedAt: D1, completedAt: D2 }],
     });
     const portable = toPortableExport(full);

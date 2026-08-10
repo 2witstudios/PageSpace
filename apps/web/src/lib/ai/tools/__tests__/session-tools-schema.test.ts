@@ -38,14 +38,21 @@ function wireSurface() {
 }
 
 describe('session + shell + layout tools — frozen wire contract', () => {
-  it('exposes exactly the thirteen tool names', () => {
-    // The nine worker/shell verbs have been frozen since Phase 1. The four
-    // LAYOUT verbs are the deliberate addition of issue #2208 — the grid
-    // rearrange surface that had to wait for the pane entities to become
-    // relational rows with a verb API. They are ADDITIVE: nothing above them
-    // changed name, description, or schema, which is what the freeze protects.
+  it('exposes exactly the fourteen tool names', () => {
+    // The nine worker/shell verbs have been frozen since Phase 1. The LAYOUT
+    // verbs are the deliberate addition of issue #2208 — the grid rearrange
+    // surface that had to wait for the pane entities to become relational rows
+    // with a verb API.
+    //
+    // `close_pane` is the fifth, and it is a REPLACEMENT rather than an
+    // addition: `move_pane(toParentId: null)` was an agent's only way to take a
+    // pane off the grid, because `null` was a legal destination meaning PARKED.
+    // There is one place a node can be now, so that destination is gone and the
+    // capability needs its own verb — otherwise removing the null would leave
+    // agents able to rearrange a layout and unable to close anything in it.
     expect(Object.keys(wireSurface()).sort()).toEqual([
       'arrange_panes',
+      'close_pane',
       'kill_session',
       'kill_shell',
       'list_panes',
@@ -193,13 +200,29 @@ describe('session + shell + layout tools — frozen wire contract', () => {
         },
       },
       // --- The LAYOUT family (issue #2208) -----------------------------
-      // Vocabulary check, per spec §4: these say "pane"/"column" and
+      // Vocabulary check, per spec §4: these say "pane"/"container"/"node" and
       // "workspace" — never "session", which on this wire is always a worker
       // you talk to. `list_panes` is what makes the other three usable: an
-      // agent cannot address a paneId it was never told.
+      // agent cannot address a nodeId it was never told.
+      //
+      // RE-PINNED, deliberately, by the node-model cutover. The layout stopped
+      // being two levels of furniture (columns of panes) and became ONE FLAT
+      // TREE in which `parentId` says where a node sits. Keeping `columnId` on
+      // the wire would have meant either lying to the model about a structure
+      // the server no longer has, or projecting the tree back into columns —
+      // which is lossy the moment a split nests, and lossy in exactly the
+      // direction that makes a rearrange address the wrong rectangle. So there
+      // is one address now: a nodeId.
+      //
+      // `parentId` does NOT also say whether a node is on screen. Only the root
+      // is parentless; `move_pane` requires a real container, and `close_pane`
+      // REMOVES a pane from the workspace. An earlier cut of this comment
+      // described `toParentId: null` as parking a pane "in the workspace and
+      // out of the layout" — the two-structure state this epic deleted, and the
+      // last place it survived was a description a model reads as the spec.
       list_panes: {
         description:
-          'Show the pane grid of THIS conversation\'s workspace: a left-to-right row of columns, each a top-to-bottom stack of panes. Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address, what each pane is showing, and the current size shares (null means that container is split evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session with an open pane grid.',
+          'Show the layout of THIS conversation\'s workspace: one flat list of nodes in which parentId says where each one sits. A node is the root, a container (split, with an axis of "row" or "column"), or a pane (a leaf that shows a conversation, a terminal, or a page). Only the root has a null parentId; every pane is on screen. Returns the nodeIds that resize_pane/move_pane/arrange_panes address, what each pane shows, and the current size shares (null means that container splits its children evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -209,51 +232,67 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       resize_pane: {
         description:
-          'Resize part of this workspace\'s pane grid: pass a columnId to set that column\'s width, or a paneId to set that pane\'s height within its own column. size is a share of the container from 0 to 1, and the siblings absorb the difference in proportion. A size that would squeeze a sibling below its minimum is clamped rather than refused. Heights are always column-local — a pane\'s height says nothing about panes in other columns. Get the ids from list_panes. A container with only one member cannot be resized: it already fills its space.',
+          'Set one node\'s share of its parent container. size is 0 to 1, and the siblings absorb the difference in proportion; a size that would squeeze a sibling below its minimum is clamped to that minimum rather than refused. Works on a pane or on a container — a container\'s share is its width or height depending on which way its own parent splits. Get the nodeId from list_panes. A node alone in its parent cannot be resized: it already fills it.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
           properties: {
-            paneId: { type: 'string', minLength: 1 },
-            columnId: { type: 'string', minLength: 1 },
+            nodeId: { type: 'string', minLength: 1 },
             // Shares are 0..1 exclusive, matching the `real` row column — a 0
-            // or 1 share is a degenerate layout the reducer would clamp away.
+            // or 1 share is a degenerate layout the algebra refuses outright.
             size: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 },
           },
-          required: ['size'],
+          required: ['nodeId', 'size'],
           additionalProperties: false,
         },
       },
       move_pane: {
         description:
-          'Move a pane to a different column in this workspace\'s grid, or to a different position within its own column. Pass toColumnId (from list_panes) and, optionally, toIndex — the 0-based slot in the destination stack; omit it to append at the bottom, and out-of-range values clamp to the ends. The pane keeps showing exactly what it was showing; only its position changes. A column left empty by the move is removed.',
+          'Move a node somewhere else in this workspace\'s layout: into a different container, or to a different slot in the one it is already in. Pass toParentId (from list_panes) — a real container; there is nowhere outside the layout for a node to go, and taking a pane away is close_pane, which removes it from the workspace. toIndex is the 0-based slot in the destination; omit it to append at the end. An out-of-range slot is refused rather than clamped, so a stale idea of the layout fails loudly instead of landing somewhere you did not mean. The node keeps showing exactly what it was showing; only its place changes. A container left holding one child collapses into it.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
           properties: {
-            paneId: { type: 'string', minLength: 1 },
-            toColumnId: { type: 'string', minLength: 1 },
+            nodeId: { type: 'string', minLength: 1 },
+            // A plain string. It was `anyOf: [string, null]`, because `null` was
+            // a real destination meaning PARKED — the shape that made a move
+            // also a removal.
+            toParentId: { type: 'string', minLength: 1 },
             toIndex: { type: 'integer', minimum: 0, maximum: 64 },
           },
-          required: ['paneId', 'toColumnId'],
+          required: ['nodeId', 'toParentId'],
+          additionalProperties: false,
+        },
+      },
+      close_pane: {
+        description:
+          'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
+        inputSchema: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: {
+            nodeId: { type: 'string', minLength: 1 },
+          },
+          required: ['nodeId'],
           additionalProperties: false,
         },
       },
       arrange_panes: {
         description:
-          'Reorder this workspace\'s columns left to right. Pass columnIds (from list_panes) in the order you want them; you do NOT have to list them all — the ones you name go first, in your order, and every column you leave out keeps its current relative position behind them. Ids that no longer exist are skipped rather than failing the call. Panes and sizes travel with their column.',
+          'Reorder a container\'s children. Pass nodeIds (from list_panes) in the order you want them, and parentId for the container that holds them — omit parentId to reorder the root\'s own children, which is the top-level left-to-right (or top-to-bottom) order. You do NOT have to list them all: the ones you name go first, in your order, and every child you leave out keeps its current relative position behind them. Ids that are not children of that container are skipped rather than failing the call. Sizes and whole subtrees travel with their node.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
           properties: {
-            columnIds: {
+            parentId: { type: 'string', minLength: 1 },
+            nodeIds: {
               minItems: 1,
               maxItems: 64,
               type: 'array',
               items: { type: 'string', minLength: 1 },
             },
           },
-          required: ['columnIds'],
+          required: ['nodeIds'],
           additionalProperties: false,
         },
       },

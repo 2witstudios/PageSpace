@@ -1,21 +1,23 @@
 /**
- * The store's own job: identity, idempotence, the CLIENT-ONLY guards the
- * server's reducer deliberately cannot evaluate (dirty panes, live
- * conversations, the invoking pane), and not blowing up on a transition aimed
- * at a grid that is gone. The layout rules themselves are the reducer's, and
- * are tested there; the queue PROTOCOL is tested in
- * `workspace-verb-queue.test.ts`.
+ * The store's own job: adopting server truth, keeping local edits alive across
+ * it, the CLIENT-ONLY guards the shared placement policy deliberately cannot
+ * evaluate, and — the whole reason this suite exists in this shape — not
+ * believing things it should not believe.
  *
- * Every mutation here also mints a verb and posts it. This suite deliberately
- * runs on a transport that never settles: what it pins is the OPTIMISTIC
- * state — what the user sees the instant they click, before any server has
- * answered — which is exactly the behavior the pre-verb store had and must
- * keep having.
+ * The layout RULES are the algebra's and are tested there. What is pinned here
+ * is everything a browser can be handed that a server never sees: a broadcast
+ * for a workspace that was just forgotten, one at a rev already held, the same
+ * event twice, a pending write whose target somebody else destroyed, a body that
+ * is not a tree, an empty grid, and a workspace with no root yet.
+ *
+ * Unless a test says otherwise the transport NEVER settles, so what the
+ * assertions read is the optimistic apply — what the user sees the instant they
+ * click, before any server has answered.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { PaneScope } from '@pagespace/lib/agent-workspaces/contract';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAgentWorkspaceStore, __resetWorkspaceQueuesForTests } from '../useAgentWorkspaceStore';
-import { panesOf } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeSnapshotResponse } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const mockFetchWithAuth = vi.fn();
@@ -23,601 +25,497 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 
-const scope = (name = 'Planning'): PaneScope => ({
-  kind: 'chat',
-  name,
-  targetId: 'conv-1',
-  agentPageId: 'agent-1',
-});
+const WS = 'ws-1';
+
+/** The root a workspace is seeded with — deterministic, from the workspace id. */
+const root: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
+
+function pane(id: string, parentId: string, position: number, chatId?: string): WorkspaceNode {
+  return {
+    nodeType: 'pane',
+    id,
+    parentId,
+    position,
+    target: chatId === undefined ? null : { kind: 'chat', id: chatId },
+  };
+}
+
+function snapshot(
+  rev: number,
+  nodes: WorkspaceNode[],
+  targets: WorkspaceNodeSnapshotResponse['targets'] = [],
+): WorkspaceNodeSnapshotResponse {
+  return { rev, nodes, targets };
+}
 
 const store = () => useAgentWorkspaceStore.getState();
-const grid = (id = 'ses-1') => store().workspaces[id];
+const tree = (id = WS) => store().workspaces[id];
+
+/** A `Response` shim carrying a JSON body — enough for the store's parse path. */
+function jsonResponse(status: number, body: unknown): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as unknown as Response;
+}
 
 beforeEach(() => {
   mockFetchWithAuth.mockReset();
-  // A transport that never answers: every verb stays queued, so what these
-  // assertions read is purely the optimistic apply.
   mockFetchWithAuth.mockImplementation(() => new Promise<Response>(() => {}));
   __resetWorkspaceQueuesForTests();
-  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
+  useEditingStore.getState().clearAllSessions();
 });
 
-describe('ensureWorkspace', () => {
-  it('should open a session on one pane bound to its first conversation', () => {
-    store().ensureWorkspace('ses-1', scope());
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].scope).toEqual(scope());
+describe('hydrateFromServer', () => {
+  it('should seat a tree and its resolved titles', () => {
+    store().hydrateFromServer(
+      WS,
+      snapshot(3, [root, pane('p1', WS, 0, 'c1')], [
+        { id: 'c1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: 'agent-1' },
+      ]),
+    );
+    expect(tree().rev).toBe(3);
+    expect(tree().nodes).toHaveLength(2);
+    expect(tree().targets[0].title).toBe('Planning');
+    expect(tree().activeNodeId).toBe('p1');
   });
 
-  it('should be idempotent — re-opening a session must not discard its layout', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().splitRight('ses-1', grid().activePaneId);
-    expect(panesOf(grid())).toHaveLength(2);
+  /**
+   * THE NO-OP EARLY-OUT. The sidebar seats every listed workspace on every
+   * revalidation; a fresh object per revalidation re-renders every tree in the
+   * app twice a minute.
+   */
+  it('should return the SAME object for an identical re-seat', () => {
+    const first = snapshot(3, [root, pane('p1', WS, 0, 'c1')], [
+      { id: 'c1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: null },
+    ]);
+    store().hydrateFromServer(WS, first);
+    const before = tree();
 
-    store().ensureWorkspace('ses-1', scope());
+    // A DIFFERENT object graph carrying the same facts, as a re-fetch produces.
+    store().hydrateFromServer(
+      WS,
+      snapshot(3, [root, pane('p1', WS, 0, 'c1')], [
+        { id: 'c1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: null },
+      ]),
+    );
 
-    expect(panesOf(grid())).toHaveLength(2);
+    expect(tree()).toBe(before);
   });
 
-  it('should keep sessions independent', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().ensureWorkspace('ses-2', { ...scope('Other'), targetId: 'conv-2' });
-    store().splitRight('ses-1', grid('ses-1').activePaneId);
-
-    expect(panesOf(grid('ses-1'))).toHaveLength(2);
-    expect(panesOf(grid('ses-2'))).toHaveLength(1);
-  });
-});
-
-describe('pane ids', () => {
-  it('should mint distinct ids for every pane', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().splitRight('ses-1', grid().activePaneId);
-    store().splitDown('ses-1', grid().activePaneId);
-
-    const ids = panesOf(grid()).map((p) => p.id);
-    expect(new Set(ids).size).toBe(ids.length);
+  it('should still adopt a RENAME at an unchanged rev — a title is not part of the rev', () => {
+    store().hydrateFromServer(WS, snapshot(3, [root, pane('p1', WS, 0, 'c1')], [
+      { id: 'c1', kind: 'chat', title: 'Planning', lastMessageAt: null, agentPageId: null },
+    ]));
+    store().hydrateFromServer(WS, snapshot(3, [root, pane('p1', WS, 0, 'c1')], [
+      { id: 'c1', kind: 'chat', title: 'Renamed', lastMessageAt: null, agentPageId: null },
+    ]));
+    expect(tree().targets[0].title).toBe('Renamed');
   });
 
-  it('should mint distinct column ids across split-rights', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().splitRight('ses-1', grid().activePaneId);
-    store().splitRight('ses-1', grid().activePaneId);
-
-    const columnIds = grid().columns.map((c) => c.id);
-    expect(new Set(columnIds).size).toBe(columnIds.length);
-  });
-});
-
-describe('transitions', () => {
-  beforeEach(() => {
-    store().ensureWorkspace('ses-1', scope());
+  it('should ignore a snapshot OLDER than the one it holds', () => {
+    store().hydrateFromServer(WS, snapshot(5, [root, pane('p1', WS, 0, 'c1')]));
+    store().hydrateFromServer(WS, snapshot(4, [root]));
+    expect(tree().rev).toBe(5);
+    expect(tree().nodes).toHaveLength(2);
   });
 
-  it('should bind a pane through assignPane', () => {
-    store().splitRight('ses-1', grid().activePaneId);
-    const target = grid().activePaneId;
-    const shell: PaneScope = { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null };
-
-    store().assignPane('ses-1', target, shell);
-
-    expect(panesOf(grid()).find((p) => p.id === target)?.scope).toEqual(shell);
+  it('should refuse a body that is not a valid tree, rather than adopt it as a base', () => {
+    const twoRoots: WorkspaceNode[] = [root, { nodeType: 'root', id: 'other', parentId: null, position: 0, axis: 'row' }];
+    store().hydrateFromServer(WS, snapshot(1, twoRoots));
+    expect(tree()).toBeUndefined();
   });
 
-  it('should close a pane and keep the grid non-empty', () => {
-    store().splitRight('ses-1', grid().activePaneId);
-    store().closePane('ses-1', grid().activePaneId);
-    expect(panesOf(grid())).toHaveLength(1);
+  it('should seat an EMPTY tree — a workspace that has never been written', () => {
+    store().hydrateFromServer(WS, snapshot(0, []));
+    expect(tree()).toBeDefined();
+    expect(tree().nodes).toEqual([]);
+    expect(tree().activeNodeId).toBeNull();
   });
 
-  it('closing the LAST pane ends the session — the grid is removed and the caller told to end it', () => {
-    // The container-level interception the old closePaneIn owned: the pure
-    // reducer no-ops (it cannot delete its own container), the store CAN, and
-    // the return value is how the caller knows to tear the sandbox down.
-    const verdict = store().closePane('ses-1', grid().activePaneId);
-    expect(verdict).toBe('session-ended');
-    expect(store().workspaces['ses-1']).toBeUndefined();
-  });
-
-  it('closing a NON-last pane reports closed and keeps the grid', () => {
-    store().splitRight('ses-1', grid().activePaneId);
-    const verdict = store().closePane('ses-1', grid().activePaneId);
-    expect(verdict).toBe('closed');
-    expect(panesOf(grid())).toHaveLength(1);
-  });
-
-  it('closing an unknown pane reports noop', () => {
-    expect(store().closePane('ses-1', 'ghost')).toBe('noop');
-    expect(store().closePane('never-existed', 'ghost')).toBe('noop');
+  it('should seat an EMPTY GRID — a root holding nothing is a resting state', () => {
+    store().hydrateFromServer(WS, snapshot(7, [root]));
+    expect(tree().nodes).toEqual([root]);
+    expect(tree().activeNodeId).toBeNull();
   });
 });
 
-describe('resetPane', () => {
-  beforeEach(() => {
-    store().ensureWorkspace('ses-1', scope());
+describe('applyRemoteUpdate', () => {
+  it('should adopt a newer tree', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')] });
+    expect(tree().rev).toBe(2);
+    expect(tree().nodes).toHaveLength(3);
   });
 
-  it('should unbind the pane so it renders the picker again', () => {
-    store().resetPane('ses-1', grid().activePaneId);
-    expect(panesOf(grid())[0].scope).toBeNull();
+  /** A workspace the store has just forgotten must NOT come back. */
+  it('should not resurrect a workspace it is no longer tracking', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().forgetWorkspace(WS);
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 9, nodes: [root, pane('p1', WS, 0, 'c1')] });
+    expect(tree()).toBeUndefined();
   });
 
-  it('should no-op against a grid that is gone', () => {
-    store().forgetWorkspace('ses-1');
-    expect(() => store().resetPane('ses-1', 'pane-1')).not.toThrow();
-    expect(store().workspaces['ses-1']).toBeUndefined();
-  });
-});
-
-describe('replaceConversation — pruning the pane a deleted conversation left behind', () => {
-  const replacement: PaneScope = { kind: 'chat', name: 'New conversation', targetId: 'conv-new', agentPageId: 'agent-1' };
-
-  it('should assign the pane that was showing the deleted conversation to its replacement', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const paneId = grid().activePaneId;
-
-    store().replaceConversation('ses-1', 'conv-1', replacement);
-
-    expect(panesOf(grid()).find((p) => p.id === paneId)?.scope).toEqual(replacement);
+  it('should never seat a workspace it has never seen', () => {
+    store().applyRemoteUpdate({ workspaceId: 'never-opened', rev: 1, nodes: [root] });
+    expect(store().workspaces['never-opened']).toBeUndefined();
   });
 
-  it('should target the pane holding the OLD id even when it is not the active pane', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const original = grid().activePaneId;
-    store().splitRight('ses-1', original);
-    // The split moved active focus to the new pane; the deleted conversation
-    // is still in the ORIGINAL one.
-    expect(grid().activePaneId).not.toBe(original);
-
-    store().replaceConversation('ses-1', 'conv-1', replacement);
-
-    expect(panesOf(grid()).find((p) => p.id === original)?.scope).toEqual(replacement);
+  it('should drop an event at a rev it already holds', () => {
+    store().hydrateFromServer(WS, snapshot(4, [root, pane('p1', WS, 0, 'c1')]));
+    const before = tree();
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 4, nodes: [root] });
+    expect(tree()).toBe(before);
   });
 
-  it('given a conversation shown nowhere, should no-op', () => {
-    store().ensureWorkspace('ses-1', scope());
-    expect(() => store().replaceConversation('ses-1', 'never-shown', replacement)).not.toThrow();
-    expect(panesOf(grid())[0].scope).toEqual(scope());
+  /**
+   * DOUBLE DELIVERY. The owner of a workspace whose grid is also mounted is in
+   * BOTH rooms, so the same write arrives twice. The rev guard is armed
+   * synchronously by the first, which is what makes the second free.
+   */
+  it('should apply the same event delivered on both rooms exactly once', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    const event = { workspaceId: WS, rev: 2, nodes: [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')] };
+    store().applyRemoteUpdate(event);
+    const afterFirst = tree();
+    store().applyRemoteUpdate(event);
+    expect(tree()).toBe(afterFirst);
+    expect(tree().nodes).toHaveLength(3);
   });
 
-  it('should no-op against a grid that is gone', () => {
-    expect(() => store().replaceConversation('never-existed', 'conv-1', replacement)).not.toThrow();
-  });
-});
-
-describe('a transition aimed at a grid that is gone', () => {
-  it('should no-op rather than throw or fabricate one', () => {
-    // A close can land after the conversation was deleted and its grid
-    // forgotten. There is nothing meaningful to build from a split of something
-    // absent, so the store declines rather than inventing a workspace.
-    expect(() => store().splitRight('never-existed', 'pane-x')).not.toThrow();
-    expect(store().workspaces['never-existed']).toBeUndefined();
-
-    store().ensureWorkspace('ses-1', scope());
-    store().forgetWorkspace('ses-1');
-    expect(() => store().closePane('ses-1', 'pane-1')).not.toThrow();
-    expect(store().workspaces['ses-1']).toBeUndefined();
+  it('should refuse a broadcast whose tree is invalid', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [pane('orphan', 'gone', 0, 'c9')] });
+    expect(tree().rev).toBe(1);
   });
 
-  it('forgetWorkspace should be safe to call twice', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().forgetWorkspace('ses-1');
-    expect(() => store().forgetWorkspace('conv-1')).not.toThrow();
+  it('should refuse a broadcast carrying a pane with NO parent, which a row can still spell', () => {
+    // `null_parent`. Under the previous model this was a legal member and the
+    // client would have adopted it as truth — a node it would then never draw.
+    const parentless = { nodeType: 'pane', id: 'lost', parentId: null, position: 0, target: null } as unknown as WorkspaceNode;
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, parentless] });
+    expect(tree().rev).toBe(1);
   });
 });
 
-describe('openConversation — selection means SHOW it (review M1)', () => {
-  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
-    kind: 'chat',
-    name,
-    targetId,
-    agentPageId: 'agent-1',
-  });
-  const shellScope = (targetId: string): PaneScope => ({
-    kind: 'terminal',
-    name: 'shell-1',
-    targetId,
-    agentPageId: null,
-  });
+describe('local writes survive new server truth', () => {
+  it('should replay a pending split on top of an adopted snapshot', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
 
-  it('with no workspace, seeds the opening grid (ensure semantics)', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-1');
-  });
-
-  it('focuses the pane already showing the conversation instead of duplicating it', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const first = panesOf(grid())[0];
-    store().splitRight('ses-1', first.id);
-    const second = panesOf(grid()).find((p) => p.id !== first.id)!;
-    store().assignPane('ses-1', second.id, conv('conv-2'));
-    expect(grid().activePaneId).toBe(second.id);
-
-    store().openConversation('ses-1', conv('conv-1'));
-    expect(grid().activePaneId).toBe(first.id);
-    expect(panesOf(grid())).toHaveLength(2);
-  });
-
-  it('opens an unseen conversation in the ACTIVE pane when it is a chat', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const paneId = panesOf(grid())[0].id;
-    store().openConversation('ses-1', conv('conv-2'));
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(paneId);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
-  });
-
-  it('never opens OVER a terminal — a running PTY keeps its only surface', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const chatPane = panesOf(grid())[0];
-    store().splitRight('ses-1', chatPane.id);
-    const termPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
-    store().assignPane('ses-1', termPane.id, shellScope('shell-row-1'));
-    // Terminal is the ACTIVE pane now; the open must land on the chat pane.
-    store().openConversation('ses-1', conv('conv-2'));
-    const term = panesOf(grid()).find((p) => p.id === termPane.id)!;
-    expect(term.scope?.kind).toBe('terminal');
-    const chat = panesOf(grid()).find((p) => p.id === chatPane.id)!;
-    expect(chat.scope?.targetId).toBe('conv-2');
-  });
-
-  it('with EVERY pane a terminal, splits right rather than evicting one', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const only = panesOf(grid())[0];
-    store().assignPane('ses-1', only.id, shellScope('shell-row-1'));
-
-    store().openConversation('ses-1', conv('conv-2'));
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.filter((p) => p.scope?.kind === 'terminal')).toHaveLength(1);
-    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
-  });
-
-  it('never clobbers a pane whose mint is still in flight (review low-batch #1)', () => {
-    // The active pane is bound to a KIND but has no row yet (the picker just
-    // chose it, the POST hasn't resolved) — picking a DIFFERENT conversation
-    // from history in the meantime must not land on top of it, or the mint's
-    // own success callback later overwrites the user's newer selection.
-    store().openConversation('ses-1', conv('conv-1'));
-    const inFlightPane = panesOf(grid())[0];
-    store().assignPane('ses-1', inFlightPane.id, {
-      kind: 'chat',
-      name: 'New conversation',
-      targetId: null,
-      agentPageId: 'agent-2',
+    // Somebody else adds a pane; our split has not been acked.
+    store().applyRemoteUpdate({
+      workspaceId: WS,
+      rev: 2,
+      nodes: [root, pane('p1', WS, 0, 'c1'), pane('remote', WS, 1, 'c2')],
     });
 
-    store().openConversation('ses-1', conv('conv-2'));
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === inFlightPane.id)?.scope?.targetId).toBeNull();
-    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
-  });
-
-  it('never evicts a pane showing a conversation closed-in-session — absent from liveConversationIds', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const closedPane = panesOf(grid())[0];
-
-    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-2']) });
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === closedPane.id)?.scope?.targetId).toBe('conv-1');
-    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
-  });
-
-  it('still evicts a pane whose conversation IS in liveConversationIds', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const paneId = panesOf(grid())[0].id;
-
-    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-1', 'conv-2']) });
-
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(paneId);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
-  });
-
-  it('omitting liveConversationIds preserves today\'s eviction behavior — strictly additive/opt-in', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    const paneId = panesOf(grid())[0].id;
-
-    store().openConversation('ses-1', conv('conv-2'));
-
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(paneId);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
-  });
-});
-
-describe('openPage — the page-pane sibling of openConversation', () => {
-  const page = (targetId: string, name = 'Doc'): PaneScope => ({
-    kind: 'page',
-    name,
-    targetId,
-    agentPageId: null,
-  });
-  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
-    kind: 'chat',
-    name,
-    targetId,
-    agentPageId: 'agent-1',
-  });
-
-  afterEach(() => {
-    useEditingStore.getState().clearAllSessions();
-  });
-
-  it('with no workspace, seeds the opening grid on the page (ensure semantics)', () => {
-    store().openPage('ses-1', page('page-1'));
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('page-1');
-  });
-
-  it('focuses the pane already showing the page instead of duplicating it', () => {
-    store().openPage('ses-1', page('page-1'));
-    const first = panesOf(grid())[0];
-    store().splitRight('ses-1', first.id);
-    const second = panesOf(grid()).find((p) => p.id !== first.id)!;
-    store().assignPane('ses-1', second.id, page('page-2'));
-
-    store().openPage('ses-1', page('page-1'));
-    expect(grid().activePaneId).toBe(first.id);
-    expect(panesOf(grid())).toHaveLength(2);
-  });
-
-  it('replaces an unseen page in the ACTIVE pane, same as a conversation would', () => {
-    store().openPage('ses-1', page('page-1'));
-    const paneId = panesOf(grid())[0].id;
-    store().openPage('ses-1', page('page-2'));
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(paneId);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('page-2');
-  });
-
-  it('never replaces a page pane with unsaved edits — it splits beside it instead', () => {
-    store().openPage('ses-1', page('page-1'));
-    const dirtyPane = panesOf(grid())[0];
-    // A real dirty registration, keyed the way DocumentView/etc actually key it
-    // (pageId carried in metadata, a useId()-suffixed componentId — the store's
-    // guard reads metadata.pageId, never the componentId string itself).
-    useEditingStore.getState().startEditing('document-page-1-:r1:', 'document', { pageId: 'page-1' });
-
-    store().openPage('ses-1', page('page-2'));
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === dirtyPane.id)?.scope?.targetId).toBe('page-1');
-    expect(panes.find((p) => p.scope?.targetId === 'page-2')).toBeDefined();
-  });
-
-  it('stops treating a page as dirty once its editing session ends', () => {
-    store().openPage('ses-1', page('page-1'));
-    const onlyPane = panesOf(grid())[0];
-    useEditingStore.getState().startEditing('document-page-1-:r1:', 'document', { pageId: 'page-1' });
-    useEditingStore.getState().endEditing('document-page-1-:r1:');
-
-    store().openPage('ses-1', page('page-2'));
-
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(onlyPane.id);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('page-2');
-  });
-
-  it('never replaces the pane the caller excluded (the open_page_pane tool\'s own invoking chat)', () => {
-    // A lone chat pane — exactly the shape a real agent session starts with —
-    // must not be evicted by its OWN tool call opening a page beside it.
-    store().ensureWorkspace('ses-1', conv('conv-1'));
-    const chatPane = panesOf(grid())[0];
-
-    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1' });
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
-    expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
-  });
-
-  it('with preferSplit, never evicts ANY bound pane — the agent path splits beside the user\'s panes', () => {
-    // The shape from the bug report: agent in conv-1 opens a page while the
-    // user is looking at a different page pane. The old policy replaced that
-    // active pane; the agent path must add a surface, not navigate one.
-    store().ensureWorkspace('ses-1', conv('conv-1'));
-    const chatPane = panesOf(grid())[0];
-    store().splitRight('ses-1', chatPane.id);
-    const otherPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
-    store().assignPane('ses-1', otherPane.id, page('page-1'));
-
-    store().openPage('ses-1', page('page-2'), { excludeTargetId: 'conv-1', preferSplit: true });
-
-    const panes = panesOf(grid());
+    const panes = tree().nodes.filter((n) => n.nodeType === 'pane');
+    // p1, the split's new pane, and the remote one.
     expect(panes).toHaveLength(3);
-    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
-    expect(panes.find((p) => p.id === otherPane.id)?.scope?.targetId).toBe('page-1');
-    expect(panes.find((p) => p.scope?.targetId === 'page-2')).toBeDefined();
+    expect(panes.some((n) => n.id === 'remote')).toBe(true);
   });
 
-  it('with preferSplit, fills an unbound picker pane rather than splitting a fourth one', () => {
-    store().ensureWorkspace('ses-1', conv('conv-1'));
-    const chatPane = panesOf(grid())[0];
-    store().splitRight('ses-1', chatPane.id);
-    const pickerPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
-    expect(pickerPane.scope).toBeNull();
+  /**
+   * THE RESURRECTION CASE. A pending edit to a node the server destroyed must be
+   * DROPPED, not upserted back — and the user has to be told, because their edit
+   * is gone.
+   */
+  it('should drop a pending write whose node the server destroyed, and flag it', () => {
+    // A pending edit TO a node — not a removal of it — is the case that matters:
+    // replaying it onto a tree the node has left would UPSERT it back, a pane
+    // somebody else destroyed returning with its binding intact.
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    store().splitPane(WS, 'p2', 'row');
+    expect(tree().nodes.some((n) => n.id === 'p2')).toBe(true);
 
-    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1', preferSplit: true });
+    // The server's truth: p2 is gone entirely.
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, pane('p1', WS, 0, 'c1')] });
 
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === pickerPane.id)?.scope?.targetId).toBe('page-1');
-  });
-
-  it('with preferSplit, still focuses the pane already showing the page instead of duplicating it', () => {
-    store().ensureWorkspace('ses-1', conv('conv-1'));
-    const chatPane = panesOf(grid())[0];
-    store().splitRight('ses-1', chatPane.id);
-    const pagePane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
-    store().assignPane('ses-1', pagePane.id, page('page-1'));
-    store().selectPane('ses-1', chatPane.id);
-
-    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1', preferSplit: true });
-
-    expect(panesOf(grid())).toHaveLength(2);
-    expect(grid().activePaneId).toBe(pagePane.id);
+    expect(tree().nodes.some((n) => n.id === 'p2')).toBe(false);
+    expect(store().queueErrors[WS]?.reason).toBe('superseded');
   });
 });
 
-describe('openConversation must not evict a page pane — the reload-seed shape', () => {
-  const page = (targetId: string, name = 'Doc'): PaneScope => ({
-    kind: 'page',
-    name,
-    targetId,
-    agentPageId: null,
-  });
-  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
-    kind: 'chat',
-    name,
-    targetId,
-    agentPageId: 'agent-1',
+describe('the root seed', () => {
+  it('should mint a root from the WORKSPACE ID on the first write into an empty tree', () => {
+    store().hydrateFromServer(WS, snapshot(0, []));
+    store().openConversation(WS, 'c1');
+    const seeded = tree().nodes.find((n) => n.nodeType === 'root');
+    expect(seeded?.id).toBe(WS);
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(1);
   });
 
-  it('with liveConversationIds supplied, a page pane splits rather than being replaced', () => {
-    // The refresh path: the persisted grid holds only an agent-opened page
-    // pane (its chat pane was replaced pre-fix, or closed); the mount-time
-    // seed re-asserts the URL-selected conversation. The page pane is a
-    // deliberate, persisted artifact — the seed must open BESIDE it, or an
-    // agent-opened page silently vanishes on every reload.
-    store().openPage('ses-1', page('page-1'));
-    const pagePane = panesOf(grid())[0];
-
-    store().openConversation('ses-1', conv('conv-1'), { liveConversationIds: new Set(['conv-1']) });
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === pagePane.id)?.scope?.targetId).toBe('page-1');
-    expect(panes.find((p) => p.scope?.targetId === 'conv-1')).toBeDefined();
+  it('should send the seed in the write, so the server is not asked to parent onto nothing', async () => {
+    store().hydrateFromServer(WS, snapshot(0, []));
+    store().openConversation(WS, 'c1');
+    await Promise.resolve();
+    const body = JSON.parse(mockFetchWithAuth.mock.calls[0][1].body as string);
+    expect(body.put.some((node: WorkspaceNode) => node.nodeType === 'root' && node.id === WS)).toBe(true);
   });
 
-  it('with liveConversationIds supplied, an unbound picker pane is still fillable', () => {
-    store().openConversation('ses-1', conv('conv-1'));
-    store().splitRight('ses-1', panesOf(grid())[0].id);
-    const pickerPane = panesOf(grid()).find((p) => p.scope === null)!;
-
-    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-1', 'conv-2']) });
-
-    const panes = panesOf(grid());
-    expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === pickerPane.id)?.scope?.targetId).toBe('conv-2');
-  });
-
-  it('without liveConversationIds, a page pane remains replaceable — user selection behavior unchanged', () => {
-    store().openPage('ses-1', page('page-1'));
-    const paneId = panesOf(grid())[0].id;
-
-    store().openConversation('ses-1', conv('conv-1'));
-
-    expect(panesOf(grid())).toHaveLength(1);
-    expect(panesOf(grid())[0].id).toBe(paneId);
-    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-1');
+  it('should not mint a second root when one already exists under another id', () => {
+    const foreignRoot: WorkspaceNode = { nodeType: 'root', id: 'legacy-root', parentId: null, position: 0, axis: 'row' };
+    store().hydrateFromServer(WS, snapshot(2, [foreignRoot]));
+    store().openConversation(WS, 'c1');
+    expect(tree().nodes.filter((n) => n.nodeType === 'root')).toHaveLength(1);
   });
 });
 
-describe('persistence — the grid is gone from localStorage; only focus remains', () => {
-  it('is versioned past the grid era, so a v1 payload is retired rather than misread', () => {
-    expect(useAgentWorkspaceStore.persist.getOptions().version).toBe(2);
+describe('closePane', () => {
+  it('should DESTROY the node — closing takes the pane out of the workspace', () => {
+    // It used to PARK it: same node, null parent, still a member and still
+    // holding its binding. That state is what made a pane the user closed and a
+    // pane that lost its parent to a defect the same row.
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    expect(store().closePane(WS, 'p2')).toBe('closed');
+    expect(tree().nodes.find((n) => n.id === 'p2')).toBeUndefined();
+    expect(tree().nodes.map((n) => n.id)).toEqual([WS, 'p1']);
   });
 
-  it('never persists the grid itself — the server is its only home now', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const persisted = useAgentWorkspaceStore.persist.getOptions().partialize!(store());
-    expect(persisted).not.toHaveProperty('workspaces');
-    expect(persisted).not.toHaveProperty('sync');
+  it('should leave an EMPTY TREE when the last pane closes, and not forget the workspace', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(store().closePane(WS, 'p1')).toBe('closed');
+    expect(tree()).toBeDefined();
+    // The node is GONE, not parked. The session stands with a root holding
+    // nothing — closing the last pane does not end it.
+    expect(tree().nodes.find((n) => n.id === 'p1')).toBeUndefined();
+    expect(tree().nodes.find((n) => n.nodeType === 'root')).toBeDefined();
+    expect(tree().activeNodeId).toBeNull();
   });
 
-  it('persists the client-local focus, which no row owns', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const persisted = useAgentWorkspaceStore.persist.getOptions().partialize!(store()) as {
-      focus: Record<string, { activePaneId: string }>;
+  it('should answer noop for the ROOT — closing a pane is not ending the session', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(store().closePane(WS, WS)).toBe('noop');
+    expect(tree().nodes.find((n) => n.nodeType === 'root')).toBeDefined();
+  });
+
+  it('should answer noop for a node this workspace does not hold', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    expect(store().closePane(WS, 'ghost')).toBe('noop');
+  });
+});
+
+describe('openConversation', () => {
+  it('should focus the node already showing it, and write nothing', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    store().selectNode(WS, 'p1');
+    mockFetchWithAuth.mockClear();
+
+    store().openConversation(WS, 'c2');
+
+    expect(tree().activeNodeId).toBe('p2');
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A target held DEEP in the tree. This case used to be about a PARKED node:
+   * the command refused it on purpose ("showing it again is a move, and the
+   * caller names it"), so the store had to move it back by hand or clicking a
+   * parked thread in the sidebar silently did nothing. A holder is always on
+   * screen now, so the whole answer is focus — and the property that matters,
+   * that no SECOND node is minted for it, is the same one.
+   */
+  it('should focus a node nested below a split rather than mint a second one', () => {
+    const split: WorkspaceNode = { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' };
+    store().hydrateFromServer(
+      WS,
+      snapshot(1, [root, pane('p1', WS, 0, 'c1'), split, pane('deep', 's1', 0, 'c2'), pane('beside', 's1', 1, 'c3')]),
+    );
+    store().selectNode(WS, 'p1');
+    mockFetchWithAuth.mockClear();
+
+    store().openConversation(WS, 'c2');
+
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane' && n.target?.id === 'c2')).toHaveLength(1);
+    expect(tree().activeNodeId).toBe('deep');
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  it('should fill an unbound pane rather than split', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('empty', WS, 0)]));
+    store().openConversation(WS, 'c1');
+    const filled = tree().nodes.find((n) => n.id === 'empty');
+    expect(filled?.nodeType === 'pane' && filled.target?.id).toBe('c1');
+  });
+
+  it('should place into an empty grid', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root]));
+    store().openConversation(WS, 'c1');
+    const panes = tree().nodes.filter((n) => n.nodeType === 'pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0].parentId).toBe(WS);
+  });
+
+  /** The client-only guard the server cannot evaluate. */
+  it('should not evict a page pane holding unsaved edits', () => {
+    const pagePane: WorkspaceNode = {
+      nodeType: 'pane',
+      id: 'p1',
+      parentId: WS,
+      position: 0,
+      target: { kind: 'page', id: 'page-1' },
     };
-    expect(persisted.focus['ses-1'].activePaneId).toBe(grid().activePaneId);
+    store().hydrateFromServer(WS, snapshot(1, [root, pagePane]));
+    useEditingStore
+      .getState()
+      .startEditing('doc-1', 'document', { componentName: 'doc', pageId: 'page-1' });
+
+    store().openConversation(WS, 'c1');
+
+    // The dirty page pane survived; the conversation went somewhere else.
+    const survivor = tree().nodes.find((n) => n.id === 'p1');
+    expect(survivor?.nodeType === 'pane' && survivor.target?.id).toBe('page-1');
+    expect(survivor?.parentId).not.toBeNull();
+    expect(tree().nodes.some((n) => n.nodeType === 'pane' && n.target?.id === 'c1')).toBe(true);
   });
 
-  it('drops a corrupted focus record on rehydrate rather than letting it reach the store', async () => {
-    const storage = useAgentWorkspaceStore.persist.getOptions().storage;
-    expect(storage).toBeDefined();
-    await storage!.setItem('agent-workspace-storage', {
-      state: { focus: { 'ses-1': { activePaneId: 42, pendingPickerPaneId: null } } },
-      version: 2,
-    } as never);
-
-    await useAgentWorkspaceStore.persist.rehydrate();
-
-    expect(store().focus).toEqual({});
+  it('should not evict a chat pane whose thread the caller knows is no longer live', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'closed-thread')]));
+    store().openConversation(WS, 'c1', { liveConversationIds: new Set(['c1']) });
+    const survivor = tree().nodes.find((n) => n.id === 'p1');
+    expect(survivor?.nodeType === 'pane' && survivor.target?.id).toBe('closed-thread');
+    expect(survivor?.parentId).not.toBeNull();
   });
 
-  it('restores a valid focus record', async () => {
-    const storage = useAgentWorkspaceStore.persist.getOptions().storage;
-    await storage!.setItem('agent-workspace-storage', {
-      state: { focus: { 'ses-1': { activePaneId: 'pane-x', pendingPickerPaneId: null } } },
-      version: 2,
+  it('should never evict a running terminal', () => {
+    const shellPane: WorkspaceNode = {
+      nodeType: 'pane',
+      id: 'p1',
+      parentId: WS,
+      position: 0,
+      target: { kind: 'terminal', id: 'shell-1' },
+    };
+    store().hydrateFromServer(WS, snapshot(1, [root, shellPane]));
+    store().openConversation(WS, 'c1');
+    const survivor = tree().nodes.find((n) => n.id === 'p1');
+    expect(survivor?.nodeType === 'pane' && survivor.target?.id).toBe('shell-1');
+    expect(survivor?.parentId).not.toBeNull();
+  });
+});
+
+describe('unbindPane', () => {
+  it('should replace the node with a fresh unbound one in the same slot', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    store().unbindPane(WS, 'p1');
+
+    const panes = tree().nodes.filter((n) => n.nodeType === 'pane');
+    expect(panes).toHaveLength(2);
+    expect(panes.some((n) => n.id === 'p1')).toBe(false);
+    // The binding did not survive — a binding is for life, so the pane did not.
+    expect(panes.some((n) => n.target?.id === 'c1')).toBe(false);
+    expect(panes.some((n) => n.target === null)).toBe(true);
+  });
+
+  it('should leave the sole pane of a workspace as an unbound pane, not an empty grid', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().unbindPane(WS, 'p1');
+    const panes = tree().nodes.filter((n) => n.nodeType === 'pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0].target).toBeNull();
+    expect(panes[0].parentId).toBe(WS);
+  });
+});
+
+describe('focus', () => {
+  it('should fall back to the first grid pane when the focused node vanishes', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    store().selectNode(WS, 'p2');
+    store().applyRemoteUpdate({ workspaceId: WS, rev: 2, nodes: [root, pane('p1', WS, 0, 'c1')] });
+    expect(tree().activeNodeId).toBe('p1');
+  });
+
+  it('should NOT let a remote edit steal focus from a node that still exists', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2')]));
+    store().selectNode(WS, 'p2');
+    store().applyRemoteUpdate({
+      workspaceId: WS,
+      rev: 2,
+      nodes: [root, pane('p1', WS, 0, 'c1'), pane('p2', WS, 1, 'c2'), pane('p3', WS, 2, 'c3')],
     });
+    expect(tree().activeNodeId).toBe('p2');
+  });
 
-    await useAgentWorkspaceStore.persist.rehydrate();
-
-    expect(store().focus['ses-1']).toEqual({ activePaneId: 'pane-x', pendingPickerPaneId: null });
+  it('should refuse to focus a node that is not a pane in this workspace', () => {
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().selectNode(WS, 'ghost');
+    expect(tree().activeNodeId).toBe('p1');
   });
 });
 
-describe('hydrateWorkspace', () => {
-  it('seeds a session from a server-saved grid, unconditionally overwriting whatever is there', () => {
-    store().ensureWorkspace('ses-1', scope());
-    store().splitRight('ses-1', grid().activePaneId);
-    expect(panesOf(grid())).toHaveLength(2);
+describe('the wire', () => {
+  it('should POST one write for several local edits, coalesced', async () => {
+    let resolveFirst: ((response: Response) => void) | undefined;
+    mockFetchWithAuth.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => { resolveFirst = resolve; }),
+    );
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    await Promise.resolve();
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
 
-    const saved = {
-      id: 'ses-1',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] }],
-      activePaneId: 'pane-x',
-      pendingPickerPaneId: null,
-    };
-    store().hydrateWorkspace('ses-1', saved);
+    // A second edit while the first is on the wire: it must WAIT, not race.
+    store().splitPane(WS, 'p1', 'column');
+    await Promise.resolve();
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
 
-    expect(grid()).toEqual(saved);
+    resolveFirst?.(jsonResponse(200, snapshot(2, tree().nodes)));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
   });
 
-  it('ignores a saved grid whose id does not match the target session', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const before = grid();
+  it('should adopt a 409 body as truth and re-post', async () => {
+    const serverTree = [root, pane('p1', WS, 0, 'c1'), pane('remote', WS, 1, 'c9')];
+    mockFetchWithAuth
+      .mockImplementationOnce(async () => jsonResponse(409, snapshot(7, serverTree)))
+      .mockImplementationOnce(() => new Promise<Response>(() => {}));
 
-    const wrongSession = {
-      id: 'ses-OTHER',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] }],
-      activePaneId: 'pane-x',
-      pendingPickerPaneId: null,
-    };
-    store().hydrateWorkspace('ses-1', wrongSession);
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(grid()).toEqual(before);
+    expect(tree().rev).toBe(7);
+    expect(tree().nodes.some((n) => n.id === 'remote')).toBe(true);
+    // The split is still applied on top of the newer base.
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(3);
+    const secondBody = JSON.parse(mockFetchWithAuth.mock.calls[1][1].body as string);
+    expect(secondBody.baseRev).toBe(7);
   });
 
-  it('normalizes activePaneId to the first pane when the saved value names no real pane', () => {
-    // The persisted schema doesn't cross-validate that activePaneId points
-    // at a pane inside columns — a saved grid restored from the server
-    // isn't guaranteed to satisfy that invariant (review finding).
-    store().ensureWorkspace('ses-1', scope());
-    const saved = {
-      id: 'ses-1',
-      columns: [
-        { id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] },
-        { id: 'col-y', panes: [{ id: 'pane-y', scope: scope('Also restored') }] },
-      ],
-      activePaneId: 'ghost',
-      pendingPickerPaneId: null,
-    };
-    store().hydrateWorkspace('ses-1', saved);
+  it('should abandon the queue and flag it on a 400', async () => {
+    mockFetchWithAuth
+      .mockImplementationOnce(async () => jsonResponse(400, { error: 'nope', code: 'dangling_parent' }))
+      // The resync that follows an abandon.
+      .mockImplementationOnce(async () => jsonResponse(200, snapshot(2, [root, pane('p1', WS, 0, 'c1')])));
 
-    expect(grid().activePaneId).toBe('pane-x');
-    // Nothing else about the grid was touched.
-    expect(grid().columns).toEqual(saved.columns);
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store().queueErrors[WS]?.reason).toBe('refused');
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(1);
+  });
+
+  it('should refuse a 200 body that is not a tree, rather than adopt it', async () => {
+    mockFetchWithAuth.mockImplementationOnce(async () => jsonResponse(200, { rev: 9, nodes: 'nope', targets: [] }));
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Rev unchanged; the local split folded into the base so the render is stable.
+    expect(tree().rev).toBe(1);
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
+  });
+});
+
+describe('the editing-store registration', () => {
+  it('should register while a write is unacked and release when the queue drains', async () => {
+    mockFetchWithAuth.mockImplementationOnce(async () =>
+      jsonResponse(200, snapshot(2, [root, pane('p1', WS, 0, 'c1')])),
+    );
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    expect(useEditingStore.getState().isAnyActive()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(useEditingStore.getState().isAnyActive()).toBe(false);
   });
 });

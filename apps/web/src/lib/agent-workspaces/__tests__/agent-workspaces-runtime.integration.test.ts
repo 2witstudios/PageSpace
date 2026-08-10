@@ -1,23 +1,29 @@
 /**
- * The per-session open-listing cap (`MAX_SESSION_CONVERSATIONS`) under REAL
- * concurrency — a mocked-DB unit test can prove the pure decision logic, but
- * "does the advisory lock actually serialize two genuinely concurrent
- * transactions" needs a real Postgres, since that's exactly the property a
- * mock can't exercise.
+ * MEMBERSHIP UNDER REAL CONCURRENCY — the properties a mocked DB cannot prove.
  *
- * The bug this guards (review finding, chatgpt-codex-connector on PR #2296):
- * `createConversationInSession` and `reopenConversationInSession` both count
- * open listings against the same cap, but only `reopenConversationInSession`
- * (and `closeConversationInSession`) took the per-session advisory lock.
- * A create racing a reopen for the session's LAST open slot could both read
- * the count before either wrote, and both succeed — exceeding the cap.
+ * Three of them, and each has moved to a different enforcement mechanism than
+ * the version this suite replaces:
+ *
+ *  1. **The cap.** It used to be a `SELECT count(*)` over
+ *     `conversations.workspaceId` serialized by a dedicated advisory lock that
+ *     create, close and reopen each had to remember to take. It is now a count
+ *     over the workspace's TREE inside the same transaction that writes the
+ *     tree, under the lock that write already takes — so "did the lock actually
+ *     serialize two concurrent transactions" is still the question, but there is
+ *     only one lock left to get wrong.
+ *  2. **The write-once binding.** It used to be `workspaceId IS NULL` in a
+ *     guarded UPDATE. It is now `agent_workspace_nodes_chat_target_idx`, a
+ *     GLOBAL unique index — which is what lets two claims into two DIFFERENT
+ *     workspaces be serialized at all, since two workspaces take two different
+ *     locks and the lock therefore provides no mutual exclusion between them.
+ *  3. **The ghost.** A conversation row that landed while its membership did
+ *     not. It is now unrepresentable, because both are one transaction — and
+ *     the test for it is the one that fails the create and looks for the row.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
- * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a silent skip
- * would be a green, zero-assertion pass. Local runs without Docker opt out
- * explicitly with ALLOW_SKIP_DB_TESTS=1.
- * Mirrors `agent-sessions-conversations-runtime.integration.test.ts` in this
- * same directory.
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable — a
+ * silent skip would be a green, zero-assertion pass. Local runs without Docker
+ * opt out explicitly with ALLOW_SKIP_DB_TESTS=1.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -25,13 +31,15 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNull, count } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
-import { agentWorkspacePanes } from '@pagespace/db/schema/agent-workspace-layout';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import {
   claimConversationInSession,
+  closeConversationInSession,
   createConversationInSession,
+  findWorkspaceOfConversation,
   reopenConversationInSession,
   ensureGlobalSandboxSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
@@ -41,147 +49,255 @@ import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 
-describe('create/reopen — the open-listing cap serializes across BOTH operations, under real concurrency', () => {
-  beforeAll(async () => {
-    try {
-      await db.select().from(pages).limit(1);
-      dbAvailable = true;
-    } catch (error) {
-      requireDb('agent-workspaces-runtime.integration.test.ts', error);
-      dbAvailable = false;
-    }
-  });
-
-  async function openCountFor(workspaceId: string): Promise<number> {
-    const [row] = await db
-      .select({ n: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.workspaceId, workspaceId),
-          eq(conversations.isActive, true),
-          isNull(conversations.closedInWorkspaceAt),
-        ),
-      );
-    return row?.n ?? 0;
+async function connect(): Promise<void> {
+  try {
+    await db.select().from(pages).limit(1);
+    dbAvailable = true;
+  } catch (error) {
+    requireDb('agent-workspaces-runtime.integration.test.ts', error);
+    dbAvailable = false;
   }
+}
 
-  it('a create racing a reopen for the session\'s LAST slot: exactly one wins, the count never exceeds the cap', async () => {
-    if (!dbAvailable) return;
+/** How many conversations this workspace HOLDS — the membership count, from the tree. */
+async function memberCountFor(workspaceId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(agentWorkspaceNodes)
+    .where(
+      and(eq(agentWorkspaceNodes.rootId, workspaceId), eq(agentWorkspaceNodes.targetKind, 'chat')),
+    );
+  return row?.n ?? 0;
+}
 
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Race Agent' });
-    const [session] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+/** The node bound to a conversation, wherever it is. At most one, by the unique index. */
+async function nodeFor(conversationId: string) {
+  const [row] = await db
+    .select()
+    .from(agentWorkspaceNodes)
+    .where(
+      and(eq(agentWorkspaceNodes.targetKind, 'chat'), eq(agentWorkspaceNodes.targetId, conversationId)),
+    )
+    .limit(1);
+  return row ?? null;
+}
 
-    // Bring the session to exactly ONE slot below the cap with plain rows
-    // (bypassing the create path — this test is about the cap's own
-    // serialization, not about creation itself).
-    const filler = Array.from({ length: MAX_SESSION_CONVERSATIONS - 1 }, () => ({
-      id: createId(),
-      userId: owner.id,
+/**
+ * Fill a workspace to `n` members without going through the create path — this
+ * suite is about the cap's serialization, not about creation.
+ *
+ * The ROOT comes with them, deliberately: `validateTree` calls a workspace with
+ * members and no root `no_root`, so a filler that skipped it would make every
+ * later write fail for a reason that has nothing to do with the test.
+ */
+async function fillWorkspace(
+  workspaceId: string,
+  ownerId: string,
+  agentPageId: string,
+  n: number,
+): Promise<void> {
+  const rootId = createId();
+  await db.insert(agentWorkspaceNodes).values({
+    id: rootId,
+    rootId: workspaceId,
+    parentId: null,
+    position: 0,
+    nodeType: 'root',
+    axis: 'row',
+    updatedAt: new Date(),
+  });
+  if (n === 0) return;
+
+  const rows = Array.from({ length: n }, () => ({ id: createId(), conversationId: createId() }));
+  await db.insert(conversations).values(
+    rows.map((row) => ({
+      id: row.conversationId,
+      userId: ownerId,
       type: 'page' as const,
-      contextId: agentPage.id,
-      workspaceId: session.id,
+      contextId: agentPageId,
       isActive: true,
-    }));
-    await db.insert(conversations).values(filler);
+    })),
+  );
+  await db.insert(agentWorkspaceNodes).values(
+    rows.map((row, index) => ({
+      id: row.id,
+      rootId: workspaceId,
+      // UNDER THE ROOT. These were seeded PARKED — `parentId: null` — because a
+      // member off the grid still counted toward the cap. There is one place a
+      // node can be, so a parked filler would seed rows the read path now
+      // refuses (`null_parent`), and every write against this workspace would
+      // fail for a reason that has nothing to do with the test.
+      parentId: rootId,
+      position: index,
+      nodeType: 'pane' as const,
+      targetKind: 'chat' as const,
+      targetId: row.conversationId,
+      updatedAt: new Date(),
+    })),
+  );
+}
 
-    // The ONE closed conversation available to reopen — contends for the
-    // same last slot the concurrent create is also trying to claim.
-    const closedConversationId = createId();
+async function seedWorkspace(title: string) {
+  const owner = await factories.createUser();
+  const drive = await factories.createDrive(owner.id);
+  const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title });
+  const [workspace] = await db
+    .insert(agentWorkspaces)
+    .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
+    .returning();
+  return { owner, drive, agentPage, workspace };
+}
+
+describe('the cap is a property of the tree, enforced by the write that changes it', () => {
+  beforeAll(connect);
+
+  it("two creates racing for the workspace's LAST slot: exactly one wins, the count never exceeds the cap", async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Race Agent');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS - 1);
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
+
+    const [first, second] = await Promise.allSettled([
+      createConversationInSession({
+        conversationId: createId(),
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspace.id,
+      }),
+      createConversationInSession({
+        conversationId: createId(),
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspace.id,
+      }),
+    ]);
+
+    const outcomes = [first, second];
+    expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+    const rejected = outcomes.filter((o) => o.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    // Refused for the RIGHT reason — a lock timeout or a driver fault masking
+    // the cap would otherwise pass this test while proving nothing.
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(SessionFullError);
+
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  }, 20_000);
+
+  it("a claim racing a create for the LAST slot: exactly one wins", async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Claim-vs-Create Race');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS - 1);
+
+    const claimable = createId();
     await db.insert(conversations).values({
-      id: closedConversationId,
+      id: claimable,
       userId: owner.id,
       type: 'page',
       contextId: agentPage.id,
-      workspaceId: session.id,
       isActive: true,
-      closedInWorkspaceAt: new Date(),
     });
 
-    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
-
-    const newConversationId = createId();
-    const [createResult, reopenResult] = await Promise.allSettled([
+    const [createResult, claimResult] = await Promise.allSettled([
       createConversationInSession({
-        conversationId: newConversationId,
+        conversationId: createId(),
         userId: owner.id,
         agentPageId: agentPage.id,
-        workspaceId: session.id,
+        workspaceId: workspace.id,
       }),
-      reopenConversationInSession({ conversationId: closedConversationId, userId: owner.id, workspaceId: session.id }),
+      claimConversationInSession({ conversationId: claimable, userId: owner.id, workspaceId: workspace.id }),
     ]);
 
-    // Exactly one of the two must have been refused — never both succeeding
-    // (that would exceed the cap) and never both refused (the session
-    // legitimately had room for one more). Mutually exclusive by
-    // construction: a refusal is EITHER a rejection (create's `SessionFullError`)
-    // OR a fulfilled 'session_full' (reopen's refusal return value) — never
-    // both counted for the same outcome.
     const isRefused = (o: PromiseSettledResult<unknown>) =>
       o.status === 'rejected' || (o.status === 'fulfilled' && o.value === 'session_full');
-    const outcomes = [createResult, reopenResult];
-    const refused = outcomes.filter(isRefused);
-    const succeeded = outcomes.filter((o) => !isRefused(o));
-    expect(succeeded).toHaveLength(1);
-    expect(refused).toHaveLength(1);
+    expect([createResult, claimResult].filter(isRefused)).toHaveLength(1);
+    // Unlike create, a claim never REJECTS for the cap — it RETURNS
+    // 'session_full', so a claim rejecting for an unrelated reason would
+    // silently pass `isRefused` without this.
+    expect(claimResult.status).toBe('fulfilled');
 
-    // The refused side must be refused for the RIGHT reason (the cap), not
-    // some unrelated failure masking a real bug.
-    if (createResult.status === 'rejected') {
-      expect(createResult.reason).toBeInstanceOf(SessionFullError);
-    }
-    // Unlike create, reopen never REJECTS for a cap refusal — it RETURNS
-    // 'session_full'. `isRefused` above treats any rejection as a
-    // legitimate cap refusal, so a reopen rejecting for an unrelated reason
-    // (e.g. `SessionListingLockBusyError`) would silently pass as "refused"
-    // here without this explicit fulfilled check (review finding —
-    // coderabbitai on PR #2296).
-    expect(reopenResult.status).toBe('fulfilled');
-    if (reopenResult.status === 'fulfilled') {
-      expect(reopenResult.value === 'reopened' || reopenResult.value === 'session_full').toBe(true);
-    }
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  }, 20_000);
 
-    // The load-bearing assertion: the real, final row count in the database
-    // is exactly at the cap — never over it.
-    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  it('CLOSING frees a cap slot, and reopening consumes one again', async () => {
+    if (!dbAvailable) return;
+    // The behaviour changed TWICE, and this is the second change. Under the
+    // column model a reopen restored a listing slot the close had freed, so a
+    // reopen into a full workspace was refused. Under the parked model neither
+    // act touched the count, because a closed thread never stopped being a
+    // member — so the refusal went away. Closing DESTROYS the node now, so the
+    // count moves again: a close frees a slot and a reopen takes one, which is
+    // the same rule every other admission follows.
+    const { owner, agentPage, workspace } = await seedWorkspace('Reopen At Cap');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+
+    const [member] = await db
+      .select({ targetId: agentWorkspaceNodes.targetId })
+      .from(agentWorkspaceNodes)
+      .where(
+        and(eq(agentWorkspaceNodes.rootId, workspace.id), eq(agentWorkspaceNodes.targetKind, 'chat')),
+      )
+      .limit(1);
+    const conversationId = member.targetId as string;
+
+    expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+      'closed',
+    );
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
+
+    expect(
+      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+    ).toBe('reopened');
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  }, 20_000);
+
+  it('refuses a reopen into a workspace that refilled the slot while the thread was closed', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Reopen Refilled');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+
+    const [member] = await db
+      .select({ targetId: agentWorkspaceNodes.targetId })
+      .from(agentWorkspaceNodes)
+      .where(
+        and(eq(agentWorkspaceNodes.rootId, workspace.id), eq(agentWorkspaceNodes.targetKind, 'chat')),
+      )
+      .limit(1);
+    const conversationId = member.targetId as string;
+
+    await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id });
+    // Somebody else takes the freed slot.
+    await createConversationInSession({
+      conversationId: createId(),
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    // Refused, and the refusal SAYS IT IS THE CAP. It used to collapse into
+    // `not_in_session` — the same shape a nonexistent id gets — which told the
+    // caller nothing about a thread that is theirs, exists, and is one freed
+    // slot away from returning. The module doc promises "a workspace that
+    // filled up in the meantime refuses"; this is that promise, kept in the
+    // type. The route answers 409 rather than joining the 404 shape.
+    expect(
+      await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+    ).toBe('session_full');
+    expect(await memberCountFor(workspace.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
 });
 
-describe('claim — real concurrency (the guarded UPDATE, not the advisory lock, is what serializes it)', () => {
-  beforeAll(async () => {
-    try {
-      await db.select().from(pages).limit(1);
-      dbAvailable = true;
-    } catch (error) {
-      requireDb('agent-workspaces-runtime.integration.test.ts', error);
-      dbAvailable = false;
-    }
-  });
+describe('the write-once binding is the unique index, not a WHERE clause', () => {
+  beforeAll(connect);
 
-  async function openCountFor(workspaceId: string): Promise<number> {
-    const [row] = await db
-      .select({ n: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.workspaceId, workspaceId),
-          eq(conversations.isActive, true),
-          isNull(conversations.closedInWorkspaceAt),
-        ),
-      );
-    return row?.n ?? 0;
-  }
-
-  it('two concurrent claims of the SAME conversation into TWO DIFFERENT sessions: exactly one wins, even though the two sessions take different lock keys', async () => {
+  it('two concurrent claims of ONE conversation into TWO workspaces: exactly one wins, though the two take different locks', async () => {
     if (!dbAvailable) return;
-
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Claim Race Agent' });
-    const [sessionA] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
-    const [sessionB] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+    const { owner, drive, agentPage, workspace: workspaceA } = await seedWorkspace('Claim Race Agent');
+    const [workspaceB] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
+      .returning();
+    await fillWorkspace(workspaceA.id, owner.id, agentPage.id, 0);
+    await fillWorkspace(workspaceB.id, owner.id, agentPage.id, 0);
 
     const conversationId = createId();
     await db.insert(conversations).values({
@@ -189,35 +305,31 @@ describe('claim — real concurrency (the guarded UPDATE, not the advisory lock,
       userId: owner.id,
       type: 'page',
       contextId: agentPage.id,
-      workspaceId: null,
       isActive: true,
     });
 
     const [resultA, resultB] = await Promise.all([
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: sessionA.id }),
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: sessionB.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceA.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceB.id }),
     ]);
 
-    // `withSessionListingLock` locks per-SESSION — sessionA and sessionB take
-    // DIFFERENT keys, so the lock provides no mutual exclusion between these
-    // two calls at all. The `workspaceId IS NULL` predicate in the guarded
-    // UPDATE is the only thing serializing this correctly.
+    // The workspace lock is keyed PER WORKSPACE, so A and B take different keys
+    // and it provides no mutual exclusion between these two calls at all. The
+    // global `UNIQUE (targetId) WHERE targetKind = 'chat'` is the only thing
+    // serializing this — which is exactly the job `workspaceId IS NULL` used to
+    // do, moved into a constraint no future writer can forget.
     const outcomes = [resultA, resultB];
     expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
     expect(outcomes.filter((o) => o === 'not_found')).toHaveLength(1);
 
-    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    const winnerSessionId = resultA === 'claimed' ? sessionA.id : sessionB.id;
-    expect(row.workspaceId).toBe(winnerSessionId);
+    const node = await nodeFor(conversationId);
+    expect(node?.rootId).toBe(resultA === 'claimed' ? workspaceA.id : workspaceB.id);
   }, 20_000);
 
-  it('two concurrent claims of the SAME conversation into the SAME session: one claimed, one already_in_session, exactly one row bound', async () => {
+  it('two concurrent claims into the SAME workspace: one claimed, one already_in_session, exactly one node', async () => {
     if (!dbAvailable) return;
-
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Same-Session Claim Race' });
-    const [session] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+    const { owner, agentPage, workspace } = await seedWorkspace('Same-Workspace Claim Race');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, 0);
 
     const conversationId = createId();
     await db.insert(conversations).values({
@@ -225,129 +337,273 @@ describe('claim — real concurrency (the guarded UPDATE, not the advisory lock,
       userId: owner.id,
       type: 'page',
       contextId: agentPage.id,
-      workspaceId: null,
       isActive: true,
     });
 
     const outcomes = await Promise.all([
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: session.id }),
-      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: session.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id }),
     ]);
 
     expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
     expect(outcomes.filter((o) => o === 'already_in_session')).toHaveLength(1);
-    expect(await openCountFor(session.id)).toBe(1);
+    expect(await memberCountFor(workspace.id)).toBe(1);
   }, 20_000);
 
-  it("claim racing create for the session's LAST slot: exactly one wins, the count never exceeds the cap", async () => {
+  it('a workspace deleted out from under a thread frees it to be claimed again', async () => {
     if (!dbAvailable) return;
-
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Claim-vs-Create Race' });
-    const [session] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
-
-    const filler = Array.from({ length: MAX_SESSION_CONVERSATIONS - 1 }, () => ({
-      id: createId(),
-      userId: owner.id,
-      type: 'page' as const,
-      contextId: agentPage.id,
-      workspaceId: session.id,
-      isActive: true,
-    }));
-    await db.insert(conversations).values(filler);
-
-    // The ONE never-bound conversation available to claim — contends for
-    // the same last slot the concurrent create is also trying to fill.
-    const claimableConversationId = createId();
-    await db.insert(conversations).values({
-      id: claimableConversationId,
-      userId: owner.id,
-      type: 'page',
-      contextId: agentPage.id,
-      workspaceId: null,
-      isActive: true,
-    });
-
-    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
-
-    const newConversationId = createId();
-    const [createResult, claimResult] = await Promise.allSettled([
-      createConversationInSession({
-        conversationId: newConversationId,
-        userId: owner.id,
-        agentPageId: agentPage.id,
-        workspaceId: session.id,
-      }),
-      claimConversationInSession({ conversationId: claimableConversationId, userId: owner.id, workspaceId: session.id }),
-    ]);
-
-    const isRefused = (o: PromiseSettledResult<unknown>) =>
-      o.status === 'rejected' || (o.status === 'fulfilled' && o.value === 'session_full');
-    const outcomes = [createResult, claimResult];
-    expect(outcomes.filter((o) => !isRefused(o))).toHaveLength(1);
-    expect(outcomes.filter(isRefused)).toHaveLength(1);
-
-    if (createResult.status === 'rejected') {
-      expect(createResult.reason).toBeInstanceOf(SessionFullError);
-    }
-    expect(claimResult.status).toBe('fulfilled');
-    if (claimResult.status === 'fulfilled') {
-      expect(claimResult.value === 'claimed' || claimResult.value === 'session_full').toBe(true);
-    }
-
-    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS);
-  }, 20_000);
-
-  it('a row with workspaceId: null but closedInWorkspaceAt still set (FK-set-null residue) claims successfully and comes back OPEN', async () => {
-    if (!dbAvailable) return;
-
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Residue Agent' });
-    const [oldSession] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
-    const [newSession] = await db.insert(agentWorkspaces).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+    // The successor to the "FK-set-null residue" case. There is no column to
+    // leave residue in: `agent_workspace_nodes.rootId` cascades, so deleting a
+    // workspace takes its membership with it and the thread is genuinely
+    // homeless rather than half-bound.
+    const { owner, drive, agentPage, workspace: oldWorkspace } = await seedWorkspace('Residue Agent');
+    const [newWorkspace] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
+      .returning();
+    await fillWorkspace(oldWorkspace.id, owner.id, agentPage.id, 0);
+    await fillWorkspace(newWorkspace.id, owner.id, agentPage.id, 0);
 
     const conversationId = createId();
-    // Simulate the residue: bound to oldSession, closed, then oldSession
-    // deleted (ON DELETE SET NULL clears workspaceId but NOT closedInWorkspaceAt).
     await db.insert(conversations).values({
       id: conversationId,
       userId: owner.id,
       type: 'page',
       contextId: agentPage.id,
-      workspaceId: oldSession.id,
       isActive: true,
-      closedInWorkspaceAt: new Date(),
     });
-    await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, oldSession.id));
+    expect(await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: oldWorkspace.id })).toBe(
+      'claimed',
+    );
 
-    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(row.workspaceId).toBeNull();
-    expect(row.closedInWorkspaceAt).not.toBeNull();
+    await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, oldWorkspace.id));
+    expect(await nodeFor(conversationId)).toBeNull();
+    expect(await findWorkspaceOfConversation(conversationId)).toBeNull();
 
-    const outcome = await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: newSession.id });
-    expect(outcome).toBe('claimed');
+    expect(await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: newWorkspace.id })).toBe(
+      'claimed',
+    );
+    expect(await memberCountFor(newWorkspace.id)).toBe(1);
+  }, 20_000);
+});
 
-    const [claimed] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(claimed.workspaceId).toBe(newSession.id);
-    expect(claimed.closedInWorkspaceAt).toBeNull();
-    expect(await openCountFor(newSession.id)).toBe(1);
+describe('a conversation and its membership are one transaction', () => {
+  beforeAll(connect);
+
+  it('a create refused by the cap leaves NO conversation row behind', async () => {
+    if (!dbAvailable) return;
+    // THE GHOST, from the other side. Under the old shape the row was inserted
+    // first and bound second, so a refusal after the insert left a real thread
+    // that belonged to nothing and appeared nowhere; the pre-checks existed to
+    // make that rare. Here the insert is inside the membership write's
+    // transaction, so a refusal takes it with it — rare stops mattering.
+    const { owner, agentPage, workspace } = await seedWorkspace('Ghost Agent');
+    await fillWorkspace(workspace.id, owner.id, agentPage.id, MAX_SESSION_CONVERSATIONS);
+
+    const conversationId = createId();
+    await expect(
+      createConversationInSession({
+        conversationId,
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspace.id,
+      }),
+    ).rejects.toBeInstanceOf(SessionFullError);
+
+    const rows = await db.select().from(conversations).where(eq(conversations.id, conversationId));
+    expect(rows).toHaveLength(0);
+    expect(await nodeFor(conversationId)).toBeNull();
+  }, 20_000);
+
+  it('a create refused because the thread is bound ELSEWHERE leaves no row behind either', async () => {
+    if (!dbAvailable) return;
+    const { owner, drive, agentPage, workspace: workspaceA } = await seedWorkspace('Elsewhere Agent');
+    const [workspaceB] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
+      .returning();
+    await fillWorkspace(workspaceA.id, owner.id, agentPage.id, 0);
+    await fillWorkspace(workspaceB.id, owner.id, agentPage.id, 0);
+
+    // A conversation that exists and already has a home.
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentPage.id,
+      isActive: true,
+    });
+    await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: workspaceA.id });
+
+    // Creating it AGAIN into another workspace: the row already exists, so the
+    // squat guard says `exists` and the anchor check passes — the only thing
+    // refusing this is the global chat-target index, inside the transaction.
+    await expect(
+      createConversationInSession({
+        conversationId,
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        workspaceId: workspaceB.id,
+      }),
+    ).rejects.toThrow('conversation_unavailable');
+
+    expect((await nodeFor(conversationId))?.rootId).toBe(workspaceA.id);
+    expect(await memberCountFor(workspaceB.id)).toBe(0);
+  }, 20_000);
+
+  it('a successful create writes the conversation AND its node', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Pair Agent');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
+    expect(row.isActive).toBe(true);
+    // Membership lives HERE, and nowhere else — there is no second witness left
+    // for it to disagree with.
+    expect((await nodeFor(conversationId))?.rootId).toBe(workspace.id);
+  }, 20_000);
+});
+
+describe('every admission is PLACED — there is no unplaced membership', () => {
+  beforeAll(connect);
+
+  it('a create lands in the tree, on the grid, with a real parent', async () => {
+    if (!dbAvailable) return;
+    // There used to be an opt-out here (`attach: false`), which minted the node
+    // PARKED — a member with no parent — so that the pane picker, which mints
+    // its own pane and binds it after the POST returns, did not get a SECOND
+    // pane for one thread. The placement policy fills an unbound pane before it
+    // splits, so the picker's waiting pane IS what an admission lands in, and
+    // the parked state that made a closed pane and a broken one identical is
+    // gone with the flag.
+    const { owner, agentPage, workspace } = await seedWorkspace('Gate Agent');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+
+    const node = await nodeFor(conversationId);
+    expect(node?.rootId).toBe(workspace.id);
+    expect(node?.parentId).not.toBeNull();
+    expect(await memberCountFor(workspace.id)).toBe(1);
+  }, 20_000);
+
+  it('a create lands ON the grid — every admission is placed', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Attach Agent');
+    const conversationId = createId();
+
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+    });
+
+    expect((await nodeFor(conversationId))?.parentId).not.toBeNull();
+  }, 20_000);
+
+  it('never evicts the conversation that asked for the spawn', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Spawn Agent');
+
+    const spawnerId = createId();
+    await createConversationInSession({
+      conversationId: spawnerId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Caller',
+    });
+
+    const workerId = createId();
+    await createConversationInSession({
+      conversationId: workerId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+      excludeTargetId: spawnerId,
+    });
+
+    // Both on screen: the worker ADDED a surface beside the caller rather than
+    // taking the caller's.
+    expect((await nodeFor(spawnerId))?.parentId).not.toBeNull();
+    expect((await nodeFor(workerId))?.parentId).not.toBeNull();
+  }, 20_000);
+
+  it('places at most ONE node per thread however often creation is retried', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Retry Agent');
+    const conversationId = createId();
+    const input = {
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+      title: 'Researcher',
+    };
+
+    await createConversationInSession(input);
+    // The retry must RESOLVE — swallowing a rejection here would let the count
+    // stay at 1 because the retry never reached the membership write at all,
+    // which is a pass for the wrong reason.
+    await createConversationInSession(input);
+
+    expect(await memberCountFor(workspace.id)).toBe(1);
+  }, 20_000);
+
+  it('closing REMOVES the node, and reopening admits a fresh one on the grid', async () => {
+    if (!dbAvailable) return;
+    const { owner, agentPage, workspace } = await seedWorkspace('Move Agent');
+    const conversationId = createId();
+    await createConversationInSession({
+      conversationId,
+      userId: owner.id,
+      agentPageId: agentPage.id,
+      workspaceId: workspace.id,
+    });
+    const born = await nodeFor(conversationId);
+    expect(born).not.toBeNull();
+
+    expect(await closeConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+      'closed',
+    );
+    // The node is GONE. Closing used to park it — same row, null parent, still a
+    // member — which is the state that made a closed pane and a broken one
+    // identical. The thread's history is untouched; only its membership went.
+    expect(await nodeFor(conversationId)).toBeNull();
+    expect(await memberCountFor(workspace.id)).toBe(0);
+
+    expect(await reopenConversationInSession({ conversationId, userId: owner.id, workspaceId: workspace.id })).toBe(
+      'reopened',
+    );
+    const reopened = await nodeFor(conversationId);
+    // A NEW node, on the grid. Reopening is re-admitting, because a closed
+    // thread is a member of nothing.
+    expect(reopened).not.toBeNull();
+    expect(reopened?.parentId).not.toBeNull();
+    expect(await memberCountFor(workspace.id)).toBe(1);
   }, 20_000);
 });
 
 describe('ensureGlobalSandboxSession — auto-provisioning the default Global Assistant conversation', () => {
-  beforeAll(async () => {
-    try {
-      await db.select().from(pages).limit(1);
-      dbAvailable = true;
-    } catch (error) {
-      requireDb('agent-workspaces-runtime.integration.test.ts', error);
-      dbAvailable = false;
-    }
-  });
+  beforeAll(connect);
 
-  it('mints a real, ordinary session (driveId null) and binds it to a never-claimed global conversation', async () => {
+  it('mints a real, ordinary workspace (driveId null) and admits a never-claimed global conversation', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -357,7 +613,6 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       userId: owner.id,
       type: 'global',
       contextId: null,
-      workspaceId: null,
       isActive: true,
     });
 
@@ -367,16 +622,14 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     if (!result.ok) return;
     expect(result.session.ownerId).toBe(owner.id);
     expect(result.session.driveId).toBeNull();
-
-    const [bound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(bound.workspaceId).toBe(result.session.id);
+    expect((await nodeFor(conversationId))?.rootId).toBe(result.session.id);
   });
 
-  it('given a conversation already bound to an existing session, resolves to THAT session rather than failing — same code path a concurrent winner takes', async () => {
+  it('given a conversation that already has a home, resolves to THAT workspace rather than failing', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
-    const [existingSession] = await db
+    const [existing] = await db
       .insert(agentWorkspaces)
       .values({ id: createId(), driveId: null, ownerId: owner.id })
       .returning();
@@ -387,30 +640,30 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       userId: owner.id,
       type: 'global',
       contextId: null,
-      workspaceId: existingSession.id,
       isActive: true,
     });
+    await claimConversationInSession({ conversationId, userId: owner.id, workspaceId: existing.id });
 
     const result = await ensureGlobalSandboxSession(conversationId, owner.id);
 
-    // The claim this call attempted lost (the conversation was already
-    // bound) — it re-resolves through the conversation instead of failing,
-    // so a caller sees the SAME outcome whether the binding happened just
-    // now (a concurrent winner) or long ago (a stale pre-check).
+    // The claim this call attempted lost (the conversation already had a home)
+    // — it re-resolves through the conversation instead of failing, so a caller
+    // sees the SAME outcome whether the binding happened just now (a concurrent
+    // winner) or long ago (a stale pre-check).
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.session.id).toBe(existingSession.id);
+    expect(result.session.id).toBe(existing.id);
 
-    // The scratch session this call spawned to attempt the claim did not
-    // end up sitting empty forever — it was torn down rather than orphaned.
-    const [liveSessions] = await db
+    // The scratch workspace this call spawned to attempt the claim was torn
+    // down rather than left sitting empty and billed forever.
+    const [live] = await db
       .select({ n: count() })
       .from(agentWorkspaces)
       .where(and(eq(agentWorkspaces.ownerId, owner.id), isNull(agentWorkspaces.endedAt)));
-    expect(liveSessions.n).toBe(1); // only `existingSession` remains live
+    expect(live.n).toBe(1);
   });
 
-  it('two concurrent calls for the SAME never-bound conversation converge on ONE session — the loser cleans up and adopts the winner\'s', async () => {
+  it("two concurrent calls for ONE never-bound conversation converge on ONE workspace", async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -420,7 +673,6 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       userId: owner.id,
       type: 'global',
       contextId: null,
-      workspaceId: null,
       isActive: true,
     });
 
@@ -432,32 +684,28 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
-    // Both concurrent callers end up pointed at the SAME sandbox — the
-    // shared-workspace invariant a per-conversation sandbox would violate.
+    // Both callers end up pointed at the SAME sandbox — the shared-workspace
+    // invariant a per-conversation sandbox would violate.
     expect(a.session.id).toBe(b.session.id);
+    expect((await nodeFor(conversationId))?.rootId).toBe(a.session.id);
 
-    const [bound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(bound.workspaceId).toBe(a.session.id);
-
-    // Exactly one session survives — the loser's scratch spawn was torn down,
-    // not left as an orphaned, empty, permanently-billed workspace.
-    const [liveSessions] = await db
+    const [live] = await db
       .select({ n: count() })
       .from(agentWorkspaces)
       .where(and(eq(agentWorkspaces.ownerId, owner.id), isNull(agentWorkspaces.endedAt)));
-    expect(liveSessions.n).toBe(1);
+    expect(live.n).toBe(1);
   });
 
-  it('given the owner is already at the active-session cap, fails with session_limit_reached rather than the generic no_session', async () => {
+  it('given the owner is already at the active-workspace cap, fails with session_limit_reached', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
-    // Bulk-insert straight to the cap — bypasses spawnSession's own store
-    // logic (this test is about ensureGlobalSandboxSession's error mapping,
-    // not about the cap's own enforcement, which plan-spawn-session.test.ts
-    // already covers).
     await db.insert(agentWorkspaces).values(
-      Array.from({ length: MAX_ACTIVE_SESSIONS_PER_OWNER }, () => ({ id: createId(), driveId: null, ownerId: owner.id })),
+      Array.from({ length: MAX_ACTIVE_SESSIONS_PER_OWNER }, () => ({
+        id: createId(),
+        driveId: null,
+        ownerId: owner.id,
+      })),
     );
 
     const conversationId = createId();
@@ -466,167 +714,11 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       userId: owner.id,
       type: 'global',
       contextId: null,
-      workspaceId: null,
       isActive: true,
     });
 
     const result = await ensureGlobalSandboxSession(conversationId, owner.id);
     expect(result).toEqual({ ok: false, reason: 'session_limit_reached' });
-
-    const [stillUnbound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(stillUnbound.workspaceId).toBeNull();
-  });
-});
-
-/**
- * PLACEMENT IS OPT-IN, AND THE OPT-OUT IS THE LOAD-BEARING HALF (issue #2373,
- * review finding — codex P1).
- *
- * `createConversationInSession` places a pane only when the caller asks with
- * `placeInGrid`. Nothing tested the gate itself: `resolve-open-placement.test.ts`
- * pins WHY an unconditional placement is wrong (a loading pane is not
- * `isReplaceable`, so the placement resolves to `split` and the picker's own
- * bind leaves one conversation in two panes), but deleting
- * `if (!input.placeInGrid) return;` would leave every one of those assertions
- * green while the duplicate-pane regression came straight back.
- *
- * Asserted against real pane ROWS rather than a mocked collaborator, because
- * the fact under test is "did a pane get written", not "was a function called".
- */
-describe('createConversationInSession — the placeInGrid gate', () => {
-  async function panesTargeting(workspaceId: string, conversationId: string) {
-    return db
-      .select({ id: agentWorkspacePanes.id })
-      .from(agentWorkspacePanes)
-      .where(
-        and(
-          eq(agentWorkspacePanes.workspaceId, workspaceId),
-          eq(agentWorkspacePanes.targetId, conversationId),
-        ),
-      );
-  }
-
-  async function seed() {
-    const owner = await factories.createUser();
-    const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Gate Agent' });
-    const [workspace] = await db
-      .insert(agentWorkspaces)
-      .values({ id: createId(), driveId: drive.id, ownerId: owner.id })
-      .returning();
-    return { owner, agentPage, workspace };
-  }
-
-  it('does NOT write a pane when the caller does not ask — the pane-picker routes depend on this', async () => {
-    if (!dbAvailable) return;
-    const { owner, agentPage, workspace } = await seed();
-    const conversationId = createId();
-
-    await createConversationInSession({
-      conversationId,
-      userId: owner.id,
-      agentPageId: agentPage.id,
-      workspaceId: workspace.id,
-    });
-
-    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(0);
-    // The thread still EXISTS and is listed — that is the whole point of the
-    // read-model fix. Unplaced is a resting state, not an invisible one.
-    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(row.workspaceId).toBe(workspace.id);
-    expect(row.isActive).toBe(true);
-  });
-
-  it('DOES write a pane when the caller asks — spawn_session, which has no browser pane waiting', async () => {
-    if (!dbAvailable) return;
-    const { owner, agentPage, workspace } = await seed();
-    const conversationId = createId();
-
-    await createConversationInSession({
-      conversationId,
-      userId: owner.id,
-      agentPageId: agentPage.id,
-      workspaceId: workspace.id,
-      title: 'Researcher',
-      placeInGrid: true,
-    });
-
-    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
-  });
-
-  it('never evicts the conversation that asked for the spawn', async () => {
-    if (!dbAvailable) return;
-    const { owner, agentPage, workspace } = await seed();
-
-    // The spawner: an agent's own thread, already occupying the only pane.
-    const spawnerId = createId();
-    await createConversationInSession({
-      conversationId: spawnerId,
-      userId: owner.id,
-      agentPageId: agentPage.id,
-      workspaceId: workspace.id,
-      title: 'Caller',
-      placeInGrid: true,
-    });
-    expect(await panesTargeting(workspace.id, spawnerId)).toHaveLength(1);
-
-    // Its worker, naming the spawner as off-limits.
-    //
-    // What this pins is the OUTCOME a user cares about — spawning a worker
-    // adds a pane beside your conversation, it never navigates the one you are
-    // reading. Which guard delivers that is deliberately not asserted, and I
-    // checked rather than assumed: removing the `excludeTargetId` pass-through
-    // does NOT flip this test, because `placeWorkerPane` also sets
-    // `preferSplit: true` (`workspace-placement.ts:122`) and that alone is
-    // enough here. `excludeTargetId` is the narrower second guard; its
-    // independent effect belongs to the verb's own tests
-    // (`workspace-placement-worker.test.ts`), which cover the pass-through
-    // directly. Pinning the outcome rather than the mechanism is the point —
-    // it stays true if the guards are ever reshuffled, and it fails if a
-    // future change lets a spawn eat the caller's pane by any route.
-    const workerId = createId();
-    await createConversationInSession({
-      conversationId: workerId,
-      userId: owner.id,
-      agentPageId: agentPage.id,
-      workspaceId: workspace.id,
-      title: 'Researcher',
-      placeInGrid: true,
-      excludeTargetId: spawnerId,
-    });
-
-    expect(await panesTargeting(workspace.id, spawnerId)).toHaveLength(1);
-    expect(await panesTargeting(workspace.id, workerId)).toHaveLength(1);
-  });
-
-  it('places at most ONE pane per thread however often creation is retried', async () => {
-    if (!dbAvailable) return;
-    const { owner, agentPage, workspace } = await seed();
-    const conversationId = createId();
-    const input = {
-      conversationId,
-      userId: owner.id,
-      agentPageId: agentPage.id,
-      workspaceId: workspace.id,
-      title: 'Researcher',
-      placeInGrid: true,
-    };
-
-    await createConversationInSession(input);
-    // A retry of the same creation, which must RESOLVE — no `.catch` swallowing
-    // it (review finding — CodeRabbit). Suppressing a rejection here would let
-    // the pane count stay at 1 because the retry never reached placement at
-    // all, which is a pass for the wrong reason. It does resolve; I checked.
-    //
-    // On the mechanism, stated carefully because I got it wrong first: this
-    // does NOT demonstrate the verb engine's op memory. Making the opId unique
-    // per call still leaves the count at 1, because `resolveOpenPlacement`
-    // finds a pane already showing this conversation and FOCUSES it rather
-    // than splitting. Op memory is the guard for a retry that arrives before
-    // the first placement lands; the focus branch covers the case here. What
-    // is asserted is the invariant both exist to protect.
-    await createConversationInSession(input);
-
-    expect(await panesTargeting(workspace.id, conversationId)).toHaveLength(1);
+    expect(await nodeFor(conversationId)).toBeNull();
   });
 });

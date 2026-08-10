@@ -838,11 +838,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'client',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-other' }));
     assert({
@@ -877,11 +881,15 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
+        // Dead membership columns, present until the follow-up migration drops
+        // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+        // membership now.
+        workspaceId: null,
+        closedInWorkspaceAt: null,
       });
     const fullHistory = [
       { role: 'user', id: 'msg-0', content: 'First', parts: [{ type: 'text', text: 'First' }] },
@@ -926,11 +934,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const fullHistory = [
       { role: 'user', id: 'h-1', content: 'Turn 1', parts: [{ type: 'text', text: 'Turn 1' }] },
@@ -967,11 +979,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({
       ...validBody,
@@ -996,11 +1012,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({
       ...validBody,
@@ -1029,11 +1049,15 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
+        // Dead membership columns, present until the follow-up migration drops
+        // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+        // membership now.
+        workspaceId: null,
+        closedInWorkspaceAt: null,
       });
     const response = await POST(makeRequest({
       ...validBody,
@@ -1359,11 +1383,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-private' }));
     await response.text();
@@ -1388,11 +1416,15 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: true,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
+      // Dead membership columns, present until the follow-up migration drops
+      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
+      // membership now.
+      workspaceId: null,
+      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-shared' }));
     await response.text();

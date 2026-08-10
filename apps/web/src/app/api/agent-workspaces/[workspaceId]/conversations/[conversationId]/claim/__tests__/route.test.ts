@@ -213,3 +213,23 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(mockCheckSessionAccess).not.toHaveBeenCalled();
   });
 });
+
+describe('the workspace is waiting for the backfill', () => {
+  /**
+   * 503, not 404 and not 200. The conversation exists and is the caller's; the
+   * SERVER has not migrated this workspace yet, and it becomes ready when an
+   * operator runs the backfill — which is what 503 says and what nothing else on
+   * this route does.
+   *
+   * The status is asserted rather than assumed because this route has no
+   * exhaustiveness check: an adversarial review found that deleting the 503
+   * block lets the request fall through to `200 OK`, reporting success for a
+   * write the server refused.
+   */
+  it('answers 503 and names the reason', async () => {
+    mockClaimConversationInSession.mockResolvedValue('awaiting_backfill');
+    const response = await post();
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'awaiting_backfill' });
+  });
+});

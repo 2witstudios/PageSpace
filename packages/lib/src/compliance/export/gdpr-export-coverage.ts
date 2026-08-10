@@ -87,6 +87,16 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   agent_workspace_shells: 'agentWorkspaces',
+  // The subject's workspace MEMBERSHIP and layout. It arrived unregistered
+  // with the node model, and it became load-bearing when membership moved into
+  // it: which threads a workspace holds, and where each one sits, is a fact
+  // about the subject's own working context. It used to live in
+  // `conversations.workspaceId` (exported under `collectUserMessages`'s
+  // boundary); nothing writes that column any more and this table is the only
+  // witness. The column itself survives until the follow-up migration drops
+  // it — its removal is staged separately so the backfill can run between the
+  // two — which is exactly why the export has to read the table and not it.
+  agent_workspace_nodes: 'agentWorkspaces',
   ai_stream_sessions: 'streamState',
 };
 
@@ -143,6 +153,27 @@ function withReason(reason: string, ...tables: string[]): Record<string, string>
  * substantive, so "n/a" cannot be used to smuggle a table past review.
  */
 export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
+  /*
+   * THE OLD TWO-LEVEL PANE GRID. Excluded because nothing reads or writes these
+   * four tables any longer — `agent_workspace_nodes` replaced them, and IT is
+   * exported (`EXPORTED_TABLES` above), so the subject's workspace membership
+   * and layout travel in full. Exporting these as well would hand the subject a
+   * second, frozen copy of the same facts and invite them to believe the two
+   * disagree about something.
+   *
+   * They are listed rather than deleted because their DROP is a separately
+   * deployable stage: `runMigrations` applies every pending migration in one
+   * invocation, so a drop registered in this release would run before the
+   * backfill that moves their rows into the node tree could execute. The
+   * follow-up migration takes the tables and these four entries together.
+   */
+  ...withReason(
+    'Superseded by `agent_workspace_nodes`, which IS exported and carries the same workspace membership and layout. Nothing has read or written these rows since the node-model cutover; they survive only until the follow-up migration drops them, which is staged after the backfill rather than beside it.',
+    'agent_workspace_pane_columns',
+    'agent_workspace_panes',
+    'agent_workspace_layout_revs',
+    'agent_workspace_layout_ops',
+  ),
   ...withReason(
     CREDENTIAL_MATERIAL,
     'auth_handoff_tokens',
@@ -239,10 +270,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
 
   ...withReason(
     DERIVED_OR_EPHEMERAL,
-    'agent_workspace_layout_ops',
-    'agent_workspace_layout_revs',
-    'agent_workspace_pane_columns',
-    'agent_workspace_panes',
+    // A monotonic per-workspace mutation counter and nothing else — one bigint
+    // whose only job is to let a client tell a stale snapshot from a fresh one.
+    // The rows it counts ARE exported (`agent_workspace_nodes`).
+    'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',
     'pulse_summaries',
