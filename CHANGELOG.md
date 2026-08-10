@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
+  be two separate records of what a session contained, kept in step by convention, so a pane you or
+  an agent opened could take up to two minutes to show up in the list. They are now two views of
+  one thing, so there is nothing to fall out of step.
+- **A thread can no longer go missing from its own session** — a session's membership and its
+  layout were stored separately, and a thread that had no pane was simply absent from the list.
+  Sessions existed with more threads than the sidebar would show. Membership is now the same record
+  as placement, so a thread that is in a session is always visible in it, open or not.
+- **Opening a conversation that is already open in another session says so, instead of leaving a
+  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
+  another session already holds used to fail as a server error. The pane you had just opened stayed
+  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
+  now refused properly and the layout corrects itself straight away.
 - **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
   requests that removed the same thing, and the second one arrived to find the first had already
   done it. The pane closed correctly either way, so the error was pure noise; there is one request
@@ -23,19 +36,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
   removes it from your session failed, every later attempt to close it reported success and did
   nothing, leaving a pane that could not be closed. The close is attempted properly now.
-- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
-  be two separate records of what a session contained, kept in step by convention, so a pane you or
-  an agent opened could take up to two minutes to show up in the list. They are now two views of
-  one thing, so there is nothing to fall out of step.
-- **A thread can no longer go missing from its own session** — a session's membership and its
-  layout were stored separately, and a thread that had no pane was simply absent from the list.
-  Sessions existed with more threads than the sidebar would show. Membership is now the same record
-  as placement, so a thread that is in a session is always visible in it, open or not.
-- **Opening a conversation that is already open in another session says so, instead of leaving a
-  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
-  another session already holds used to fail as a server error. The pane you had just opened stayed
-  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
-  now refused properly and the layout corrects itself straight away.
 - **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
   tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
   showed no PageSpace tools at all. Copy it again and it works.
