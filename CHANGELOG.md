@@ -38,8 +38,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
   that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
   The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
-  drive itself, and deleting one would leave the AI's memory with nowhere to live. Empty a page to
-  erase it, or turn personalization off entirely.
+  drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
+  emptying a page erases what it says, so deleting one would only leave the AI's memory with
+  nowhere to live.
 - **The AI stops recording things about you that do not change how it answers** — the nightly
   process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
   teams, family details and the names of colleagues, none of which affects a reply. It now records

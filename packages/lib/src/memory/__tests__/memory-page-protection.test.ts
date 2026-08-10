@@ -91,12 +91,20 @@ describe('memory page deletion protection', () => {
     expect((await findProtectedMemoryPages([])).size).toBe(0);
   });
 
-  it('tells the user what to do instead of deleting', async () => {
-    // The refusal has to point somewhere: a bare "cannot be deleted" leaves
-    // someone who wants the content gone with no next step.
+  it('offers the toggle before the clear-the-page workaround', async () => {
+    // Deletion is redundant rather than missing: the toggle already stops the
+    // AI using memory entirely, and emptying a page removes its content. The
+    // refusal has to say so, strongest option first — a bare "cannot be
+    // deleted" leaves someone who wants it gone with no next step, and leading
+    // with "clear the page" offers the weaker remedy to someone whose actual
+    // intent was to switch the feature off.
     const { MEMORY_PAGE_DELETE_ERROR } = await import('../memory-pages');
 
-    expect(MEMORY_PAGE_DELETE_ERROR).toMatch(/clear the page/i);
-    expect(MEMORY_PAGE_DELETE_ERROR).toMatch(/settings/i);
+    const toggleAt = MEMORY_PAGE_DELETE_ERROR.search(/personalization off/i);
+    const clearAt = MEMORY_PAGE_DELETE_ERROR.search(/clear the page/i);
+
+    expect(toggleAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(toggleAt).toBeLessThan(clearAt);
   });
 });

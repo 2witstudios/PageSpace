@@ -35,9 +35,15 @@ const POINTER_COLUMN = {
   rules: 'rulesPageId',
 } as const;
 
-/** Refusal shown when someone tries to trash a memory page or its folder. */
+/**
+ * Refusal shown when someone tries to trash a memory page or its folder.
+ *
+ * Names both alternatives, strongest first: the toggle is the complete answer
+ * for "stop using this", and emptying the page is the answer for "remove this
+ * content". Between them there is nothing deletion would additionally achieve.
+ */
 export const MEMORY_PAGE_DELETE_ERROR =
-  'Memory pages hold what the AI knows about you and cannot be deleted. Clear the page instead, or turn personalization off in Settings.';
+  'Memory pages hold what the AI knows about you and cannot be deleted. To stop the AI using them, turn personalization off in Settings; to erase what one says, clear the page.';
 
 /**
  * Whether this page is one of the protected memory pages, or their folder.
@@ -48,10 +54,18 @@ export const MEMORY_PAGE_DELETE_ERROR =
  * pointer nulls, the settings screen shows a dead link, and the next run
  * silently writes nothing.
  *
- * Emptying a page remains the way to erase content, and the personalization
- * toggle remains the way to stop it being used. Both are reversible and neither
- * breaks the structure, which is why deletion is refused rather than made to
- * cascade into cleanup.
+ * ── Why refusing costs the user nothing ──────────────────────────────────────
+ * Deletion is a REDUNDANT path here, not a missing one. Everything someone
+ * could want from deleting a memory page is already available and reversible:
+ *
+ *   - "I don't want this content" → empty the page.
+ *   - "I don't want the AI using any of this" → turn personalization off in
+ *     Settings, which stops the whole feature reading or writing.
+ *
+ * Deletion adds no capability over those two; it only adds a broken state the
+ * rest of the system then has to tolerate. That is the reasoning behind this
+ * guard — please do not reintroduce deletion as a "missing feature" without
+ * first replacing what the toggle and the empty-page path already provide.
  */
 export async function isProtectedMemoryPage(pageId: string): Promise<boolean> {
   const [row] = await db
