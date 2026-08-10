@@ -11,7 +11,7 @@
 
 import { and, eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
 import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
@@ -92,15 +92,31 @@ export async function updatePersonalizationPage(
     return { written: false, reason: 'no page pointer (backfill has not run for this user)' };
   }
 
-  // Read the revision we are writing against, and confirm the page is still live.
+  // Read the revision we are writing against, and confirm the page is still
+  // live AND still inside this user's own Home drive.
+  //
+  // The drive join is defence in depth rather than a fix for a reachable bug:
+  // the pointer is only ever set server-side by `provisionMemoryPages`. But
+  // this function will happily write whatever page id that column names, and
+  // `readMemoryPages` already scopes its reads by drive — leaving the WRITE
+  // unscoped is the kind of asymmetry that turns a future bug (a bad backfill,
+  // a page moved between drives) into writing one person's profile into
+  // someone else's page.
   const [page] = await db
     .select({ revision: pages.revision, isTrashed: pages.isTrashed })
     .from(pages)
-    .where(eq(pages.id, pageId))
+    .innerJoin(drives, eq(drives.id, pages.driveId))
+    .where(
+      and(
+        eq(pages.id, pageId),
+        eq(drives.ownerId, userId),
+        eq(drives.kind, 'HOME'),
+      )
+    )
     .limit(1);
 
   if (!page || page.isTrashed) {
-    loggers.api.warn('Memory integration: page pointer is stale or trashed', {
+    loggers.api.warn('Memory integration: page pointer is stale, trashed, or out of scope', {
       userId,
       field,
       pageId,
