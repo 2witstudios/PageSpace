@@ -24,14 +24,9 @@ import {
   PageRevisionMismatchError,
 } from '@/services/api/page-mutation-service';
 
-export type MemoryField = 'bio' | 'writingStyle' | 'rules';
+import { MAX_FIELD_LENGTH, type MemoryField } from './budgets';
 
-// Injection budgets — enforced at read time in personalization-utils
-const MAX_FIELD_LENGTHS: Record<MemoryField, number> = {
-  bio: 3000,
-  writingStyle: 2500,
-  rules: 2500,
-};
+export type { MemoryField };
 
 /**
  * Fetch the current personalization page content for a user.
@@ -484,7 +479,7 @@ export function screenRewrite(
     };
   }
 
-  const maxLength = MAX_FIELD_LENGTHS[field];
+  const maxLength = MAX_FIELD_LENGTH[field];
   if (next.length > maxLength) {
     return { ok: false, reason: `exceeds ${maxLength} char limit` };
   }

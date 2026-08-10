@@ -11,33 +11,16 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
-import { readMemoryPages, type MemoryField } from '@pagespace/lib/memory/memory-pages';
+import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
+import {
+  MAX_FIELD_LENGTH,
+  MAX_TOTAL_INJECTION_LENGTH,
+  type MemoryField,
+} from '@/lib/memory/budgets';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { PersonalizationInfo } from './system-prompt';
 
-/**
- * Per-field injection budgets, in characters.
- *
- * These match the compaction targets in `apps/web/src/lib/memory/compaction-service.ts`
- * so the cron keeps pages inside the budget and truncation stays a backstop for
- * hand-edited pages rather than the normal path.
- */
-const MAX_FIELD_LENGTHS: Record<MemoryField, number> = {
-  bio: 3000,
-  writingStyle: 2500,
-  rules: 2500,
-};
-
-/**
- * Ceiling for the whole injected block.
- *
- * Deliberately BELOW the sum of the per-field budgets (3000 + 2500 + 2500 =
- * 8000). If it equalled that sum the total check could never fire, since three
- * already-truncated fields would always fit — the guard would be dead code that
- * reads as protection. A profile using every field in full is over budget, and
- * the priority order below decides what survives.
- */
-const MAX_TOTAL_LENGTH = 6000;
+// Budgets live in one place; see budgets.ts for why all three consumers must agree.
 const TRUNCATION_MARKER = '\n[truncated]';
 
 const FIELD_ORDER: readonly MemoryField[] = ['rules', 'writingStyle', 'bio'];
@@ -114,9 +97,9 @@ export async function getUserPersonalization(
 
     // Per-field budget.
     const trimmed: Record<MemoryField, string> = {
-      bio: truncateField(raw.bio.trim(), MAX_FIELD_LENGTHS.bio),
-      writingStyle: truncateField(raw.writingStyle.trim(), MAX_FIELD_LENGTHS.writingStyle),
-      rules: truncateField(raw.rules.trim(), MAX_FIELD_LENGTHS.rules),
+      bio: truncateField(raw.bio.trim(), MAX_FIELD_LENGTH.bio),
+      writingStyle: truncateField(raw.writingStyle.trim(), MAX_FIELD_LENGTH.writingStyle),
+      rules: truncateField(raw.rules.trim(), MAX_FIELD_LENGTH.rules),
     };
 
     const fieldTruncated =
@@ -127,7 +110,7 @@ export async function getUserPersonalization(
     // Total budget. Spend it in priority order — rules and writing style change
     // AI behaviour directly, bio is context — rather than scaling every field
     // down proportionally, which would corrupt all three at once.
-    let remaining = MAX_TOTAL_LENGTH;
+    let remaining = MAX_TOTAL_INJECTION_LENGTH;
     const budgeted: Partial<Record<MemoryField, string>> = {};
     let overBudget = false;
 
@@ -156,7 +139,7 @@ export async function getUserPersonalization(
         userId,
         fieldBudgetTruncated: fieldTruncated,
         totalBudgetTruncated: overBudget,
-        totalLimit: MAX_TOTAL_LENGTH,
+        totalLimit: MAX_TOTAL_INJECTION_LENGTH,
       });
     }
 

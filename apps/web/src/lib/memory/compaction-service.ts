@@ -15,14 +15,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
-export type MemoryField = 'bio' | 'writingStyle' | 'rules';
+import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
 
-// Per-field budgets — trigger at 1.0×, compact to 0.7×
-const FIELD_LENGTHS: Record<MemoryField, { max: number; compactTo: number }> = {
-  bio: { max: 3000, compactTo: 2100 },
-  writingStyle: { max: 2500, compactTo: 1750 },
-  rules: { max: 2500, compactTo: 1750 },
-};
+export type { MemoryField };
 
 const COMPACTION_PROMPTS: Record<MemoryField, string> = {
   bio: `You are compacting a user's bio and background information that has grown too long.
@@ -87,8 +82,7 @@ export function needsCompaction(
   content: string,
   field: MemoryField
 ): boolean {
-  const { max } = FIELD_LENGTHS[field];
-  return content.length > max;
+  return content.length > MAX_FIELD_LENGTH[field];
 }
 
 /**
@@ -99,7 +93,7 @@ export async function compactField(
   field: MemoryField,
   content: string
 ): Promise<string> {
-  const { compactTo } = FIELD_LENGTHS[field];
+  const compactTo = compactionTarget(field);
 
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,

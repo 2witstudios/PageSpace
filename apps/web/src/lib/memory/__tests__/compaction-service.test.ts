@@ -112,6 +112,41 @@ describe('needsCompaction', () => {
   });
 });
 
+describe('budget coherence across the three consumers', () => {
+  it('compacts to a size the write guard will actually accept', async () => {
+    // Compaction, the rewrite guard and prompt injection all act on these
+    // numbers, and only work if they agree. If compaction targeted a size at or
+    // above the guard's ceiling, every compaction result would be refused, the
+    // page would stay over budget forever, and the cron would log "compacted"
+    // each night while nothing changed. Nothing about that fails loudly.
+    const { MAX_FIELD_LENGTH, compactionTarget } = await import('../budgets');
+
+    const fields = ['bio', 'writingStyle', 'rules'] as const;
+    assert({
+      given: 'each field budget',
+      should: 'leave compaction headroom strictly below the ceiling',
+      actual: fields.every((f) => compactionTarget(f) < MAX_FIELD_LENGTH[f]),
+      expected: true,
+    });
+  });
+
+  it('keeps the total ceiling below the sum of the per-field budgets', async () => {
+    // Equal to the sum, the total check could never fire — three already
+    // truncated fields always fit — so it would read as protection while being
+    // dead code. A mutation proved exactly that earlier in this branch.
+    const { MAX_FIELD_LENGTH, MAX_TOTAL_INJECTION_LENGTH } = await import('../budgets');
+
+    const sum = MAX_FIELD_LENGTH.bio + MAX_FIELD_LENGTH.writingStyle + MAX_FIELD_LENGTH.rules;
+
+    assert({
+      given: 'the per-field budgets and the total injection ceiling',
+      should: 'make the total strictly smaller, so the total guard can fire',
+      actual: MAX_TOTAL_INJECTION_LENGTH < sum,
+      expected: true,
+    });
+  });
+});
+
 describe('checkAndCompactIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
