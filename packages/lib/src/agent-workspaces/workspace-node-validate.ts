@@ -493,13 +493,13 @@ export function validateTree(nodes: readonly WorkspaceNode[]): TreeValidation {
   // `workspace-node-chat-binding.ts`.
   //
   // It would be easy to write the missing half off as unreachable, on the
-  // grounds that a conversation belongs to exactly one workspace
-  // (`conversations.workspaceId`, permanent — moving a thread is a FORK, never a
-  // rebind). It is not: this branch's own backfill says so in as many words
-  // ("a pane naming a conversation in another session is reachable today",
-  // `workspace-node-backfill.ts`), which is why that migration has to arbitrate
-  // chat claims globally. A pane's target is free-form in the payload and is not
-  // held to `conversations.workspaceId` by anything.
+  // grounds that a conversation belongs to exactly one workspace. It is not,
+  // and the legacy data proved it: a pane naming a conversation owned by
+  // ANOTHER session was reachable, which is why the one-shot backfill had to
+  // arbitrate chat claims globally before it could seat them. A node's target
+  // is free-form in the payload and nothing constrains it to the workspace the
+  // node lives in — the chat uniqueness index is global for exactly that
+  // reason.
   //
   // DO NOT close the gap by giving this function IO. It is pure and it runs on
   // the client, and a global fact is not one an offline reducer can be handed.

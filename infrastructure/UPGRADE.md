@@ -13,6 +13,67 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-08 — ⚠️ Minimum upgrade path: workspace membership becomes a node tree (`0255` → `0256`)
+
+**Applies to tenant / self-host deployments that skip releases. Read this before
+upgrading.** Cloud rolls every release in order and needs nothing here.
+
+A workspace's membership (which threads belong to a session) and its layout
+(where each one is shown) used to be two structures — `conversations."workspaceId"`
+plus four `agent_workspace_pane_*` / `_layout_*` tables. They are now one flat
+tree in `agent_workspace_nodes`. That moved in three steps, and the third one is
+destructive:
+
+| step | migration | what it does |
+|------|-----------|--------------|
+| expand | `0255_clear_phil_sheldon` | creates `agent_workspace_nodes` / `agent_workspace_node_revs`. Purely additive. |
+| backfill | *(a script, run between releases)* | derives every existing workspace's tree from the legacy rows |
+| contract | `0256_parched_bloodscream` | `DROP TABLE` on all four legacy tables, `DROP COLUMN` on `conversations."workspaceId"` and `"closedInWorkspaceAt"` |
+
+**THE RULE: you must pass through a release that carries `0255` and stop there
+long enough to run the backfill. Do not jump a pre-`0255` deployment straight to
+this release.**
+
+`runMigrations` applies every pending migration in ONE invocation, so a
+deployment sitting below `0255` that pulls this release applies `0255` and
+`0256` back to back. `0255` creates the node tables EMPTY; `0256` then deletes
+the only rows that could have filled them. **The backfill script that bridged
+them is deleted in this release** — its source tables no longer exist, so it
+cannot run and is not shipped. The result of skipping is every session opening
+empty, with its threads reachable only through past-conversation history, and
+nothing left in the database to repair it from.
+
+For a version-skipping upgrade:
+
+1. **Take a database snapshot.** This is the only migration in this epic that
+   destroys data, and there is no reverse migration.
+2. Upgrade to a release containing `0255` and **not** `0256`, and let it come
+   up.
+3. Run the node backfill from that release, on the migrate image:
+   `bun scripts/backfill-agent-workspace-nodes.ts` (dry by default; re-run with
+   `--apply`). It is safe to re-run — it skips any workspace already through the
+   node model.
+4. Confirm the census reports zero skipped workspaces and `members in == pane
+   nodes out`, then upgrade to this release.
+
+**Already at `0255` with the backfill run?** Nothing to do — `0256` applies
+cleanly and touches no node row. Verify with the check below, which should
+return only conversations whose session has since been ENDED (ending a session
+destroys its tree, and nothing retires the legacy column, so a pointer with no
+node is expected and benign):
+
+```sql
+SELECT c.id, c."workspaceId", w."endedAt"
+  FROM conversations c
+  LEFT JOIN agent_workspaces w ON w.id = c."workspaceId"
+ WHERE c."workspaceId" IS NOT NULL AND c."isActive" AND c."closedInWorkspaceAt" IS NULL
+   AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                    WHERE n."targetKind" = 'chat' AND n."targetId" = c.id);
+```
+
+Any row whose `endedAt` is NULL is membership that is about to be lost — stop
+and run the backfill before upgrading.
+
 ## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
 **Applies to every deployment.** Migration `0254_agent_workspaces_rename` renames

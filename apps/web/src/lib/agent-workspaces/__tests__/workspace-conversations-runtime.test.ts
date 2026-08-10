@@ -48,7 +48,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'conversations.id', userId: 'conversations.userId', isActive: 'conversations.isActive',
     type: 'conversations.type', title: 'conversations.title', contextId: 'conversations.contextId',
     lastMessageAt: 'conversations.lastMessageAt', createdAt: 'conversations.createdAt',
-    workspaceId: 'conversations.workspaceId', closedInWorkspaceAt: 'conversations.closedInWorkspaceAt',
   },
   messages: { conversationId: 'messages.conversationId', isActive: 'messages.isActive' },
 }));

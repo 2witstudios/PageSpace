@@ -199,9 +199,8 @@ export async function GET(request: Request) {
  * session's first thing, instead of minting a brand-new one —
  * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), which
  * ADMITS the thread — one node in `agent_workspace_nodes`, which is what
- * membership is. It used to write `conversations.workspaceId`; nothing writes
- * that column now, and it survives only until the follow-up migration drops
- * it. `driveId`/`agentPageId`
+ * membership is. It used to write `conversations.workspaceId`, a column
+ * migration 0256 dropped. `driveId`/`agentPageId`
  * are derived from the claimed row itself (a `type: 'page'` row's own agent;
  * a `type: 'global'` row takes the caller's `driveId`, same three-shape
  * ambiguity as the ordinary mint path below) — a caller-supplied

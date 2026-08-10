@@ -38,8 +38,6 @@ export type ReopenConversationOutcome =
   | 'already_open'
   | 'not_in_session'
   | 'history_deleted'
-  /** The workspace awaits the backfill — unrecoverable by the caller. */
-  | 'awaiting_backfill'
   /**
    * The cap refused the return. Named rather than folded into `not_in_session`
    * because the module doc above promises the caller exactly this — "a
@@ -54,7 +52,6 @@ export type ReopenConversationOutcome =
 export type ReadmitConversationOutcome =
   | 'readmitted'
   | 'already_attached'
-  | 'awaiting_backfill'
   | 'not_a_member'
   /** The cap. Distinct from `refused` so the outcome survives the wiring. */
   | 'session_full'
@@ -113,10 +110,6 @@ export async function reopenConversationInSessionWith<TRow extends ConversationC
     // The one refusal a caller can do something about, so it keeps its name.
     case 'session_full':
       return 'session_full';
-    // And the one NOBODY can do anything about from here, which is exactly why
-    // it must not arrive as `not_in_session`.
-    case 'awaiting_backfill':
-      return 'awaiting_backfill';
     case 'not_a_member':
     case 'refused':
       return 'not_in_session';
