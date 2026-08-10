@@ -544,6 +544,34 @@ describe('a chat target whose thread has been DELETED', () => {
     expect(chatBindings.livenessAsked).toEqual([]);
   });
 
+  it('lets a workspace holding a DEAD thread still open a new pane — containment, on a write that actually changes something', async () => {
+    // THE PROBE THE TEST ABOVE CANNOT BE. Its write re-sends an identical node,
+    // so `decision.persist.put` is EMPTY and nothing is asked about anything —
+    // it passes whether liveness is scoped to INTRODUCED targets or widened to
+    // the whole payload. That mutation survived a review of this file (`M4`);
+    // the assertion that claims to pin containment could not see it.
+    //
+    // This write CHANGES the tree, so the payload is non-empty and carries the
+    // dead thread's node alongside the live newcomer. Scoped to introduced, only
+    // `conv-live` is asked about and the write lands. Widened to the payload,
+    // the long-dead `conv-1` refuses it — which is the user-visible shape of the
+    // bug: one thread dies under a pane and the workspace can never open another
+    // chat pane again.
+    store.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' })];
+    chatBindings.deleted = ['conv-1'];
+
+    const result = await write({
+      put: [
+        pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-1' }),
+        pane('pane-new', 'root', 1, { kind: 'chat', id: 'conv-live' }),
+      ],
+    });
+
+    expect(result.status).toBe('ok');
+    // Only the newcomer was ever the subject of the question.
+    expect(chatBindings.livenessAsked).toEqual([['conv-live']]);
+  });
+
   it('runs AFTER the ACL gate, so a refusal never confirms a conversation the caller may not touch', async () => {
     // Same oracle argument as the holder check above: "that thread is deleted"
     // is a fact about a conversation, and a caller with no authority over it
