@@ -642,6 +642,72 @@ describe('AgentPanes — the mint lifecycle', () => {
     expect(panesNow()).toHaveLength(1);
   });
 
+  /**
+   * THE REGRESSION #2386-adjacent, and the one that made a second agent pane
+   * unusable: a mint's OWN server write admits what it created, and admitting
+   * PLACES — into this very pane, because that is what `admit` does with an
+   * unbound one. The `session:<id>` broadcast binds it here before the POST
+   * resolves, so the pane the user asked for arrives, and then the completion
+   * handler used to read "bound" as "somebody else took this node", declare
+   * itself superseded, and DELETE the conversation it had just created. The
+   * pane appeared and vanished, silently, because that cleanup says nothing.
+   */
+  it("keeps the conversation when the mint's own admission bound this pane first", async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // The broadcast for the mint's own admission — the server placed the new
+    // conversation into this pane while its POST was still in flight.
+    act(() => {
+      useAgentWorkspaceStore.getState().applyRemoteUpdate({
+        workspaceId: WS,
+        rev: 2,
+        nodes: [rootNode, chatNode('n1', WS, 0, 'new-id-1')],
+      });
+    });
+
+    resolveMint({});
+
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+    // The whole point: nothing tears down what the mint just made.
+    expect(mockDel).not.toHaveBeenCalled();
+  });
+
+  it('still cleans up when the pane was taken by something ELSE mid-mint', async () => {
+    // The case the supersede check exists for, and which must survive the fix:
+    // bound, but to a thread this mint did not create.
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    act(() => {
+      useAgentWorkspaceStore.getState().applyRemoteUpdate({
+        workspaceId: WS,
+        rev: 2,
+        nodes: [rootNode, chatNode('n1', WS, 0, 'someone-elses-thread')],
+      });
+    });
+
+    resolveMint({});
+
+    await waitFor(() =>
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
+    );
+  });
+
   it('holds the pane on a spinner while its mint is in flight, never a speculative terminal', async () => {
     let resolveMint!: (value: unknown) => void;
     mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));

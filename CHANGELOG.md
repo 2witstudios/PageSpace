@@ -7,6 +7,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
+  pane for a global assistant or a page agent worked once per session; every one after it appeared
+  for a moment and then disappeared, with nothing said about why. The session had started placing a
+  new conversation into your pane itself, and the browser was still expecting to do that job — so it
+  read the pane arriving correctly as evidence that something else had claimed it, and quietly
+  deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
+  Pages were never affected. Second, third and fourth panes now open and stay open.
 - **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
   work in that drive's sessions, so a conversation of yours can live in a session someone else
   started. Opening one of those from your conversation list gave you a pane you could read and type

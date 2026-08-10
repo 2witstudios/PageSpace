@@ -260,20 +260,44 @@ export default function AgentPanes({
   pendingMintsRef.current = pendingMints;
 
   /**
-   * Is `nodeId` STILL an unbound node ON THE GRID, waiting on this mint?
+   * Is `nodeId` STILL this mint's to land in — a node ON THE GRID that nothing
+   * else has claimed?
    *
-   * Not merely present, and the grid clause is the part the node model made
-   * necessary. Closing a pane no longer destroys it — it PARKS it — so a node
-   * whose pane the user closed mid-mint still exists, still unbound, and a
-   * check for existence alone would land the result in a rectangle that is no
-   * longer on screen. "The pane is still there waiting" means on the grid.
+   * The grid clause is what stops a result landing in a rectangle the user
+   * closed mid-mint.
+   *
+   * **`mintedTargetId` is the answer to a trap the node model set.** This asked
+   * only whether the pane was still UNBOUND, which was the whole question while
+   * the client was the only thing that could bind one. It is not any more: a
+   * mint's own server write ADMITS what it created, and admitting places —
+   * `admit` → `place` fills exactly this pane, because "only an unbound pane may
+   * be filled ... is what makes the picker path land in the very pane the user
+   * is looking at" (`workspace-membership.ts`). The `session:<id>` broadcast then
+   * binds it here before this check ever runs.
+   *
+   * So the SUCCESS case — the server placed what we asked for, in the pane we
+   * asked for — became indistinguishable from the abandonment case, and both
+   * callers answer abandonment by destroying what they just made: the chat mint
+   * deletes its conversation, the shell mint kills its shell. That is the pane
+   * appearing and then vanishing with nothing said, since both cleanups are
+   * deliberately silent.
+   *
+   * A pane bound to THIS MINT'S OWN target is therefore still this mint's pane.
+   * Bound to anything else, it was genuinely taken, and the caller should still
+   * clean up. Callers that cannot name their target (there are none today) may
+   * omit it and get the old unbound-only rule.
    */
   const stillMinting = useCallback(
-    (nodeId: string, mint: PendingMint) => {
+    (nodeId: string, mint: PendingMint, mintedTargetId?: string) => {
       const outstanding = pendingMintsRef.current[nodeId];
       if (!outstanding || outstanding.kind !== mint.kind || outstanding.agentPageId !== mint.agentPageId) return false;
       const node = findNode(useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [], nodeId);
-      return node !== undefined && node.nodeType === 'pane' && node.target === null && node.parentId !== null;
+      if (node === undefined || node.nodeType !== 'pane' || node.parentId === null) return false;
+      // Still waiting: nothing has bound it, so this mint may fill it.
+      if (node.target === null) return true;
+      // Already carrying what this mint produced — the server got there first,
+      // which is the write landing, not a race being lost.
+      return mintedTargetId !== undefined && node.target.id === mintedTargetId;
     },
     [sessionId],
   );
@@ -792,7 +816,7 @@ export default function AgentPanes({
             sessionId,
           });
         }
-        const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint));
+        const superseded = !isCurrent() || (showsSpinner && !stillMinting(nodeId, mint, conversationId));
         if (showsSpinner) endMint(nodeId);
         if (superseded) {
           // A NEWER call for this node superseded this one, or the node was
@@ -1146,11 +1170,14 @@ export default function AgentPanes({
           `/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells`,
           {},
         );
-        const superseded = !stillMinting(nodeId, mint);
+        const superseded = !stillMinting(nodeId, mint, shell.shellId);
         endMint(nodeId);
         if (superseded) {
           // The shell exists server-side already, so close it rather than leave
-          // it running unattached or clobber whatever this node became.
+          // it running unattached or clobber whatever this node became. NOT for
+          // a pane the spawn's own admission already bound to THIS shell — see
+          // `stillMinting`; that is the write landing, and killing the shell
+          // there tore down the terminal the user had just watched appear.
           closeShell(shell.shellId);
           return;
         }
