@@ -212,11 +212,6 @@ export async function POST(
     // the agent_sessions → agent_workspaces rename, `sessionId` is what a
     // pre-rename client bundle still sends during the rolling-deploy window.
     // The contract PR drops the legacy key.
-    // WHERE the caller wants it, when a human picked a pane. A preference only —
-    // the placement policy still refuses a pane it may not give up, and an id
-    // naming nothing in this tree loses to the default. It cannot address
-    // anything outside the workspace the write already locked.
-    const activeNodeId = typeof body.activeNodeId === 'string' && body.activeNodeId.length > 0 ? body.activeNodeId : null;
     const workspaceIdFromBody = typeof body.workspaceId === 'string' && body.workspaceId.length > 0 ? body.workspaceId : null;
     const sessionId: string | null =
       workspaceIdFromBody ?? (typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null);
@@ -235,6 +230,13 @@ export async function POST(
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
     if (sessionId !== null) {
+      // WHERE the caller wants it, when a human picked a pane. A preference only
+      // — the placement policy still refuses a pane it may not give up, and an
+      // id naming nothing in this tree loses to the default. Not validated
+      // beyond its type for that reason: it cannot address anything outside the
+      // workspace this write has already gated on above.
+      const activeNodeId =
+        typeof body.activeNodeId === 'string' && body.activeNodeId.length > 0 ? body.activeNodeId : null;
       try {
         await createConversationInSession({
           conversationId,
