@@ -168,15 +168,6 @@ async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[]
 }
 
 /**
- * Is this cache entry the session LISTING's body?
- *
- * This grid no longer subscribes to that listing — it reads its conversations
- * from the tree (see `conversationDirectory` below) — but the end-session
- * rollback still needs the SIDEBAR's row for this workspace, and the sidebar
- * owns that cache. Read through SWR's cache rather than a hook so a body of an
- * unexpected shape is refused instead of asserted.
- */
-/**
  * Mark the directory probe answered, but only if it is still the SAME one — a
  * member set that changed while the read was in flight started its own probe,
  * and stamping this answer onto it would arm readiness against a question
@@ -189,6 +180,15 @@ function markAnswered(
   return current !== null && current.signature === signature ? { signature, answered: true } : current;
 }
 
+/**
+ * Is this cache entry the session LISTING's body?
+ *
+ * This grid no longer subscribes to that listing — it reads its conversations
+ * from the tree (see `conversationDirectory` below) — but the end-session
+ * rollback still needs the SIDEBAR's row for this workspace, and the sidebar
+ * owns that cache. Read through SWR's cache rather than a hook so a body of an
+ * unexpected shape is refused instead of asserted.
+ */
 function isSessionListingBody(value: unknown): value is { sessions: SessionListEntry[] } {
   return (
     typeof value === 'object' &&
@@ -357,6 +357,13 @@ export default function AgentPanes({
     paneAssignTokens.current.set(nodeId, token);
     return () => paneAssignTokens.current.get(nodeId) === token;
   }, []);
+  // OBSERVE the same token without taking it — for a handler that has to survive
+  // an await before it knows whether it will act at all. Claiming to find out is
+  // not free: the token is what an in-flight mint reads to decide it was
+  // superseded, and a claim it then never uses would have that mint DELETE the
+  // conversation it just created. Peek across the await; the claim belongs to
+  // whoever actually rebinds the pane.
+  const peekPaneAssign = useCallback((nodeId: string) => paneAssignTokens.current.get(nodeId), []);
 
   // Races the per-node token can't catch, since it is scoped per NODE while
   // these are scoped per CONVERSATION:
@@ -1178,14 +1185,22 @@ export default function AgentPanes({
     async (nodeId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
       if (conversationDirectory === null) return;
 
-      // CLAIM THIS NODE, because the MRU re-read below can suspend this handler.
-      // It used to be synchronous end to end, so a second pick simply ran after
-      // the first; with an await in the middle, an earlier pick can resume AFTER
-      // a later one has already placed its choice and apply a decision computed
-      // against a tree two selections ago. Same token `handlePickAgent` uses —
-      // and it takes its own on the mint branch below, which is why this only
-      // ever guards the branches that act here.
-      const isCurrent = beginPaneAssign(nodeId);
+      // NOTE WHO OWNS THIS PANE, because the MRU re-read below can suspend this
+      // handler. It used to be synchronous end to end, so a second pick simply
+      // ran after the first; with an await in the middle, an earlier pick can
+      // resume AFTER a later one has already placed its choice and apply a
+      // decision computed against a tree two selections ago.
+      //
+      // PEEKED, NOT CLAIMED, and the difference is a deleted conversation. This
+      // handler does not yet know whether it will act — `selectPaneAgent` below
+      // can still answer `noop`, which is what re-picking the agent a pane
+      // already shows returns. A claim taken to find out would invalidate a mint
+      // in flight for this same pane, and that mint answers supersession by
+      // DELETING the conversation it just created (see `handlePickAgent`) — the
+      // pane appearing and then silently vanishing, which is the defect this
+      // branch exists to fix. So: observe here, and leave the claiming to
+      // `handlePickAgent`, which takes its own on the mint branch below.
+      const assignAtEntry = peekPaneAssign(nodeId);
 
       let candidates = conversationDirectory.resolved;
       // MRU FRESHNESS, bought only where recency can actually decide anything.
@@ -1203,9 +1218,12 @@ export default function AgentPanes({
         // A failed re-read is not a reason to refuse the switch: the stale
         // ordering is still a real answer, and it is the one shown on screen.
         if (refreshed !== null) candidates = refreshed.resolved;
-        // A newer pick for this pane landed while the re-read was in flight. It
-        // has already decided; this one must not decide again on top of it.
-        if (!isCurrent()) return;
+        // SOMEBODY TOOK THIS PANE while the re-read was in flight — a newer
+        // switch that committed, a History pick, a mint. Whoever it was has
+        // already decided; this one must not decide again on top of it. A newer
+        // switch that decided `noop` took nothing and is correctly invisible
+        // here: it changed the pane no more than this one has.
+        if (peekPaneAssign(nodeId) !== assignAtEntry) return;
       }
 
       const decision = selectPaneAgent({
@@ -1239,7 +1257,7 @@ export default function AgentPanes({
       closeReplacedConversation,
       handlePickAgent,
       syncConsoleSelection,
-      beginPaneAssign,
+      peekPaneAssign,
     ],
   );
 

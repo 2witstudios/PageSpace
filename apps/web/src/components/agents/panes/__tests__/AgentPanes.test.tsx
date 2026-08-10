@@ -944,6 +944,48 @@ describe('AgentPanes — the pane bar', () => {
     expect(useAgentWorkspaceStore.getState().workspaces[WS].activeNodeId).toBe(minted!.id);
   });
 
+  /**
+   * THE SAME WINDOW, FROM THE OTHER SIDE. Guarding the await above needs a token
+   * saying who owns this pane — but TAKING one to find out is itself a write,
+   * and this handler can still decide it has nothing to do: re-picking the agent
+   * a pane already shows is `noop`. A token claimed on that path invalidates a
+   * mint in flight for the same pane, and that mint answers supersession by
+   * DELETING the conversation it just created — the pane appearing and then
+   * silently vanishing, which is the defect this branch exists to fix, arriving
+   * through a narrower door. So the guard PEEKS across the await, leaving the
+   * claim to the mint that actually rebinds the pane.
+   */
+  it('re-picking the agent a pane already shows does not cancel a mint in flight for it', async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+
+    // Switch to Writer, who has no thread here: a mint, held in flight. The pane
+    // is BOUND, so it goes on showing conv-1 — and its selector goes on saying
+    // "Researcher" — for the whole round trip.
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // Now re-pick the agent already on screen. `selectPaneAgent` answers `noop`:
+    // nothing about this pane changes, so nothing may be invalidated either.
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+    await act(async () => {
+      resolveMint({});
+      await Promise.resolve();
+    });
+
+    // The mint lands, and nothing tore it down on the way.
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+    expect(conversationDeletes()).not.toContain('/api/agent-workspaces/ses-1/conversations/new-id-1');
+  });
+
   it('switching to an agent with no thread here mints one', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     mockPost.mockResolvedValue({});
