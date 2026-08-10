@@ -551,6 +551,16 @@ export default function AgentPanes({
    * reconnect re-reads the snapshot, and any change to the member set starts a
    * fresh probe because the signature changes with it.
    *
+   * BUT A FAILED READ ANSWERS NOTHING, so it is worth exactly one more ask.
+   * `refreshWorkspaceSnapshot` reports failure as `false` rather than throwing,
+   * and that boolean is the one thing here that can tell "we asked and the facts
+   * are not ours to have" from "we never got to ask". Arming on the first
+   * failure conflates them: one dropped request at the moment another member's
+   * thread lands leaves readiness armed against a list missing that thread, and
+   * the switch then reads "no thread for this agent" and mints a DUPLICATE.
+   * Bounded at one retry, and armed either way afterwards — the point is to stop
+   * conflating the two states, not to keep asking until the network agrees.
+   *
    * Deduplicated by the member set rather than a bare boolean: repeated
    * broadcasts, and a local mint's own echo, must not each fire a read. The
    * store's `snapshot.rev < sync.rev` guard handles an older response landing
@@ -560,13 +570,15 @@ export default function AgentPanes({
     if (conversationDirectory === null || !conversationDirectory.hasUnresolved || directorySignature === null) return;
     if (directoryProbe !== null && directoryProbe.signature === directorySignature) return;
     setDirectoryProbe({ signature: directorySignature, answered: false });
-    void useAgentWorkspaceStore
-      .getState()
-      .refreshWorkspaceSnapshot(sessionId)
-      .then(
-        () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
-        () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
-      );
+    const ask = async () => {
+      const read = () => useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(sessionId);
+      if (await read()) return;
+      await read();
+    };
+    void ask().then(
+      () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+      () => setDirectoryProbe((current) => markAnswered(current, directorySignature)),
+    );
   }, [conversationDirectory, directoryProbe, directorySignature, sessionId]);
 
   /**

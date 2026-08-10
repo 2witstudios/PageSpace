@@ -1276,6 +1276,58 @@ describe('AgentPanes — the pane bar', () => {
     );
   });
 
+  /**
+   * A DROPPED READ ANSWERS NOTHING. `refreshWorkspaceSnapshot` reports failure
+   * as `false` rather than throwing, and arming on it conflates "we asked and
+   * these facts are not ours to have" with "we never got to ask" — so one
+   * dropped request at the moment another member's thread lands would arm
+   * readiness against a list missing that thread, and the switch would then read
+   * "no thread for this agent" and mint a DUPLICATE of a conversation that is
+   * sitting right there.
+   */
+  it('does not arm on a read that failed — it asks once more before believing the list', async () => {
+    // conv-2 is a member with no facts. The first probe read FAILS; the second
+    // carries the facts, and identifies conv-2 as Researcher's existing thread.
+    const resolved: WorkspaceNodeTarget[] = [
+      CONV_1_TARGET,
+      { id: 'conv-2', kind: 'chat', title: 'Theirs', lastMessageAt: null, agentPageId: 'agent-2' },
+    ];
+    const nodes = [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')];
+    // Read 1 is the mount's own, and answers WITHOUT conv-2's facts — which is
+    // what leaves the directory unresolved and starts the probe. Read 2 is that
+    // probe, and it is the one that gets dropped.
+    let nodeReads = 0;
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        nodeReads += 1;
+        if (nodeReads === 1) return jsonOk({ rev: 1, nodes, targets: [CONV_1_TARGET] });
+        if (nodeReads === 2) throw new Error('dropped');
+        return jsonOk({ rev: 2, nodes, targets: resolved });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat(nodes, [CONV_1_TARGET]);
+    const user = userEvent.setup();
+    // conv-2's pane renders as the HOST's own identity, so the only "Researcher"
+    // control on screen is n1's selector.
+    renderPanes({ hostConversationId: 'conv-2' });
+
+    await screen.findAllByTestId('pane-chat');
+    const trigger = await screen.findByRole('button', { name: /Researcher/ });
+    await waitFor(() => expect(trigger).not.toBeDisabled());
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+
+    // The switch found Writer's thread and showed it, closing the outgoing one.
+    // A POST would mean the retry never happened, the partial list was believed,
+    // and a DUPLICATE of conv-2 was minted alongside it.
+    await waitFor(() => expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'));
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it('is enabled once every thread in the workspace has its facts', async () => {
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
     renderPanes();
