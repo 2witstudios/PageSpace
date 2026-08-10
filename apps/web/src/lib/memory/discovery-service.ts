@@ -27,6 +27,16 @@ export interface DiscoveredClaim {
   field: MemoryField;
   claim: string;
   evidence: string;
+  /**
+   * How many messages in THIS window support the claim.
+   *
+   * Not used for corroboration — that counts distinct evidence days across
+   * runs (see `evidenceAt`), and a count confined to one window cannot
+   * distinguish one emphatic day from a standing preference. It is kept
+   * because asking the model to count forces it to look for repetition rather
+   * than latch onto a single striking sentence, and it is worth having in the
+   * logs when tuning the prompts.
+   */
   occurrencesInWindow: number;
   /**
    * When the newest message supporting this claim was written.
