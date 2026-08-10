@@ -51,10 +51,10 @@ flyctl machine run "$FLY_IMAGE" \
   --name "$MACHINE_NAME" \
   --region iad \
   --restart no \
-  "${EXTRA_ARGS[@]}" \
+  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
   2>&1 | tee "$OUTPUT_FILE" || true
 
-MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' "$OUTPUT_FILE" | head -1)
+MACHINE_ID=$(grep -o 'Machine ID: [0-9a-f]*' "$OUTPUT_FILE" | head -1 | sed 's/Machine ID: //')
 if [ -z "$MACHINE_ID" ]; then
   echo "ERROR: could not parse machine ID from flyctl output" >&2
   cat "$OUTPUT_FILE" >&2
@@ -98,6 +98,19 @@ done
 
 if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
   echo "ERROR: timed out after ${TIMEOUT}s waiting for migration machine" >&2
+  flyctl machine destroy "$MACHINE_ID" --app "$FLY_APP" --force 2>/dev/null || true
+  exit 1
+fi
+
+# With --restart no, the machine reaches "stopped" on ANY process exit — including a
+# non-zero one. "stopped" alone is not success; the migration command itself may have
+# errored. $STATE_FILE already holds the last-polled response body (the one that broke
+# the loop above), so read its exit code from there instead of polling again. Missing
+# exit_code (e.g. no exit event recorded) fails closed rather than assuming success.
+EXIT_CODE=$(jq -r '[.events[]? | select(.type == "exit")] | last | .request.exit_event.exit_code // empty' "$STATE_FILE" 2>/dev/null)
+if [ -z "$EXIT_CODE" ] || [ "$EXIT_CODE" != "0" ]; then
+  echo "ERROR: migration machine stopped with exit code '${EXIT_CODE:-unknown}' (migrations failed)" >&2
+  flyctl machine logs "$MACHINE_ID" --app "$FLY_APP" 2>/dev/null || true
   flyctl machine destroy "$MACHINE_ID" --app "$FLY_APP" --force 2>/dev/null || true
   exit 1
 fi
