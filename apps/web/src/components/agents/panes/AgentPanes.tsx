@@ -1233,6 +1233,15 @@ export default function AgentPanes({
       });
       if (decision.action === 'noop') return;
       if (decision.action === 'focus-existing') {
+        // CLAIM IT, now that a decision has actually committed to altering this
+        // node — the rule `decideClosePane` states above, and what makes the
+        // guard's "a newer switch that committed" true rather than aspirational.
+        // Without it this branch is invisible to the peek: two switches that
+        // both take the MRU await, the later one commits, and the earlier one
+        // then resumes against an unchanged token and applies its own decision
+        // on top — a second DELETE for the outgoing thread, and the console
+        // selection dragged back to the agent the user already replaced.
+        beginPaneAssign(nodeId);
         // Read LIVE rather than from the closure: an await may have passed
         // above, and the tree can have moved under it.
         const node = findNode(useAgentWorkspaceStore.getState().workspaces[sessionId]?.nodes ?? [], nodeId);
@@ -1257,6 +1266,7 @@ export default function AgentPanes({
       closeReplacedConversation,
       handlePickAgent,
       syncConsoleSelection,
+      beginPaneAssign,
       peekPaneAssign,
     ],
   );
@@ -1268,7 +1278,11 @@ export default function AgentPanes({
       try {
         const { shell } = await post<{ shell: { shellId: string; name: string } }>(
           `/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells`,
-          {},
+          // WHERE, for the same reason the chat mint says it: the spawn's own
+          // write ADMITS the terminal, and admitting places. Without a
+          // preference the policy takes the first pane that qualifies, so with
+          // two empty panes the shell opens in the one the user did not click.
+          { activeNodeId: nodeId },
         );
         const superseded = !stillMinting(nodeId, mint, shell.shellId);
         endMint(nodeId);

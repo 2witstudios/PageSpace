@@ -782,8 +782,28 @@ describe('AgentPanes — the picker', () => {
 
     await user.click(await screen.findByText('Shell'));
 
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', {}));
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', { activeNodeId: 'n1' }),
+    );
     await waitFor(() => expect(nodeById('n1')).toMatchObject({ target: { kind: 'terminal', id: 'shell-9' } }));
+  });
+
+  it('opens the shell in the pane the user picked into, not whichever was empty first', async () => {
+    // The terminal's own version of the mint's blind placement: `spawnShell`
+    // ADMITS the same way a conversation does, so with two unbound panes the
+    // policy falls to `panes.find(canReplace)` — n1 — while the user clicked n2.
+    mockPost.mockResolvedValue({ shell: { shellId: 'shell-9', name: 'shell-1' } });
+    seat([rootNode, paneNode('n1', WS, 0, null), paneNode('n2', WS, 1, null)], []);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    // The SECOND picker — the pane the user is actually looking at.
+    const pickers = await screen.findAllByText('Shell');
+    await user.click(pickers[1]);
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', { activeNodeId: 'n2' }),
+    );
   });
 
   it('closes a shell whose pane went away while it was being opened', async () => {
@@ -942,6 +962,72 @@ describe('AgentPanes — the pane bar', () => {
     const minted = nodeShowingChat('new-id-1');
     expect(minted).toBeDefined();
     expect(useAgentWorkspaceStore.getState().workspaces[WS].activeNodeId).toBe(minted!.id);
+  });
+
+  /**
+   * THE SUPERSEDER THAT DOES NOT MINT. The guard above only sees a newer pick if
+   * that pick TOOK the pane's token, and until this was fixed only the mint
+   * branch did — so a newer switch that landed an EXISTING thread was invisible
+   * to it. The earlier, still-suspended switch would then resume against an
+   * unchanged token and act on top of it: a second DELETE for the outgoing
+   * thread, and the console selection dragged back to the agent the user had
+   * already replaced.
+   */
+  it('a superseding pick that lands an EXISTING thread also cancels the suspended one', async () => {
+    const seatedNodes = [
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-1'),
+      chatNode('n2', WS, 1, 'conv-2'),
+      chatNode('n3', WS, 2, 'conv-3'),
+      chatNode('n4', WS, 3, 'conv-4'),
+    ];
+    const seatedTargets: WorkspaceNodeTarget[] = [
+      { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+      // Researcher has TWO, so switching to it suspends on the MRU re-read.
+      { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+      { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+      // Writer has ONE, so switching to it decides straight away — and lands an
+      // existing thread rather than minting.
+      { id: 'conv-4', kind: 'chat', title: 'C', lastMessageAt: '2026-08-03T00:00:00.000Z', agentPageId: 'agent-2' },
+    ];
+    let suspend = false;
+    const nodeReads: Array<(value: unknown) => void> = [];
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        if (suspend) return new Promise((resolve) => nodeReads.push(resolve));
+        return jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockDel.mockResolvedValue({});
+    seat(seatedNodes, seatedTargets);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
+
+    const pick = async (agent: RegExp) => {
+      const trigger = await findEnabledSelector(/Assistant/);
+      trigger.focus();
+      await user.keyboard('{Enter}');
+      await user.click(await screen.findByRole('menuitem', { name: agent }));
+    };
+
+    suspend = true;
+    await pick(/Researcher/); // suspends on the re-read
+    await pick(/Writer/); // decides at once, and lands conv-4 here
+    await waitFor(() => expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'));
+
+    // NOW let the suspended pick's re-read come back.
+    await act(async () => {
+      for (const resolve of nodeReads) resolve(jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets }));
+      await Promise.resolve();
+    });
+
+    // It must not decide again on top of the pick that replaced it. The outgoing
+    // thread is closed ONCE, by the switch that actually owns the pane.
+    expect(
+      conversationDeletes().filter((url) => url === '/api/agent-workspaces/ses-1/conversations/conv-1'),
+    ).toHaveLength(1);
   });
 
   /**
