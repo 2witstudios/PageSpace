@@ -197,18 +197,29 @@ export async function evaluateAndIntegrate(
     rules: currentPages.rules ?? '',
   };
 
-  // Group candidates by field
+  // Group candidates by field.
+  //
+  // `field` is a free-form text column, so the guard checks membership in an
+  // explicit set rather than using `in`, which also matches inherited keys:
+  // a row whose field read `toString` would pass `in`, resolve `byField[field]`
+  // to a function, and throw on `.push` — aborting the whole evaluation run.
   const byField: Record<MemoryField, typeof candidates> = {
     bio: [],
     writingStyle: [],
     rules: [],
   };
+  const KNOWN_FIELDS = new Set<string>(['bio', 'writingStyle', 'rules']);
 
   for (const candidate of candidates) {
-    const field = candidate.field as MemoryField;
-    if (field in byField) {
-      byField[field].push(candidate);
+    if (!KNOWN_FIELDS.has(candidate.field)) {
+      loggers.api.warn('Memory integration: candidate has an unrecognised field', {
+        userId,
+        candidateId: candidate.id,
+        field: candidate.field,
+      });
+      continue;
     }
+    byField[candidate.field as MemoryField].push(candidate);
   }
 
   const EVALUATOR_SYSTEM_PROMPT = `You are deciding how to update a user's personalization profile based on newly-learned information.

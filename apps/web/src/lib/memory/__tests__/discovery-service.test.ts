@@ -83,12 +83,21 @@ vi.mock('ai', () => ({
  * `where()` therefore has to be both thenable and chainable.
  */
 function setupDb(messageRows: unknown[], driveRows: unknown[] = [{ driveId: 'drive-1' }]) {
+  // The module runs three `.limit()` queries: global messages, page messages,
+  // then activity. Serving `messageRows` to every one would silently duplicate
+  // the transcript, which would make an index-resolution assertion meaningless.
+  // So the rows are served ONCE and later queries come back empty.
+  let served = false;
   mockDbSelect.mockImplementation(() => {
     const chain = {
       from: () => chain,
       innerJoin: () => chain,
       orderBy: () => chain,
-      limit: () => Promise.resolve(messageRows),
+      limit: () => {
+        if (served) return Promise.resolve([]);
+        served = true;
+        return Promise.resolve(messageRows);
+      },
       // Awaiting the chain directly resolves the drive-membership shape.
       where: () => Object.assign(Promise.resolve(driveRows), chain),
     };
@@ -187,6 +196,73 @@ describe('runDiscoveryPasses', () => {
         occurrencesInWindow: result.claims[0].occurrencesInWindow,
       },
       expected: { evidence: 'keep it short', occurrencesInWindow: 3 },
+    });
+  });
+
+  it('resolves a cited message index against a chronological transcript', async () => {
+    // The db returns newest-first (that is how the most recent N are picked),
+    // so the transcript must be reversed before numbering. Numbering it
+    // newest-first would make [0] the newest while a model reading a
+    // conversation assumes ascending time — "cite the most recent message"
+    // would then return a HIGH index and resolve to the OLDEST message.
+    //
+    // The failure is silent: the index is in range, so the out-of-range
+    // fallback never fires, and today's evidence is stamped a week old —
+    // inverting the corroboration rule, which keys entirely on evidenceAt.
+    const newest = new Date('2026-03-12T00:00:00.000Z');
+    const oldest = new Date('2026-03-05T00:00:00.000Z');
+    setupDb([
+      { content: 'newest', role: 'user', createdAt: newest },
+      { content: 'middle', role: 'user', createdAt: new Date('2026-03-08T00:00:00.000Z') },
+      { content: 'oldest', role: 'user', createdAt: oldest },
+    ]);
+
+    // Cite the highest index — what a model means by "the most recent message".
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [
+          { claim: 'c', evidence: 'e', occurrencesInWindow: 1, evidenceMessageIndex: 2 },
+        ],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-1');
+
+    assert({
+      given: 'a claim citing the highest message number',
+      should: 'date it from the NEWEST message, not the oldest',
+      actual: result.claims[0]?.evidenceAt,
+      expected: newest,
+    });
+  });
+
+  it('dates a claim from the oldest message when the cited index is unusable', async () => {
+    const oldest = new Date('2026-03-05T00:00:00.000Z');
+    setupDb([
+      { content: 'newest', role: 'user', createdAt: new Date('2026-03-12T00:00:00.000Z') },
+      { content: 'middle', role: 'user', createdAt: new Date('2026-03-08T00:00:00.000Z') },
+      { content: 'oldest', role: 'user', createdAt: oldest },
+    ]);
+
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [
+          { claim: 'c', evidence: 'e', occurrencesInWindow: 1, evidenceMessageIndex: 999 },
+        ],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-1');
+
+    assert({
+      given: 'an out-of-range message index',
+      should: 'fall back to the oldest message, so a claim can never look fresher than its evidence',
+      actual: result.claims[0]?.evidenceAt,
+      expected: oldest,
     });
   });
 

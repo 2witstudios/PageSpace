@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, boolean, uniqueIndex, integer } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, boolean, uniqueIndex, integer, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
@@ -76,7 +76,7 @@ export const personalizationCandidates = pgTable('personalization_candidates', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
-  field: text('field').notNull(), // 'bio' | 'writingStyle' | 'rules' — CHECK constraint in migration
+  field: text('field').notNull(), // 'bio' | 'writingStyle' | 'rules' — see fieldValues check below
 
   claim: text('claim').notNull(),
   claimKey: text('claimKey').notNull(), // normalized for dedupe
@@ -91,6 +91,10 @@ export const personalizationCandidates = pgTable('personalization_candidates', {
 }, (table) => ({
   userFieldClaimIdx: uniqueIndex('personalization_candidates_user_field_claim_idx')
     .on(table.userId, table.field, table.claimKey),
+  fieldValues: check(
+    'personalization_candidates_field_chk',
+    sql`${table.field} IN ('bio', 'writingStyle', 'rules')`,
+  ),
 }));
 
 export const personalizationCandidatesRelations = relations(personalizationCandidates, ({ one }) => ({

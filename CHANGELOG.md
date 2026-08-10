@@ -46,9 +46,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   yourself.
 - **Something you mention once no longer becomes a permanent fact about you** — a single remark
   could end up in your profile and stay there. A new observation now has to show up on at least two
-  separate days, from things you actually wrote on those days, before it is recorded at all — and
-  three days for anything describing who you are. Observations that stop recurring are dropped
-  after a month.
+  separate days, from things you actually wrote on those days, before it is added to your profile —
+  and three days for anything describing who you are. Until then it is held aside as a pending
+  observation, which your data export includes. Observations that stop recurring are dropped after
+  a month.
 - **Your profile can now correct itself instead of only growing** — it could only ever have text
   added, so a wrong guess stayed forever and the profile grew until it was trimmed at around 14,000
   characters. It is now rewritten in place, superseded lines are removed, and each page is kept to

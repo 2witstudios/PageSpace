@@ -103,7 +103,7 @@ EXPLICIT EXCLUSIONS (never record these, even if they seem actionable):
 - Self-reported metrics (lines of code, rankings, follower counts, scores)
 - Current tasks, projects, or work-in-progress status
 
-Each message in the transcript below is numbered like [12 user]. Use those numbers.
+Each message in the transcript below is numbered like [12 user], in chronological order: [0] is the OLDEST message and the highest number is the MOST RECENT. Use those numbers.
 
 Return a JSON object with a "claims" array. Each claim has:
 - claim: the insight itself — IMPERATIVE for writingStyle/rules (e.g. "Never use emojis", not "user prefers no emojis")
@@ -343,7 +343,11 @@ async function runDiscoveryPass(
     // index falls back to the OLDEST message in the window: a model that cites
     // nothing usable must not be able to make a claim look fresher than its
     // evidence, which would let it clear the corroboration bar early.
-    const oldest = messageDates[messageDates.length - 1] ?? new Date();
+    // Transcript is chronological, so index 0 is the oldest message in the
+    // window. An unusable index falls back to it: a claim must never be able
+    // to look FRESHER than the evidence actually supports, since that is what
+    // would let it clear the corroboration bar early.
+    const oldest = messageDates[0] ?? new Date();
 
     // The model's own `field` tag is discarded in favour of `field`, the field
     // this pass is responsible for. The model can omit or mislabel it, and a
@@ -379,9 +383,19 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
   }
 
   // Format conversation context: 60 messages × 1500 chars (was 100 × 500).
-  // Messages are NUMBERED so a claim can cite the message it came from, and the
-  // dates array below stays index-aligned with the transcript the model sees.
-  const windowed = recentMessages.slice(0, 60);
+  //
+  // `recentMessages` is newest-first (that is how the 60 most recent are
+  // selected), but the transcript is then REVERSED to chronological order
+  // before numbering. Numbering a newest-first list would make index 0 the
+  // newest message while a model reading a conversation naturally assumes
+  // ascending time — so "cite the most recent message" would return a high
+  // index, and `evidenceAt` would resolve to the OLDEST message instead.
+  //
+  // That failure is invisible: the index is in range, so the out-of-range
+  // fallback never fires, and today's evidence is silently stamped a week old.
+  // It also inverts the corroboration rule, since both
+  // `shouldIncrementOccurrences` and `promotionCutoff` key on `evidenceAt`.
+  const windowed = recentMessages.slice(0, 60).reverse();
   const messageDates = windowed.map((m) => m.createdAt);
   const conversationContext = windowed
     .map((m, i) => `[${i} ${m.role}]: ${m.content.substring(0, 1500)}`)
