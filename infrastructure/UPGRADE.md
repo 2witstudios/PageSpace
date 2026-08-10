@@ -56,11 +56,19 @@ For a version-skipping upgrade:
 4. Confirm the census reports zero skipped workspaces and `members in == pane
    nodes out`, then upgrade to this release.
 
-**Already at `0255` with the backfill run?** Nothing to do — `0256` applies
-cleanly and touches no node row. Verify with the check below, which should
-return only conversations whose session has since been ENDED (ending a session
-destroys its tree, and nothing retires the legacy column, so a pointer with no
-node is expected and benign):
+**Already at `0255` with the backfill run?** Nothing to do for the data —
+`0256` applies cleanly and touches no node row. (Still read the deploy-order
+section below, which applies to every deployment including cloud.)
+
+**Run the check below BEFORE applying `0256`, while the database is still at
+`0255`.** It reads `conversations."workspaceId"` and `"closedInWorkspaceAt"`,
+which are the columns `0256` drops — afterwards it cannot run at all, and there
+is no post-`0256` equivalent, because the whole question is about data that will
+no longer exist. This is a pre-flight, not a post-check.
+
+It should return only conversations whose session has since been ENDED (ending a
+session destroys its tree, and nothing retires the legacy column, so a pointer
+with no node is expected and benign):
 
 ```sql
 SELECT c.id, c."workspaceId", w."endedAt"
@@ -73,6 +81,66 @@ SELECT c.id, c."workspaceId", w."endedAt"
 
 Any row whose `endedAt` is NULL is membership that is about to be lost — stop
 and run the backfill before upgrading.
+
+To confirm afterwards that the tree is intact, ask a node-only question instead
+— every live workspace should hold a root:
+
+```sql
+SELECT w.id, w."endedAt",
+       (SELECT count(*) FROM agent_workspace_nodes n WHERE n."rootId" = w.id) AS nodes
+  FROM agent_workspaces w
+ WHERE w."endedAt" IS NULL
+   AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                    WHERE n."rootId" = w.id AND n."nodeType" = 'root');
+```
+
+### ⚠️ Deploy order for `0256`: bring the new image up BEFORE migrating
+
+**This applies to EVERY deployment, cloud included — it is not a
+version-skipping concern.**
+
+`0256` is a CONTRACT migration, so the usual order is backwards for it. The
+pipeline (`.github/workflows/docker-images.yml`) runs the migrate one-shot and
+only then rolls `web`, which means the PREVIOUS image serves against the
+contracted schema for the length of that roll. That image still declares both
+columns in its Drizzle schema, and Drizzle names every declared column
+explicitly rather than emitting `SELECT *`:
+
+```
+select "id", "userId", "title", "type", "contextId", "workspaceId",
+       "closedInWorkspaceAt", "agentPageId", … from "conversations"
+```
+
+so every unprojected `.select().from(conversations)` fails with
+`column "workspaceId" does not exist` (SQLSTATE 42703) until the roll finishes.
+Three such selects exist, and one of them is on the main chat path:
+
+| what | file |
+|---|---|
+| `conversationRepository.getConversation()` — **17 non-test callers**, including `handle-chat-turn.ts` and `page-chat-turn.ts` (sending a message), the sandbox/session agent tools, the claim route, and the `/api/v1` conversation routes | `apps/web/src/lib/repositories/conversation-repository.ts:738` |
+| `GET /api/v1/conversations` (the public API pagespace-cli uses) | `apps/web/src/app/api/v1/conversations/route.ts:90` |
+| `GET /api/ai/global/[id]/messages` (global-assistant history) | `apps/web/src/app/api/ai/global/[id]/messages/route.ts:36` |
+
+This is the same shape as `0252`'s window (documented below) but with a **much**
+wider blast radius. `0252` degraded the Agents sidebar and the layout endpoints;
+this one reaches `getConversation`, which sits on the chat turn itself — so in
+the default order, sending a message 500s for the length of the roll. Treat the
+inverted order below as required rather than advisory.
+
+**It is fully avoidable, and the fix costs nothing:** the NEW image is forward
+compatible with the un-contracted schema. It never names either column, and both
+are nullable, so it runs correctly against a database that still has them. So
+for this one release, invert the order:
+
+1. Deploy `web` (and `realtime`) on the new image FIRST, against the database
+   still at `0255`.
+2. Run the migrate one-shot once the roll has completed.
+
+Degradation if you do it in the pipeline's default order is bounded to the
+migrate→roll window and it is loud (500s), not silent. No data is at risk either
+way — this is an availability concern only.
+
+## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
 ## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
