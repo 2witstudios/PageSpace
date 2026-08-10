@@ -153,6 +153,20 @@ export async function updatePersonalizationPage(
     throw error;
   }
 
+  // Retire the legacy column for this field now that a page holds the content.
+  //
+  // The column is a one-way fallback for users the backfill has not reached,
+  // NOT a shadow copy that outlives the page. Leaving it populated is a latent
+  // privacy leak with a real trigger: `purgeExpiredTrashedPages` hard-deletes a
+  // trashed page 30 days on, `ON DELETE SET NULL` clears the pointer, and the
+  // pointer-absent branch in `getUserPersonalization` then reads the column
+  // again — resurrecting, weeks later, exactly the content the user deleted the
+  // page to be rid of.
+  await db
+    .update(userPersonalization)
+    .set({ [field]: null, updatedAt: new Date() })
+    .where(eq(userPersonalization.userId, userId));
+
   return { written: true };
 }
 

@@ -160,6 +160,23 @@ export async function runBackfill({
             }
           }
 
+          // Retire the columns we successfully copied, in the SAME transaction.
+          //
+          // Once a page holds the content the column is not a second copy to
+          // keep in step — it is a fallback for users this backfill has not
+          // reached yet. Leaving it behind is a latent privacy leak: if the user
+          // later deletes the page, `purgeExpiredTrashedPages` hard-deletes it,
+          // `ON DELETE SET NULL` clears the pointer, and the pointer-absent
+          // fallback reads the column again — resurrecting the very content they
+          // deleted the page to remove.
+          if (written.length > 0) {
+            const cleared = Object.fromEntries(written.map((field) => [LEGACY_COLUMN[field], null]));
+            await tx
+              .update(userPersonalization)
+              .set({ ...cleared, updatedAt: new Date() })
+              .where(eq(userPersonalization.userId, row.userId));
+          }
+
           return written;
         });
 

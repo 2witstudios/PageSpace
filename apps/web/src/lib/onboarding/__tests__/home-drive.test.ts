@@ -239,10 +239,17 @@ describe('provisionHomeDriveIfNeeded', () => {
   });
 
   test('given an existing user reached lazily, memory pages are still provisioned', async () => {
-    const tx = makeTx();
+    // Owning a non-HOME drive is what puts production on the LAZY branch.
+    // Calling makeTx() bare would report zero owned drives and quietly re-test
+    // the new-user path instead.
+    const tx = makeTx([{ id: 'other-drive-1', kind: 'STANDARD', slug: 'my-drive' }]);
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
-    await provisionHomeDriveIfNeeded('user-existing');
+    const result: ProvisionHomeDriveResult = await provisionHomeDriveIfNeeded('user-existing');
+
+    // `created: false` is what proves the lazy branch ran: the new-user branch
+    // returns true after seeding tutorial content.
+    expect(result.created).toBe(false);
 
     // Both branches, like starter skills. An account that predates the feature
     // reaches Home through the lazy path and must not be left without pages.
