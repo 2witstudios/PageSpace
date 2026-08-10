@@ -1,17 +1,18 @@
 /**
- * Put ONE conversation back on its workspace's grid — the undo of the sibling
+ * Put ONE conversation back into its workspace — the undo of the sibling
  * `[conversationId]` route's DELETE.
  *
- * POST → 200 { ok: true } — a `move` of the thread's node back into the tree.
- * It mints nothing: the node never stopped existing, because a close only
- * changed where it was.
+ * POST → 200 { ok: true } — an ADMISSION, and a re-mint. There is no `readmit`
+ * in the model: that was a `move` back onto the grid, and it existed only
+ * because a closed thread kept a node with no parent. Closing DESTROYS the
+ * node, so a thread that was closed is a member of nothing, and putting it back
+ * is an ordinary admission that mints a fresh node for it.
  *
- * **No `session_full` any more.** The old version was bounded by
- * `MAX_SESSION_CONVERSATIONS`, because reopening restored a listing slot the
- * close had freed. A member that never stopped being a member frees no slot
- * when it is closed and consumes none when it returns, so the ceiling has
- * nothing to say here — it bounds MEMBERSHIP, and is enforced where membership
- * is created.
+ * **Which is why `session_full` is live on this path.** It is bounded by
+ * `MAX_SESSION_CONVERSATIONS` because the cap counts MEMBERSHIP and a close now
+ * genuinely frees a slot — so a return has to re-consult the ceiling like any
+ * other admission, and can lose. It is answered 409 below rather than folded
+ * into the "nothing here" 404: it is the one refusal here a user can resolve.
  *
  * Gated by the same ordinary session access check the close route uses —
  * this is a routine write, not a capability-gated act.

@@ -83,6 +83,7 @@ import {
   rowFromNode,
   type WorkspaceNodeRow,
 } from './workspace-node-rows';
+import { rootSeedFor } from './workspace-node-commands';
 import { validateTree, type TreeViolationCode } from './workspace-node-validate';
 import type { PaneNode, PaneTargetKind, SplitNode, WorkspaceNode } from './workspace-node';
 
@@ -758,10 +759,23 @@ export function deriveWorkspaceNodes(
   // ---------------------------------------------------------------------
   // The nodes
   // ---------------------------------------------------------------------
-  const rootId = ids.allocate(`${workspaceId}::root`, 'root').id;
-  const nodes: WorkspaceNode[] = [
-    { nodeType: 'root', id: rootId, parentId: null, position: 0, axis: 'row' },
-  ];
+  // THE SAME ROOT THE SEED WOULD MINT, from the same function, and that is the
+  // point rather than a tidiness. `rootSeedFor` derives its id from the
+  // workspace so that two writers racing to seed an empty tree produce the
+  // IDENTICAL root and converge on the upsert. A backfill that minted its own
+  // shape of id put a second derivation into circulation: a client seeding
+  // against a stale or empty local tree while the server already held a
+  // backfilled root would send a root the server does not have, and the write
+  // would come back `multiple_roots` instead of converging. One derivation,
+  // one root id.
+  //
+  // Still through the allocator, because a pane may already hold this id — the
+  // old schema keys panes per-workspace and nothing stopped one being named
+  // after its workspace. A renamed root loses the convergence above and keeps
+  // the migration correct, which is the right way round.
+  const seed = rootSeedFor(workspaceId);
+  const rootId = ids.allocate(seed.id, 'root').id;
+  const nodes: WorkspaceNode[] = [{ ...seed, id: rootId }];
 
   // ---------------------------------------------------------------------
   // THE MEMBERS THAT HAD NO PANE — resolved BEFORE anything is emitted, because

@@ -106,6 +106,52 @@ function sameNode(left: WorkspaceNode, right: WorkspaceNode): boolean {
 }
 
 /**
+ * ONE NODE SAID TWICE IN ONE PAYLOAD IS ONE NODE — and only when the two
+ * sayings agree.
+ *
+ * The idempotency this model runs on is "the same write applied twice is the
+ * same result", and until this function that held only ACROSS payloads: a
+ * retried POST re-upserts its nodes and lands where the first one did. Within a
+ * single payload the same repetition was fatal, because {@link upsertNodes}
+ * replaces by id against the STORED nodes and appends everything else in order
+ * — it does not collapse a repeat inside `changed` — so both copies reached
+ * {@link validateTree} and came back `duplicate_id`, a 400 the client treats as
+ * unrecoverable.
+ *
+ * That is not a hypothetical shape. It is the ROOT SEED. A workspace with no
+ * tree is seeded by whichever write first needs a root, and BOTH ends mint one:
+ * the browser prepends `seedRoot`'s node so its optimistic tree has somewhere to
+ * put a pane, and the server prepends its own inside the lock so the write is
+ * legal whatever the client sent. Both come from `rootSeedFor(workspaceId)` and
+ * are therefore the identical node — the convergence the deterministic id was
+ * chosen FOR — and they met in one `put`, where the convergence did not apply.
+ * Every first command against an empty tree failed.
+ *
+ * **Identical only, deliberately.** Two DIFFERENT nodes claiming one id is a
+ * real fault with a real code, and collapsing it last-wins would judge a tree on
+ * whichever half survived and then store that half silently. Those repeats are
+ * left in place so the validator still refuses them. What is dropped is
+ * strictly the repetition that says nothing: same id, same everything
+ * {@link sameNode} compares, so the payload means the same with it as without.
+ *
+ * Done HERE rather than at the seed's call site because the duplicate must also
+ * leave `persist.put`: a multi-row `INSERT … ON CONFLICT DO UPDATE` carrying one
+ * key twice is a Postgres error ("cannot affect row a second time"), so a fix
+ * that only satisfied the validator would trade the 400 for a 500.
+ */
+function collapseRepeats(incoming: readonly WorkspaceNode[]): WorkspaceNode[] {
+  const kept: WorkspaceNode[] = [];
+  const byId = new Map<string, WorkspaceNode>();
+  for (const node of incoming) {
+    const seen = byId.get(node.id);
+    if (seen !== undefined && sameNode(seen, node)) continue;
+    byId.set(node.id, node);
+    kept.push(node);
+  }
+  return kept;
+}
+
+/**
  * TRANSLATE THE DECIDED TREE INTO A STORAGE INSTRUCTION, and it is NOT the
  * caller's `put`/`drop`.
  *
@@ -183,7 +229,11 @@ export function decideNodeWrite(request: NodeWriteRequest): NodeWriteDecision {
   // 2. REV.
   if (baseRev !== rev) return { status: 'stale' };
 
-  const incoming = put.map(nodeOfWire);
+  // The payload's nodes, with any node it named twice IDENTICALLY reduced to
+  // one. See {@link collapseRepeats}: the root seed arrives from both ends of a
+  // first write, and everything below — the validated tree, the change
+  // measurement, the storage instruction — must see one of it.
+  const incoming = collapseRepeats(put.map(nodeOfWire));
 
   // 3. VALIDITY OF THE RESULT. Drop then upsert, so an id named in BOTH
   //    resolves as PUT WINS — which is the decision `persistedWrite` below

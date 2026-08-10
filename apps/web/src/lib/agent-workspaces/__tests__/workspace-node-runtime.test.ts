@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { PersistedNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-write';
+import { rootSeedFor } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import {
   CHAT_TARGET_UNIQUE_INDEX,
   type ChatTargetHolder,
@@ -327,6 +328,57 @@ describe('replay', () => {
     if (replay.status !== 'ok') return;
     expect(replay.changed).toBe(false);
     expect(store.rev).toBe(before);
+  });
+});
+
+/**
+ * THE FIRST WRITE TO AN EMPTY WORKSPACE, which is where the two seeds meet.
+ *
+ * A workspace with no tree is seeded by whichever write first needs a root, and
+ * BOTH ends mint one — the browser so its optimistic tree has somewhere to put
+ * a pane, and this funnel inside the lock so the write is legal whatever the
+ * client sent. `rootSeedFor` makes them the same node, which is what the
+ * deterministic id is for, and they arrive in ONE `put`, where the convergence
+ * has to be a property of the write decision rather than of the upsert. It
+ * wasn't: both copies reached the validator and every first command against an
+ * empty workspace came back `duplicate_id` — a 400 the client's queue treats as
+ * unrecoverable, so it discarded the pending writes and resynced.
+ */
+describe('the root seed the CLIENT also sent', () => {
+  beforeEach(() => {
+    store.rev = 0;
+    store.nodes = [];
+  });
+
+  it('lands as one root, not a refusal', async () => {
+    const seed = rootSeedFor(WORKSPACE);
+    const result = await write({ baseRev: 0, put: [seed, pane('pane-new', WORKSPACE, 0)] });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.snapshot.nodes.filter((node) => node.nodeType === 'root')).toHaveLength(1);
+    expect(store.nodes.filter((node) => node.nodeType === 'root')).toHaveLength(1);
+  });
+
+  it('reaches the store once — one statement cannot carry one key twice', async () => {
+    const seed = rootSeedFor(WORKSPACE);
+    await write({ baseRev: 0, put: [seed, pane('pane-new', WORKSPACE, 0)] });
+    expect(store.writes).toHaveLength(1);
+    const ids = store.writes[0]!.put.map((node) => node.id);
+    expect(ids).toEqual([...new Set(ids)]);
+  });
+
+  it('is the same tree the client would have got had it sent no seed at all', async () => {
+    const seeded = await write({ baseRev: 0, put: [rootSeedFor(WORKSPACE), pane('pane-new', WORKSPACE, 0)] });
+    const first = store.nodes;
+
+    store.rev = 0;
+    store.nodes = [];
+    store.writes = [];
+    const bare = await write({ baseRev: 0, put: [pane('pane-new', WORKSPACE, 0)] });
+
+    expect(seeded.status).toBe('ok');
+    expect(bare.status).toBe('ok');
+    expect(first).toEqual(store.nodes);
   });
 });
 

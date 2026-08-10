@@ -199,12 +199,19 @@ function ContainerGroup({
 /**
  * The empty grid — a resting state, not a failure.
  *
- * Closing the last pane parks it and leaves the workspace alive. Under the model
- * this replaces, that state could not be represented (a two-level grid had no
- * spelling for zero columns), so the reducer no-oped on the last close and
- * browser code ended the session instead. The workspace's members are all still
- * there, in the sidebar, one click from being shown again — which is what this
- * says.
+ * A root with no children is a legal tree. Under the model this replaces the
+ * state could not be represented at all — a two-level grid had no spelling for
+ * zero columns — so the reducer no-oped on the last close and browser code
+ * ended the session instead. It is a tree the validator accepts here, and a
+ * workspace that reaches it stays alive: ending one is `destroy(rootId)`, an
+ * explicit act, never inferred from emptiness.
+ *
+ * NOTHING IS PARKED. `closePane` destroys the node, and for a pane bound to a
+ * conversation that is the membership going with it — there is no off-grid
+ * place for a node to wait, which is the whole correction. What the copy points
+ * at is the sidebar's pickers: a page or shell is a drive resource and always
+ * there, and a closed thread's binding is freed by the destroy, so admitting it
+ * again is an ordinary admission.
  */
 function EmptyGrid() {
   return (

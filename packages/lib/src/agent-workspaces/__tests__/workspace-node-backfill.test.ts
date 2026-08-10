@@ -27,6 +27,7 @@ import {
   type WorkspaceBackfillSource,
   type WorkspaceDerivation,
 } from '../workspace-node-backfill';
+import { rootSeedFor } from '../workspace-node-commands';
 import { nodesFromRows } from '../workspace-node-rows';
 import { validateTree, MAX_NODES } from '../workspace-node-validate';
 import { buildRenderTree } from '../workspace-node-rows';
@@ -105,6 +106,17 @@ describe('deriveWorkspaceNodes — the structure it produces', () => {
     assertWritable(derived);
     expect(derived.rows).toHaveLength(1);
     expect(derived.rows[0]).toMatchObject({ nodeType: 'root', parentId: null, position: 0, axis: 'row' });
+  });
+
+  it('gives it the root the SEED would mint, so the two derivations cannot drift apart', () => {
+    // The migration and the runtime seed must agree on what this workspace's
+    // root is called. If they disagree, a client seeding against an empty local
+    // tree sends a root the backfilled server does not have, and the write is
+    // refused `multiple_roots` instead of converging on the upsert — the exact
+    // property the deterministic id exists to provide.
+    const derived = deriveWorkspaceNodes(source({ workspaceId: 'w1' }));
+    assertWritable(derived);
+    expect(derived.rows[0]?.id).toBe(rootSeedFor('w1').id);
   });
 
   it('turns a multi-pane column into a split of axis column, panes in order', () => {
@@ -677,7 +689,7 @@ describe('deriveWorkspaceNodes — a pane bound to a thread that is not a member
     // the split would be a `degenerate_split` and skip the whole workspace.
     expect(nodeById(derived, 'c1')).toBeUndefined();
     expect(nodeById(derived, 'p1')).toMatchObject({ nodeType: 'pane', position: 0 });
-    expect(nodeById(derived, 'p1')?.parentId).toBe('w1::root');
+    expect(nodeById(derived, 'p1')?.parentId).toBe(rootSeedFor('w1').id);
   });
 
   it('reads a shrunken column’s shares as UNSIZED — they no longer sum to 1', () => {

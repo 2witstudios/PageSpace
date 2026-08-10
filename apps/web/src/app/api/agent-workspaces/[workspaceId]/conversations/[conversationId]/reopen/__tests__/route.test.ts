@@ -3,7 +3,8 @@
  * The session-scoped conversation-reopen route — the undo of the sibling
  * `[conversationId]` route's DELETE. What matters here: the uniform 404 for
  * an unreachable session AND for a conversation this session does not own
- * (or was history-deleted), the 429 + human message on the cap, and that an
+ * (or was history-deleted), the 409 + human message when the workspace is full
+ * — reopening is a re-admission and consumes a cap slot — and that an
  * idempotent re-reopen (already_open) still answers 200 without a fresh
  * audit write — mirrors `[conversationId]/__tests__/route.test.ts`.
  */
@@ -117,19 +118,18 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(response.status).toBe(404);
   });
 
-  it('reopens into a workspace at MAX_SESSION_CONVERSATIONS — a member returning consumes no slot', async () => {
-    // The 429 this replaces existed because reopening restored a listing slot
-    // the close had freed. Under a `move` the node never stopped existing:
-    // closing frees no slot and reopening consumes none, so the cap — which now
-    // bounds MEMBERSHIP, enforced where membership is created — has nothing to
-    // say here and `session_full` is not an outcome this route can receive.
-    mockReopenConversationInSession.mockResolvedValue('reopened');
+  it('409s a workspace at MAX_SESSION_CONVERSATIONS — a return is an ADMISSION and can lose the last slot', async () => {
+    // Closing DESTROYS the node, so a closed thread is a member of nothing and
+    // coming back re-consults the cap like any other admission. 409 rather than
+    // the "nothing here" 404 the other refusals take: the thread exists, it is
+    // the caller's, and closing something else fixes it — the one refusal on
+    // this path a user can act on.
+    mockReopenConversationInSession.mockResolvedValue('session_full');
     const response = await post();
-    expect(response.status).toBe(200);
-    expect(mockAuditRequest).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ eventType: 'security.rate.limited' }),
-    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('full') });
+    // A refusal is not a write.
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
   it('500s a thrown failure with a human error', async () => {
