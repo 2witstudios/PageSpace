@@ -34,7 +34,17 @@ vi.mock('@pagespace/lib/memory/memory-pages', () => ({
 describe('getUserPersonalization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    findFirst.mockResolvedValue({ enabled: true, bio: null, writingStyle: null, rules: null });
+    // Default: pointers present, so page content is the source of truth. Tests
+    // that exercise the legacy fallback override this with null pointers.
+    findFirst.mockResolvedValue({
+      enabled: true,
+      bio: null,
+      writingStyle: null,
+      rules: null,
+      bioPageId: 'bio-page-1',
+      writingStylePageId: 'style-page-1',
+      rulesPageId: 'rules-page-1',
+    });
     readMemoryPages.mockResolvedValue({});
   });
 
@@ -125,12 +135,44 @@ describe('getUserPersonalization', () => {
     });
   });
 
-  it('falls back to the legacy column when a page has no content yet', async () => {
+  it('stops injecting legacy content once the user deletes the memory page', async () => {
+    // The user deleted the page precisely to stop this content reaching the
+    // AI. `readMemoryPages` omits a trashed page, so keying the fallback on
+    // "no content came back" would resurrect the pre-deletion text and keep
+    // sending it forever. A present pointer means the page is the source of
+    // truth, and an empty result from it means empty.
+    findFirst.mockResolvedValue({
+      enabled: true,
+      bio: 'the content they deleted the page to get rid of',
+      writingStyle: null,
+      rules: null,
+      bioPageId: 'bio-page-1', // pointer still set; the page itself is gone
+      writingStylePageId: null,
+      rulesPageId: null,
+    });
+    readMemoryPages.mockResolvedValue({}); // trashed page omitted
+
+    const { getUserPersonalization } = await import('../personalization-utils');
+
+    assert({
+      given: 'a deleted memory page whose pointer still exists',
+      should: 'inject nothing for that field rather than the stale legacy column',
+      actual: await getUserPersonalization('user-1'),
+      expected: null,
+    });
+  });
+
+  it('falls back to the legacy column when the user has no page pointer yet', async () => {
     findFirst.mockResolvedValue({
       enabled: true,
       bio: 'legacy bio from before the backfill',
       writingStyle: null,
       rules: null,
+      // No pointers: the backfill has not reached this user, so there is no
+      // page yet and the column is all they have.
+      bioPageId: null,
+      writingStylePageId: null,
+      rulesPageId: null,
     });
     readMemoryPages.mockResolvedValue({});
     const { getUserPersonalization } = await import('../personalization-utils');
@@ -151,6 +193,9 @@ describe('getUserPersonalization', () => {
       bio: 'stale legacy bio',
       writingStyle: null,
       rules: null,
+      bioPageId: 'bio-page-1',
+      writingStylePageId: null,
+      rulesPageId: null,
     });
     readMemoryPages.mockResolvedValue({ bio: 'current page bio' });
     const { getUserPersonalization } = await import('../personalization-utils');
