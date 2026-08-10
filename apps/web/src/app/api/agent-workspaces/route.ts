@@ -302,9 +302,19 @@ export async function POST(request: Request) {
     // chat-target index. An ADVISORY preflight: the claim's own decision asks
     // the same question, and the unique index settles the racing case, so this
     // exists to answer the ordinary one before a workspace row is minted.
-    if ((await findWorkspaceOfConversation(conversationId)) !== null) {
+    const existingWorkspaceId = await findWorkspaceOfConversation(conversationId);
+    if (existingWorkspaceId !== null) {
+      // NAME the owning workspace. This refusal carries its own remedy: the
+      // caller wanted this conversation opened in a workspace and one already
+      // exists, so the client can select straight into it rather than
+      // treating the conflict as a dead end and ejecting to /dashboard.
+      //
+      // Safe to disclose: the ownership check immediately above already
+      // refused, with a uniform 404, any conversation not owned by
+      // `auth.userId`. So the only id this can ever reveal is the workspace
+      // holding the caller's OWN conversation — nothing about anyone else's.
       return NextResponse.json(
-        { error: 'That conversation already belongs to a session' },
+        { error: 'That conversation already belongs to a session', workspaceId: existingWorkspaceId },
         { status: 409 },
       );
     }
@@ -558,8 +568,19 @@ export async function POST(request: Request) {
         // this atomic claim (most likely: another request claimed it first).
         // Same conflict, same status the preflight gives it — not a server
         // fault, so not 502.
+        //
+        // If the cause WAS the likely one, the winning workspace exists now
+        // and is the caller's own (ownership was proven in the preflight
+        // above, and never lapses), so name it for the same reason the
+        // preflight does — the client opens it instead of dead-ending. Best
+        // effort: any other cause of `not_found` simply finds nothing here
+        // and the refusal degrades to the plain message it always was.
+        const raceWinnerWorkspaceId = await findWorkspaceOfConversation(conversationId).catch(() => null);
         return NextResponse.json(
-          { error: 'That conversation is no longer available to claim' },
+          {
+            error: 'That conversation is no longer available to claim',
+            ...(raceWinnerWorkspaceId ? { workspaceId: raceWinnerWorkspaceId } : {}),
+          },
           { status: 409 },
         );
       }

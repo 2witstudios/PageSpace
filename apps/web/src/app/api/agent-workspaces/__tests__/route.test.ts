@@ -593,10 +593,17 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
-  it('409s a conversation that some workspace\'s tree already holds', async () => {
+  it('409s a conversation that some workspace\'s tree already holds, NAMING that workspace so the caller can open it', async () => {
+    // The refusal carries its own remedy. Without the id the client has
+    // nothing to act on and treats "already belongs to a session" as a dead
+    // end — which is how a normal history click ended up on /dashboard.
+    // Disclosure is safe: the ownership check above already 404s anything the
+    // caller does not own, so this can only ever name the caller's own
+    // workspace.
     mockFindWorkspaceOfConversation.mockResolvedValue('ses-other');
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-other' });
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
@@ -615,6 +622,26 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('given the race was lost to another claim, the 409 NAMES the workspace that won it', async () => {
+    // The preflight saw no workspace (first call), then the atomic claim came
+    // back `not_found` because someone else got there first — so by the time
+    // we look again (second call) the winner exists. Same reasoning as the
+    // preflight's 409: the caller wanted this conversation in a workspace, one
+    // now exists, and it is theirs.
+    mockFindWorkspaceOfConversation.mockResolvedValueOnce(null).mockResolvedValue('ses-winner');
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-winner' });
+  });
+
+  it('given the race was lost for some other reason, the 409 names no workspace rather than inventing one', async () => {
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
   });
 
   it('given claim fails for a truly unexpected outcome, ENDS the session and responds 502', async () => {

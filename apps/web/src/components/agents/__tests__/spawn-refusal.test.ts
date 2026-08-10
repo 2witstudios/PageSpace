@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { classifySpawnRefusal } from '../spawn-refusal';
+import { classifySpawnRefusal, claimConflictWorkspaceId } from '../spawn-refusal';
 
 describe('classifySpawnRefusal', () => {
   it("a 429 is a QUOTA refusal, carrying the server's own message", () => {
@@ -34,5 +34,44 @@ describe('classifySpawnRefusal', () => {
     // same way; only the allowance case earns the interruption.
     expect(classifySpawnRefusal(502, null).kind).toBe('capability');
     expect(classifySpawnRefusal(500, 'Could not start a session').kind).toBe('capability');
+  });
+});
+
+/**
+ * The other half of a claim refusal: a 409 that names the workspace already
+ * holding the conversation is not a degrade at all — it is the answer, and the
+ * caller opens that workspace instead of leaving the Agents surface.
+ */
+describe('claimConflictWorkspaceId', () => {
+  it("names the workspace a 409 body carries", () => {
+    expect(
+      claimConflictWorkspaceId(409, {
+        error: 'That conversation already belongs to a session',
+        workspaceId: 'ses-owner',
+      }),
+    ).toBe('ses-owner');
+  });
+
+  it('ignores a 409 that names no workspace — the type:\'client\' refusal has none to give', () => {
+    expect(claimConflictWorkspaceId(409, { error: 'That conversation is not available' })).toBeNull();
+  });
+
+  it('never reads a workspace out of any other status, however the body looks', () => {
+    // A 403/429/500 body is a refusal to degrade from, not a redirect. Reading
+    // an id out of one would silently select into a workspace the server never
+    // said was there.
+    expect(claimConflictWorkspaceId(403, { workspaceId: 'ses-owner' })).toBeNull();
+    expect(claimConflictWorkspaceId(429, { workspaceId: 'ses-owner' })).toBeNull();
+    expect(claimConflictWorkspaceId(undefined, { workspaceId: 'ses-owner' })).toBeNull();
+  });
+
+  it('treats a body of any unexpected shape as naming nothing', () => {
+    // Straight off the wire and therefore unknown until proven — the same
+    // discipline whose absence caused the `sessionId`/`workspaceId` mismatch.
+    expect(claimConflictWorkspaceId(409, undefined)).toBeNull();
+    expect(claimConflictWorkspaceId(409, null)).toBeNull();
+    expect(claimConflictWorkspaceId(409, 'That conversation already belongs to a session')).toBeNull();
+    expect(claimConflictWorkspaceId(409, { workspaceId: 42 })).toBeNull();
+    expect(claimConflictWorkspaceId(409, { workspaceId: '' })).toBeNull();
   });
 });

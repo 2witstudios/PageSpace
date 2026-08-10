@@ -32,3 +32,29 @@ export function classifySpawnRefusal(status: number | undefined, message: string
   }
   return { kind: 'capability', message: trimmed && trimmed.length > 0 ? trimmed : DEFAULT_CAPABILITY_MESSAGE };
 }
+
+/**
+ * The workspace a claim's 409 names as the conversation's CURRENT owner, if
+ * it named one — the id `POST /api/agent-workspaces` puts in the body of its
+ * "that conversation already belongs to a session" refusal.
+ *
+ * Not every 409 on that route carries one (a `type: 'client'` conversation is
+ * refused 409 too, and owns no workspace by construction), hence the null
+ * return rather than a throw: absent means "no workspace to open, fall back
+ * as before".
+ *
+ * Disclosure is safe by the time the server writes this id: the route
+ * already refused any conversation the caller does not own with a uniform
+ * 404, so the only workspace id it can ever name is one holding the caller's
+ * own conversation.
+ *
+ * Deliberately defensive about the body's shape — it comes off the wire, so
+ * it is `unknown` until proven otherwise, the exact lesson of the field
+ * mismatch this whole change fixes.
+ */
+export function claimConflictWorkspaceId(status: number | undefined, body: unknown): string | null {
+  if (status !== 409) return null;
+  if (typeof body !== 'object' || body === null) return null;
+  const workspaceId = (body as { workspaceId?: unknown }).workspaceId;
+  return typeof workspaceId === 'string' && workspaceId.length > 0 ? workspaceId : null;
+}

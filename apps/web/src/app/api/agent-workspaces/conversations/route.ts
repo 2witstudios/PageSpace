@@ -1,6 +1,7 @@
 /**
  * GET ?driveId=<id> | (none = every drive) & limit & cursor
- *   → { conversations: PastConversationRow[], pagination: { hasMore, nextCursor, limit } }
+ *   → `PastConversationsResponseDTO` — see `past-conversation-dto.ts`, the
+ *     single declaration of this wire shape that the client imports too.
  *
  * The Agents surface's default middle-panel view: every conversation the
  * requester owns — session-bound or not, page-agent or global-assistant —
@@ -24,8 +25,8 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   listAllConversationsPaginated,
   encodeCursor,
-  type PastConversationRow,
 } from '@/lib/agent-workspaces/workspace-conversations-runtime';
+import type { PastConversationServerRow } from '@/lib/agent-workspaces/past-conversation-dto';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -46,11 +47,11 @@ const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const MAX_INTERNAL_FETCHES = 5;
 
 function maskOrDrop(
-  row: PastConversationRow,
+  row: PastConversationServerRow,
   canViewPage: (agentPageId: string) => boolean,
   canAccessSessionDrive: (driveId: string) => boolean,
   scopedDriveId: string | undefined,
-): PastConversationRow[] {
+): PastConversationServerRow[] {
   if (row.type === 'page' && row.agentPageId !== null && !canViewPage(row.agentPageId)) {
     // Drive-scoped requests must DROP the row entirely, not just mask its
     // fields: the drive filter itself runs against the page's CURRENT
@@ -110,8 +111,8 @@ async function fetchVisiblePage(
   scopedDriveId: string | undefined,
   limit: number,
   initialCursor: string | undefined,
-): Promise<{ conversations: PastConversationRow[]; hasMore: boolean; nextCursor: string | null }> {
-  const visible: PastConversationRow[] = [];
+): Promise<{ conversations: PastConversationServerRow[]; hasMore: boolean; nextCursor: string | null }> {
+  const visible: PastConversationServerRow[] = [];
   let cursor = initialCursor;
   let hasMore = true;
 

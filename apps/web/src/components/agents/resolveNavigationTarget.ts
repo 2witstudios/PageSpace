@@ -7,40 +7,53 @@
  * branch, which is what a bare `if/else if/else` chain would do.
  */
 
-/**
- * Mirrors `conversations.type` (`packages/db/src/schema/conversations.ts`) —
- * the only values any production code path writes. `'client'` is the rare
- * API-managed conversation created via `POST /api/v1/conversations` (never
- * `'drive'` — that value was never actually written by any code path; it was
- * a documentation mistake corrected once this got fixed).
- */
-export type ConversationKind = 'global' | 'page' | 'client';
+import type { PastConversationDTO } from '@/lib/agent-workspaces/past-conversation-dto';
 
-export interface PastConversationRow {
-  conversationId: string;
-  type: ConversationKind;
-  agentPageId: string | null;
-  sessionId: string | null;
-  driveId: string | null;
-}
+/**
+ * Exactly the fields of a wire row this decision reads — PICKED from the
+ * shared DTO, never re-declared. The predecessor of this type was a private,
+ * hand-written interface saying `sessionId` where the server has always said
+ * `workspaceId`; it compiled forever and made `row.sessionId` `undefined` on
+ * every real row, so the `pane` branch below could never fire (see
+ * `past-conversation-dto.ts` for the full account). `Pick` is what stops that
+ * happening again: rename a field on the DTO and this line is a compile
+ * error, not a silent `undefined`.
+ */
+export type PastConversationRow = Pick<
+  PastConversationDTO,
+  'conversationId' | 'type' | 'agentPageId' | 'workspaceId' | 'driveId'
+>;
 
 /** Where a `claimable` row's click routes if the claim-into-a-session attempt fails. */
 export type ClaimableFallback =
-  | { kind: 'page'; driveId: string; pageId: string; conversationId: string; sessionId: string | null }
+  // No session/workspace id here on purpose: a fallback is only ever reached
+  // for a row that HAS no workspace. The field this used to carry was
+  // unconditionally null and read by nothing — dead weight that, after the
+  // `workspaceId` rename, read as though a fallback could name a workspace.
+  | { kind: 'page'; driveId: string; pageId: string; conversationId: string }
   | { kind: 'global'; conversationId: string; driveId: string | null }
   | { kind: 'unavailable' };
 
 export type NavigationTarget =
+  /**
+   * `sessionId` here is the CLIENT's vocabulary — the field
+   * `useAgentSurfaceStore.selectConversation` takes and the name the URL uses
+   * — for the id the wire calls `workspaceId`. This is the one place the two
+   * names meet, and it is a deliberate translation rather than a shape the
+   * server ever sends.
+   */
   | { kind: 'pane'; sessionId: string; conversationId: string; agentId: string | null }
   /**
-   * A session-less `type: 'page'` or `type: 'global'` row — clicking it
+   * A workspace-less `type: 'page'` or `type: 'global'` row — clicking it
    * should spawn a session and claim this SAME conversation into it (see
    * `claim-conversation-in-workspace.ts`), landing it in the pane grid with a
    * real sandbox, rather than opening it read-only outside any session.
    * `fallback` carries exactly what this row would have resolved to before
    * claiming existed — the old `page`/`global` target — so a failed claim
-   * (quota, a race, a permission edge) degrades to today's exact behavior
-   * instead of a dead end.
+   * (quota, a permission edge) degrades to today's exact behavior instead of
+   * a dead end. A claim refused because the conversation ALREADY has a
+   * workspace is NOT one of those cases — that refusal names the workspace
+   * and the caller opens it (`claimConflictWorkspaceId`).
    */
   | { kind: 'claimable'; conversationId: string; agentPageId: string | null; driveId: string | null; fallback: ClaimableFallback }
   /**
@@ -58,14 +71,16 @@ export type NavigationTarget =
   | { kind: 'unavailable' };
 
 /**
- * A session-bound conversation always wins, whatever its `type` — it opens in
- * the pane grid in-place, the one case that never leaves the Agents surface.
+ * A workspace-bound conversation always wins, whatever its `type` — it opens
+ * in the pane grid in-place, the one case that never leaves the Agents
+ * surface. That is also the rule the past-conversations list exists to serve:
+ * a history row clicked ON the Agents surface belongs on the Agents surface.
  *
  * EXCEPT a `type: 'page'` row whose `driveId` came back null: the API masks
  * `driveId` to null (route.ts) ONLY when it already checked and the
  * requester can no longer view that page — a real, live page always belongs
  * to a drive, so this can never be a legitimate "no drive" value. Checking
- * it before the `sessionId` branch matters because a session-bound page
+ * it before the `workspaceId` branch matters because a bound page
  * conversation would otherwise open `AgentPanes` unconditionally; the pane's
  * message fetch enforces the same permission server-side and 403s, so the
  * click would silently fail to show anything (review finding).
@@ -78,8 +93,8 @@ export function resolveNavigationTarget(
     return { kind: 'unavailable' };
   }
 
-  if (row.sessionId) {
-    return { kind: 'pane', sessionId: row.sessionId, conversationId: row.conversationId, agentId: row.agentPageId };
+  if (row.workspaceId) {
+    return { kind: 'pane', sessionId: row.workspaceId, conversationId: row.conversationId, agentId: row.agentPageId };
   }
 
   switch (row.type) {
@@ -95,13 +110,12 @@ export function resolveNavigationTarget(
           driveId: row.driveId,
           pageId: row.agentPageId,
           conversationId: row.conversationId,
-          sessionId: null,
         },
       };
     }
-    // API-managed (POST /api/v1/conversations) — always session-less (confirmed:
-    // nothing ever binds a `client` row to a session) and has no in-app chat
-    // surface to open into, and no session claim can grant it one either
+    // API-managed (POST /api/v1/conversations) — never bound to a workspace
+    // (confirmed: nothing ever binds a `client` row to one) and has no in-app
+    // chat surface to open into, and no session claim can grant it one either
     // (claim refuses `type: 'client'` — see `claim-conversation-in-workspace.ts`).
     case 'client':
       return { kind: 'unavailable' };

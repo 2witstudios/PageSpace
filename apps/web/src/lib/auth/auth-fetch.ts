@@ -29,11 +29,21 @@ export interface SessionRefreshResult {
  */
 export class ApiRequestError extends Error {
   readonly status: number;
+  /**
+   * The parsed JSON error body, when the response had one — `undefined`
+   * otherwise (non-JSON body, or a caller that constructed this directly).
+   * Some refusals carry more than a message: a claim's 409 names the
+   * workspace that already owns the conversation, which is what lets the
+   * caller recover instead of degrading. Typed `unknown` on purpose — it is
+   * unvalidated wire data, and every reader must narrow it itself.
+   */
+  readonly body: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, body?: unknown) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -1227,7 +1237,7 @@ class AuthFetch {
       // Try to parse JSON error response and extract error message
       try {
         const json = JSON.parse(text);
-        throw new ApiRequestError(json.error || json.message || text, response.status);
+        throw new ApiRequestError(json.error || json.message || text, response.status, json);
       } catch (parseError) {
         // If parsing fails, it's not JSON - use the raw text
         if (parseError instanceof SyntaxError) {
