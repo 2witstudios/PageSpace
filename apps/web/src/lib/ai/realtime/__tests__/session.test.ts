@@ -25,9 +25,11 @@ describe('buildSessionConfig', () => {
     const { session } = buildSessionConfig();
     expect(session.type).toBe('realtime');
     expect(session.model).toBe(DEFAULT_REALTIME_MODEL);
-    // Not gpt-realtime-2.1: access is per-account and /v1/realtime/calls 403s
-    // at connect time, so the default is the model this account can reach.
-    expect(DEFAULT_REALTIME_MODEL).toBe('gpt-realtime');
+    // Pinned: access is per-account and /v1/realtime/calls 403s at connect time
+    // for an unentitled model, so a change here must be verified against that
+    // endpoint (mint returns 200 regardless) and overridden per-environment via
+    // OPENAI_REALTIME_MODEL rather than edited.
+    expect(DEFAULT_REALTIME_MODEL).toBe('gpt-realtime-2.1');
   });
 
   it('given speech output, should set the default voice', () => {
@@ -41,7 +43,7 @@ describe('buildSessionConfig', () => {
     expect(buildSessionConfig()).toEqual({
       session: {
         type: 'realtime',
-        model: 'gpt-realtime',
+        model: 'gpt-realtime-2.1',
         audio: { output: { voice: 'marin' } },
         tools: [],
         tool_choice: 'auto',

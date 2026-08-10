@@ -11,15 +11,20 @@
  */
 
 /**
- * `gpt-realtime`, not `gpt-realtime-2.1`, because model access is per-account:
- * `client_secrets` accepts ANY model string and mints a secret, then
- * `/v1/realtime/calls` 403s `model_not_found` at connect time if the account
- * lacks it — so a wrong default fails late, mid-connect, not at config time.
- * This account 403s on `gpt-realtime-2.1` and 201s on `gpt-realtime`, and the
- * working prototype runs `gpt-realtime` too. Move to 2.1 by setting
- * OPENAI_REALTIME_MODEL once the account has it, rather than editing this.
+ * Model access is per-account, and it fails LATE: `client_secrets` accepts any
+ * model string and mints a secret, then `/v1/realtime/calls` 403s
+ * `model_not_found` at connect time if the project lacks it. So mint success is
+ * never proof of model access — surface model-config errors from the calls
+ * response, not the mint response. (A plain `wss://…?model=X` socket opens even
+ * for an unentitled model, so it is useless as a probe; `GET /v1/models` and
+ * `/v1/realtime/calls` are the reliable signals.)
+ *
+ * `gpt-realtime-2.1` was not on this project until it was added to the
+ * allowlist; `/v1/realtime/calls` now returns 201 for it, verified with a real
+ * browser SDP offer. Override per-environment with OPENAI_REALTIME_MODEL rather
+ * than editing this — a deployment whose project lacks 2.1 needs `gpt-realtime`.
  */
-export const DEFAULT_REALTIME_MODEL = 'gpt-realtime';
+export const DEFAULT_REALTIME_MODEL = 'gpt-realtime-2.1';
 export const REALTIME_VOICE = 'marin';
 
 /** The env var that overrides the model, named once so callers can't drift. */
