@@ -13,32 +13,21 @@ import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { useDriveStore } from '@/hooks/useDrive';
 import { cn } from '@/lib/utils';
 import EmptyState from './EmptyState';
-import { resolveNavigationTarget, type ConversationKind, type ClaimableFallback } from './resolveNavigationTarget';
-import { classifySpawnRefusal } from './spawn-refusal';
+import { resolveNavigationTarget, type ClaimableFallback } from './resolveNavigationTarget';
+import { classifySpawnRefusal, claimConflictWorkspaceId } from './spawn-refusal';
 import { isAgentWorkspacesKey } from './panes/workspace-conversations';
+// The row/response shapes come from the ONE shared declaration of this
+// endpoint's wire contract. This file used to keep its own `PastConversationDTO`
+// copy, which said `sessionId` where the server says `workspaceId` — see
+// `past-conversation-dto.ts` for why that compiled and what it broke.
+import type {
+  PastConversationDTO,
+  PastConversationsResponseDTO,
+} from '@/lib/agent-workspaces/past-conversation-dto';
 
 const PAGE_SIZE = 20;
 
-interface ConversationRowDTO {
-  conversationId: string;
-  title: string | null;
-  type: ConversationKind;
-  agentPageId: string | null;
-  pageTitle: string | null;
-  lastMessageAt: string | null;
-  createdAt: string;
-  sessionId: string | null;
-  sessionName: string | null;
-  sessionEndedAt: string | null;
-  driveId: string | null;
-}
-
-interface ConversationsResponse {
-  conversations: ConversationRowDTO[];
-  pagination: { hasMore: boolean; nextCursor: string | null; limit: number };
-}
-
-async function conversationsFetcher(url: string): Promise<ConversationsResponse> {
+async function conversationsFetcher(url: string): Promise<PastConversationsResponseDTO> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list conversations (${response.status})`);
   return response.json();
@@ -52,7 +41,7 @@ function buildKey(driveId: string | undefined, cursor: string | null): string {
   return `/api/agent-workspaces/conversations?${params.toString()}`;
 }
 
-function rowLabel(row: ConversationRowDTO): string {
+function rowLabel(row: PastConversationDTO): string {
   if (row.title) return row.title;
   if (row.type === 'page') return row.pageTitle ?? 'Untitled conversation';
   if (row.type === 'global') return 'Global assistant chat';
@@ -60,9 +49,9 @@ function rowLabel(row: ConversationRowDTO): string {
   return 'Untitled conversation';
 }
 
-function rowSubtitle(row: ConversationRowDTO, showDrive: boolean, driveName: string | undefined): string {
+function rowSubtitle(row: PastConversationDTO, showDrive: boolean, driveName: string | undefined): string {
   const parts: string[] = [];
-  if (row.sessionId) {
+  if (row.workspaceId) {
     parts.push(row.sessionName ? row.sessionName : 'Session');
   } else if (row.type === 'page' && row.pageTitle) {
     parts.push(row.pageTitle);
@@ -96,7 +85,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
   // back server-side. Also drives the row's disabled/spinner state.
   const [claimingId, setClaimingId] = useState<string | null>(null);
 
-  const { data, error, isLoading, isValidating } = useSWR<ConversationsResponse>(
+  const { data, error, isLoading, isValidating } = useSWR<PastConversationsResponseDTO>(
     buildKey(driveId, cursor),
     conversationsFetcher,
     {
@@ -134,7 +123,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
     }
   };
 
-  const handleRowClick = async (row: ConversationRowDTO) => {
+  const handleRowClick = async (row: PastConversationDTO) => {
     const target = resolveNavigationTarget(row, driveId);
     switch (target.kind) {
       case 'pane':
@@ -158,12 +147,38 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
             agentId: target.agentPageId,
           });
         } catch (error) {
+          const status = error instanceof ApiRequestError ? error.status : undefined;
+
+          // "That conversation already belongs to a session" is not a reason
+          // to leave the Agents surface — it CARRIES the answer. The claim
+          // lost a race (another tab, or a claim that landed between this
+          // listing's fetch and this click), so the workspace the user wanted
+          // already exists and the 409 names it. Open it, exactly as the
+          // `pane` branch above would have.
+          const ownerWorkspaceId = claimConflictWorkspaceId(
+            status,
+            error instanceof ApiRequestError ? error.body : undefined,
+          );
+          if (ownerWorkspaceId) {
+            // Same reason the success path above invalidates: the panes render
+            // off this shared listing, and a workspace that won the race was
+            // created by ANOTHER tab — so this tab's cache has never seen it
+            // and would not until its own 20s poll fired. More necessary here
+            // than on the success path, not less (review finding).
+            void mutate(isAgentWorkspacesKey);
+            selectConversation({
+              sessionId: ownerWorkspaceId,
+              conversationId: target.conversationId,
+              agentId: target.agentPageId,
+            });
+            return;
+          }
+
           // Same split `useResolvedConversation.ts` uses for an opportunistic
           // session spawn: QUOTA is worth interrupting the user for (they
           // have the capability and simply ran out of allowance); every
           // other refusal degrades silently into the exact behavior this
           // row had before claiming existed.
-          const status = error instanceof ApiRequestError ? error.status : undefined;
           const refusal = classifySpawnRefusal(status, error instanceof Error ? error.message : null);
           console.warn('Session claim refused; falling back:', error);
           if (refusal.kind === 'quota') {

@@ -7,6 +7,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
+  sent you out to the dashboard when you clicked it, including conversations that were already open
+  in a session. The session was right there and you were simply not taken to it. A conversation you
+  pick from that list now opens as a pane in Agents, whichever kind it is: one already in a session
+  opens in place, and a global-assistant or page-agent conversation that has never had a session
+  gets one and opens there. The dashboard is still where you land when a conversation genuinely
+  cannot be opened in Agents — you have run out of sandboxes, or it is an API-created conversation
+  with no in-app view.
 - **Agents takes you to your conversations again** — clicking Agents in the sidebar reopened
   whichever session you last had open, and once you were inside a session there was no way back to
   the list except ending the session. Your history was unreachable without destroying the work you

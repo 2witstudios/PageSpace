@@ -108,9 +108,34 @@ import {
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
+import type { PastConversationDTO } from '@/lib/agent-workspaces/past-conversation-dto';
 
 /** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
 const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
+
+/**
+ * Every past-conversation fixture in this file goes through here, TYPED as
+ * the shared wire row — never an inline object literal, which is exactly how
+ * these tests came to describe a row the server has never sent (`sessionId`,
+ * renamed to `workspaceId` and never followed on the client). A literal in a
+ * `json: async () => ({...})` mock is checked by nothing at all; this is.
+ */
+function pastConversationRow(overrides: Partial<PastConversationDTO> = {}): PastConversationDTO {
+  return {
+    conversationId: 'conv-1',
+    title: null,
+    type: 'global',
+    agentPageId: null,
+    pageTitle: null,
+    lastMessageAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    workspaceId: null,
+    sessionName: null,
+    sessionEndedAt: null,
+    driveId: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   // Two different endpoints share this mock — route by URL rather than one
@@ -472,19 +497,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-hist-1',
                 title: 'A past chat',
-                type: 'global',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
-                driveId: null,
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
@@ -499,7 +515,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(screen.queryByText('Select a session')).toBeNull();
   });
 
-  it('clicking a session-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
+  it('clicking a workspace-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
     // A drive scope no earlier test fetched — see the cache note above.
     mockFetchWithAuth.mockImplementation(async (url: string) => {
       if (url.includes('/api/agent-workspaces/conversations')) {
@@ -507,19 +523,16 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-1',
                 title: 'Session chat',
                 type: 'page',
                 agentPageId: 'agent-1',
                 pageTitle: 'My Agent',
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: 'ses-1',
+                workspaceId: 'ses-1',
                 sessionName: 'My Session',
-                sessionEndedAt: null,
                 driveId: 'drive-1',
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
@@ -543,19 +556,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
       ok: true,
       json: async () => ({
         conversations: [
-          {
+          pastConversationRow({
             conversationId: cursor ? `conv-${driveLabel}-page2` : `conv-${driveLabel}-page1`,
             title: cursor ? `${driveLabel} page 2` : `${driveLabel} page 1`,
-            type: 'global',
-            agentPageId: null,
-            pageTitle: null,
-            lastMessageAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            sessionId: null,
-            sessionName: null,
-            sessionEndedAt: null,
-            driveId: null,
-          },
+          }),
         ],
         // Page 1 always advertises more, so the Next button is enabled —
         // page 2 (any `cursor` present) is the end of the list.
@@ -605,19 +609,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: cursor ? 'conv-page2' : 'conv-page1',
                 title: cursor ? 'Page 2 chat' : 'Page 1 chat',
-                type: 'global',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
-                driveId: null,
-              },
+              }),
             ],
             pagination: { hasMore: !cursor, nextCursor: cursor ? null : 'conv-page1', limit: 20 },
           }),
@@ -659,19 +654,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
       ok: true as const,
       json: async () => ({
         conversations: [
-          {
+          pastConversationRow({
             conversationId: `conv-${label}`,
             title: label,
-            type: 'global',
-            agentPageId: null,
-            pageTitle: null,
-            lastMessageAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            sessionId: null,
-            sessionName: null,
-            sessionEndedAt: null,
-            driveId: null,
-          },
+          }),
         ],
         pagination: { hasMore: nextCursor !== null, nextCursor, limit: 20 },
       }),
@@ -713,19 +699,12 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-client-1',
                 title: 'My API thread',
                 type: 'client',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
                 driveId: 'drive-1',
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
