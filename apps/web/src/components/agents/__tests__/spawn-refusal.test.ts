@@ -42,14 +42,19 @@ describe('classifySpawnRefusal', () => {
  * holding the conversation is not a degrade at all — it is the answer, and the
  * caller opens that workspace instead of leaving the Agents surface.
  */
+// A REAL cuid2, because `claimConflictWorkspaceId` validates the shape —
+// `agentWorkspaces.id` is `$defaultFn(createId)` everywhere, so a fixture that
+// is not one would be testing a value the server cannot send.
+const WORKSPACE_ID = 'qbiohdrz7895nz87fpw8w0h5';
+
 describe('claimConflictWorkspaceId', () => {
   it("names the workspace a 409 body carries", () => {
     expect(
       claimConflictWorkspaceId(409, {
         error: 'That conversation already belongs to a session',
-        workspaceId: 'ses-owner',
+        workspaceId: WORKSPACE_ID,
       }),
-    ).toBe('ses-owner');
+    ).toBe(WORKSPACE_ID);
   });
 
   it('ignores a 409 that names no workspace — the type:\'client\' refusal has none to give', () => {
@@ -60,9 +65,9 @@ describe('claimConflictWorkspaceId', () => {
     // A 403/429/500 body is a refusal to degrade from, not a redirect. Reading
     // an id out of one would silently select into a workspace the server never
     // said was there.
-    expect(claimConflictWorkspaceId(403, { workspaceId: 'ses-owner' })).toBeNull();
-    expect(claimConflictWorkspaceId(429, { workspaceId: 'ses-owner' })).toBeNull();
-    expect(claimConflictWorkspaceId(undefined, { workspaceId: 'ses-owner' })).toBeNull();
+    expect(claimConflictWorkspaceId(403, { workspaceId: WORKSPACE_ID })).toBeNull();
+    expect(claimConflictWorkspaceId(429, { workspaceId: WORKSPACE_ID })).toBeNull();
+    expect(claimConflictWorkspaceId(undefined, { workspaceId: WORKSPACE_ID })).toBeNull();
   });
 
   it('treats a body of any unexpected shape as naming nothing', () => {
@@ -73,5 +78,14 @@ describe('claimConflictWorkspaceId', () => {
     expect(claimConflictWorkspaceId(409, 'That conversation already belongs to a session')).toBeNull();
     expect(claimConflictWorkspaceId(409, { workspaceId: 42 })).toBeNull();
     expect(claimConflictWorkspaceId(409, { workspaceId: '' })).toBeNull();
+  });
+
+  it('refuses a nonempty id that is not a real workspace id', () => {
+    // Nonempty is not enough: this id would be selected into the surface store
+    // and written to the URL, so a value no `agentWorkspaces.id` could ever
+    // hold is worth refusing outright rather than opening a junk workspace.
+    expect(claimConflictWorkspaceId(409, { workspaceId: 'not-a-workspace-id' })).toBeNull();
+    expect(claimConflictWorkspaceId(409, { workspaceId: `  ${WORKSPACE_ID}  ` })).toBeNull();
+    expect(claimConflictWorkspaceId(409, { workspaceId: `${WORKSPACE_ID}/../other` })).toBeNull();
   });
 });

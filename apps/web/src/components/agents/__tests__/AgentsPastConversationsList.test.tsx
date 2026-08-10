@@ -62,6 +62,9 @@ import type { PastConversationDTO } from '@/lib/agent-workspaces/past-conversati
  */
 type Row = PastConversationDTO;
 
+/** A real cuid2 — `claimConflictWorkspaceId` refuses anything that is not one. */
+const OWNER_WORKSPACE_ID = 'nshgif165q8ehrnjgx9jvqxc';
+
 const PAGE_ROW: Row = {
   conversationId: 'conv-page',
   title: 'Page chat',
@@ -156,7 +159,9 @@ describe('AgentsPastConversationsList', () => {
     mockPost.mockRejectedValue(
       new ApiRequestError('That conversation already belongs to a session', 409, {
         error: 'That conversation already belongs to a session',
-        workspaceId: 'ses-owner',
+        // A real cuid2 — the client validates the shape, so `ses-owner` would
+        // be refused as an id no `agentWorkspaces.id` could hold.
+        workspaceId: OWNER_WORKSPACE_ID,
       }),
     );
     renderList();
@@ -164,11 +169,39 @@ describe('AgentsPastConversationsList', () => {
 
     await user.click(await screen.findByText('Page chat'));
 
-    await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-owner'));
+    await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe(OWNER_WORKSPACE_ID));
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-page');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     expect(mockPush).not.toHaveBeenCalled();
     expect(mockToastError).not.toHaveBeenCalled();
+    // The winning workspace was minted by another tab, so this tab's shared
+    // listing has never seen it — the panes render off that listing, so it
+    // must be revalidated or the selection points at nothing until the 20s
+    // poll happens to fire.
+    expect(mockMutate).toHaveBeenCalledWith(isAgentWorkspacesKey);
+  });
+
+  test('a 409 naming an UNOPENABLE workspace falls back — the server withheld the id', async () => {
+    // The server omits `workspaceId` when the caller cannot open that
+    // workspace (it can hold a conversation you own inside a drive session you
+    // have since lost membership of). Nothing to select into, so the
+    // pre-existing degrade is right — and the client must not invent one.
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockRejectedValue(
+      new ApiRequestError('That conversation already belongs to a session', 409, {
+        error: 'That conversation already belongs to a session',
+      }),
+    );
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() =>
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/agent-1?conversationId=conv-page'),
+    );
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
   test('a 409 that names no workspace still falls back — nothing to open', async () => {

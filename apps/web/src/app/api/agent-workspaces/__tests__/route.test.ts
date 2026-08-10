@@ -21,6 +21,7 @@ const {
   mockFindSessionRecord,
   mockClaimConversationInSession,
   mockFindWorkspaceOfConversation,
+  mockCheckSessionAccess,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -41,6 +42,7 @@ const {
   mockFindSessionRecord: vi.fn(),
   mockClaimConversationInSession: vi.fn(),
   mockFindWorkspaceOfConversation: vi.fn(),
+  mockCheckSessionAccess: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -74,6 +76,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
   findWorkspaceOfConversation: (...args: unknown[]) => mockFindWorkspaceOfConversation(...args),
+  checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
 }));
 vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
@@ -124,6 +127,9 @@ beforeEach(() => {
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
   mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
+  // Default: the caller CAN open whatever workspace a claim conflict names.
+  // The tests that care about the denial path say so explicitly.
+  mockCheckSessionAccess.mockResolvedValue({ allowed: true });
 });
 
 describe('GET /api/agent-workspaces', () => {
@@ -604,6 +610,24 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-other' });
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-other');
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('409s WITHOUT naming a workspace the caller cannot open — owning the conversation is not access to the session holding it', async () => {
+    // Any accepted drive member may create their own conversation inside
+    // another member's drive session, and that membership can lapse while
+    // conversation ownership never does. The 404 above proves only "this
+    // conversation is yours", so the id goes through the same centralized gate
+    // every other workspace route uses. The listing route already masks
+    // `workspaceId` in this exact situation; without this the 409 would
+    // disclose what the listing deliberately hides, and the client would
+    // select a workspace it cannot open.
+    mockFindWorkspaceOfConversation.mockResolvedValue('ses-someone-elses');
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
@@ -635,6 +659,15 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-winner' });
+  });
+
+  it('given the race was lost to a workspace the caller cannot open, the 409 still names nothing', async () => {
+    mockFindWorkspaceOfConversation.mockResolvedValueOnce(null).mockResolvedValue('ses-someone-elses');
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
   });
 
   it('given the race was lost for some other reason, the 409 names no workspace rather than inventing one', async () => {

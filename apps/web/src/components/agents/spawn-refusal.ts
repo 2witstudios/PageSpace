@@ -14,6 +14,8 @@
  * fetch or toast.
  */
 
+import { isCuid } from '@paralleldrive/cuid2';
+
 export type SpawnRefusalKind = 'quota' | 'capability';
 
 export interface SpawnRefusal {
@@ -50,11 +52,17 @@ export function classifySpawnRefusal(status: number | undefined, message: string
  *
  * Deliberately defensive about the body's shape — it comes off the wire, so
  * it is `unknown` until proven otherwise, the exact lesson of the field
- * mismatch this whole change fixes.
+ * mismatch this whole change fixes. That extends to the VALUE, not just the
+ * type: `agentWorkspaces.id` is a cuid2 by construction (`$defaultFn(createId)`,
+ * and nothing anywhere inserts a hand-made id), so anything else is not an id
+ * this app could open — selecting it would put a junk workspace in the store
+ * and the URL. `isCuid` is the same validator `IdSchema` applies to every
+ * other id in the codebase (review finding).
  */
 export function claimConflictWorkspaceId(status: number | undefined, body: unknown): string | null {
   if (status !== 409) return null;
   if (typeof body !== 'object' || body === null) return null;
   const workspaceId = (body as { workspaceId?: unknown }).workspaceId;
-  return typeof workspaceId === 'string' && workspaceId.length > 0 ? workspaceId : null;
+  if (typeof workspaceId !== 'string' || !isCuid(workspaceId)) return null;
+  return workspaceId;
 }

@@ -160,6 +160,12 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
             error instanceof ApiRequestError ? error.body : undefined,
           );
           if (ownerWorkspaceId) {
+            // Same reason the success path above invalidates: the panes render
+            // off this shared listing, and a workspace that won the race was
+            // created by ANOTHER tab — so this tab's cache has never seen it
+            // and would not until its own 20s poll fired. More necessary here
+            // than on the success path, not less (review finding).
+            void mutate(isAgentWorkspacesKey);
             selectConversation({
               sessionId: ownerWorkspaceId,
               conversationId: target.conversationId,

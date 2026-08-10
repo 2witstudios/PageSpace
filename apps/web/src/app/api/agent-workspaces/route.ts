@@ -45,7 +45,7 @@ import {
   type AgentSessionListFilter,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
-import { findWorkspaceOfConversation } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
 
@@ -304,17 +304,29 @@ export async function POST(request: Request) {
     // exists to answer the ordinary one before a workspace row is minted.
     const existingWorkspaceId = await findWorkspaceOfConversation(conversationId);
     if (existingWorkspaceId !== null) {
-      // NAME the owning workspace. This refusal carries its own remedy: the
-      // caller wanted this conversation opened in a workspace and one already
-      // exists, so the client can select straight into it rather than
-      // treating the conflict as a dead end and ejecting to /dashboard.
+      // NAME the owning workspace — but only one the caller can actually open.
+      // This refusal carries its own remedy: the caller wanted this
+      // conversation opened in a workspace and one already exists, so the
+      // client selects straight into it rather than treating the conflict as a
+      // dead end and ejecting to /dashboard.
       //
-      // Safe to disclose: the ownership check immediately above already
-      // refused, with a uniform 404, any conversation not owned by
-      // `auth.userId`. So the only id this can ever reveal is the workspace
-      // holding the caller's OWN conversation — nothing about anyone else's.
+      // Owning the CONVERSATION is not access to the WORKSPACE holding it.
+      // Any accepted drive member may create their own conversation inside
+      // another member's drive session (`decideAgentSessionAccess` grants by
+      // drive membership, not session ownership), and that membership can
+      // lapse while conversation ownership never does. The 404 above proves
+      // only "this conversation is yours" — so the id goes through the same
+      // centralized gate every other workspace route uses, and is simply
+      // omitted when it does not pass. The listing route already masks
+      // `workspaceId` in exactly this situation (see `maskOrDrop`); this keeps
+      // the two consistent instead of letting the 409 disclose what the
+      // listing deliberately hides. Reported by review on #2386.
+      const access = await checkSessionAccess(auth.userId, existingWorkspaceId);
       return NextResponse.json(
-        { error: 'That conversation already belongs to a session', workspaceId: existingWorkspaceId },
+        {
+          error: 'That conversation already belongs to a session',
+          ...(access.allowed ? { workspaceId: existingWorkspaceId } : {}),
+        },
         { status: 409 },
       );
     }
@@ -569,17 +581,24 @@ export async function POST(request: Request) {
         // Same conflict, same status the preflight gives it — not a server
         // fault, so not 502.
         //
-        // If the cause WAS the likely one, the winning workspace exists now
-        // and is the caller's own (ownership was proven in the preflight
-        // above, and never lapses), so name it for the same reason the
-        // preflight does — the client opens it instead of dead-ending. Best
-        // effort: any other cause of `not_found` simply finds nothing here
-        // and the refusal degrades to the plain message it always was.
+        // If the cause WAS the likely one, the winning workspace exists now,
+        // so name it for the same reason the preflight does — the client opens
+        // it instead of dead-ending — behind the same access gate, since
+        // owning the conversation is not access to whatever workspace won the
+        // race. Best effort throughout: any other cause of `not_found` finds
+        // nothing here, and a workspace the caller cannot open is simply not
+        // named, degrading to the plain refusal this always was.
         const raceWinnerWorkspaceId = await findWorkspaceOfConversation(conversationId).catch(() => null);
+        const raceWinnerOpenable =
+          raceWinnerWorkspaceId !== null &&
+          (await checkSessionAccess(auth.userId, raceWinnerWorkspaceId).then(
+            (a) => a.allowed,
+            () => false,
+          ));
         return NextResponse.json(
           {
             error: 'That conversation is no longer available to claim',
-            ...(raceWinnerWorkspaceId ? { workspaceId: raceWinnerWorkspaceId } : {}),
+            ...(raceWinnerOpenable ? { workspaceId: raceWinnerWorkspaceId } : {}),
           },
           { status: 409 },
         );
