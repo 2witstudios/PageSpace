@@ -22,10 +22,16 @@
  *    before the index has to. One conversation, at most one node.
  *
  * What survives is the fact this module was written for and the model does not
- * answer on its own: whether closing this rectangle should also close the
- * THREAD's listing. Closing a node parks it — it stays a member of the workspace
- * — so that is a genuinely separate question, and it is the one the server route
- * owns the authority on.
+ * answer on its own: whether closing this rectangle should go through the
+ * THREAD's own DELETE instead of the plain node write.
+ *
+ * Both end with the node GONE — membership is the node, so either way the thread
+ * leaves the workspace; nothing parks. What only the route can do is tell the
+ * DIRECTORY PLANE: it emits the conversation's `closed` lifecycle event, and the
+ * node write's `workspace:nodes-updated` does not cover that, because that event
+ * carries the tree while the sidebar's rows come from the LISTING. Close a
+ * chat-bound pane through the node write alone and the grid is right while the
+ * sidebar keeps a row for a thread that is no longer there.
  *
  * A pure decision over PLAIN DATA (the workspace's panes, plus its listing) — no
  * store, no fetch, no IO — so the branch never lives inline in `AgentPanes`.
@@ -39,17 +45,20 @@ export type { SessionConversationSummary };
 export type ClosePaneDecision =
   /** Nothing to act on, or nothing that can be decided yet. */
   | { action: 'noop' }
-  /** A pure layout removal: the node leaves the grid and stays in the workspace. */
+  /**
+   * The plain node write: destroy the node. Nothing else in the workspace has a
+   * listing row to correct, which is what makes this the whole act.
+   */
   | { action: 'close-pane' }
   /**
-   * Take the node out of the grid AND close conversation `conversationId`'s
-   * listing (the workspace-scoped DELETE). The node still only parks — closing
-   * the thread is the extra act, not a different one.
+   * Destroy the node through conversation `conversationId`'s own DELETE (the
+   * workspace-scoped route). The same removal, taken by the one path that also
+   * announces the thread's close to the directory plane.
    */
   | { action: 'close-conversation'; conversationId: string };
 
 export function decideClosePane(params: {
-  /** Every pane in the workspace, attached or parked. */
+  /** Every pane in the workspace — which is every pane in its tree. */
   panes: readonly PaneNode[];
   /** The node being closed. */
   nodeId: string;
@@ -65,7 +74,7 @@ export function decideClosePane(params: {
   if (!node) return { action: 'noop' };
 
   // A picker, a terminal or a page pane addresses no conversation listing, so
-  // this node has nothing of its own to close. Parking it is the whole act.
+  // this node has nothing to announce. Destroying it is the whole act.
   if (node.target === null || node.target.kind !== 'chat') return { action: 'close-pane' };
 
   const conversationId = node.target.id;
@@ -78,7 +87,7 @@ export function decideClosePane(params: {
   if (activeConversations === null) return { action: 'noop' };
 
   // Resolved, and this thread is not in it — somebody else already closed it.
-  // There is nothing left to DELETE; park the node and be done.
+  // There is nothing left to DELETE; destroy the node and be done.
   if (!activeConversations.some((entry) => entry.conversationId === conversationId)) {
     return { action: 'close-pane' };
   }

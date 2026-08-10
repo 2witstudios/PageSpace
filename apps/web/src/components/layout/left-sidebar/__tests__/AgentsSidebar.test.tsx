@@ -487,11 +487,11 @@ describe('AgentsSidebar', () => {
     });
 
     /**
-     * The agreement itself. A broadcast parks the node between the render and
+     * The agreement itself. A broadcast DESTROYS the node between the render and
      * the click; the menu must have already followed it, because both read the
      * same live tree rather than the snapshot the row arrived on.
      */
-    test('follows a live broadcast: a thread parked under the sidebar switches to closing the THREAD', async () => {
+    test('follows a live broadcast: a thread whose node goes out from under the sidebar switches to closing the THREAD', async () => {
       respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')] }]);
       mockDel.mockResolvedValue({});
       const user = userEvent.setup();

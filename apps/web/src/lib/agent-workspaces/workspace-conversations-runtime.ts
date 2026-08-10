@@ -281,9 +281,11 @@ export async function listAllConversationsPaginated(
       createdAt: conversations.createdAt,
       // MEMBERSHIP, from the tree — the node that binds this thread names the
       // workspace it belongs to, where this used to read the conversation's own
-      // column. Nothing else about this listing changes: a thread OFF the grid
-      // is still a member and still past-conversation history, and a thread in
-      // no workspace at all still has a null here.
+      // column. A thread with no node is in no workspace and gets a null here:
+      // that is the only shape of "not a member" there is now, because the node
+      // IS the membership and there is no off-grid state for one to sit in. The
+      // thread itself is untouched either way — it stays in this listing as
+      // past-conversation history.
       workspaceId: membershipNode.rootId,
       sessionName: agentWorkspaces.name,
       sessionEndedAt: agentWorkspaces.endedAt,

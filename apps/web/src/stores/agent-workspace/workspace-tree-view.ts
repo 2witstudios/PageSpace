@@ -4,8 +4,8 @@
  *
  * They live outside React on purpose, and outside the store too. Outside React
  * because every one of them is a decision with edge cases worth testing
- * directly — a detached node, a target with no resolved title, an empty grid —
- * and mounting a component to assert one of those is how a rule ends up
+ * directly — a thread with no node, a target with no resolved title, an empty
+ * grid — and mounting a component to assert one of those is how a rule ends up
  * re-derived slightly differently at the second call site. Outside the store
  * because none of them is state: they are the same list, looked at twice.
  *
