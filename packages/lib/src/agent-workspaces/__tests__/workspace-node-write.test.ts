@@ -478,7 +478,7 @@ describe('the wire schema', () => {
 
 describe('a write that MOVES a conversation between nodes in one commit', () => {
   /**
-   * The reviewer's scenario (PR #2378, CodeRabbit on `.pu-reports/pu-fix-xws.md`):
+   * The reviewer's scenario (PR #2378, CodeRabbit):
    * a client rebases, and its replayed write drops the node currently bound to a
    * conversation while putting a different node bound to the same one. The
    * concern was that this is "permanently rejected" — that `target_already_shown`

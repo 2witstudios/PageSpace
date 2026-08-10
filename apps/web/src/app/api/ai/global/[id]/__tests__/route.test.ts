@@ -426,7 +426,7 @@ describe('DELETE /api/ai/global/[id]', () => {
     });
 
     it('runs the second expel on the NO-MEMBERSHIP branch too — the race that branch had no answer for', async () => {
-      // F3, from `.pu-reports/pu-rev-races.md`. Both delete routes read
+      // A review finding on this PR. Both delete routes read
       // membership, then delete; the `if` branch compensates for a claim landing
       // in that gap and the `else` branch did not. A thread with no workspace is
       // precisely what `claimConversationInSession` admits (it proceeds on

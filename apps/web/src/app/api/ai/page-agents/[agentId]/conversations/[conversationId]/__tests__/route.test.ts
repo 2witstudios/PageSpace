@@ -498,7 +498,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     });
 
     it('runs the second expel on the NO-MEMBERSHIP branch too — the race that branch had no answer for', async () => {
-      // The twin of the global route's F3 test (`.pu-reports/pu-rev-races.md`).
+      // The twin of the global route's test — see it for the race.
       // This branch carried a comment saying "no listing to protect, no lock
       // needed", which was true of the READ and false of the write: a claim
       // landing between the membership read and the delete leaves a live node
