@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig } from 'swr';
+import useSWR, { SWRConfig } from 'swr';
 
 const mockPost = vi.fn();
 const mockDel = vi.fn();
@@ -573,6 +573,69 @@ describe('AgentPanes — closing the LAST pane', () => {
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
     await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeUndefined());
     expect(onSessionEnded).toHaveBeenCalled();
+  });
+
+  it('restores the sidebar row when the end DELETE fails, whatever scope the listing was fetched under', async () => {
+    // THE REACH HAS TO MATCH. `forgetWorkspaceInCache` strips this row from
+    // EVERY listing entry (an `isWorkspaceListingKey` predicate), so a rollback
+    // snapshot read from the one `agentWorkspacesKey(driveId)` key comes back
+    // empty whenever the listing was fetched under a different scope — and the
+    // row is then dropped everywhere and restored nowhere, leaving a workspace
+    // that is still very much alive missing from the sidebar.
+    //
+    // Here the grid is handed `drive-1` while the listing is subscribed under
+    // the UNSCOPED key, which is exactly that mismatch. The subscriber stands in
+    // for the sidebar, and has to be a real one: SWR's predicate `mutate` only
+    // reaches keys SWR itself is tracking, so a hand-seeded cache entry would
+    // make this test vacuous — neither removed nor restored.
+    const row = { workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] };
+    // The listing is fetched ONCE and is then offline — the same dead network
+    // that failed the DELETE. That is the whole reason `restoreWorkspaceInCache`
+    // exists rather than a bare revalidate: with the network down, re-reading
+    // brings nothing back.
+    let listingOnline = true;
+    const ListingProbe = () => {
+      useSWR('/api/agent-workspaces', async () => {
+        if (!listingOnline) throw new Error('offline');
+        listingOnline = false;
+        return { sessions: [row] };
+      });
+      return null;
+    };
+    let listingNow: Array<{ workspaceId: string }> = [];
+    const Watch = () => {
+      const { data } = useSWR<{ sessions: Array<{ workspaceId: string }> }>('/api/agent-workspaces');
+      listingNow = data?.sessions ?? [];
+      return null;
+    };
+
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockDel.mockRejectedValue(new Error('offline'));
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <ListingProbe />
+        <Watch />
+        <AgentPanes
+          sessionId="ses-1"
+          driveId="drive-1"
+          initialConversation={{ conversationId: 'conv-1', agentPageId: 'agent-1', name: 'Conversation' }}
+        />
+      </SWRConfig>,
+    );
+
+    await screen.findByTestId('pane-chat');
+    await waitFor(() => expect(listingNow).toHaveLength(1));
+
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /end session/i }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Could not end the session', expect.anything()));
+    // The optimistic removal is rolled back rather than left to a revalidate the
+    // same dead network would fail.
+    await waitFor(() => expect(listingNow).toHaveLength(1));
+    expect(listingNow[0]).toMatchObject({ workspaceId: 'ses-1' });
   });
 
   it('a member who may NOT end the workspace keeps the ordinary close', async () => {

@@ -48,7 +48,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { mutate, useSWRConfig } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
+import type { Cache } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -83,7 +84,6 @@ import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
 import { decideClosePane } from './close-pane';
 import {
-  agentWorkspacesKey,
   isAgentWorkspacesKey,
   isWorkspaceListingKey,
   forgetWorkspaceInCache,
@@ -197,6 +197,26 @@ function isSessionListingBody(value: unknown): value is { sessions: SessionListE
   );
 }
 
+/**
+ * This workspace's sidebar row, from ANY open session listing.
+ *
+ * Scoped by the same predicate the cache WRITERS use rather than by one built
+ * key, because a rollback snapshot narrower than the removal it has to undo is
+ * how a live workspace disappears from the sidebar: see `confirmEndSession`.
+ * First match wins — the row is the same workspace whichever scope fetched it,
+ * and the rollback only needs one copy to put back.
+ */
+function findSessionInListingCache(cache: Cache, sessionId: string): SessionListEntry | null {
+  for (const key of cache.keys()) {
+    if (!isWorkspaceListingKey(key)) continue;
+    const body = cache.get(key)?.data;
+    if (!isSessionListingBody(body)) continue;
+    const row = body.sessions.find((session) => session.workspaceId === sessionId);
+    if (row !== undefined) return row;
+  }
+  return null;
+}
+
 export default function AgentPanes({
   sessionId,
   driveId,
@@ -221,7 +241,13 @@ export default function AgentPanes({
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   // NON-REACTIVE by design — see `isSessionListingBody`. Used once, inside the
   // end-session rollback.
-  const { cache } = useSWRConfig();
+  // BOTH from the same config, deliberately. `mutate` used to be the bare
+  // top-level import, which targets SWR's DEFAULT cache regardless of the
+  // provider this tree is actually mounted under — so the rollback below could
+  // read its snapshot from one cache and write its removal to another.
+  // `forgetWorkspaceInCache`'s own doc asks callers for the mutate bound to
+  // their cache for exactly this reason; this is that.
+  const { cache, mutate } = useSWRConfig();
 
   const nodes = useMemo(() => tree?.nodes ?? [], [tree]);
   const targetIndex = useMemo(() => indexTargets(tree?.targets ?? []), [tree]);
@@ -698,10 +724,19 @@ export default function AgentPanes({
     // rather than through a subscription. This grid has no other use for that
     // listing, and subscribing to it just to hold a rollback snapshot would
     // re-render every pane on the sidebar's poll.
-    const cachedListing = cache.get(agentWorkspacesKey(driveId))?.data;
-    const sessionEntrySnapshot = isSessionListingBody(cachedListing)
-      ? cachedListing.sessions.find((session) => session.workspaceId === sessionId) ?? null
-      : null;
+    //
+    // SCANNED, not fetched by one key, because the rollback has to REACH as far
+    // as the removal does: `forgetWorkspaceInCache` strips this row from every
+    // entry `isWorkspaceListingKey` matches, so a snapshot read from a single
+    // `agentWorkspacesKey(driveId)` can come back empty for a row that was
+    // nonetheless removed — this grid is handed the WORKSPACE's drive, and the
+    // listing may well have been fetched under another scope (the reused-global
+    // case `agentWorkspacesKey`'s own doc comment warns about) or under none.
+    // The row would then be dropped everywhere and restored nowhere, leaving a
+    // still-live workspace missing from the sidebar with only the revalidate to
+    // bring it back — which `restoreWorkspaceInCache` exists precisely because
+    // it cannot be trusted to.
+    const sessionEntrySnapshot = findSessionInListingCache(cache, sessionId);
     forgetWorkspace(sessionId);
     setPendingEnd(null);
     forgetWorkspaceInCache(mutate, sessionId);
@@ -738,7 +773,7 @@ export default function AgentPanes({
       toast.warning('This session had other open conversations, which were also ended.');
     }
     onSessionEnded?.();
-  }, [pendingEnd, nodes, sessionId, cache, driveId, forgetWorkspace, closeShell, onSessionEnded]);
+  }, [pendingEnd, nodes, sessionId, cache, mutate, forgetWorkspace, closeShell, onSessionEnded]);
 
   /** Shared by the orphan cleanup's own post-DELETE recheck and the History pick's rollback. */
   const isConversationShownSomewhere = useCallback(
@@ -826,7 +861,7 @@ export default function AgentPanes({
       // exists to delete.
       void mutate(isAgentWorkspacesKey);
     },
-    [sessionId, closeDecisionListing, isConversationShownSomewhere, onConversationClosed],
+    [sessionId, closeDecisionListing, isConversationShownSomewhere, onConversationClosed, mutate],
   );
 
   /**
@@ -949,6 +984,7 @@ export default function AgentPanes({
       cleanupOrphanedConversation,
       closeReplacedConversation,
       syncConsoleSelection,
+      mutate,
     ],
   );
 
@@ -1140,6 +1176,7 @@ export default function AgentPanes({
       cleanupOrphanedConversation,
       closeReplacedConversation,
       isConversationShownSomewhere,
+      mutate,
     ],
   );
 
@@ -1176,7 +1213,7 @@ export default function AgentPanes({
         }
       }
     },
-    [sessionId, unbindPane],
+    [sessionId, unbindPane, mutate],
   );
 
   /**
