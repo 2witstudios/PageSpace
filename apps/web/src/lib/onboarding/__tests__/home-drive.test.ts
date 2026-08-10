@@ -41,12 +41,25 @@ vi.mock('@pagespace/lib/commands/starter-skill-installer', () => ({
   installStarterSkills: vi.fn().mockResolvedValue({ installed: [], skipped: [], alreadyInstalled: false }),
 }));
 
+// Same treatment, same reason: memory-page provisioning has its own behaviour
+// and its own coverage. Here we only care that provisioning calls it, so the
+// real implementation is not driven against this file's transaction stub.
+vi.mock('@pagespace/lib/memory/memory-pages', () => ({
+  provisionMemoryPages: vi.fn().mockResolvedValue({
+    folderId: 'memory-folder',
+    bioPageId: 'bio-page',
+    writingStylePageId: 'style-page',
+    rulesPageId: 'rules-page',
+  }),
+}));
+
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer';
+import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   provisionHomeDriveIfNeeded,
   type ProvisionHomeDriveResult,
@@ -210,6 +223,30 @@ describe('provisionHomeDriveIfNeeded', () => {
     // Passed the SAME tx, so a failed install rolls the whole Home back rather
     // than leaving a drive with half its starter content.
     expect(installStarterSkills).toHaveBeenCalledWith('user-new', 'drive-new', tx);
+  });
+
+  test('given new user, memory pages are provisioned into the new Home drive', async () => {
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    // Same tx as the drive insert, for the same reason as starter skills: a Home
+    // drive that exists without its memory pages leaves the personalization cron
+    // with nowhere to write, and the settings screen with nothing to link to.
+    expect(provisionMemoryPages).toHaveBeenCalledWith('user-new', 'drive-new', tx);
+  });
+
+  test('given an existing user reached lazily, memory pages are still provisioned', async () => {
+    const tx = makeTx();
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-existing');
+
+    // Both branches, like starter skills. An account that predates the feature
+    // reaches Home through the lazy path and must not be left without pages.
+    expect(provisionMemoryPages).toHaveBeenCalledWith('user-existing', 'drive-new', tx);
   });
 
   test('given slug "home" taken, resolveUniqueSlug result is used as the drive slug', async () => {
