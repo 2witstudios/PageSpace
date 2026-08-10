@@ -6,20 +6,17 @@
  * to the actual personalization pages.
  */
 
-import { and, eq, inArray, isNull, lt, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+// Single definition, owned by the producer. A local copy here had already
+// drifted — it lacked `evidenceAt`, so the staging table could not have seen
+// the evidence date even once discovery started supplying it.
+import type { DiscoveredClaim, MemoryField } from './discovery-service';
 
-export type MemoryField = 'bio' | 'writingStyle' | 'rules';
-
-export interface DiscoveredClaim {
-  field: MemoryField;
-  claim: string;
-  evidence: string;
-  occurrencesInWindow: number;
-}
+export type { DiscoveredClaim, MemoryField };
 
 /**
  * Corroboration thresholds, in distinct observation days.
@@ -35,6 +32,16 @@ export const PROMOTION_THRESHOLD: Record<MemoryField, number> = {
 
 /** Candidates not re-observed within this many days are forgotten. */
 export const STALE_CANDIDATE_DAYS = 30;
+
+/**
+ * How long a settled candidate keeps its verbatim `evidence` quote.
+ *
+ * Longer than the pending window because a subject access request should still
+ * be able to show WHY a claim in the profile was accepted for a reasonable
+ * period after it was. After that the quote has served its purpose and is
+ * redacted; the claim itself is retained for deduplication.
+ */
+export const SETTLED_EVIDENCE_RETENTION_DAYS = 90;
 
 /**
  * Normalize a claim to its key for deduplication.
@@ -59,13 +66,21 @@ export function utcDayKey(date: Date): string {
 /**
  * Whether re-observing a claim should raise its corroboration count.
  *
- * Occurrences count DISTINCT DAYS, not sightings. Without this, a single long
- * session saying the same thing three times would promote a claim the user has
- * expressed exactly once — which is the failure mode the whole staging table
- * exists to prevent.
+ * Compares the days the SUPPORTING EVIDENCE was written on — never the days the
+ * cron happened to run.
+ *
+ * That distinction is the whole guarantee. Discovery re-reads a rolling 7-day
+ * window every night, so one unchanged message is rediscovered on consecutive
+ * runs. Counting cron days would promote a genuine one-off after two or three
+ * nights while the user said nothing new, which is exactly the failure the
+ * staging table exists to prevent. Counting evidence days means a claim only
+ * advances when the person actually said something on another day.
  */
-export function shouldIncrementOccurrences(lastSeenAt: Date, now: Date): boolean {
-  return utcDayKey(lastSeenAt) !== utcDayKey(now);
+export function shouldIncrementOccurrences(
+  lastEvidenceAt: Date,
+  newEvidenceAt: Date
+): boolean {
+  return utcDayKey(lastEvidenceAt) !== utcDayKey(newEvidenceAt);
 }
 
 /**
@@ -82,8 +97,7 @@ export function shouldIncrementOccurrences(lastSeenAt: Date, now: Date): boolean
  */
 export async function upsertCandidates(
   userId: string,
-  claims: DiscoveredClaim[],
-  now: Date = new Date()
+  claims: DiscoveredClaim[]
 ): Promise<number> {
   if (claims.length === 0) return 0;
 
@@ -93,12 +107,17 @@ export async function upsertCandidates(
     const claimKey = normalizeClaimKey(claim.claim);
     if (!claimKey) continue;
 
-    // Check if this claim already exists
+    // Look up the row WITHOUT filtering on promoted/rejected. The unique index
+    // is on (userId, field, claimKey) unconditionally, so an active-only lookup
+    // would miss a settled row and then collide on insert — aborting the whole
+    // user's run every night once any recurring wording had been settled once.
     const [existing] = await db
       .select({
         id: personalizationCandidates.id,
         occurrences: personalizationCandidates.occurrences,
         lastSeenAt: personalizationCandidates.lastSeenAt,
+        promotedAt: personalizationCandidates.promotedAt,
+        rejectedAt: personalizationCandidates.rejectedAt,
       })
       .from(personalizationCandidates)
       .where(
@@ -106,29 +125,11 @@ export async function upsertCandidates(
           eq(personalizationCandidates.userId, userId),
           eq(personalizationCandidates.field, claim.field),
           eq(personalizationCandidates.claimKey, claimKey),
-          isNull(personalizationCandidates.promotedAt),
-          isNull(personalizationCandidates.rejectedAt),
         )
       )
       .limit(1);
 
-    if (existing) {
-      const occurrences = shouldIncrementOccurrences(existing.lastSeenAt, now)
-        ? existing.occurrences + 1
-        : existing.occurrences;
-
-      await db
-        .update(personalizationCandidates)
-        .set({
-          occurrences,
-          lastSeenAt: now,
-          evidence: claim.evidence, // keep most recent evidence
-        })
-        .where(eq(personalizationCandidates.id, existing.id));
-
-      upserted++;
-    } else {
-      // Insert new candidate
+    if (!existing) {
       await db.insert(personalizationCandidates).values({
         id: createId(),
         userId,
@@ -137,12 +138,36 @@ export async function upsertCandidates(
         claimKey,
         evidence: claim.evidence,
         occurrences: 1,
-        firstSeenAt: now,
-        lastSeenAt: now,
+        firstSeenAt: claim.evidenceAt,
+        lastSeenAt: claim.evidenceAt,
       });
-
       upserted++;
+      continue;
     }
+
+    // Already settled. A promoted claim is in the profile already, and a
+    // rejected one was declined against that profile — re-staging either would
+    // just re-spend tokens re-deciding a question already answered. Skipping
+    // also keeps the row's terminal timestamps meaningful as a record of when
+    // that decision was made.
+    if (existing.promotedAt || existing.rejectedAt) continue;
+
+    const occurrences = shouldIncrementOccurrences(existing.lastSeenAt, claim.evidenceAt)
+      ? existing.occurrences + 1
+      : existing.occurrences;
+
+    await db
+      .update(personalizationCandidates)
+      .set({
+        occurrences,
+        // Never move lastSeenAt backwards: re-reading an older message must not
+        // make a claim look staler than evidence already counted for it.
+        lastSeenAt: claim.evidenceAt > existing.lastSeenAt ? claim.evidenceAt : existing.lastSeenAt,
+        evidence: claim.evidence, // keep most recent evidence
+      })
+      .where(eq(personalizationCandidates.id, existing.id));
+
+    upserted++;
   }
 
   loggers.api.debug('Memory candidates upserted', {
@@ -270,4 +295,59 @@ export async function pruneStaleCandidates(
   }
 
   return deleted.length;
+}
+
+/** Placeholder left in `evidence` once a settled row passes its retention window. */
+export const REDACTED_EVIDENCE = '[evidence redacted after retention period]';
+
+/**
+ * Drop the verbatim quote from candidates that settled long enough ago.
+ *
+ * `evidence` is a direct quote of something the user wrote. It earns its keep
+ * while a claim is pending — it is what justifies promoting or declining the
+ * claim, and what a subject sees when asking why the AI believes something —
+ * but once the row is promoted or rejected the decision is made and the quote
+ * is just retained personal data with no remaining purpose. Art 5(1)(e) says
+ * that has to stop.
+ *
+ * The ROW survives, with `claim` and `claimKey` intact, because those are what
+ * `upsertCandidates` needs to recognise a recurring claim and avoid colliding
+ * on the unique index. Only the quote goes.
+ */
+export async function redactSettledEvidence(
+  userId: string,
+  now: Date = new Date()
+): Promise<number> {
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - SETTLED_EVIDENCE_RETENTION_DAYS);
+
+  const redacted = await db
+    .update(personalizationCandidates)
+    .set({ evidence: REDACTED_EVIDENCE })
+    .where(
+      and(
+        eq(personalizationCandidates.userId, userId),
+        ne(personalizationCandidates.evidence, REDACTED_EVIDENCE),
+        or(
+          and(
+            isNotNull(personalizationCandidates.promotedAt),
+            lt(personalizationCandidates.promotedAt, cutoff)
+          ),
+          and(
+            isNotNull(personalizationCandidates.rejectedAt),
+            lt(personalizationCandidates.rejectedAt, cutoff)
+          )
+        )
+      )
+    )
+    .returning({ id: personalizationCandidates.id });
+
+  if (redacted.length > 0) {
+    loggers.api.debug('Memory settled candidate evidence redacted', {
+      userId,
+      count: redacted.length,
+    });
+  }
+
+  return redacted.length;
 }

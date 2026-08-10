@@ -18,6 +18,7 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import {
   readMemoryPages,
+  provisionMemoryPages,
   MEMORY_PAGE_TITLES,
   MEMORY_FIELDS,
   type MemoryField,
@@ -51,12 +52,36 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const [personalization, homeDrive] = await Promise.all([
-      db.query.userPersonalization.findFirst({
+    const homeDrive = await getHomeDrive(userId);
+
+    // Self-heal a pointerless profile.
+    //
+    // A user who predates this feature has content in the legacy columns and no
+    // page pointers, so every link below would be null: the screen would tell
+    // them their memory pages are missing and give them no way to create one.
+    // Rather than make that state depend on an operator remembering to run the
+    // backfill, provision on read — this is precisely the moment the pages are
+    // wanted, and `provisionMemoryPages` reuses anything that already exists.
+    //
+    // Deliberately does NOT copy legacy column content into the new pages; that
+    // stays the backfill's job, so this path cannot race it into a double write.
+    if (homeDrive) {
+      const existing = await db.query.userPersonalization.findFirst({
         where: eq(userPersonalization.userId, userId),
-      }),
-      getHomeDrive(userId),
-    ]);
+        columns: { bioPageId: true, writingStylePageId: true, rulesPageId: true },
+      });
+
+      const missingPointer =
+        !existing?.bioPageId || !existing?.writingStylePageId || !existing?.rulesPageId;
+
+      if (missingPointer) {
+        await db.transaction((tx) => provisionMemoryPages(userId, homeDrive.id, tx));
+      }
+    }
+
+    const personalization = await db.query.userPersonalization.findFirst({
+      where: eq(userPersonalization.userId, userId),
+    });
 
     const content = personalization ? await readMemoryPages(userId) : {};
 

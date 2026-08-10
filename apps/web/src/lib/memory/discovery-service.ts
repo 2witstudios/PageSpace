@@ -28,6 +28,20 @@ export interface DiscoveredClaim {
   claim: string;
   evidence: string;
   occurrencesInWindow: number;
+  /**
+   * When the newest message supporting this claim was written.
+   *
+   * This, NOT the time the cron happened to run, is what corroboration counts.
+   * Discovery re-reads the same rolling 7-day window every night, so a single
+   * unchanged message is rediscovered on consecutive runs; counting cron days
+   * would promote a one-off after two or three nights and defeat the whole
+   * point of the staging table.
+   *
+   * Derived server-side from `evidenceMessageIndex` — the model cites which
+   * message it quoted, and we look up that message's real timestamp. The model
+   * never supplies a date.
+   */
+  evidenceAt: Date;
 }
 
 export interface DiscoveryResult {
@@ -40,12 +54,23 @@ interface ConversationMessage {
   createdAt: Date;
 }
 
-// Zod schema for structured output — eliminates silent parse failures
+// Zod schema for structured output — eliminates silent parse failures.
+//
+// `field` is optional: `runDiscoveryPasses` assigns it from the pass the claim
+// came from, which is the authority. Requiring it here would make a response
+// that omits it fail schema validation and drop the whole pass to zero claims.
 const claimSchema = z.object({
-  field: z.enum(['bio', 'writingStyle', 'rules']),
+  field: z.enum(['bio', 'writingStyle', 'rules']).optional(),
   claim: z.string().min(1),
   evidence: z.string().min(1),
   occurrencesInWindow: z.number().int().min(1),
+  /**
+   * Index (from the numbered transcript) of the newest message supporting the
+   * claim. An index rather than a date so the model cannot invent a timestamp;
+   * anything out of range falls back to the oldest message in the window,
+   * which is the conservative choice — it cannot fabricate recency.
+   */
+  evidenceMessageIndex: z.number().int().min(0),
 });
 
 const discoverySchema = z.object({
@@ -68,20 +93,22 @@ EXPLICIT EXCLUSIONS (never record these, even if they seem actionable):
 - Self-reported metrics (lines of code, rankings, follower counts, scores)
 - Current tasks, projects, or work-in-progress status
 
+Each message in the transcript below is numbered like [12 user]. Use those numbers.
+
 Return a JSON object with a "claims" array. Each claim has:
-- field: "bio" (who they are), "writingStyle" (how AI should write), or "rules" (AI behavior rules)
 - claim: the insight itself — IMPERATIVE for writingStyle/rules (e.g. "Never use emojis", not "user prefers no emojis")
 - evidence: a verbatim quote from the user's messages that supports this claim
 - occurrencesInWindow: how many distinct messages in these conversations support this claim
+- evidenceMessageIndex: the NUMBER of the most recent message supporting this claim, exactly as shown in brackets
 
 Example output format:
 {
   "claims": [
     {
-      "field": "writingStyle",
       "claim": "Prefer concise responses without preamble or sign-off",
       "evidence": "be concise, skip the preamble",
-      "occurrencesInWindow": 3
+      "occurrencesInWindow": 3,
+      "evidenceMessageIndex": 12
     }
   ]
 }`;
@@ -254,8 +281,12 @@ async function gatherRecentActivity(
 async function runDiscoveryPass(
   userId: string,
   passName: string,
+  /** The field this pass is responsible for — the authority on every claim it returns. */
+  field: MemoryField,
   systemPrompt: string,
-  conversationContext: string
+  conversationContext: string,
+  /** Same order as the numbered transcript, so a cited index resolves to a real timestamp. */
+  messageDates: Date[]
 ): Promise<DiscoveredClaim[]> {
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
@@ -298,7 +329,20 @@ async function runDiscoveryPass(
       metadata: { feature: 'memory_discovery', pass: passName },
     });
 
-    return result.object.claims;
+    // Resolve each cited index to the real message timestamp. An out-of-range
+    // index falls back to the OLDEST message in the window: a model that cites
+    // nothing usable must not be able to make a claim look fresher than its
+    // evidence, which would let it clear the corroboration bar early.
+    const oldest = messageDates[messageDates.length - 1] ?? new Date();
+
+    // The model's own `field` tag is discarded in favour of `field`, the field
+    // this pass is responsible for. The model can omit or mislabel it, and a
+    // claim filed into the wrong page is worse than one not filed at all.
+    return result.object.claims.map(({ field: _modelTag, ...claim }) => ({
+      ...claim,
+      field,
+      evidenceAt: messageDates[claim.evidenceMessageIndex] ?? oldest,
+    }));
   } catch (error) {
     loggers.api.warn(`Memory discovery ${passName} pass failed`, { error });
     return [];
@@ -324,10 +368,13 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     return { claims: [] };
   }
 
-  // Format conversation context: 60 messages × 1500 chars (was 100 × 500)
-  const conversationContext = recentMessages
-    .slice(0, 60)
-    .map((m) => `[${m.role}]: ${m.content.substring(0, 1500)}`)
+  // Format conversation context: 60 messages × 1500 chars (was 100 × 500).
+  // Messages are NUMBERED so a claim can cite the message it came from, and the
+  // dates array below stays index-aligned with the transcript the model sees.
+  const windowed = recentMessages.slice(0, 60);
+  const messageDates = windowed.map((m) => m.createdAt);
+  const conversationContext = windowed
+    .map((m, i) => `[${i} ${m.role}]: ${m.content.substring(0, 1500)}`)
     .join('\n\n');
 
   const activityContext =
@@ -337,37 +384,37 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   const fullContext = conversationContext + activityContext;
 
-  // Run three focused passes in parallel
+  // Run three focused passes in parallel. Each pass owns its field and stamps
+  // it onto every claim it returns, so the model's own tag never decides which
+  // page a claim lands in.
   const [bioClaims, communicationClaims, rulesClaims] = await Promise.all([
     runDiscoveryPass(
       userId,
       'worldview',
+      'bio',
       DISCOVERY_PROMPT_BASE + '\n\n' + WORLDVIEW_SPECIFIC,
-      fullContext
+      fullContext,
+      messageDates
     ),
     runDiscoveryPass(
       userId,
       'communication',
+      'writingStyle',
       DISCOVERY_PROMPT_BASE + '\n\n' + COMMUNICATION_SPECIFIC,
-      fullContext
+      fullContext,
+      messageDates
     ),
     runDiscoveryPass(
       userId,
       'preferences',
+      'rules',
       DISCOVERY_PROMPT_BASE + '\n\n' + RULES_SPECIFIC,
-      fullContext
+      fullContext,
+      messageDates
     ),
   ]);
 
-  // The pass a claim came from is the authority on its field — not the model's
-  // own `field` tag, which it can omit or get wrong. Spreading the claim first
-  // and the field second means a mislabelled claim is corrected rather than
-  // filed into the wrong page.
-  const allClaims = [
-    ...bioClaims.map((c) => ({ ...c, field: 'bio' as const })),
-    ...communicationClaims.map((c) => ({ ...c, field: 'writingStyle' as const })),
-    ...rulesClaims.map((c) => ({ ...c, field: 'rules' as const })),
-  ];
+  const allClaims = [...bioClaims, ...communicationClaims, ...rulesClaims];
 
   loggers.api.info('Memory discovery passes complete', {
     userId,

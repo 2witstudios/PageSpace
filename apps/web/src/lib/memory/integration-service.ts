@@ -58,7 +58,7 @@ export async function updatePersonalizationPage(
   userId: string,
   field: MemoryField,
   newContent: string
-): Promise<void> {
+): Promise<{ written: boolean; reason?: string }> {
   const [personalization] = await db
     .select({ pageId: POINTER_COLUMN[field] })
     .from(userPersonalization)
@@ -71,7 +71,7 @@ export async function updatePersonalizationPage(
       userId,
       field,
     });
-    return;
+    return { written: false, reason: 'no page pointer (backfill has not run for this user)' };
   }
 
   const updated = await db
@@ -89,22 +89,45 @@ export async function updatePersonalizationPage(
       field,
       pageId,
     });
+    return { written: false, reason: 'page is trashed or no longer exists' };
   }
+
+  return { written: true };
 }
+
+/**
+ * The outcome of one evaluation run.
+ *
+ * `ok: false` means the evaluator never reached a decision — provider error,
+ * generation failure, or an unparseable response. That is deliberately NOT the
+ * same shape as "decided to change nothing": a transient model outage must
+ * leave candidates pending for the next run rather than permanently retiring
+ * every ready claim the user has accumulated.
+ */
+export type EvaluationOutcome =
+  | {
+      ok: true;
+      /** Full replacement content, per field the evaluator chose to rewrite. */
+      updates: Partial<Record<MemoryField, string>>;
+      /** IDs of the candidates the evaluator actually used. */
+      usedCandidateIds: string[];
+    }
+  | { ok: false; reason: string };
 
 /**
  * Evaluate promoted candidates and decide how to integrate.
  *
  * Returns the FULL new content for each field that changes, instructed to
- * preserve every line it is not explicitly superseding.
+ * preserve every line it is not explicitly superseding, plus the specific
+ * candidate IDs it drew on so the caller can settle them individually.
  */
 export async function evaluateAndIntegrate(
   userId: string,
   candidates: typeof personalizationCandidates.$inferSelect[],
   currentPages: Partial<Record<MemoryField, string>>
-): Promise<Partial<Record<MemoryField, string>>> {
+): Promise<EvaluationOutcome> {
   if (candidates.length === 0) {
-    return {};
+    return { ok: true, updates: {}, usedCandidateIds: [] };
   }
 
   const current = {
@@ -145,12 +168,17 @@ For each field, output the FULL NEW CONTENT — the complete page, not just the 
 - REMOVE lines that are superseded by newer, more accurate information
 - REORGANIZE into a coherent structure (prose or bullets, whichever fits)
 
+Each candidate insight below is numbered like [3]. Report which ones you actually used.
+
 Return JSON with this structure:
 {
   "bio": "full new bio content or null if unchanged",
   "writingStyle": "full new writing style content or null if unchanged",
-  "rules": "full new rules content or null if unchanged"
+  "rules": "full new rules content or null if unchanged",
+  "usedInsights": [3, 7]
 }
+
+"usedInsights" must list the number of every insight whose content you incorporated. Omit the numbers you decided to skip — they are recorded as declined.
 
 Remember: You are writing the COMPLETE page, not just additions. Preserve what matters, remove what doesn't.`;
 
@@ -163,18 +191,27 @@ Remember: You are writing the COMPLETE page, not just additions. Preserve what m
     loggers.api.error('Memory integration: provider error', {
       error: providerResult.error,
     });
-    return {};
+    return { ok: false, reason: 'provider error' };
   }
+
+  // Number every candidate so the evaluator can cite which it used. Indices are
+  // stable for this call only; they never leave this function.
+  const numbered = candidates.map((c, i) => ({ index: i, candidate: c }));
+  const byIndex = new Map(numbered.map((n) => [n.index, n.candidate.id]));
 
   try {
     // Build candidates text
-    const candidatesByField = Object.entries(byField)
-      .filter(([_, list]) => list.length > 0)
-      .map(([field, list]) => {
-        const items = list
-          .map(
-            (c) =>
-              `- ${c.claim} (seen ${c.occurrences} times, first: ${new Date(c.firstSeenAt).toLocaleDateString()})`
+    const candidatesByField = (Object.keys(byField) as MemoryField[])
+      .filter((field) => byField[field].length > 0)
+      .map((field) => {
+        const items = numbered
+          .filter((n) => n.candidate.field === field)
+          .map(({ index, candidate: c }) =>
+            // Fixed UTC formatting: toLocaleDateString() varies with host
+            // locale and timezone, which makes prompts non-reproducible and
+            // can name a different calendar day than the UTC-day rule the
+            // candidate service enforces.
+            `[${index}] ${c.claim} (seen on ${c.occurrences} separate days, first: ${new Date(c.firstSeenAt).toISOString().slice(0, 10)})`
           )
           .join('\n');
         return `NEW ${field.toUpperCase()} INSIGHTS:\n${items}`;
@@ -239,17 +276,30 @@ Return JSON with the full new content for each field that should change. Use nul
         }
       }
 
-      return updates;
+      // Map the cited indices back to candidate IDs. Anything the evaluator
+      // did not cite is treated as declined by the caller.
+      const usedCandidateIds: string[] = Array.isArray(parsed.usedInsights)
+        ? [
+            ...new Set(
+              (parsed.usedInsights as unknown[])
+                .filter((i): i is number => Number.isInteger(i))
+                .map((i) => byIndex.get(i))
+                .filter((id): id is string => id !== undefined)
+            ),
+          ]
+        : [];
+
+      return { ok: true, updates, usedCandidateIds };
     } catch {
       loggers.api.warn('Memory integration: failed to parse decision', {
         userId,
         response: text.substring(0, 500),
       });
-      return {};
+      return { ok: false, reason: 'unparseable evaluator response' };
     }
   } catch (error) {
     loggers.api.error('Memory integration: generation error', { userId, error });
-    return {};
+    return { ok: false, reason: 'generation error' };
   }
 }
 
@@ -287,8 +337,27 @@ export async function applyIntegrationDecisions(
       continue;
     }
 
-    await updatePersonalizationPage(userId, field, newContent);
-    updatedFields.push(field);
+    // A field counts as updated only when a row actually changed. Reporting a
+    // write that never landed would make the caller retire the candidates
+    // behind it, losing claims for every user whose backfill has not run or
+    // who has trashed the page.
+    //
+    // A thrown write is contained rather than propagated: one field failing
+    // must not discard the settlement information for the fields that already
+    // succeeded, which the caller needs to decide what to retire.
+    let result: { written: boolean; reason?: string };
+    try {
+      result = await updatePersonalizationPage(userId, field, newContent);
+    } catch (error) {
+      loggers.api.error('Memory integration: page write threw', { userId, field, error });
+      result = { written: false, reason: 'write failed' };
+    }
+
+    if (result.written) {
+      updatedFields.push(field);
+    } else {
+      rejected.push({ field, reason: result.reason ?? 'write did not affect any row' });
+    }
   }
 
   return {

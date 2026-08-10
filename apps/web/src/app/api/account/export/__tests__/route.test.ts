@@ -96,6 +96,7 @@ const mockUserData = {
   displayPreferences: [],
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
+  personalizationCandidates: [],
   // The categories the "Agent-Session Single Source of Truth" epic added. They
   // were missing from the export for the whole epic, and THIS FILE is why
   // nobody noticed: the category assertion below used to be a hand-written list

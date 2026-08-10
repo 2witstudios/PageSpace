@@ -41,6 +41,7 @@ import {
   markCandidatesPromoted,
   markCandidatesRejected,
   pruneStaleCandidates,
+  redactSettledEvidence,
   type MemoryField,
 } from '@/lib/memory/candidate-service';
 
@@ -164,6 +165,25 @@ export async function POST(request: Request) {
   }
 }
 
+/**
+ * Retention housekeeping, run on EVERY exit path.
+ *
+ * Forgetting must not be conditional on the happy path: a user whose evaluator
+ * is failing, or who has nothing promotable, still has stale candidates to drop
+ * and settled quotes past their retention window. Tying either to a successful
+ * run would leave the longest-neglected accounts the least cleaned up.
+ *
+ * Returns the pruned count; redaction is reported through logs, since it is a
+ * compliance action rather than a signal about this run's work.
+ */
+async function runRetention(userId: string): Promise<number> {
+  const [pruned] = await Promise.all([
+    pruneStaleCandidates(userId),
+    redactSettledEvidence(userId),
+  ]);
+  return pruned;
+}
+
 async function processUserMemory(
   userId: string
 ): Promise<{
@@ -177,29 +197,20 @@ async function processUserMemory(
   const discoveryResult = await runDiscoveryPasses(userId);
   const discovered = discoveryResult.claims.length;
 
-  if (discovered === 0) {
-    loggers.api.debug('Memory cron: No claims discovered for user', { userId });
-    // Still run prune even if nothing discovered
-    const pruned = await pruneStaleCandidates(userId);
-    return {
-      discovered: 0,
-      promoted: 0,
-      updated: false,
-      compacted: false,
-      pruned,
-    };
+  // Step 2: Stage what was discovered. An empty discovery is NOT a reason to
+  // stop: candidates left pending by an earlier guard rejection or provider
+  // outage are already corroborated and still deserve evaluation, and a quiet
+  // week would otherwise strand them indefinitely.
+  if (discovered > 0) {
+    await upsertCandidates(userId, discoveryResult.claims);
   }
 
-  // Step 2: Upsert candidates
-  await upsertCandidates(userId, discoveryResult.claims);
-
-  // Step 3: Promote candidates that meet criteria
+  // Step 3: Find candidates that have cleared the corroboration bar
   const promotable = await findPromotableCandidates(userId);
-  const promoted = promotable.length;
 
-  if (promoted === 0) {
+  if (promotable.length === 0) {
     loggers.api.debug('Memory cron: No candidates ready for promotion', { userId });
-    const pruned = await pruneStaleCandidates(userId);
+    const pruned = await runRetention(userId);
     return {
       discovered,
       promoted: 0,
@@ -212,38 +223,67 @@ async function processUserMemory(
   // Step 4: Get current page content
   const currentPages = await getCurrentPersonalizationPages(userId);
 
-  // Step 5: Evaluate and integrate
-  const updates = await evaluateAndIntegrate(userId, promotable, currentPages);
+  // Step 5: Evaluate
+  const evaluation = await evaluateAndIntegrate(userId, promotable, currentPages);
+
+  // The evaluator never reached a decision (provider down, generation error,
+  // unparseable response). Leave every candidate pending — settling them here
+  // would permanently retire a user's whole ready set over a transient outage.
+  if (!evaluation.ok) {
+    loggers.api.warn('Memory cron: evaluation failed, candidates left pending', {
+      userId,
+      reason: evaluation.reason,
+      pending: promotable.length,
+    });
+    const pruned = await runRetention(userId);
+    return {
+      discovered,
+      promoted: 0,
+      updated: false,
+      compacted: false,
+      pruned,
+    };
+  }
 
   // Step 6: Apply updates with guards
-  const applyResult = await applyIntegrationDecisions(userId, updates, currentPages);
+  const applyResult = await applyIntegrationDecisions(
+    userId,
+    evaluation.updates,
+    currentPages
+  );
 
-  // Step 6b: Settle each candidate against what actually landed.
+  // Step 6b: Settle each candidate INDIVIDUALLY.
   //
-  // A candidate is only PROMOTED if the page for its field was really written.
-  // The evaluator can decline a claim, and the rewrite guards can reject a
-  // whole field — in both cases marking the candidate promoted would retire it
-  // permanently despite nothing reaching the profile, so a claim the user keeps
-  // expressing would be silently dropped after its first evaluation.
+  // Field-level settling was wrong: several candidates can share a field, and
+  // the evaluator may incorporate one while declining another. Marking the
+  // whole field promoted retired claims that never reached the page. So a
+  // candidate is promoted only when the evaluator cited it AND the page write
+  // for its field actually landed.
   //
   // Declined claims are marked REJECTED rather than left pending: the evaluator
-  // has seen them against the current profile and said no, and leaving them
-  // pending would re-spend tokens re-deciding the same claim every night.
-  // Guard-rejected fields stay pending so the next run can try again.
+  // saw them against the current profile and said no, and re-staging them would
+  // re-spend tokens re-deciding the same question every night. Anything blocked
+  // by a guard or a failed write stays pending so the next run can retry.
   const written = new Set(applyResult.fields);
-  const guardRejected = new Set(applyResult.rejected.map((r) => r.field));
+  const blocked = new Set(applyResult.rejected.map((r) => r.field));
+  const used = new Set(evaluation.usedCandidateIds);
 
   const promotedIds: string[] = [];
   const rejectedIds: string[] = [];
 
   for (const candidate of promotable) {
     const field = candidate.field as MemoryField;
-    if (written.has(field)) {
-      promotedIds.push(candidate.id);
-    } else if (!guardRejected.has(field)) {
-      rejectedIds.push(candidate.id);
+
+    if (used.has(candidate.id)) {
+      // Cited by the evaluator — promoted only if the write landed.
+      if (written.has(field)) promotedIds.push(candidate.id);
+      // else: guard-rejected or write failed → stays pending.
+      continue;
     }
-    // else: guard-rejected — leave pending for the next run.
+
+    // Not cited. Declined by the evaluator, unless its field never got a
+    // verdict at all (blocked write), in which case leave it pending.
+    if (!blocked.has(field)) rejectedIds.push(candidate.id);
   }
 
   await Promise.all([
@@ -259,12 +299,18 @@ async function processUserMemory(
   }
 
   // Step 8: Prune stale candidates
-  const pruned = await pruneStaleCandidates(userId);
+  const pruned = await runRetention(userId);
 
   loggers.api.info('Memory cron: User processed', {
     userId,
     discovered,
-    promoted,
+    // Counts settled outcomes, not the size of the ready set. Reporting
+    // `promotable.length` as "promoted" counted evaluator-declined and
+    // guard-pending candidates as though they had reached the profile.
+    eligible: promotable.length,
+    promoted: promotedIds.length,
+    declined: rejectedIds.length,
+    stillPending: promotable.length - promotedIds.length - rejectedIds.length,
     updated: applyResult.updated,
     updatedFields: applyResult.fields,
     rejected: applyResult.rejected,
@@ -274,7 +320,7 @@ async function processUserMemory(
 
   return {
     discovered,
-    promoted,
+    promoted: promotedIds.length,
     updated: applyResult.updated,
     compacted,
     pruned,

@@ -71,6 +71,7 @@ export default function PersonalizationSettingsPage() {
   );
 
   const [enabled, setEnabled] = useState(true);
+  const [isTogglePending, setIsTogglePending] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -84,17 +85,31 @@ export default function PersonalizationSettingsPage() {
     }
   }, [data]);
 
+  /**
+   * Only one PATCH is ever in flight.
+   *
+   * Without this, rapid toggling starts overlapping writes and the responses
+   * can settle out of order, leaving the server on the OLDER value while the
+   * switch shows the newer one — a silent disagreement about whether the
+   * profile is being injected at all.
+   */
   const handleToggleEnabled = async (next: boolean) => {
+    if (isTogglePending) return;
+
+    const previous = enabled;
     setEnabled(next);
+    setIsTogglePending(true);
 
     try {
       await patch('/api/settings/personalization', { enabled: next });
       toast.success(next ? 'AI personalization enabled' : 'AI personalization disabled');
       mutate();
     } catch (error) {
-      setEnabled(!next);
+      setEnabled(previous);
       toast.error('Failed to update personalization setting');
       console.error('Error updating personalization:', error);
+    } finally {
+      setIsTogglePending(false);
     }
   };
 
@@ -143,6 +158,7 @@ export default function PersonalizationSettingsPage() {
             <Switch
               id="personalization-enabled"
               checked={enabled}
+              disabled={isTogglePending}
               onCheckedChange={handleToggleEnabled}
             />
           </div>

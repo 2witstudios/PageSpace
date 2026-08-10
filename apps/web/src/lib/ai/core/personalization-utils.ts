@@ -73,7 +73,15 @@ export async function getUserPersonalization(
   try {
     const personalization = await db.query.userPersonalization.findFirst({
       where: eq(userPersonalization.userId, userId),
-      columns: { enabled: true, bio: true, writingStyle: true, rules: true },
+      columns: {
+        enabled: true,
+        bio: true,
+        writingStyle: true,
+        rules: true,
+        bioPageId: true,
+        writingStylePageId: true,
+        rulesPageId: true,
+      },
     });
 
     if (!personalization || !personalization.enabled) {
@@ -82,12 +90,26 @@ export async function getUserPersonalization(
 
     const pageContent = await readMemoryPages(userId);
 
-    // Pointer-first, legacy-column fallback. The columns are still populated for
-    // users the backfill has not reached; they are dropped in a follow-up PR.
+    /**
+     * The legacy column is a fallback for users the backfill has not reached —
+     * NOT a shadow copy that outlives the page.
+     *
+     * Keyed on whether a pointer EXISTS, not on whether content came back.
+     * `readMemoryPages` omits a page that has been trashed or deleted, so
+     * falling back on missing content would resurrect the pre-deletion text
+     * and keep injecting it into every prompt after the user deleted the page
+     * to stop exactly that. A present pointer therefore means "the page is the
+     * source of truth", and an empty result from it means empty.
+     */
+    const legacyFor = (field: MemoryField, pointer: string | null): string => {
+      if (pointer) return pageContent[field] ?? '';
+      return pageContent[field] ?? personalization[field] ?? '';
+    };
+
     const raw: Record<MemoryField, string> = {
-      bio: pageContent.bio ?? personalization.bio ?? '',
-      writingStyle: pageContent.writingStyle ?? personalization.writingStyle ?? '',
-      rules: pageContent.rules ?? personalization.rules ?? '',
+      bio: legacyFor('bio', personalization.bioPageId),
+      writingStyle: legacyFor('writingStyle', personalization.writingStylePageId),
+      rules: legacyFor('rules', personalization.rulesPageId),
     };
 
     // Per-field budget.
@@ -96,6 +118,11 @@ export async function getUserPersonalization(
       writingStyle: truncateField(raw.writingStyle.trim(), MAX_FIELD_LENGTHS.writingStyle),
       rules: truncateField(raw.rules.trim(), MAX_FIELD_LENGTHS.rules),
     };
+
+    const fieldTruncated =
+      trimmed.bio.length < raw.bio.trim().length ||
+      trimmed.writingStyle.length < raw.writingStyle.trim().length ||
+      trimmed.rules.length < raw.rules.trim().length;
 
     // Total budget. Spend it in priority order — rules and writing style change
     // AI behaviour directly, bio is context — rather than scaling every field
@@ -121,10 +148,15 @@ export async function getUserPersonalization(
       remaining = 0;
     }
 
-    if (overBudget) {
-      loggers.api.warn('Personalization exceeds injection budget; truncated', {
+    // Warn when EITHER budget cut content. A field trimmed to its own limit
+    // that then fits the total would otherwise truncate silently, which is the
+    // case most likely to surprise a user who wrote a long page by hand.
+    if (overBudget || fieldTruncated) {
+      loggers.api.warn('Personalization truncated to fit the injection budget', {
         userId,
-        limit: MAX_TOTAL_LENGTH,
+        fieldBudgetTruncated: fieldTruncated,
+        totalBudgetTruncated: overBudget,
+        totalLimit: MAX_TOTAL_LENGTH,
       });
     }
 
