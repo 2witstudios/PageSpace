@@ -130,18 +130,28 @@ export async function upsertCandidates(
       .limit(1);
 
     if (!existing) {
-      await db.insert(personalizationCandidates).values({
-        id: createId(),
-        userId,
-        field: claim.field,
-        claim: claim.claim,
-        claimKey,
-        evidence: claim.evidence,
-        occurrences: 1,
-        firstSeenAt: claim.evidenceAt,
-        lastSeenAt: claim.evidenceAt,
-      });
-      upserted++;
+      // `onConflictDoNothing` rather than a bare insert: two runs for the same
+      // user (a retry overlapping the scheduled pass) can both find no row and
+      // race to insert. Losing that race must be a no-op, not an exception that
+      // aborts every remaining claim — the winner's row is identical anyway,
+      // and the loser's evidence is folded in on the next pass.
+      const inserted = await db
+        .insert(personalizationCandidates)
+        .values({
+          id: createId(),
+          userId,
+          field: claim.field,
+          claim: claim.claim,
+          claimKey,
+          evidence: claim.evidence,
+          occurrences: 1,
+          firstSeenAt: claim.evidenceAt,
+          lastSeenAt: claim.evidenceAt,
+        })
+        .onConflictDoNothing()
+        .returning({ id: personalizationCandidates.id });
+
+      if (inserted.length > 0) upserted++;
       continue;
     }
 
@@ -152,22 +162,30 @@ export async function upsertCandidates(
     // that decision was made.
     if (existing.promotedAt || existing.rejectedAt) continue;
 
-    const occurrences = shouldIncrementOccurrences(existing.lastSeenAt, claim.evidenceAt)
-      ? existing.occurrences + 1
-      : existing.occurrences;
+    const shouldIncrement = shouldIncrementOccurrences(existing.lastSeenAt, claim.evidenceAt);
 
-    await db
+    // Guarded by the lastSeenAt we read. If a concurrent run advanced the row
+    // first, this matches nothing and the increment is skipped rather than
+    // double-counting the same evidence day — the count stays a count of
+    // distinct days, not of how many times the cron overlapped itself.
+    const updated = await db
       .update(personalizationCandidates)
       .set({
-        occurrences,
+        occurrences: shouldIncrement ? existing.occurrences + 1 : existing.occurrences,
         // Never move lastSeenAt backwards: re-reading an older message must not
         // make a claim look staler than evidence already counted for it.
         lastSeenAt: claim.evidenceAt > existing.lastSeenAt ? claim.evidenceAt : existing.lastSeenAt,
         evidence: claim.evidence, // keep most recent evidence
       })
-      .where(eq(personalizationCandidates.id, existing.id));
+      .where(
+        and(
+          eq(personalizationCandidates.id, existing.id),
+          eq(personalizationCandidates.lastSeenAt, existing.lastSeenAt),
+        )
+      )
+      .returning({ id: personalizationCandidates.id });
 
-    upserted++;
+    if (updated.length > 0) upserted++;
   }
 
   loggers.api.debug('Memory candidates upserted', {

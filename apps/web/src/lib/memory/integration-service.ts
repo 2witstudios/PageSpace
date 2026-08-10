@@ -19,6 +19,10 @@ import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
+import {
+  applyPageMutation,
+  PageRevisionMismatchError,
+} from '@/services/api/page-mutation-service';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
@@ -51,6 +55,20 @@ const POINTER_COLUMN = {
 /**
  * Overwrite a single memory page with new content.
  *
+ * Routed through `applyPageMutation` rather than writing `pages.content`
+ * directly, for three reasons:
+ *
+ *  - **A user can be editing the page while the cron runs.** Passing
+ *    `expectedRevision` makes the write fail rather than silently discard an
+ *    edit made between our read and our write. Losing what someone typed into
+ *    their own memory page is worse than skipping a nightly update, so a
+ *    mismatch is treated as "not written" and the candidates stay pending.
+ *  - It keeps `revision`/`stateHash` coherent, which every other writer and
+ *    the realtime layer depend on.
+ *  - It records page-version and activity entries, so a background rewrite of
+ *    the user's own page is visible in history rather than appearing from
+ *    nowhere.
+ *
  * A missing pointer, or a pointer to a trashed page, is a no-op: the user
  * deleted that page and the cron does not resurrect it.
  */
@@ -74,22 +92,49 @@ export async function updatePersonalizationPage(
     return { written: false, reason: 'no page pointer (backfill has not run for this user)' };
   }
 
-  const updated = await db
-    .update(pages)
-    .set({
-      content: newContent,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(pages.id, pageId), eq(pages.isTrashed, false)))
-    .returning({ id: pages.id });
+  // Read the revision we are writing against, and confirm the page is still live.
+  const [page] = await db
+    .select({ revision: pages.revision, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
 
-  if (updated.length === 0) {
+  if (!page || page.isTrashed) {
     loggers.api.warn('Memory integration: page pointer is stale or trashed', {
       userId,
       field,
       pageId,
     });
     return { written: false, reason: 'page is trashed or no longer exists' };
+  }
+
+  try {
+    await applyPageMutation({
+      pageId,
+      operation: 'update',
+      updates: { content: newContent },
+      updatedFields: ['content'],
+      expectedRevision: page.revision,
+      context: {
+        userId,
+        isAiGenerated: true,
+        changeGroupType: 'automation',
+        metadata: { source: 'memory-cron', memoryField: field },
+      },
+    });
+  } catch (error) {
+    if (error instanceof PageRevisionMismatchError) {
+      // The user edited the page while this run was deciding. Their edit wins;
+      // the candidates stay pending and the next run re-evaluates against what
+      // they actually wrote.
+      loggers.api.info('Memory integration: page changed mid-run, deferring to the user edit', {
+        userId,
+        field,
+        pageId,
+      });
+      return { written: false, reason: 'page was edited during this run' };
+    }
+    throw error;
   }
 
   return { written: true };

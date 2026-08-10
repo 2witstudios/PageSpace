@@ -31,13 +31,16 @@ vi.mock('@pagespace/db/db', () => ({
     insert: () => ({
       values: (v: Record<string, unknown>) => {
         dbCalls.inserts.push(v);
-        return Promise.resolve();
+        // Mirrors the real chain: insert ... on conflict do nothing returning id.
+        return {
+          onConflictDoNothing: () => ({ returning: () => Promise.resolve([{ id: 'new' }]) }),
+        };
       },
     }),
     update: () => ({
       set: (v: Record<string, unknown>) => {
         dbCalls.updates.push(v);
-        return { where: () => Promise.resolve() };
+        return { where: () => ({ returning: () => Promise.resolve([{ id: 'c1' }]) }) };
       },
     }),
   },
