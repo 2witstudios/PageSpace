@@ -444,6 +444,8 @@ export async function claimConversationInSession(input: {
   conversationId: string;
   userId: string;
   workspaceId: string;
+  /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
+  activeNodeId?: string;
 }): Promise<ClaimConversationOutcome> {
   return claimConversationInSessionWith(buildClaimDeps(input.userId), input);
 }

@@ -1067,7 +1067,12 @@ export default function AgentPanes({
         try {
           claimResult = await post<{ ok: boolean; alreadyInSession: boolean }>(
             `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/claim`,
-            {},
+            // WHERE, for the same reason a mint says it: the claim ADMITS this
+            // thread, and admitting places. Without a preference the policy
+            // takes the first pane that qualifies, and the `openConversation`
+            // below cannot correct it — by then the thread is already showing
+            // somewhere, which that call reads as "focus it there".
+            { activeNodeId: nodeId },
           );
         } catch (error) {
           const remaining = settleClaim();
