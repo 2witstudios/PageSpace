@@ -83,6 +83,7 @@ import {
   rowFromNode,
   type WorkspaceNodeRow,
 } from './workspace-node-rows';
+import { rootSeedFor } from './workspace-node-commands';
 import { validateTree, type TreeViolationCode } from './workspace-node-validate';
 import type { PaneNode, PaneTargetKind, SplitNode, WorkspaceNode } from './workspace-node';
 
@@ -233,8 +234,15 @@ export function resolveChatClaims(params: {
 export type DerivationNoteCode =
   /** A column holding no panes. It renders nothing today and would be a `degenerate_split` tomorrow. */
   | 'empty_column_dropped'
-  /** A column id that collided with a pane id — legal in two tables, impossible in one. */
+  /** A column id that collided with an id already taken — legal in two tables, impossible in one. */
   | 'column_id_renamed'
+  /**
+   * A pane already held the id `rootSeedFor` mints for this workspace, so the
+   * root took a suffixed one. Worth reporting rather than swallowing: the
+   * derived id is what makes a client's seed and the server's the SAME write, so
+   * a renamed root is a workspace that quietly does not have that property.
+   */
+  | 'root_id_renamed'
   /** `kind` without `targetId`, or the reverse. Half a binding is a corrupt pane, not a partial one. */
   | 'pane_target_half_bound'
   /** `kind` outside `'chat' | 'terminal' | 'page'`. The old column had no check constraint. */
@@ -758,10 +766,35 @@ export function deriveWorkspaceNodes(
   // ---------------------------------------------------------------------
   // The nodes
   // ---------------------------------------------------------------------
-  const rootId = ids.allocate(`${workspaceId}::root`, 'root').id;
-  const nodes: WorkspaceNode[] = [
-    { nodeType: 'root', id: rootId, parentId: null, position: 0, axis: 'row' },
-  ];
+  // THE SAME ROOT THE SEED WOULD MINT, from the same function, and that is the
+  // point rather than a tidiness. `rootSeedFor` derives its id from the
+  // workspace so that two writers racing to seed an empty tree produce the
+  // IDENTICAL root and converge on the upsert. A backfill that minted its own
+  // shape of id put a second derivation into circulation: a client seeding
+  // against a stale or empty local tree while the server already held a
+  // backfilled root would send a root the server does not have, and the write
+  // would come back `multiple_roots` instead of converging. One derivation,
+  // one root id.
+  //
+  // Still through the allocator, because a pane may already hold this id — the
+  // old schema keys panes per-workspace and nothing stopped one being named
+  // after its workspace. A renamed root loses the convergence above and keeps
+  // the migration correct, which is the right way round.
+  const seed = rootSeedFor(workspaceId);
+  const allocatedRoot = ids.allocate(seed.id, 'root');
+  if (allocatedRoot.renamed) {
+    // REPORTED, not swallowed. Every other rename on this path emits a note, and
+    // this one costs more than a name: the workspace keeps a correct tree but
+    // loses the convergence the derived id exists to provide, and nothing else
+    // in the run would say so.
+    note(
+      'root_id_renamed',
+      workspaceId,
+      `a pane already holds the id this workspace's root derives from; the root is "${allocatedRoot.id}"`,
+    );
+  }
+  const rootId = allocatedRoot.id;
+  const nodes: WorkspaceNode[] = [{ ...seed, id: rootId }];
 
   // ---------------------------------------------------------------------
   // THE MEMBERS THAT HAD NO PANE — resolved BEFORE anything is emitted, because
@@ -863,7 +896,10 @@ export function deriveWorkspaceNodes(
       note(
         'column_id_renamed',
         entry.column.id,
-        `column id collides with a pane id in the same workspace; the split is "${allocated.id}"`,
+        // Not "collides with a pane" any more: the ROOT is allocated before the
+        // columns and now prefers the workspace's own id, so it is a second
+        // thing this can collide with.
+        `column id is already taken in this workspace; the split is "${allocated.id}"`,
       );
     }
     const split: SplitNode = {

@@ -53,13 +53,12 @@
  */
 
 import { MAX_SESSION_CONVERSATIONS } from './plan-spawn-worker';
-import { create, destroy, type NodeWrite } from './workspace-node-algebra';
+import { destroy, type NodeWrite } from './workspace-node-algebra';
 import {
   rootOf,
   type NodeAxis,
   type PaneNode,
   type PaneTarget,
-  type RootNode,
   type WorkspaceNode,
 } from './workspace-node';
 import {
@@ -69,7 +68,6 @@ import {
   openShell,
   type CommandCode,
   type CommandResult,
-  type Step,
 } from './workspace-node-commands';
 
 /**
@@ -160,11 +158,6 @@ export interface AdmitInput {
   activeNodeId?: string;
   /** The invoking conversation: never evicted by the thing it spawned. */
   excludeTargetId?: string;
-}
-
-/** A step that writes exactly what it is given — for the one node no operation mints. */
-function staged(write: NodeWrite): Step {
-  return () => ({ ok: true, write });
 }
 
 /**

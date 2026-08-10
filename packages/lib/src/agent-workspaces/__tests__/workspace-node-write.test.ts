@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { decideNodeWrite } from '../workspace-node-write';
 import { applyNodeWrite } from '../workspace-node-algebra';
+import { rootSeedFor } from '../workspace-node-commands';
 import { validateTree } from '../workspace-node-validate';
 import { workspaceNodeWriteRequestSchema } from '../workspace-node-wire';
 import type { WireWorkspaceNode } from '../workspace-node-wire';
@@ -207,6 +208,45 @@ describe('an id that names two nodes', () => {
     expect(decision.code).toBe('duplicate_id');
   });
 
+  it('refuses a conflicting repeat of an id the workspace ALREADY HOLDS', () => {
+    // The half the tree cannot see, and the reason the check is on the payload.
+    // `upsertNodes` keys `changed` by id and REPLACES a stored node in place, so
+    // the second copy silently wins and the validated tree holds exactly one —
+    // `duplicate_id` never fires. `changedPut` meanwhile keeps both, so
+    // `persist.put` used to carry one conflict key twice and Postgres answered
+    // "cannot affect row a second time": a 500 for a payload the caller should
+    // have been told was a 400.
+    const decision = decide(TWO_PANES, {
+      put: [
+        pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p1' } }),
+        pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p2' } }),
+      ],
+    });
+    expect(decision.status).toBe('invalid');
+    if (decision.status !== 'invalid') return;
+    expect(decision.code).toBe('duplicate_id');
+  });
+
+  it('collapses an identical repeat of a STORED id too, which is a retry, not a conflict', () => {
+    const bound = pane('pane-a', 'root', 0, { target: { kind: 'page', id: 'p1' } });
+    const decision = decide(TWO_PANES, { put: [bound, { ...bound }] });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    expect(decision.persist.put.filter((node) => node.id === 'pane-a')).toHaveLength(1);
+  });
+
+  it('collapses the same id said twice IDENTICALLY, because that payload means one thing', () => {
+    // Not a relaxation of the check above: the two namings there disagree about
+    // `position`, so the tree they describe is ambiguous and stays refused.
+    // These two describe one node, and a payload that says it twice says it
+    // once.
+    const twice = pane('pane-new', 'root', 2);
+    const decision = decide(TWO_PANES, { put: [twice, { ...twice }] });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    expect(decision.persist.put.filter((node) => node.id === 'pane-new')).toHaveLength(1);
+  });
+
   it('refuses a put that would give the workspace a second root', () => {
     const decision = decide(TWO_PANES, { put: [{ ...root(), id: 'root-2' }] });
     expect(decision.status).toBe('invalid');
@@ -215,6 +255,59 @@ describe('an id that names two nodes', () => {
     // order settles the dangling/reachability questions first, and a second root
     // descends from nothing.
     expect(['multiple_roots', 'unreachable']).toContain(decision.code);
+  });
+});
+
+/**
+ * THE FIRST WRITE TO AN EMPTY WORKSPACE, which is the shape that actually broke.
+ *
+ * A workspace with no tree is seeded by whichever write first needs a root, and
+ * both ends mint one: the browser prepends `seedRoot`'s node so its optimistic
+ * tree has somewhere to put a pane, and the server prepends its own inside the
+ * lock. `rootSeedFor` makes them the identical node — that is what the
+ * deterministic id is FOR — and they arrive in one `put`, where "identical
+ * writes converge on the upsert" did not hold, because `upsertNodes` collapses
+ * nothing inside `changed`. Every first command against an empty tree came back
+ * `duplicate_id`, a 400 the client's queue treats as unrecoverable: it discards
+ * the pending writes and resyncs.
+ */
+describe('the root seed arriving from BOTH ends of one write', () => {
+  const EMPTY = { rev: 0, baseRev: 0 } as const;
+  const seed = rootSeedFor(WORKSPACE);
+
+  it('is one root, not a refusal', () => {
+    const decision = decide([], {
+      ...EMPTY,
+      put: [seed, { ...seed }, pane('pane-new', WORKSPACE, 0)],
+    });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    expect(decision.nodes.filter((node) => node.nodeType === 'root')).toHaveLength(1);
+  });
+
+  it('reaches STORAGE once, because one statement cannot carry a key twice', () => {
+    // A collapse that only satisfied the validator would trade the 400 for a
+    // 500: `INSERT … ON CONFLICT DO UPDATE` refuses a payload that names one
+    // conflict key in two rows ("cannot affect row a second time").
+    const decision = decide([], {
+      ...EMPTY,
+      put: [seed, { ...seed }, pane('pane-new', WORKSPACE, 0)],
+    });
+    expect(decision.status).toBe('ok');
+    if (decision.status !== 'ok') return;
+    const ids = decision.persist.put.map((node) => node.id);
+    expect(ids).toEqual([...new Set(ids)]);
+    expect(ids).toContain(WORKSPACE);
+  });
+
+  it('still refuses when the two seeds DISAGREE, which no longer describes one root', () => {
+    const decision = decide([], {
+      ...EMPTY,
+      put: [seed, { ...seed, axis: 'column' as const }, pane('pane-new', WORKSPACE, 0)],
+    });
+    expect(decision.status).toBe('invalid');
+    if (decision.status !== 'invalid') return;
+    expect(decision.code).toBe('duplicate_id');
   });
 });
 

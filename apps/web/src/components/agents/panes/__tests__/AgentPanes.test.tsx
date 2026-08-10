@@ -39,6 +39,12 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   ApiRequestError,
 }));
 
+// Unmocked until now, which is why the reported symptom was invisible here: a
+// spurious "Could not close this conversation" toast is not observable unless
+// something records the call.
+const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() }));
+vi.mock('sonner', () => ({ toast: mockToast }));
+
 let cuidCounter = 0;
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => `new-id-${++cuidCounter}`,
@@ -138,14 +144,33 @@ import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/worksp
 const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
 
 /**
- * The default routing every test starts from: empty shells, an empty
- * session-conversations list (both `selectPaneAgent`'s switch-decision data
- * AND `decideClosePane`'s close-decision data), and `useResolvedAgent`'s two
- * lookups per fixture agent (id/title come from `mockUsePageAgents` above). A
- * test that cares about a specific route layers its own `mockImplementation`
- * on top, falling back to this for every other URL.
+ * This session's own RECORD — `useSessionRecord`'s read, and the source of
+ * `canEndSession`, which `decideClosePane` needs to know whether the last-pane
+ * close may offer to end the workspace.
+ *
+ * Matched EXACTLY, and ahead of every `includes('/api/agent-workspaces')`
+ * branch below: the listing key is a prefix of this one, so a substring test
+ * would answer a record read with a `{sessions: []}` body and the flag would
+ * read as absent — which is a silent false, not an error.
+ */
+const SESSION_RECORD_URL = '/api/agent-workspaces/ses-1';
+let mockCanEndSession = true;
+const sessionRecord = () => ({
+  session: { driveId: 'drive-1', name: 'Session' },
+  sandboxEligible: true,
+  canEndSession: mockCanEndSession,
+});
+
+/**
+ * The default routing every test starts from: this session's record, empty
+ * shells, an empty session-conversations list (both `selectPaneAgent`'s
+ * switch-decision data AND `decideClosePane`'s close-decision data), and
+ * `useResolvedAgent`'s two lookups per fixture agent (id/title come from
+ * `mockUsePageAgents` above). A test that cares about a specific route layers
+ * its own `mockImplementation` on top, falling back to this for every other URL.
  */
 function defaultFetchRoute(url: string): unknown {
+  if (url === SESSION_RECORD_URL) return sessionRecord();
   if (url.includes('/shells')) return { shells: [] };
   if (url.includes('/api/agent-workspaces')) return { sessions: [] };
   if (url === '/api/pages/agent-1') return { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' };
@@ -164,13 +189,46 @@ function mockSessionConversations(
   conversations: Array<{ conversationId: string; agentPageId: string | null; lastMessageAt?: string | null }>,
 ) {
   mockFetchWithAuth.mockImplementation(async (url: string) => {
-    if (url.includes('/api/agent-workspaces')) {
+    if (url !== SESSION_RECORD_URL && url.includes('/api/agent-workspaces')) {
       return jsonOk({
         sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
       });
     }
     return jsonOk(defaultFetchRoute(url));
   });
+}
+
+/**
+ * Every node write this test issued, as `{put, drop}` — the ONE channel a pane
+ * close is allowed to use.
+ *
+ * The double-send this suite failed to catch survived precisely because
+ * `fetchWithAuth` (the `/nodes` POST) and `del` (the conversations DELETE) are
+ * separate spies, so no assertion ever looked at both. Anything asserting that a
+ * close is one write has to look across the two, which is what this and
+ * {@link conversationDeletes} are for.
+ */
+function nodeWrites(): Array<{ put: unknown[]; drop: string[] }> {
+  return mockFetchWithAuth.mock.calls
+    .filter(([url, init]) => typeof url === 'string' && url.endsWith('/nodes') && init?.method === 'POST')
+    .map(([, init]) => JSON.parse(init.body as string) as { put: unknown[]; drop: string[] });
+}
+
+/** Every conversation-scoped DELETE this test issued. */
+function conversationDeletes(): string[] {
+  return mockDel.mock.calls
+    .map(([url]) => url as string)
+    .filter((url) => typeof url === 'string' && url.includes('/conversations/'));
+}
+
+/**
+ * THE CROSS-CHANNEL ASSERTION: closing a chat pane is exactly one node drop and
+ * no conversation DELETE.
+ */
+async function expectSingleDropClose(nodeId: string) {
+  await waitFor(() => expect(nodeWrites().some((write) => write.drop.includes(nodeId))).toBe(true));
+  expect(nodeWrites().filter((write) => write.drop.includes(nodeId))).toHaveLength(1);
+  expect(conversationDeletes()).toEqual([]);
 }
 
 function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {}) {
@@ -189,6 +247,7 @@ function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {
 beforeEach(() => {
   vi.clearAllMocks();
   cuidCounter = 0;
+  mockCanEndSession = true;
   useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
   usePendingStreamsStore.setState({ streams: new Map() });
   // The write queue's generation counters and retry timers are module-level
@@ -203,6 +262,15 @@ beforeEach(() => {
     isLoading: false,
   });
   mockFetchWithAuth.mockImplementation(async (url: string) => jsonOk(defaultFetchRoute(url)));
+  // A RESOLVED PROMISE BY DEFAULT, so no test depends on another having set one.
+  // `vi.clearAllMocks()` clears calls but NOT implementations, so `del` used to
+  // arrive here carrying whatever `mockResolvedValue` the previous test left on
+  // it — and the terminal-close test relied on that leak without saying so.
+  // When the chat close stopped issuing a DELETE, the leak stopped too:
+  // `closeShell`'s `void del(...).catch(...)` got `undefined` back and threw
+  // inside a React event handler. Every test still passed and the RUN exited 1
+  // on the unhandled error.
+  mockDel.mockResolvedValue(undefined);
 });
 
 
@@ -253,7 +321,7 @@ describe('AgentPanes — the grid it renders', () => {
   });
 
   /**
-   * THE EMPTY GRID. Closing the last pane parks it and leaves the workspace
+   * THE EMPTY GRID. Closing the last pane destroys it and leaves the workspace
    * alive — a state the two-level model could not represent, which is why
    * browser code used to end the session instead.
    */
@@ -315,9 +383,14 @@ describe('AgentPanes — selection is an instruction', () => {
 });
 
 describe('AgentPanes — closing a pane', () => {
-  it('destroys the node and closes the thread when the listing has it open', async () => {
+  it('closes a chat pane with ONE node drop and no conversation DELETE', async () => {
+    // THE DOUBLE-SEND REGRESSION. Both requests destroyed the same node: the
+    // store's drop, POSTed to /nodes, and a DELETE whose `expel` is the same
+    // destroy. The drop normally won, so the DELETE's expel found nothing,
+    // answered 404, and raised a toast for a close that had already succeeded.
+    // Asserted across BOTH channels, because the two are separate spies and
+    // that is exactly why nothing caught it.
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-    mockDel.mockResolvedValue({});
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
     const user = userEvent.setup();
     renderPanes();
@@ -325,39 +398,42 @@ describe('AgentPanes — closing a pane', () => {
     await screen.findAllByTestId('pane-chat');
     await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
-    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
+    await expectSingleDropClose('n1');
     // DESTROYED, not parked. It used to survive with a null parent, still a
     // member holding its binding — the state that made a closed pane and a
     // broken one the same row.
     expect(nodeById('n1')).toBeUndefined();
   });
 
-  it('leaves an EMPTY GRID when the last pane closes, and does not end the workspace', async () => {
+  it('shows no error toast on a successful close', async () => {
+    // The reported symptom, stated directly. Unobservable before this suite
+    // mocked `sonner` at all.
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-    mockDel.mockResolvedValue({});
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
     const user = userEvent.setup();
     renderPanes();
 
-    await screen.findByTestId('pane-chat');
-    await user.click(screen.getByLabelText('Close pane'));
+    await screen.findAllByTestId('pane-chat');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
     await waitFor(() => expect(nodeById('n1')).toBeUndefined());
-    // No confirm dialog, and the SESSION itself is untouched — closing the last
-    // pane leaves an empty tree, it does not end the workspace.
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
-    expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeDefined();
-    expect(await screen.findByTestId('empty-grid')).toBeDefined();
+    expect(mockToast.error).not.toHaveBeenCalled();
   });
 
   it('closing a terminal pane kills its shell — a closed tab is a DELETE, not an orphan', async () => {
-    seat([rootNode, paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' })], []);
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
     const user = userEvent.setup();
     renderPanes({ initialConversation: null });
 
     await screen.findByTestId('pane-shell');
-    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-1'));
     expect(nodeById('n1')).toBeUndefined();
@@ -365,13 +441,14 @@ describe('AgentPanes — closing a pane', () => {
 
   it('does nothing while the listing has not resolved — a close never acts on an unverified fact', async () => {
     // The default route answers `sessions: []`, so THIS workspace's own entry
-    // never appears: "not loaded" is not "loaded and empty".
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    // never appears: "not loaded" is not "loaded and empty". Two panes, so the
+    // last-pane branch (which is decided ABOVE this guard) is not what answers.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
     const user = userEvent.setup();
     renderPanes();
 
-    await screen.findByTestId('pane-chat');
-    await user.click(screen.getByLabelText('Close pane'));
+    await screen.findAllByTestId('pane-chat');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
     expect(mockDel).not.toHaveBeenCalled();
     expect(nodeById('n1')?.parentId).toBe(WS);
@@ -379,21 +456,31 @@ describe('AgentPanes — closing a pane', () => {
 
   it('is a pure layout close when the listing resolved WITHOUT this thread', async () => {
     mockSessionConversations([{ conversationId: 'conv-other', agentPageId: 'agent-1' }]);
-    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
     const user = userEvent.setup();
     renderPanes();
 
-    await screen.findByTestId('pane-chat');
+    await screen.findAllByTestId('pane-chat');
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
-    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
     await waitFor(() => expect(nodeById('n1')).toBeUndefined());
     expect(mockDel).not.toHaveBeenCalled();
   });
+});
 
-  it("falls back to the end-workspace confirm when the server says this was the last open listing (409)", async () => {
+/**
+ * CLOSING THE LAST PANE ENDS THE SESSION — restored, and decided on the client.
+ *
+ * It used to be the server's `last_conversation` 409 caught by the close
+ * DELETE's error branch; the node-tree cutover removed that refusal, which left
+ * the branch unreachable and the user stranded in an empty grid. The whole
+ * decision is `decideClosePane`'s now, so the confirm is raised without any
+ * request having to fail first — `mockDel` never rejects in any of these.
+ */
+describe('AgentPanes — closing the LAST pane', () => {
+  it('raises the end-session confirm instead of emptying the grid', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-    mockDel.mockRejectedValue(new ApiRequestError('last listing', 409));
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
     const user = userEvent.setup();
     renderPanes();
@@ -402,6 +489,93 @@ describe('AgentPanes — closing a pane', () => {
     await user.click(screen.getByLabelText('Close pane'));
 
     expect(await screen.findByRole('alertdialog')).toBeDefined();
+    // NOTHING has been written yet — the confirm is the whole act so far.
+    expect(nodeById('n1')).toBeDefined();
+    expect(nodeWrites()).toEqual([]);
+    expect(mockDel).not.toHaveBeenCalled();
+  });
+
+  it('raises it for a lone TERMINAL pane too — the count is of panes, not of chats', async () => {
+    seat([rootNode, paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' })], []);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(screen.getByLabelText('Close pane'));
+
+    expect(await screen.findByRole('alertdialog')).toBeDefined();
+    expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-1');
+  });
+
+  it('raises it while the listing has NOT resolved', async () => {
+    // The default route never lists this workspace, so `activeConversations` is
+    // null. Behind that guard the click would silently no-op; the decision is
+    // taken above it.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+
+    expect(await screen.findByRole('alertdialog')).toBeDefined();
+  });
+
+  it('Cancel leaves the pane exactly where it was, having written nothing', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /cancel/i }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(nodeById('n1')).toBeDefined();
+    expect(nodeWrites()).toEqual([]);
+    expect(mockDel).not.toHaveBeenCalled();
+    expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeDefined();
+  });
+
+  it('Confirm ends the session', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockDel.mockResolvedValue({});
+    const onSessionEnded = vi.fn();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes({ onSessionEnded });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /end session/i }));
+
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeUndefined());
+    expect(onSessionEnded).toHaveBeenCalled();
+  });
+
+  it('a member who may NOT end the workspace keeps the ordinary close', async () => {
+    // `DELETE /api/agent-workspaces/{id}` is gated by `checkSessionEndAccess`,
+    // which is stricter than the access that let them reach the pane. Offering
+    // a confirm they would obey and then be refused for is worse than the empty
+    // grid they had before.
+    mockCanEndSession = false;
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    // Wait for the session record to land, or the flag reads as its (false)
+    // default for a reason that has nothing to do with permission.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledWith(SESSION_RECORD_URL));
+    await user.click(screen.getByLabelText('Close pane'));
+
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
+    expect(await screen.findByTestId('empty-grid')).toBeDefined();
   });
 });
 

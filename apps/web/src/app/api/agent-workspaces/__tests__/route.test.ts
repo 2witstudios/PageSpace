@@ -21,6 +21,7 @@ const {
   mockFindSessionRecord,
   mockClaimConversationInSession,
   mockFindWorkspaceOfConversation,
+  mockCheckSessionAccess,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -41,6 +42,7 @@ const {
   mockFindSessionRecord: vi.fn(),
   mockClaimConversationInSession: vi.fn(),
   mockFindWorkspaceOfConversation: vi.fn(),
+  mockCheckSessionAccess: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -74,6 +76,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
   findWorkspaceOfConversation: (...args: unknown[]) => mockFindWorkspaceOfConversation(...args),
+  checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
 }));
 vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
@@ -124,6 +127,9 @@ beforeEach(() => {
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
   mockReadWorkspaceNodesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
+  // Default: the caller CAN open whatever workspace a claim conflict names.
+  // The tests that care about the denial path say so explicitly.
+  mockCheckSessionAccess.mockResolvedValue({ allowed: true });
 });
 
 describe('GET /api/agent-workspaces', () => {
@@ -132,10 +138,10 @@ describe('GET /api/agent-workspaces', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       // The listing is handed through UNCHANGED. Every entry already carries
-      // its own `nodeId` and `attached`, read off the node that decided the
-      // thread is in this workspace at all — so there is nothing for the route
-      // to annotate it with, and `annotateConversationsWithPanes` is deleted
-      // rather than ported (issue #2373).
+      // its own `nodeId`, read off the node that decided the thread is in this
+      // workspace at all — so there is nothing for the route to annotate it
+      // with, and `annotateConversationsWithPanes` is deleted rather than
+      // ported (issue #2373).
       sessions: [
         {
           ...SESSION_DTO,
@@ -163,32 +169,27 @@ describe('GET /api/agent-workspaces', () => {
    * `AgentsSidebar` chose the grid, so a thread with no pane row was invisible.
    *
    * The reconciliation that fixed it is gone too, because there is nothing left
-   * to reconcile: membership is the node, so `attached` is read off the same row
-   * that put the thread in the listing. A thread OFF the grid is in the list
-   * with `attached: false` — a resting state, not an absence — and this is the
-   * guard that replaces the deleted annotation's suite.
+   * to reconcile: membership is the node, so a thread is in this listing exactly
+   * when a node of this workspace binds it, and that node's id rides along. This
+   * is the guard that replaces the deleted annotation's suite, so what it has to
+   * pin is the ABSENCE of annotation: whatever the store answers is what the
+   * client gets, key for key.
+   *
+   * It pins that with `toEqual` on the whole array rather than `toMatchObject`
+   * on each entry, because the failure this guards against is the route ADDING a
+   * derived field back — `attached` was one, deleted with the grid it
+   * reconciled against — and a per-key match would not see one arrive.
    */
-  it('LISTS a thread that is off the grid, carrying its node and its state', async () => {
-    mockListSessionConversationsBulk.mockResolvedValue(
-      new Map([
-        [
-          'ses-1',
-          [
-            { ...CONVERSATION_ENTRY, nodeId: 'node-1', attached: true },
-            { ...CONVERSATION_ENTRY, conversationId: 'conv-parked', nodeId: 'node-2', attached: false },
-          ],
-        ],
-      ]),
-    );
+  it('hands the listing back exactly as the store answered it — no annotation, no derived state', async () => {
+    const entries = [
+      { ...CONVERSATION_ENTRY, nodeId: 'node-1' },
+      { ...CONVERSATION_ENTRY, conversationId: 'conv-2', nodeId: 'node-2' },
+    ];
+    mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', entries]]));
 
     const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
-    const conversations = body.sessions[0].conversations;
 
-    expect(conversations).toHaveLength(2);
-    expect(conversations[0]).toMatchObject({ nodeId: 'node-1', attached: true });
-    // The one the old shape dropped on the floor, and the one a `close` now
-    // produces: still a member, still listed, simply not on screen.
-    expect(conversations[1]).toMatchObject({ conversationId: 'conv-parked', nodeId: 'node-2', attached: false });
+    expect(body.sessions[0].conversations).toEqual(entries);
   });
 
   /**
@@ -598,10 +599,35 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
-  it('409s a conversation that some workspace\'s tree already holds', async () => {
+  it('409s a conversation that some workspace\'s tree already holds, NAMING that workspace so the caller can open it', async () => {
+    // The refusal carries its own remedy. Without the id the client has
+    // nothing to act on and treats "already belongs to a session" as a dead
+    // end — which is how a normal history click ended up on /dashboard.
+    // Disclosure is safe: the ownership check above already 404s anything the
+    // caller does not own, so this can only ever name the caller's own
+    // workspace.
     mockFindWorkspaceOfConversation.mockResolvedValue('ses-other');
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-other' });
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-other');
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('409s WITHOUT naming a workspace the caller cannot open — owning the conversation is not access to the session holding it', async () => {
+    // Any accepted drive member may create their own conversation inside
+    // another member's drive session, and that membership can lapse while
+    // conversation ownership never does. The 404 above proves only "this
+    // conversation is yours", so the id goes through the same centralized gate
+    // every other workspace route uses. The listing route already masks
+    // `workspaceId` in this exact situation; without this the 409 would
+    // disclose what the listing deliberately hides, and the client would
+    // select a workspace it cannot open.
+    mockFindWorkspaceOfConversation.mockResolvedValue('ses-someone-elses');
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
@@ -620,6 +646,35 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(409);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('given the race was lost to another claim, the 409 NAMES the workspace that won it', async () => {
+    // The preflight saw no workspace (first call), then the atomic claim came
+    // back `not_found` because someone else got there first — so by the time
+    // we look again (second call) the winner exists. Same reasoning as the
+    // preflight's 409: the caller wanted this conversation in a workspace, one
+    // now exists, and it is theirs.
+    mockFindWorkspaceOfConversation.mockResolvedValueOnce(null).mockResolvedValue('ses-winner');
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ workspaceId: 'ses-winner' });
+  });
+
+  it('given the race was lost to a workspace the caller cannot open, the 409 still names nothing', async () => {
+    mockFindWorkspaceOfConversation.mockResolvedValueOnce(null).mockResolvedValue('ses-someone-elses');
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
+  });
+
+  it('given the race was lost for some other reason, the 409 names no workspace rather than inventing one', async () => {
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.not.toHaveProperty('workspaceId');
   });
 
   it('given claim fails for a truly unexpected outcome, ENDS the session and responds 502', async () => {

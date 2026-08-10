@@ -9,8 +9,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useSidebarBadges } from "@/hooks/useSidebarBadges";
-import { useShallow } from "zustand/react/shallow";
-import { useAgentSurfaceStore } from "@/stores/agents/useAgentSurfaceStore";
 import { EMPTY_AGENT_SELECTION, buildAgentSelectionUrl } from "@/lib/agents/agent-selection";
 
 interface PrimaryNavigationProps {
@@ -29,26 +27,24 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     // nav-item visibility.
     const isAuthenticated = Boolean(user);
 
-    // The Agents surface keeps its whole selection in the URL query string
-    // (see useAgentSurfaceStore's "the URL is the state" design) and never
-    // clears it on route unmount, so the store still has the right values in
-    // memory even after navigating away. A bare href here would silently drop
-    // them on the way back in — derive the link's href from the live
-    // selection instead, scoped to this nav's own drive so a different
-    // drive's (or global vs. drive-scoped) session is never carried over.
-    const agentsSelectionDriveId = useAgentSurfaceStore((state) => state.driveId);
-    const agentSelection = useAgentSurfaceStore(
-        useShallow((state) => ({
-            sessionId: state.selectedSessionId,
-            conversationId: state.selectedConversationId,
-            agentId: state.selectedAgentId,
-        }))
-    );
-    const agentsTargetDriveId = driveId ?? null;
-    const agentsMatchesDrive = agentsSelectionDriveId === agentsTargetDriveId;
+    // Agents means "my conversations", so this href carries NO selection.
+    //
+    // The surface keeps its whole selection in the URL query string (see
+    // useAgentSurfaceStore's "the URL is the state" design), and this link used
+    // to re-attach the live selection so returning to the tab resumed whatever
+    // was last open. That made the nav item the only route INTO a session and
+    // no route OUT of one: `AgentsSurface` renders the conversation list only
+    // while nothing is selected, and the sole things that clear a selection all
+    // destroy the session first. A user parked in a session could not reach
+    // their own history without ending it.
+    //
+    // This changes what the NAV ITEM means, not the URL-is-the-state design.
+    // Deep links, refresh, popstate and the sidebar's own session rows still
+    // carry and restore a full selection through the same grammar — they just
+    // aren't spelled by this link any more.
     const agentsHref = buildAgentSelectionUrl({
-        driveId: agentsTargetDriveId,
-        ...(agentsMatchesDrive ? agentSelection : EMPTY_AGENT_SELECTION),
+        driveId: driveId ?? null,
+        ...EMPTY_AGENT_SELECTION,
     });
 
     const navigation = [
@@ -118,15 +114,14 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     return (
         <nav className="flex flex-col gap-0.5 mb-2">
             {navigation.map((item) => {
-                // The Agents entry's href can carry a query string (the live
-                // agent-session selection); isActive must compare against the
-                // bare path, since usePathname() never includes the query
-                // string. Every other item's href never has a "?", so this
-                // is a no-op for them.
-                const matchPath = item.href.split("?")[0];
+                // Every href here is a bare path — the Agents entry stopped
+                // carrying the agent selection's query string — so `pathname`
+                // (which never includes a query) compares directly. Agents
+                // stays highlighted for the whole surface, selection or not,
+                // because it is `exact: false` and matches on the prefix.
                 const isActive = item.exact
-                    ? pathname === matchPath
-                    : pathname?.startsWith(matchPath);
+                    ? pathname === item.href
+                    : pathname?.startsWith(item.href);
 
                 return (
                     <Link

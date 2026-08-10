@@ -7,6 +7,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
+  sent you out to the dashboard when you clicked it, including conversations that were already open
+  in a session. The session was right there and you were simply not taken to it. A conversation you
+  pick from that list now opens as a pane in Agents, whichever kind it is: one already in a session
+  opens in place, and a global-assistant or page-agent conversation that has never had a session
+  gets one and opens there. The dashboard is still where you land when a conversation genuinely
+  cannot be opened in Agents — you have run out of sandboxes, or it is an API-created conversation
+  with no in-app view.
+- **Agents takes you to your conversations again** — clicking Agents in the sidebar reopened
+  whichever session you last had open, and once you were inside a session there was no way back to
+  the list except ending the session. Your history was unreachable without destroying the work you
+  were in the middle of. Agents now means "my conversations" and always lands on the list, and a
+  session has an "All conversations" control that leaves it running: the panes, terminals and any
+  reply still streaming are all untouched, and the session is one click away in the sidebar.
+  Bookmarks, shared links, refresh and Back still restore a full selection exactly as before.
 - **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
   be two separate records of what a session contained, kept in step by convention, so a pane you or
   an agent opened could take up to two minutes to show up in the list. They are now two views of
@@ -20,6 +35,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   another session already holds used to fail as a server error. The pane you had just opened stayed
   on screen, showing nothing, until something else happened to refresh the layout. The attempt is
   now refused properly and the layout corrects itself straight away.
+- **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
+  requests that removed the same thing, and the second one arrived to find the first had already
+  done it. The pane closed correctly either way, so the error was pure noise; there is one request
+  now.
+- **Closing the last pane asks whether to end the session again** — it had started leaving you in an
+  empty grid with nothing to do, which was not what anyone wanted. You get the same confirm the
+  sidebar's "End session" uses, and Cancel leaves everything exactly as it was. Closing the last
+  conversation row in the sidebar now asks the same question, instead of quietly emptying the
+  session.
+- **A conversation removed from a session leaves the sidebar however it was removed** — closing a
+  pane, closing a sidebar row, an agent closing one on your behalf, or ending the session. Only one
+  of those used to tell the sidebar, so a thread you had just closed could sit in the list for up to
+  two minutes.
+- **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
+  removes it from your session failed, every later attempt to close it reported success and did
+  nothing, leaving a pane that could not be closed. The close is attempted properly now.
 - **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
   tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
   showed no PageSpace tools at all. Copy it again and it works.

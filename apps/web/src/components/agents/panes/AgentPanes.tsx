@@ -50,7 +50,7 @@ import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lu
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
@@ -110,20 +110,29 @@ export interface AgentPanesProps {
   driveId: string | null;
   /**
    * The conversation the host wants shown. Selection IS an instruction: this
-   * focuses the node already showing it, un-parks that node when it has one, or
-   * places it. Null for a workspace-only selection (a page/terminal row in the
-   * sidebar, a conversation-less deep link) — there is nothing to show, and the
-   * grid renders whatever the tree holds.
+   * focuses the node already showing it, or places it when nothing does. Null
+   * for a workspace-only selection (a page/terminal row in the sidebar, a
+   * conversation-less deep link) — there is nothing to show, and the grid
+   * renders whatever the tree holds.
    */
   initialConversation: { conversationId: string; agentPageId: string | null; name: string } | null;
   /** Fired after the workspace was ended — the host owns what renders next. */
   onSessionEnded?: () => void;
   /**
-   * Fired after a conversation's LISTING closed. `next` is always `null` now:
-   * closing never rebinds a pane to a replacement, because the grid is allowed
-   * to be empty. The shape is kept so a host tracking "current conversation"
-   * independently of the tree can decide for itself what a closed conversation
-   * means for whatever it is showing elsewhere.
+   * Fired after a conversation's LISTING closed. TWO callers, and `next` is what
+   * tells them apart:
+   *
+   *  - A direct close sends `next: null`. Closing never rebinds a pane to a
+   *    replacement, because the grid is allowed to be empty — so there is
+   *    nothing to hand the host but the fact.
+   *  - The cleanup after a mint or a switch sends the REPLACEMENT's id, because
+   *    there the thread that closed was displaced by one the user is now looking
+   *    at. `AgentPageView` branches on exactly that: a non-null `next` whose
+   *    `nextAgentPageId` is its own page navigates to it instead of minting.
+   *
+   * The shape is kept so a host tracking "current conversation" independently of
+   * the tree can decide for itself what a closed conversation means for whatever
+   * it is showing elsewhere.
    */
   onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   /**
@@ -204,6 +213,13 @@ export default function AgentPanes({
   // picker's Shell/reattach buttons mustn't flash disabled on every mount.
   const { data: sessionRecordData } = useSessionRecord(sessionId);
   const canRunSandbox = sessionRecordData?.sandboxEligible ?? true;
+  // Defaults to FALSE, unlike `canRunSandbox` above — and the asymmetry is
+  // deliberate. An optimistic sandbox flag costs a button that flashes
+  // enabled; an optimistic END flag costs a confirm dialog raised for someone
+  // the server will refuse, and the user has already agreed to destroy their
+  // session by the time they learn that. Until the record resolves, closing
+  // the last pane just closes it.
+  const canEndSession = sessionRecordData?.canEndSession ?? false;
 
   // The tree is SERVER-AUTHORITATIVE: the store posts each edit as its own
   // write-set, and this hook supplies the other direction — the mount-time
@@ -450,9 +466,10 @@ export default function AgentPanes({
    * Selection IS an instruction to show the conversation.
    *
    * NOT a grid seed — there is nothing to seed, because the root is minted
-   * server-side by whatever write first needs one. This focuses the node already
-   * showing the thread, un-parks it when it has one, or places it; the store
-   * owns all three (`openConversation`).
+   * server-side by whatever write first needs one. Two outcomes, not the three
+   * the parked model needed: the thread is in the tree, so showing it is FOCUS
+   * and costs no write at all; or it is nowhere, and it is PLACED. The store
+   * owns both (`openConversation`).
    *
    * It still waits for the live conversation set before it can risk an EVICTION.
    * A target already showing never reaches that logic, so that case goes
@@ -498,42 +515,49 @@ export default function AgentPanes({
   );
 
   /**
-   * Take the node out of the grid and close its conversation's listing — silent
-   * on success, since closing a listing never touches history.
+   * Close a chat pane: ONE write, and it is the node drop.
    *
-   * The node PARKS rather than vanishing, so the thread's row stays in the
-   * sidebar right up until the DELETE confirms it is gone. There is no rebind
-   * branch any more: the grid is allowed to be empty.
+   * **This used to send two, and they destroyed the same thing.** The store's
+   * `closePane` queues a `drop` that the pump POSTs to `/nodes`, and this
+   * function then awaited `DELETE …/conversations/{id}` — whose `expel` is a
+   * destroy of that same node. Both take the workspace's advisory lock, the
+   * drop normally wins, and the DELETE's expel then finds no node:
+   * `not_a_member` → `not_in_session` → 404 → "Could not close this
+   * conversation". The pane closed anyway (nothing rolls the drop back), so the
+   * toast was pure noise; under lock contention the same race produced the 500
+   * variant instead.
+   *
+   * Making the route idempotent would have silenced it in four lines and left
+   * the double-write permanent in a model whose premise is one fact, one
+   * writer. The listing is derived from the nodes now
+   * (`workspace-conversations-runtime.ts` builds it from
+   * `agentWorkspaceNodes WHERE targetKind = 'chat'`; there is no
+   * `closedInWorkspaceAt` column left), so the node drop IS the close for the
+   * sidebar exactly as it is for the tree, and the DELETE was a second writer
+   * for a fact the node write already owns.
+   *
+   * The directory `conversation:closed` the route used to emit is not lost — it
+   * moved INTO the write funnel (`commitUnderLock`), which every producer
+   * passes through. It was already not firing for most of them: the drop
+   * usually beat the DELETE, so `announceClosed` ran on a branch that was
+   * seldom taken, and the sidebar's own row-close never went through the route
+   * at all.
+   *
+   * Synchronous now, and nothing awaits it — so no rebind branch, no catch, no
+   * toast on the success path.
    */
-  const closeConversationListing = useCallback(
-    async (nodeId: string, conversationId: string) => {
-      // Layout first, and deliberately: parking is reversible and instant, and
-      // the alternative — waiting on the DELETE — is what made a close feel like
-      // the app had ignored it.
+  const closeChatPane = useCallback(
+    (nodeId: string, conversationId: string) => {
       closePane(sessionId, nodeId);
-      try {
-        await del(
-          `/api/agent-workspaces/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
-        );
-      } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 409) {
-          // The workspace's LAST open listing — the server is the authority on
-          // the never-empty invariant, so fall back to the confirmed
-          // end-workspace flow.
-          setPendingEnd({ nodeId });
-          return;
-        }
-        console.error('Failed to close this conversation:', error);
-        toast.error('Could not close this conversation', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-        return;
-      }
       onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+      // Instant LOCAL freshness for the switch decision's own cache. The
+      // broader `void mutate(isAgentWorkspacesKey)` that used to follow is gone
+      // with the DELETE it depended on: it was only safe because it ran AFTER
+      // an awaited round trip, and firing it beside a merely-QUEUED drop races
+      // the pump's POST — the revalidation can answer from before the drop
+      // landed and put the row back. Other clients are settled by the funnel's
+      // `conversation:closed` instead (`session-directory-listener.ts`).
       recordClosedConversation(conversationId);
-      // Instant sidebar freshness — the closed listing's row leaves every open
-      // `/api/agent-workspaces**` poll without waiting on its interval.
-      void mutate(isAgentWorkspacesKey);
     },
     [sessionId, closePane, onConversationClosed, recordClosedConversation],
   );
@@ -546,9 +570,21 @@ export default function AgentPanes({
         panes: paneNodesOf(nodes),
         nodeId,
         activeConversations: closeDecisionListing,
+        canEndSession,
       });
 
       if (decision.action === 'noop') return;
+
+      // ABOVE `beginPaneAssign`, and that placement is the point of putting it
+      // here rather than below with the others. That call's own comment says to
+      // fire it "only once a decision ACTUALLY commits to altering this node";
+      // an end-session raises a confirm and writes nothing, and the user may
+      // cancel — which then costs nothing, because nothing was invalidated and
+      // nothing was mutated (`onOpenChange(false)` just clears `pendingEnd`).
+      if (decision.action === 'end-session') {
+        setPendingEnd({ nodeId });
+        return;
+      }
 
       // Only once a decision ACTUALLY commits to altering this node: a stale
       // close attempt that changed nothing must not invalidate a genuinely
@@ -557,16 +593,17 @@ export default function AgentPanes({
 
       if (decision.action === 'close-pane') {
         closePane(sessionId, nodeId);
-        // A closed terminal tab is a DELETE, not an orphan. The node parks with
-        // its binding, but the PTY has no surface left and no reattach path
-        // through a parked node's own row, so it goes with the close.
+        // A closed terminal tab is a DELETE, not an orphan. The node and its
+        // binding are gone with the close, so the PTY has no surface left and
+        // nothing that could reattach to it — it goes too, rather than being
+        // left running for a row that no longer exists.
         if (node.target?.kind === 'terminal') closeShell(node.target.id);
         return;
       }
 
-      void closeConversationListing(nodeId, decision.conversationId);
+      closeChatPane(nodeId, decision.conversationId);
     },
-    [nodes, closePane, sessionId, closeShell, closeDecisionListing, closeConversationListing, beginPaneAssign],
+    [nodes, closePane, sessionId, closeShell, closeDecisionListing, closeChatPane, beginPaneAssign, canEndSession],
   );
 
   const confirmEndSession = useCallback(async () => {
@@ -662,10 +699,11 @@ export default function AgentPanes({
    * After a mint or a switch replaces what a node shows, close the conversation
    * it replaced — the fix for panes silently accumulating stray sidebar rows.
    *
-   * The displaced NODE is parked rather than destroyed, so its thread is still
-   * one click from being shown again right up until this DELETE lands. Runs only
-   * AFTER the replacement is in place; a failed mint never touches the prior
-   * conversation.
+   * Nothing is displaced: a binding is for life, so the replacement is PLACED in
+   * a node of its own rather than repointing this one. The prior thread keeps
+   * its node, stays on screen and stays a member right up until this DELETE
+   * lands and destroys it. Runs only AFTER the replacement is in place; a failed
+   * mint never touches the prior conversation.
    */
   const closeReplacedConversation = useCallback(
     async (oldConversationId: string, newConversationId: string, newAgentPageId: string | null) => {
@@ -963,9 +1001,9 @@ export default function AgentPanes({
       }
 
       if (!isCurrent()) return false;
-      // ONE placement call for every branch. The store owns the three cases the
-      // duplicated block here used to hand-roll — already on the grid (focus
-      // it), parked (un-park and focus), nowhere (place it) — and it reads live
+      // ONE placement call for every branch. The store owns the two cases the
+      // duplicated block here used to hand-roll — already in the tree (focus
+      // it), nowhere (place it) — and it reads live
       // state, which is what two panes racing to reopen the same conversation
       // need: a stale pre-request snapshot would let both miss the other's
       // arrival and independently place it, which the chat-target index refuses.

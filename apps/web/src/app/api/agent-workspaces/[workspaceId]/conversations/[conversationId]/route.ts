@@ -1,20 +1,25 @@
 /**
- * Close ONE conversation OFF its workspace's grid.
+ * Close ONE conversation OUT of its workspace.
  *
- * DELETE → 200 { ok: true } — a `move` of the thread's node to no parent. The
- * thread stays a MEMBER of the workspace and stays in its listing; only its
- * location changes. This is NOT the history-deleting
+ * DELETE → 200 { ok: true } — a `destroy` of the thread's node. Membership IS
+ * that node, so this removes the thread from the workspace: it leaves the grid
+ * and the listing together, and the table's chat-target uniqueness is freed, so
+ * the thread can afterwards be admitted somewhere else. See
+ * `close-conversation-in-workspace.ts`, which carries the argument for why
+ * "off the grid but still a member" is no longer a state.
+ *
+ * Still NOT the history-deleting
  * `ai/page-agents/[agentId]/conversations/[conversationId]` DELETE — closing
- * never touches a thread's history, and (unlike that route) never removes it
- * from the workspace either.
+ * writes no `conversations` row and never touches a thread's messages. What it
+ * removes is the membership, not the thread.
  *
  * **`last_conversation` is gone from this route.** It refused the close of a
  * workspace's last open listing, because that left a workspace holding nothing
- * — contract invariant 3. A `move` cannot produce that state: every member is
- * still a member afterwards, however few are on screen. Closing the last thread
- * now leaves an EMPTY GRID and a workspace that still holds all its threads,
- * exactly as closing the last PANE already did. Ending a workspace stays an
- * explicit act on a different route.
+ * — contract invariant 3. Holding nothing is now an ordinary resting state: a
+ * root with no children, which `validateTree` accepts. Closing the last thread
+ * leaves an EMPTY workspace, exactly as closing the last PANE already did.
+ * Ending a workspace stays an explicit act on a different route —
+ * `destroy(rootId)`, never inferred from emptiness.
  *
  * Gated by the ordinary session access check (identity + drive membership),
  * NOT the end-access check — closing one thread is a routine write, not the

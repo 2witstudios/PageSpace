@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { PersistedNodeWrite } from '@pagespace/lib/agent-workspaces/workspace-node-write';
+import { rootSeedFor } from '@pagespace/lib/agent-workspaces/workspace-node-commands';
 import {
   CHAT_TARGET_UNIQUE_INDEX,
   type ChatTargetHolder,
@@ -21,7 +22,7 @@ import {
 const WORKSPACE = 'ws-1';
 const VIEWER = 'user-1';
 
-const { store, mockBroadcast, authorize, labelRows, chatBindings } = vi.hoisted(() => ({
+const { store, mockBroadcast, mockConversationClosed, authorize, labelRows, chatBindings, directoryRows } = vi.hoisted(() => ({
   /**
    * A workspace's nodes and rev, mutated by the write exactly as the DB would
    * be — plus `rows`, which stands for whatever `within` writes on the same
@@ -29,8 +30,41 @@ const { store, mockBroadcast, authorize, labelRows, chatBindings } = vi.hoisted(
    * back on a throw, so "the membership write unwound" and "it returned a
    * refusal" are distinguishable states rather than the same empty `writes`.
    */
-  store: { rev: 0, nodes: [] as WorkspaceNode[], writes: [] as PersistedNodeWrite[], rows: [] as string[] },
+  store: {
+    rev: 0,
+    nodes: [] as WorkspaceNode[],
+    writes: [] as PersistedNodeWrite[],
+    rows: [] as string[],
+    /**
+     * A transaction that fails AT COMMIT, after the body has run to completion.
+     *
+     * The only way to reach the far side of every in-body refusal and still not
+     * have the write land — which is the one seam that can tell "read inside
+     * the transaction, emit after it commits" from "emit inside it". Every
+     * other rollback in this suite is a throw from the body, which happens
+     * before the directory read is even reached.
+     */
+    throwOnCommit: null as Error | null,
+  },
   mockBroadcast: vi.fn(),
+  /**
+   * The DIRECTORY plane's `conversation:closed`. Async like the real one, and
+   * typed with its argument so `mock.calls` is a tuple the assertions can index.
+   */
+  mockConversationClosed: vi.fn(async (_ctx: { conversationId: string }) => {}),
+  /**
+   * What `readConversationDirectoryRows` answers — the display facts a
+   * `conversation:closed` is addressed with. Seeded per test for whichever
+   * threads that test's tree holds.
+   */
+  directoryRows: [] as Array<{
+    id: string;
+    rev: number;
+    userId: string;
+    isShared: boolean;
+    type: string;
+    contextId: string | null;
+  }>,
   authorize: { allow: true, seen: [] as unknown[] },
   labelRows: {
     conversations: [] as unknown[],
@@ -82,11 +116,13 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
         rows: [...store.rows],
       };
       try {
-        return await fn({
+        const answer = await fn({
           select: () => ({
             from: () => ({ where: () => ({ limit: async () => labelRows.workspaces }) }),
           }),
         });
+        if (store.throwOnCommit !== null) throw store.throwOnCommit;
+        return answer;
       } catch (error) {
         Object.assign(store, snapshot);
         throw error;
@@ -103,6 +139,8 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
       chatBindings.livenessAsked.push([...targetIds]);
       return targetIds.filter((id) => chatBindings.deleted.includes(id));
     },
+    readConversationDirectoryRows: async (_tx: unknown, ids: readonly string[]) =>
+      directoryRows.filter((row) => ids.includes(row.id)),
     writeWorkspaceNodes: async (_tx: unknown, input: { write: PersistedNodeWrite }) => {
       if (chatBindings.throwOnWrite !== null) throw chatBindings.throwOnWrite;
       store.writes.push(input.write);
@@ -119,6 +157,18 @@ vi.mock('@pagespace/lib/services/agent-workspaces/workspace-node-store', async (
 
 vi.mock('@/lib/websocket/agent-workspace-events', () => ({
   broadcastWorkspaceNodesUpdated: (...args: unknown[]) => mockBroadcast(...args),
+}));
+
+// `SERVER_TRIGGERED_BROWSER_SESSION` is not decoration: `emitContextFromRow`
+// reads it for the default `triggeredBy`, and vitest raises on a missing named
+// export from a mocked module. That throw is SYNCHRONOUS and lands inside
+// `announceWithoutUnsucceeding`, which swallows it by contract — so an
+// incomplete mock here reads as "the funnel does not announce" rather than as
+// an error. (It also demonstrated the contract works: the write still
+// succeeded.)
+vi.mock('@/lib/websocket/conversation-events', () => ({
+  conversationEvents: { closed: (ctx: { conversationId: string }) => mockConversationClosed(ctx) },
+  SERVER_TRIGGERED_BROWSER_SESSION: 'server',
 }));
 
 vi.mock('../authorize-pane-scope', async () => {
@@ -147,7 +197,12 @@ vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaces: { __name: 'workspaces' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { __name: 'pages' } }));
-vi.mock('@pagespace/db/operators', () => ({ inArray: () => ({}), eq: () => ({}) }));
+vi.mock('@pagespace/db/operators', () => ({
+  inArray: () => ({}),
+  eq: () => ({}),
+  and: () => ({}),
+  sql: Object.assign(() => ({}), { raw: () => ({}) }),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
@@ -172,6 +227,7 @@ beforeEach(() => {
   store.nodes = [root, pane('pane-a', 'root', 0), pane('pane-b', 'root', 1)];
   store.writes = [];
   store.rows = [];
+  store.throwOnCommit = null;
   authorize.allow = true;
   authorize.seen = [];
   labelRows.conversations = [];
@@ -183,6 +239,7 @@ beforeEach(() => {
   chatBindings.throwOnWrite = null;
   chatBindings.deleted = [];
   chatBindings.livenessAsked = [];
+  directoryRows.length = 0;
 });
 
 function write(over: { baseRev?: number; put?: WorkspaceNode[]; drop?: string[] } = {}) {
@@ -327,6 +384,176 @@ describe('replay', () => {
     if (replay.status !== 'ok') return;
     expect(replay.changed).toBe(false);
     expect(store.rev).toBe(before);
+  });
+});
+
+/**
+ * THE DIRECTORY PLANE'S HALF OF A MEMBERSHIP CHANGE.
+ *
+ * `conversation:closed` used to be emitted by the close ROUTE's own decision,
+ * which is one of four producers that remove a chat node — and, in practice,
+ * the one that usually lost: the pane's optimistic `drop` reached this funnel
+ * first, so the route's `expel` found no node and its announcement branch was
+ * never taken. It is emitted from HERE now, so it is a property of the write
+ * rather than of which endpoint a client happened to call.
+ *
+ * The sidebar's rows come from the LISTING, not the tree, so the structural
+ * `workspace:nodes-updated` beside it cannot take a row out of that cache — the
+ * other side of the seam is `session-directory-listener.test.ts`.
+ */
+describe('the conversation:closed announcement', () => {
+  const chatPane = (id: string, conversationId: string, position: number) =>
+    pane(id, 'root', position, { kind: 'chat', id: conversationId });
+  const directoryRow = (id: string) => ({
+    id,
+    rev: 7,
+    userId: VIEWER,
+    isShared: false,
+    type: 'global',
+    contextId: null,
+  });
+
+  beforeEach(() => {
+    store.nodes = [root, chatPane('pane-a', 'conv-1', 0), chatPane('pane-b', 'conv-2', 1)];
+    directoryRows.push(directoryRow('conv-1'), directoryRow('conv-2'));
+  });
+
+  it('announces once for the thread a drop removed, and for no other', async () => {
+    const result = await write({ drop: ['pane-b'] });
+    expect(result.status).toBe('ok');
+
+    expect(mockConversationClosed).toHaveBeenCalledTimes(1);
+    expect(mockConversationClosed).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conv-2', rev: 7 }));
+  });
+
+  it('announces NOTHING for a hand-off — the same thread on a different node', async () => {
+    // THE CASE A `drop`-shaped implementation gets wrong. The write drops
+    // `pane-b` and puts `pane-c` holding the same conversation; the thread
+    // never left the workspace, so telling every subscriber it closed would be
+    // a lie the sidebar acts on.
+    const result = await write({
+      drop: ['pane-b'],
+      put: [chatPane('pane-c', 'conv-2', 1)],
+    });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.changed).toBe(true);
+    expect(mockConversationClosed).not.toHaveBeenCalled();
+  });
+
+  it('announces nothing on a REPLAY — no rev, no broadcast, no announcement', async () => {
+    await write({ drop: ['pane-b'] });
+    expect(mockConversationClosed).toHaveBeenCalledTimes(1);
+
+    const replay = await write({ drop: ['pane-b'] });
+    expect(replay.status).toBe('ok');
+    if (replay.status !== 'ok') return;
+    expect(replay.changed).toBe(false);
+    // Still one: the second POST produced the tree already stored, so it minted
+    // no rev, broadcast nothing, and owes the directory plane nothing either.
+    expect(mockConversationClosed).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces nothing for a write that ROLLED BACK', async () => {
+    // A refusal raised after the decision — the write unwinds, so there is no
+    // membership change to announce. Announcing from inside the transaction
+    // would have shipped this one.
+    authorize.allow = false;
+    const result = await write({
+      drop: ['pane-b'],
+      put: [chatPane('pane-c', 'conv-new', 1)],
+    });
+    expect(result.status).toBe('refused');
+    expect(store.writes).toEqual([]);
+    expect(mockConversationClosed).not.toHaveBeenCalled();
+  });
+
+  it('announces for every thread an end-session destroyed', async () => {
+    // The producer that never announced AT ALL under the old shape: ending a
+    // session goes nowhere near the close route.
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    expect(result.status).toBe('ok');
+
+    expect(mockConversationClosed).toHaveBeenCalledTimes(2);
+    expect(
+      mockConversationClosed.mock.calls.map(([ctx]) => ctx.conversationId).sort(),
+    ).toEqual(['conv-1', 'conv-2']);
+  });
+
+  it('announces nothing when the transaction fails AT COMMIT', async () => {
+    // The seam between reading inside the transaction and emitting after it.
+    // Every other refusal in this funnel throws before the directory read is
+    // reached; this one lets the whole body run and then fails, so an emit
+    // placed beside the read would ship a `conversation:closed` for a removal
+    // that rolled back — telling every subscriber a thread had left a workspace
+    // it is still in, with nothing to correct it but the 120s poll.
+    store.throwOnCommit = new Error('commit failed');
+
+    await expect(write({ drop: ['pane-b'] })).rejects.toThrow('commit failed');
+
+    expect(store.nodes.map((node) => node.id)).toEqual(['root', 'pane-a', 'pane-b']);
+    expect(mockConversationClosed).not.toHaveBeenCalled();
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('announces nothing for a pure layout write that removed no thread', async () => {
+    const result = await write({ put: [chatPane('pane-a', 'conv-1', 1), chatPane('pane-b', 'conv-2', 0)] });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.changed).toBe(true);
+    expect(mockConversationClosed).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE FIRST WRITE TO AN EMPTY WORKSPACE, which is where the two seeds meet.
+ *
+ * A workspace with no tree is seeded by whichever write first needs a root, and
+ * BOTH ends mint one — the browser so its optimistic tree has somewhere to put
+ * a pane, and this funnel inside the lock so the write is legal whatever the
+ * client sent. `rootSeedFor` makes them the same node, which is what the
+ * deterministic id is for, and they arrive in ONE `put`, where the convergence
+ * has to be a property of the write decision rather than of the upsert. It
+ * wasn't: both copies reached the validator and every first command against an
+ * empty workspace came back `duplicate_id` — a 400 the client's queue treats as
+ * unrecoverable, so it discarded the pending writes and resynced.
+ */
+describe('the root seed the CLIENT also sent', () => {
+  beforeEach(() => {
+    store.rev = 0;
+    store.nodes = [];
+  });
+
+  it('lands as one root, not a refusal', async () => {
+    const seed = rootSeedFor(WORKSPACE);
+    const result = await write({ baseRev: 0, put: [seed, pane('pane-new', WORKSPACE, 0)] });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.snapshot.nodes.filter((node) => node.nodeType === 'root')).toHaveLength(1);
+    expect(store.nodes.filter((node) => node.nodeType === 'root')).toHaveLength(1);
+  });
+
+  it('reaches the store once — one statement cannot carry one key twice', async () => {
+    const seed = rootSeedFor(WORKSPACE);
+    await write({ baseRev: 0, put: [seed, pane('pane-new', WORKSPACE, 0)] });
+    expect(store.writes).toHaveLength(1);
+    const ids = store.writes[0]!.put.map((node) => node.id);
+    expect(ids).toEqual([...new Set(ids)]);
+  });
+
+  it('is the same tree the client would have got had it sent no seed at all', async () => {
+    const seeded = await write({ baseRev: 0, put: [rootSeedFor(WORKSPACE), pane('pane-new', WORKSPACE, 0)] });
+    const first = store.nodes;
+
+    store.rev = 0;
+    store.nodes = [];
+    store.writes = [];
+    const bare = await write({ baseRev: 0, put: [pane('pane-new', WORKSPACE, 0)] });
+
+    expect(seeded.status).toBe('ok');
+    expect(bare.status).toBe('ok');
+    expect(first).toEqual(store.nodes);
   });
 });
 

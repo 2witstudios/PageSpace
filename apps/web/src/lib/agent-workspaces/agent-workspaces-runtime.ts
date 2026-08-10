@@ -88,6 +88,7 @@ import {
 } from '@/lib/agent-workspaces/workspace-node-runtime';
 import {
   closeConversationInSessionWith,
+  dismissOutcomeOf,
   type CloseConversationOutcome,
 } from '@/lib/agent-workspaces/close-conversation-in-workspace';
 import {
@@ -565,16 +566,14 @@ export async function closeConversationInSession(input: {
           actingUserId: input.userId,
           run: (nodes) => expel(nodes, { target: { kind: 'chat', id: conversationId } }),
         });
-        if (result.status === 'refused') {
-          return result.code === 'not_a_member' ? 'not_a_member' : 'refused';
-        }
-        if (result.status === 'stale') return 'refused';
-        return 'dismissed';
+        // POSITIVELY narrowed, in a pure function beside the type it produces
+        // — see `dismissOutcomeOf` for the `conflict` fallthrough this replaces.
+        return dismissOutcomeOf(result);
       },
-      // The directory plane. See `announceClosed`'s own doc for why the node
-      // write's `workspace:nodes-updated` does not cover this: that event
-      // carries the TREE, and the sidebar's rows come from the LISTING.
-      announceClosed: (row) => emitConversationLifecycle('closed', row),
+      // No `announceClosed`: the write funnel emits `conversation:closed` for
+      // every chat node a committed write removes, whichever producer removed
+      // it. See `dismissConversation`'s doc in
+      // `close-conversation-in-workspace.ts`.
     },
     input,
   );

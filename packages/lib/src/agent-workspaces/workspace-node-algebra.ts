@@ -74,9 +74,22 @@ import { validateTree, type TreeViolationCode } from './workspace-node-validate'
  * from memory, both of them consequences of the composite self-FK
  * `(rootId, parentId) → (rootId, id)`:
  *
- *  - **`put` before `drop`.** The FK is `ON DELETE cascade`, and `drop` names
- *    containers whose children are being REPARENTED rather than deleted. See
- *    {@link applyNodeWrite}.
+ *  - **THE CASCADE MUST NOT REACH A REPARENTED CHILD.** The FK is
+ *    `ON DELETE cascade`, and `drop` names containers whose children are being
+ *    REPARENTED rather than deleted — {@link collapseInto} builds precisely that
+ *    shape. IN MEMORY the obligation is discharged by ORDER:
+ *    {@link applyNodeWrite} folds `put` before `drop`, so a survivor already
+ *    hangs off its new parent when its old one goes.
+ *
+ *    **A PERSISTING writer cannot use that order, and must not reach for it.**
+ *    Upserting first leaves one conversation held by two rows for the length of
+ *    the statement, and the table's `UNIQUE (targetId) WHERE targetKind = 'chat'`
+ *    refuses that immediately — closing one hole by opening another. So the
+ *    store deletes FIRST and pays for the cascade a different way: every node
+ *    that survives the write while sitting beneath a removed one is added to the
+ *    upsert, so the delete takes it and the same statement puts it straight
+ *    back. That derivation is `persistedWrite` in `workspace-node-write.ts`, and
+ *    IT — not an ordering — is what a persisting writer owes this type.
  *  - **`put` is ONE statement, not a loop.** Its order is whatever
  *    `upsertNodes` produced — replace in place, then append — and nothing
  *    establishes that a parent precedes its children in it. A multi-row

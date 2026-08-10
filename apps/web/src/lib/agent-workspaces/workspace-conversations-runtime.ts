@@ -23,25 +23,10 @@ import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { pages } from '@pagespace/db/schema/core';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
-
-export interface PastConversationRow {
-  conversationId: string;
-  title: string | null;
-  type: string;
-  /** The page id when `type === 'page'`, else null. */
-  agentPageId: string | null;
-  /** The agent page's own title (distinct from the conversation's own title), when `type === 'page'`. */
-  pageTitle: string | null;
-  /** Real recency — see `recencyExpr` below. Never simply `conversations.lastMessageAt`, which stays null forever for `type: 'page'`. */
-  lastMessageAt: Date | null;
-  createdAt: Date;
-  workspaceId: string | null;
-  /** '' when the session has no display name, mirroring `toAgentSessionDTO`'s `name ?? ''`. */
-  sessionName: string | null;
-  sessionEndedAt: Date | null;
-  /** Resolved from the page's drive, the session's drive, or (for `type: 'client'`) the conversation's own contextId. Null only for a driveless global-assistant conversation. */
-  driveId: string | null;
-}
+// The row shape is declared ONCE, in the wire contract both ends import, so
+// the client cannot silently drift from what this file actually emits — see
+// that file's header for the bug that motivated it.
+import type { PastConversationServerRow } from './past-conversation-dto';
 
 export interface ListAllConversationsPaginatedInput {
   limit?: number;
@@ -50,7 +35,7 @@ export interface ListAllConversationsPaginatedInput {
 }
 
 export interface PaginatedPastConversationsResult {
-  conversations: PastConversationRow[];
+  conversations: PastConversationServerRow[];
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
@@ -281,9 +266,11 @@ export async function listAllConversationsPaginated(
       createdAt: conversations.createdAt,
       // MEMBERSHIP, from the tree — the node that binds this thread names the
       // workspace it belongs to, where this used to read the conversation's own
-      // column. Nothing else about this listing changes: a thread OFF the grid
-      // is still a member and still past-conversation history, and a thread in
-      // no workspace at all still has a null here.
+      // column. A thread with no node is in no workspace and gets a null here:
+      // that is the only shape of "not a member" there is now, because the node
+      // IS the membership and there is no off-grid state for one to sit in. The
+      // thread itself is untouched either way — it stays in this listing as
+      // past-conversation history.
       workspaceId: membershipNode.rootId,
       sessionName: agentWorkspaces.name,
       sessionEndedAt: agentWorkspaces.endedAt,

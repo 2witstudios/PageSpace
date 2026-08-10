@@ -487,11 +487,11 @@ describe('AgentsSidebar', () => {
     });
 
     /**
-     * The agreement itself. A broadcast parks the node between the render and
+     * The agreement itself. A broadcast DESTROYS the node between the render and
      * the click; the menu must have already followed it, because both read the
      * same live tree rather than the snapshot the row arrived on.
      */
-    test('follows a live broadcast: a thread parked under the sidebar switches to closing the THREAD', async () => {
+    test('follows a live broadcast: a thread whose node goes out from under the sidebar switches to closing the THREAD', async () => {
       respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')] }]);
       mockDel.mockResolvedValue({});
       const user = userEvent.setup();
@@ -1140,16 +1140,69 @@ describe('AgentsSidebar', () => {
       );
     });
 
-    test('a 409 (the session\'s last open listing) falls back to the end-session confirm dialog, mirroring the pane grid', async () => {
-      mockDel.mockRejectedValue(new ApiRequestError('last open listing', 409));
+    /**
+     * REPLACES the 409 fallback. The server stopped refusing the last close in
+     * the node-tree cutover, so the `last_conversation` branch this used to
+     * exercise was unreachable code — the DELETE simply succeeded and left the
+     * workspace holding nothing. The decision is `decideClosePane`'s now, taken
+     * BEFORE anything is sent, which is also what stops these two affordances
+     * disagreeing: the sidebar row used to call `closePane` directly and could
+     * empty a tree the pane's own close button refuses to.
+     */
+    test("closing the last PLACED row raises the end-session confirm, and sends nothing", async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')],
+          conversations: [{ conversationId: 'conv-1', title: 'First chat', agentPageId: 'agent-1' }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close conversation'));
+      // "Close pane", not "Close conversation": the row is PLACED, so its menu
+      // names the node it holds.
+      await user.click(await screen.findByText('Close pane'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
+      // Nothing written and nothing requested — the confirm is the whole act,
+      // and `mockDel` never rejected to produce it.
+      expect(mockDel).not.toHaveBeenCalled();
+      expect(
+        mockFetchWithAuth.mock.calls.some(
+          ([url, init]) => typeof url === 'string' && url.includes('/nodes') && init?.method === 'POST',
+        ),
+      ).toBe(false);
+    });
+
+    test('closing a NON-last placed row drops its node and raises no dialog', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close pane'));
+
+      await waitFor(() =>
+        expect(
+          mockFetchWithAuth.mock.calls.some(
+            ([url, init]) =>
+              typeof url === 'string' &&
+              url.includes('/nodes') &&
+              init?.method === 'POST' &&
+              JSON.parse(init.body as string).drop.includes('n1'),
+          ),
+        ).toBe(true),
+      );
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      // And no second writer for the same removal — the DELETE is gone.
+      expect(mockDel).not.toHaveBeenCalled();
     });
 
     test('a non-409 failure shows an error toast, not the end-session dialog', async () => {

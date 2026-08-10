@@ -106,6 +106,64 @@ function sameNode(left: WorkspaceNode, right: WorkspaceNode): boolean {
 }
 
 /**
+ * ONE NODE SAID TWICE IN ONE PAYLOAD IS ONE NODE — and only when the two
+ * sayings agree.
+ *
+ * The idempotency this model runs on is "the same write applied twice is the
+ * same result", and until this function that held only ACROSS payloads: a
+ * retried POST re-upserts its nodes and lands where the first one did. Within a
+ * single payload the same repetition was fatal, because {@link upsertNodes}
+ * replaces by id against the STORED nodes and appends everything else in order
+ * — it does not collapse a repeat inside `changed` — so both copies reached
+ * {@link validateTree} and came back `duplicate_id`, a 400 the client treats as
+ * unrecoverable.
+ *
+ * That is not a hypothetical shape. It is the ROOT SEED. A workspace with no
+ * tree is seeded by whichever write first needs a root, and BOTH ends mint one:
+ * the browser prepends `seedRoot`'s node so its optimistic tree has somewhere to
+ * put a pane, and the server prepends its own inside the lock so the write is
+ * legal whatever the client sent. Both come from `rootSeedFor(workspaceId)` and
+ * are therefore the identical node — the convergence the deterministic id was
+ * chosen FOR — and they met in one `put`, where the convergence did not apply.
+ * Every first command against an empty tree failed.
+ *
+ * **Identical only, deliberately.** Two DIFFERENT nodes claiming one id is a
+ * real fault: collapsing it last-wins would judge a tree on whichever half
+ * survived and then store that half silently. So this REFUSES that payload
+ * itself, with the validator's own code and wording, rather than collapsing it
+ * and rather than passing it on for {@link validateTree} to catch.
+ *
+ * **Refusing here is not belt-and-braces; the validator cannot see it.** A
+ * repeat whose id is ALREADY STORED never reaches the tree as two nodes:
+ * {@link upsertNodes} keys `changed` by id and replaces in place, so the second
+ * copy silently wins and `next` holds exactly one. `duplicate_id` fires only
+ * when the id is NEW and both copies are appended. The two halves then part
+ * ways: `changedPut` is filtered from this list, which still held both, so
+ * `persist.put` carried one conflict key twice and a multi-row
+ * `INSERT … ON CONFLICT DO UPDATE` raised "cannot affect row a second time" — a
+ * 500 where the caller should have been told 400. That is why the check lives
+ * on the payload, where both copies are still visible, instead of on the tree.
+ */
+type CollapsedPut =
+  | { status: 'ok'; nodes: WorkspaceNode[] }
+  | { status: 'conflict'; id: string };
+
+function collapseRepeats(incoming: readonly WorkspaceNode[]): CollapsedPut {
+  const kept: WorkspaceNode[] = [];
+  const byId = new Map<string, WorkspaceNode>();
+  for (const node of incoming) {
+    const seen = byId.get(node.id);
+    if (seen !== undefined) {
+      if (!sameNode(seen, node)) return { status: 'conflict', id: node.id };
+      continue;
+    }
+    byId.set(node.id, node);
+    kept.push(node);
+  }
+  return { status: 'ok', nodes: kept };
+}
+
+/**
  * TRANSLATE THE DECIDED TREE INTO A STORAGE INSTRUCTION, and it is NOT the
  * caller's `put`/`drop`.
  *
@@ -183,7 +241,24 @@ export function decideNodeWrite(request: NodeWriteRequest): NodeWriteDecision {
   // 2. REV.
   if (baseRev !== rev) return { status: 'stale' };
 
-  const incoming = put.map(nodeOfWire);
+  // The payload's nodes, with any node it named twice IDENTICALLY reduced to
+  // one — and a payload that named one id twice DIFFERENTLY refused outright.
+  // See {@link collapseRepeats}: the root seed arrives from both ends of a first
+  // write, so everything below (the validated tree, the change measurement, the
+  // storage instruction) must see one of it; and a conflicting repeat has to be
+  // caught here, because a repeat of a STORED id never reaches the tree as two
+  // nodes for `validateTree` to refuse.
+  const collapsed = collapseRepeats(put.map(nodeOfWire));
+  if (collapsed.status === 'conflict') {
+    return {
+      status: 'invalid',
+      code: 'duplicate_id',
+      // The validator's own wording, so one fault reads the same to the caller
+      // whichever of the two places notices it.
+      detail: `id "${collapsed.id}" names more than one node; ids are unique`,
+    };
+  }
+  const incoming = collapsed.nodes;
 
   // 3. VALIDITY OF THE RESULT. Drop then upsert, so an id named in BOTH
   //    resolves as PUT WINS — which is the decision `persistedWrite` below
