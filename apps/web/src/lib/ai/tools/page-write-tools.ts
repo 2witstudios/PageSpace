@@ -220,12 +220,6 @@ async function trashPage(
     throw new Error(`Page with ID "${pageId}" not found`);
   }
 
-  // Same protection the HTTP path enforces. An agent asked to "clean up my
-  // drive" must not be able to delete the pages that hold the user's profile.
-  if (await isProtectedMemoryPage(page.id)) {
-    throw new Error(MEMORY_PAGE_DELETE_ERROR);
-  }
-
   if (withChildren) {
     const canDelete = await canActorDeletePage(context, page.id);
     if (!canDelete) {
@@ -236,6 +230,15 @@ async function trashPage(
     if (!canEdit) {
       throw new Error('Insufficient permissions to trash this page');
     }
+  }
+
+  // Same protection the HTTP path enforces. An agent asked to "clean up my
+  // drive" must not be able to delete the pages that hold the user's profile.
+  //
+  // AFTER the permission check, matching pageService.trashPage. Refusing first
+  // would tell a caller who cannot delete the page that it is a memory page.
+  if (await isProtectedMemoryPage(page.id)) {
+    throw new Error(MEMORY_PAGE_DELETE_ERROR);
   }
 
   let childrenCount = 0;
@@ -428,6 +431,19 @@ async function restoreDrive(
 type MovablePage = NonNullable<Awaited<ReturnType<typeof pageRepository.findById>>>;
 
 /**
+ * Refuse to relocate a memory page.
+ *
+ * Same-drive moves only: the cross-drive path enforces this inside
+ * `movePagesToDrive`, which is shared with /api/pages/bulk-move and is the only
+ * place that covers BOTH callers.
+ */
+async function refuseIfMemoryPage(pageId: string): Promise<void> {
+  if (await isProtectedMemoryPage(pageId)) {
+    throw new Error(MEMORY_PAGE_MOVE_ERROR);
+  }
+}
+
+/**
  * Same-drive move / reorder. Requires drive owner or admin — mirrors the
  * /api/pages/reorder REST route's authorization bar for the same operation.
  */
@@ -444,6 +460,13 @@ async function moveWithinDrive(params: {
   if (!canManage) {
     throw new Error('Only drive owners and admins can move pages');
   }
+
+  // Memory pages stay put — a page moved out of the Memory folder is what ends
+  // up inside another page's delete cascade. Checked here rather than once at
+  // the dispatch so it lands AFTER this function's own authorization bar,
+  // matching pageService.updatePage; the cross-drive path repeats it after its
+  // (different) bar for the same reason.
+  await refuseIfMemoryPage(page.id);
 
   if (newParentId) {
     // Verify the destination exists and is in the same drive
@@ -1294,14 +1317,6 @@ export const pageWriteTools = {
         // targetDriveId === page.driveId deliberately takes the same-drive bar, so
         // a model echoing back the current workspace id can't quietly swap which
         // authorization applies.
-        // Same refusal the HTTP path enforces (pageService.updatePage). Guarded
-        // once here so it covers BOTH implementations below — a cross-drive move
-        // would additionally take the page out of the Home drive the memory
-        // pointers assume.
-        if (await isProtectedMemoryPage(page.id)) {
-          throw new Error(MEMORY_PAGE_MOVE_ERROR);
-        }
-
         const isCrossDrive = !!targetDriveId && targetDriveId !== page.driveId;
 
         return isCrossDrive

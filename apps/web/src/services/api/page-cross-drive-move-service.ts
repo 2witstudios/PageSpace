@@ -25,6 +25,10 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
@@ -88,6 +92,7 @@ export type CrossDriveMoveFailureCode =
   | 'SOURCE_DRIVE_OUT_OF_SCOPE'
   | 'SOURCE_PAGE_FORBIDDEN'
   | 'CIRCULAR_REFERENCE'
+  | 'MEMORY_PAGE_PROTECTED'
   | 'SUBTREE_TOO_DEEP';
 
 export interface MovedPageSummary {
@@ -251,6 +256,18 @@ export async function movePagesToDrive(
         `You do not have permission to move page: ${page.title}`,
       );
     }
+  }
+
+  // Memory pages are addressed by pointer and assumed to live in the user's Home
+  // drive; moving one to another drive breaks that and puts the user's profile
+  // inside a drive they may later delete. Guarded HERE rather than at each
+  // caller because this service is the only cross-drive move path, shared by
+  // /api/pages/bulk-move and the AI move_page tool — pageService.updatePage's
+  // guard never sees either. After the permission loops above, so a caller who
+  // cannot move the page is not told what it is.
+  const protectedIds = await findProtectedMemoryPages(pageIds);
+  if (protectedIds.size > 0) {
+    return fail('MEMORY_PAGE_PROTECTED', 403, MEMORY_PAGE_MOVE_ERROR);
   }
 
   if (targetParentId) {
