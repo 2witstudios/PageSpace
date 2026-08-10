@@ -49,12 +49,19 @@ For a version-skipping upgrade:
    destroys data, and there is no reverse migration.
 2. Upgrade to a release containing `0255` and **not** `0256`, and let it come
    up.
-3. Run the node backfill from that release, on the migrate image:
-   `bun scripts/backfill-agent-workspace-nodes.ts` (dry by default; re-run with
-   `--apply`). It is safe to re-run — it skips any workspace already through the
-   node model.
+3. Run the node backfill **from that release's migrate image** — not from this
+   one. `scripts/backfill-agent-workspace-nodes.ts` is DELETED here, because
+   after `0256` the tables it reads no longer exist, so it cannot run and is not
+   shipped. Pull the `0255` release's image explicitly and run
+   `bun scripts/backfill-agent-workspace-nodes.ts` on it (dry by default; re-run
+   with `--apply`). It is safe to re-run — it skips any workspace already
+   through the node model.
 4. Confirm the census reports zero skipped workspaces and `members in == pane
    nodes out`, then upgrade to this release.
+
+If you have already upgraded past `0255` and only then discovered the data is
+gone, the backfill cannot help: its source tables were dropped. Restore the
+snapshot from step 1 and start again. That is the whole reason step 1 is step 1.
 
 **Already at `0255` with the backfill run?** Nothing to do for the data —
 `0256` applies cleanly and touches no node row. (Still read the deploy-order
