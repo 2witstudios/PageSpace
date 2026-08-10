@@ -7,6 +7,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Agents takes you to your conversations again** — clicking Agents in the sidebar reopened
+  whichever session you last had open, and once you were inside a session there was no way back to
+  the list except ending the session. Your history was unreachable without destroying the work you
+  were in the middle of. Agents now means "my conversations" and always lands on the list, and a
+  session has an "All conversations" control that leaves it running: the panes, terminals and any
+  reply still streaming are all untouched, and the session is one click away in the sidebar.
+  Bookmarks, shared links, refresh and Back still restore a full selection exactly as before.
 - **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
   be two separate records of what a session contained, kept in step by convention, so a pane you or
   an agent opened could take up to two minutes to show up in the list. They are now two views of
