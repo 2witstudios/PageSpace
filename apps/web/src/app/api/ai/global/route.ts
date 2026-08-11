@@ -19,12 +19,19 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *
  * Query Parameters:
  *   - limit (optional): Max conversations to return (default 20, max 100)
- *   - cursor (optional): Conversation ID for cursor-based pagination
- *   - direction (optional): 'before' (older) or 'after' (newer), default 'before'
+ *   - cursor (optional): Opaque token taken from a previous response's
+ *     `pagination.nextCursor`. NOT a conversation id — it encodes the sort key
+ *     that page ended on, so the boundary cannot shift when the underlying
+ *     messages change. Always means "older than this". An unrecognised or
+ *     malformed value is ignored and page one is returned.
  *   - paginated (optional): If 'true', returns paginated response format
  *
  * Without pagination (legacy): Returns array of conversations
- * With pagination: Returns { conversations: [], pagination: { hasMore, nextCursor, prevCursor, limit } }
+ * With pagination: Returns { conversations: [], pagination: { hasMore, nextCursor, limit } }
+ *
+ * Scoped to the GLOBAL ASSISTANT's own threads. It used to return every
+ * conversation of every type — see `isGlobalAssistantThread` for why that was
+ * invisible until the message-table merge.
  */
 export async function GET(request: Request) {
   try {
@@ -43,11 +50,6 @@ export async function GET(request: Request) {
       max: 100,
     });
     const cursor = searchParams.get('cursor') || undefined;
-    const directionParam = searchParams.get('direction');
-    const direction = (directionParam === 'before' || directionParam === 'after')
-      ? directionParam
-      : 'before';
-
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat', resourceId: 'list', details: {
       action: 'list_conversations',
     } });
@@ -57,7 +59,6 @@ export async function GET(request: Request) {
       const result = await globalConversationRepository.listConversationsPaginated(userId, {
         limit,
         cursor,
-        direction,
       });
 
       return NextResponse.json(result);

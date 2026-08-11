@@ -239,7 +239,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     setLoadingMore(true);
     try {
       const response = await fetchWithAuth(
-        `/api/ai/global?paginated=true&limit=30&cursor=${nextCursor}&direction=before`
+        `/api/ai/global?paginated=true&limit=30&cursor=${encodeURIComponent(nextCursor)}`
       );
       if (response.ok) {
         const data = await response.json();

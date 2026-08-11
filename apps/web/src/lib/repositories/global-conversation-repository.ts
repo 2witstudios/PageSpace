@@ -26,6 +26,17 @@ import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
+// Recency, the sort key and the cursor codecs are declared ONCE, in the module
+// the Agents-surface listing imports too — see that file's header for the
+// drift between the two that this listing was on the wrong side of.
+import {
+  recencyExpr,
+  sortKeyExpr,
+  newestFirst,
+  encodeCursor,
+  decodeCursor,
+  olderThanCursor,
+} from '@/lib/conversations/conversation-recency';
 
 // Types
 export interface ConversationSummary {
@@ -147,8 +158,18 @@ export function calculateUsageSummary(
 
 export interface ListConversationsPaginatedInput {
   limit?: number;
+  /**
+   * Always "older than this conversation". There is no `direction` toggle:
+   * returning the page truly adjacent on the other side needs the ORDER BY
+   * inverted (ascending toward the cursor, then reversed back for display),
+   * and the branch that used to claim `after` did not do that — it reused the
+   * `before` comparator under an unchanged `DESC` order, which returns the
+   * globally newest matches rather than the adjacent page. No caller ever sent
+   * it (`SidebarHistoryTab` hardcodes `direction=before`, and nothing else
+   * calls this), so it is gone rather than kept unverified and wrong — the
+   * same call `listAllConversationsPaginated` documents for the same reason.
+   */
   cursor?: string;
-  direction?: 'before' | 'after';
 }
 
 export interface PaginatedConversationsResult {
@@ -156,7 +177,6 @@ export interface PaginatedConversationsResult {
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
-    prevCursor: string | null;
     limit: number;
   };
 }
@@ -166,6 +186,14 @@ export interface PaginatedConversationsResult {
  * Used to filter history — empty (never-messaged) conversations are hidden.
  * Handles both new rows (lastMessageAt=null) and existing stale rows from before
  * lazy creation was introduced.
+ *
+ * NOT a type filter, though it used to act as one. Before the message-table
+ * merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6) `messages`
+ * held global-assistant rows ONLY — page and client threads wrote to
+ * `chat_messages` — so this predicate incidentally excluded every other kind,
+ * and the listings below never needed to say so. The merge's backfill moved all
+ * of it into one table and the accident stopped holding. Scope is now stated
+ * explicitly by `isGlobalAssistantThread`; this asks only what it says.
  */
 const hasMessages = exists(
   db
@@ -177,9 +205,30 @@ const hasMessages = exists(
     ))
 );
 
+/**
+ * The scope of this repository's history listings: the Global Assistant's own
+ * threads, and nothing else.
+ *
+ * `SidebarHistoryTab` shows the history of the SELECTED agent. With a page
+ * agent selected it calls that agent's own endpoint
+ * (`/api/ai/page-agents/{id}/conversations`); with the Global Assistant
+ * selected it calls the route these functions back. The page-agent branch was
+ * always scoped — this one was not, and once page rows entered `messages` it
+ * returned every conversation of every type, burying the assistant's own
+ * history under hundreds of page-agent threads (measured on one account:
+ * 107 page rows in the first 180). Clicking one of those also mis-routed, since
+ * the global branch loads a row through `loadGlobalConversation`.
+ *
+ * A `type: 'client'` thread (minted by `POST /api/v1/conversations` for
+ * pagespace-cli and other OpenAI-compatible clients) is excluded by the same
+ * rule: it belongs to an API caller, not to this sidebar.
+ */
+const isGlobalAssistantThread = eq(conversations.type, 'global');
+
 export const globalConversationRepository = {
   /**
-   * List all active conversations for a user, ordered by lastMessageAt
+   * List all active Global Assistant conversations for a user, newest activity
+   * first.
    * @deprecated Use listConversationsPaginated for better performance
    */
   async listConversations(userId: string): Promise<ConversationSummary[]> {
@@ -189,16 +238,18 @@ export const globalConversationRepository = {
         title: conversations.title,
         type: conversations.type,
         contextId: conversations.contextId,
-        lastMessageAt: conversations.lastMessageAt,
+        // The REAL last activity, not the stored column — see `recencyExpr`.
+        lastMessageAt: recencyExpr,
         createdAt: conversations.createdAt,
       })
       .from(conversations)
       .where(and(
         eq(conversations.userId, userId),
         eq(conversations.isActive, true),
+        isGlobalAssistantThread,
         hasMessages,
       ))
-      .orderBy(desc(conversations.lastMessageAt));
+      .orderBy(...newestFirst());
   },
 
   /**
@@ -208,47 +259,37 @@ export const globalConversationRepository = {
     userId: string,
     options: ListConversationsPaginatedInput = {}
   ): Promise<PaginatedConversationsResult> {
-    const { limit = 20, cursor, direction = 'before' } = options;
-    const maxLimit = Math.min(limit, 100);
+    const { limit = 20, cursor } = options;
+    // Clamped at BOTH ends, matching `listAllConversationsPaginated`. An
+    // upper bound alone leaves two broken states for a non-positive `limit`:
+    // `0` queries `.limit(1)`, which makes `hasMore` true with an empty page
+    // and therefore a null `nextCursor` — a caller told there is more, with no
+    // way to advance — and a negative reaches Postgres as a negative LIMIT and
+    // raises. The route guards its own input, so no shipped path reaches this,
+    // but the method is exported and called directly (this module's own
+    // integration suite does), so the guard is not structural (review finding).
+    const maxLimit = Math.min(Math.max(limit, 1), 100);
 
     // Build query conditions
     const conditions = [
       eq(conversations.userId, userId),
       eq(conversations.isActive, true),
+      isGlobalAssistantThread,
       hasMessages,
     ];
 
-    // Add cursor condition if provided - use compound cursor (lastMessageAt + id) for stable ordering
+    // An OPAQUE cursor carrying the sort key the caller last saw, evaluated in
+    // the same total order this query sorts by — see `olderThanCursor`. What it
+    // replaces re-read the cursor ROW live and branched on
+    // `if (cursorConv?.lastMessageAt)`, which is falsy for every conversation
+    // that never had the column written, and fell through to comparing `id`
+    // alone. Ordering by one key while paginating by another does not merely
+    // reorder a page: rows between the two boundaries are returned by NO page.
+    // Proven against real Postgres in this module's integration suite — six
+    // conversations, pages of two, four rows reachable.
     if (cursor) {
-      // Get the cursor conversation's lastMessageAt and id
-      const [cursorConv] = await db
-        .select({ lastMessageAt: conversations.lastMessageAt, id: conversations.id })
-        .from(conversations)
-        .where(eq(conversations.id, cursor))
-        .limit(1);
-
-      if (cursorConv?.lastMessageAt) {
-        if (direction === 'before') {
-          // Get conversations older than cursor (earlier lastMessageAt)
-          // Use compound condition: either earlier timestamp, or same timestamp but smaller id
-          conditions.push(
-            sql`(${conversations.lastMessageAt} < ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} < ${cursorConv.id}))`
-          );
-        } else {
-          // Get conversations newer than cursor (later lastMessageAt)
-          // Use compound condition: either later timestamp, or same timestamp but larger id
-          conditions.push(
-            sql`(${conversations.lastMessageAt} > ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} > ${cursorConv.id}))`
-          );
-        }
-      } else if (cursorConv) {
-        // Cursor conversation exists but has null lastMessageAt - use id-only comparison
-        if (direction === 'before') {
-          conditions.push(sql`${conversations.id} < ${cursorConv.id}`);
-        } else {
-          conditions.push(sql`${conversations.id} > ${cursorConv.id}`);
-        }
-      }
+      const decoded = decodeCursor(cursor);
+      if (decoded) conditions.push(olderThanCursor(decoded));
     }
 
     // Query with limit + 1 to check for more
@@ -258,24 +299,24 @@ export const globalConversationRepository = {
         title: conversations.title,
         type: conversations.type,
         contextId: conversations.contextId,
-        lastMessageAt: conversations.lastMessageAt,
+        lastMessageAt: recencyExpr,
+        sortKeyValue: sortKeyExpr,
         createdAt: conversations.createdAt,
       })
       .from(conversations)
       .where(and(...conditions))
-      .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
+      .orderBy(...newestFirst())
       .limit(maxLimit + 1);
 
     const hasMore = results.length > maxLimit;
-    const conversationsToReturn = hasMore ? results.slice(0, maxLimit) : results;
+    const rows = hasMore ? results.slice(0, maxLimit) : results;
+    // `sortKeyValue` is this query's own ordering key, not part of the wire
+    // shape — it exists to be frozen into the next cursor and is dropped here.
+    const conversationsToReturn = rows.map(({ sortKeyValue: _sortKey, ...row }) => row);
 
-    // Determine cursors
-    const nextCursor = hasMore && conversationsToReturn.length > 0
-      ? conversationsToReturn[conversationsToReturn.length - 1].id
-      : null;
-
-    const prevCursor = conversationsToReturn.length > 0 && cursor
-      ? conversationsToReturn[0].id
+    const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
+    const nextCursor = hasMore && lastRow
+      ? encodeCursor(lastRow.sortKeyValue, lastRow.id)
       : null;
 
     return {
@@ -283,7 +324,6 @@ export const globalConversationRepository = {
       pagination: {
         hasMore,
         nextCursor,
-        prevCursor,
         limit: maxLimit,
       },
     };
@@ -338,7 +378,17 @@ export const globalConversationRepository = {
         eq(conversations.isActive, true),
         hasMessages,
       ))
-      .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`, desc(conversations.createdAt))
+      // The SAME ordering the history listing uses, because this answers the
+      // same question — which thread was used most recently — and two answers
+      // to it is the drift this module was on the wrong side of. The two
+      // diverge exactly where the raw column is absent but activity is not: a
+      // thread with messages and no `lastMessageAt` (one production account
+      // holds 30) sorted LAST under `NULLS LAST` while ranking FIRST by real
+      // activity, so the sidebar would show it at the top of history while this
+      // resumed a different one. `sortKeyExpr` is total, so it needs no null
+      // handling of its own, and its final fallback is `createdAt` — the same
+      // tiebreak this used to spell out.
+      .orderBy(...newestFirst())
       .limit(1);
 
     return results[0] || null;
