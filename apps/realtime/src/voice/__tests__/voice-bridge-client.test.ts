@@ -103,9 +103,24 @@ describe('createVoiceBridgeClient', () => {
     });
   });
 
-  it('should give a tool dispatch a TIGHTER deadline than a transcript', () => {
-    // A tool call is inside the live turn — the model has stopped and a slow hop
-    // is heard as silence. Nothing waits on a transcript.
+  it('given a NON-Error transport failure, should still degrade rather than escape', async () => {
+    const client = createVoiceBridgeClient({
+      webUrl: 'http://web:3000',
+      fetchFn: (() => {
+        throw 'ECONNREFUSED as a string';
+      }) as unknown as typeof fetch,
+      signHeaders: () => ({}),
+    });
+
+    await expect(client.send(TOOL_REQUEST)).resolves.toEqual({
+      ok: false,
+      error: 'Voice bridge is unreachable',
+    });
+  });
+
+  it('should give a tool dispatch a LONGER deadline than a transcript', () => {
+    // The budget follows the work, not who is waiting: a tool dispatch runs a
+    // real page read or search behind it, while a transcript is one insert.
     expect(TOOL_DISPATCH_TIMEOUT_MS).toBeGreaterThan(TRANSCRIPT_TIMEOUT_MS);
   });
 

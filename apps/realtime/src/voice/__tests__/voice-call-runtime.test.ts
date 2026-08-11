@@ -235,6 +235,180 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     expect(session.sent[1]).toEqual({ type: 'response.create' });
   });
 
+  it('given ONE answer that THROWS, should still send response.create for the rest of the turn', async () => {
+    // `session.send` throws if the socket rejects a frame. Under `Promise.all`
+    // the first such throw skipped the response.create below it, and the model
+    // held a turn it never spoke — the one unrecoverable outcome.
+    const session = fakeSession();
+    let sends = 0;
+    const sent: Record<string, unknown>[] = [];
+    session.send = (event) => {
+      sends += 1;
+      if (sends === 1) throw new Error('socket rejected the frame');
+      sent.push(event);
+    };
+    startVoiceCallRuntime({
+      session,
+      bridge: fakeBridge().client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(
+      responseDone({ output: [toolCall(), toolCall({ call_id: 'call_2', name: 'read_page' })] }),
+    );
+    await flush();
+
+    expect(sent).toContainEqual({ type: 'response.create' });
+  });
+
+  it('given an UNBOUND call, should still dispatch tools — with no conversation on the request', async () => {
+    // A call with no thread still runs tools and still meters; it simply has
+    // nowhere to write a transcript.
+    const session = fakeSession({ conversationId: undefined });
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.requests[0]).not.toHaveProperty('conversationId');
+    expect(session.sent[1]).toEqual({ type: 'response.create' });
+  });
+
+  it('given an answer that throws a NON-Error, should still reach response.create', async () => {
+    const session = fakeSession();
+    let sends = 0;
+    const sent: Record<string, unknown>[] = [];
+    session.send = (event) => {
+      sends += 1;
+      if (sends === 1) throw 'socket string blip';
+      sent.push(event);
+    };
+    startVoiceCallRuntime({
+      session,
+      bridge: fakeBridge().client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(sent).toContainEqual({ type: 'response.create' });
+  });
+
+  it('given the session ENDED while the tools ran, should not ask a dead socket to respond', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge(() => {
+      // The call ends mid-dispatch — the caller hung up while a tool was running.
+      (session as { ended: boolean }).ended = true;
+      return { ok: true, kind: 'tool', output: 'Two pages.' };
+    });
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(session.sent.filter((event) => event.type === 'response.create')).toHaveLength(0);
+  });
+
+  it('given the bridge REFUSES a transcript, should log the dropped row and carry on', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge((request) =>
+      request.kind === 'transcript'
+        ? { ok: false, error: 'Voice bridge is unreachable' }
+        : { ok: true, kind: 'tool', output: 'ok' },
+    );
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hello there',
+    });
+    await flush();
+
+    // A dropped transcript is a logged row, never a dropped call.
+    expect(bridge.requests).toHaveLength(1);
+    expect(session.ended).toBe(false);
+  });
+
+  it('given a transcript write that rejects with a NON-Error, should still not raise an unhandled rejection', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const session = fakeSession();
+    const bridge = fakeBridge((request) => {
+      if (request.kind === 'transcript') throw 'bridge string blip';
+      return { ok: true, kind: 'tool', output: 'ok' };
+    });
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hello there',
+    });
+    await flush();
+
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('given a transcript write that REJECTS, should log it rather than raise an unhandled rejection', async () => {
+    // An unhandled rejection inside a socket event handler takes the process
+    // down by default, which would drop every other live call in it.
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const session = fakeSession();
+    const bridge = fakeBridge((request) => {
+      if (request.kind === 'transcript') throw new Error('bridge exploded');
+      return { ok: true, kind: 'tool', output: 'ok' };
+    });
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hello there',
+    });
+    await flush();
+
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
   it('given a response with no tool calls, should send nothing back', async () => {
     const session = fakeSession();
     startVoiceCallRuntime({
@@ -441,7 +615,11 @@ describe('startVoiceCallRuntime — teardown', () => {
     expect(meter.stop).toHaveBeenCalledWith('duration_cap');
   });
 
-  it('given the CALL ended on its own, should not try to hang up a call OpenAI already tore down', async () => {
+  it("given our attached socket closed, should STILL hang up — that does not prove the browser's call ended", async () => {
+    // 'call_ended' is the reason `onClosed` reports for every attached-socket
+    // close, including a network drop, a process shutdown and the one-hour
+    // socket backstop. None of those touch the browser's independent WebRTC
+    // session, so skipping the hangup here left a live, unmetered call up.
     const hangUp = vi.fn(async () => true);
     const runtime = startVoiceCallRuntime({
       session: fakeSession(),
@@ -454,7 +632,7 @@ describe('startVoiceCallRuntime — teardown', () => {
 
     await runtime.stop('call_ended');
 
-    expect(hangUp).not.toHaveBeenCalled();
+    expect(hangUp).toHaveBeenCalledWith('rtc_1', 'ek_1');
   });
 
   it('should stop listening on teardown', async () => {

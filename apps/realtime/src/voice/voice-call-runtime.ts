@@ -144,7 +144,22 @@ export const startVoiceCallRuntime = (
     // Concurrent, then ONE `response.create`. A response per output would have
     // the model start speaking about the first tool while the second is still
     // running, and interrupt itself when the second landed.
-    await Promise.all(calls.map((call) => answerToolCall(call)));
+    //
+    // `allSettled`, not `all`: `answerToolCall` ends in `session.send`, which
+    // throws if the socket rejects the frame, and `all` rejects on the FIRST
+    // such throw. That would skip the `response.create` below and leave the
+    // model holding a turn it never speaks — the one unrecoverable outcome this
+    // file's header names. One failed answer must not silence the others.
+    const settled = await Promise.allSettled(calls.map((call) => answerToolCall(call)));
+    for (const result of settled) {
+      if (result.status === 'rejected') {
+        loggers.realtime.error(
+          'Realtime voice tool answer threw',
+          result.reason instanceof Error ? result.reason : new Error(String(result.reason)),
+          { callId, userId },
+        );
+      }
+    }
     if (session.ended) return;
     session.send(RESPONSE_CREATE);
   };
@@ -216,7 +231,19 @@ export const startVoiceCallRuntime = (
       // Not awaited: the transcript is the durable record, not part of the live
       // turn, and blocking the event loop on a database write would put a chat
       // persistence latency inside a spoken conversation.
-      void persistTranscript(transcript.role, transcript.text);
+      //
+      // Caught for the same reason the tool dispatch above is. `bridge` is an
+      // interface, and nothing in its type stops an implementation from
+      // rejecting; an unhandled rejection raised inside a socket event handler
+      // takes the process down by default, which would drop every OTHER live
+      // call in it over one dropped transcript row.
+      void persistTranscript(transcript.role, transcript.text).catch((error: unknown) => {
+        loggers.realtime.error(
+          'Realtime voice transcript persistence threw',
+          error instanceof Error ? error : new Error(String(error)),
+          { callId, conversationId, role: transcript.role },
+        );
+      });
     }
   });
 
@@ -228,12 +255,18 @@ export const startVoiceCallRuntime = (
       // usually the most expensive part of the call, and a teardown that raced
       // it would drop it.
       await meter.stop(reason);
-      // Ends the BROWSER's call, not just our view of it. Skipped for
-      // 'call_ended', where the socket closing is what told us in the first
-      // place and OpenAI has already torn the call down.
-      if (reason !== 'call_ended') {
-        await hangUp(callId, secret);
-      }
+      // Ends the BROWSER's call, not just our view of it — on EVERY reason,
+      // including 'call_ended'.
+      //
+      // 'call_ended' means our attached socket closed, and that is not proof
+      // the call did. The same reason covers a network drop, a process
+      // shutdown and the one-hour socket backstop, none of which touch the
+      // browser's independent WebRTC session: skipping the hangup for those
+      // left the user talking to a model whose metering and transcript
+      // supervision had already stopped. Asking twice is free — a call that
+      // really did end answers 404, which `hangUpCall` reads as "already
+      // ended" — while asking zero times bills nobody for a live call.
+      await hangUp(callId, secret);
       session.end(reason);
     })();
     return stopping;

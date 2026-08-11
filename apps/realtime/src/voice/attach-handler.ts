@@ -10,16 +10,22 @@
  *
  * ADMISSION ORDER IS DELIBERATE, and each step refuses something the next one
  * could not:
- *   1. the DEPLOYMENT concurrency slot, claimed synchronously (the account's
- *      40,000 tokens/minute is shared by every session on our key);
- *   2. the PER-USER call count, which the deployment cap structurally cannot
- *      express — eight calls spread over eight people is fine, eight held by
- *      one person is not;
- *   3. the CREDIT hold, taken before a socket exists, because a voice call has
+ *   1. the DEPLOYMENT concurrency slot AND the PER-USER call count, claimed
+ *      together in one synchronous step (the account's 40,000 tokens/minute is
+ *      shared by every session on our key, while the per-user cap expresses
+ *      something the deployment cap structurally cannot — eight calls spread
+ *      over eight people is fine, eight held by one person is not);
+ *   2. the CREDIT hold, taken before a socket exists, because a voice call has
  *      no natural end at which an unaffordable one would be noticed.
  * Only then is an OpenAI socket opened. Every one of those refusals costs the
  * caller nothing; opening the socket first and refusing afterwards would have
  * already started the meter.
+ *
+ * BOTH CAPS ARE CLAIMED BEFORE THE FIRST `await`, and that is the whole point.
+ * A call enters the registry two awaits after admission, so any check made from
+ * the registered count alone admits every simultaneous request — which is the
+ * bug the deployment slot was written to prevent, and which the per-user count
+ * had one scope down until it was moved into the same reservation.
  *
  * The handler itself takes its dependencies as arguments and returns
  * `{ status, body }`, the shape `shell-io.ts` established, so the whole
@@ -116,42 +122,42 @@ export const handleRealtimeAttachRequest = async (
     seed,
   } = parsed.data;
 
-  // Claimed synchronously, before the first `await`. Checking the live count
+  // Claimed synchronously, before the first `await`. Checking the live counts
   // and attaching afterwards would let every simultaneous request past a cap of
   // one, because they would all observe the same pre-attach size.
-  if (!deps.registry.reserveSlot()) {
-    loggers.realtime.warn('Realtime attach refused: concurrent call cap reached', {
-      callId,
-      userId,
-      live: deps.registry.size,
-    });
+  //
+  // The per-user cap is enforced here as well as through the credit gate's
+  // `maxInFlight`, because that gate is a no-op when billing is disabled — and
+  // a tenant/onprem deployment still has one OpenAI key with one rate limit.
+  const perUserCap = deps.maxCallsPerUser ?? REALTIME_MAX_INFLIGHT;
+  const reservation = deps.registry.reserveSlot(userId, perUserCap);
+  if (!reservation.ok) {
+    const refusedByUser = reservation.refusedBy === 'user';
+    loggers.realtime.warn(
+      refusedByUser
+        ? 'Realtime attach refused: user is already on their limit of calls'
+        : 'Realtime attach refused: concurrent call cap reached',
+      {
+        callId,
+        userId,
+        live: deps.registry.size,
+        ...(refusedByUser ? { perUserCap } : {}),
+      },
+    );
     return {
       status: 429,
-      body: { success: false, error: 'Too many concurrent voice calls' },
+      body: {
+        success: false,
+        error: refusedByUser
+          ? 'Too many concurrent voice calls for this user'
+          : 'Too many concurrent voice calls',
+      },
     };
   }
 
   let meter: CallMeterStart | undefined;
 
   try {
-    const perUserCap = deps.maxCallsPerUser ?? REALTIME_MAX_INFLIGHT;
-    const usersCalls = deps.registry.getForUser(userId).length;
-    if (usersCalls >= perUserCap) {
-      // Enforced here as well as through the credit gate's `maxInFlight`,
-      // because that gate is a no-op when billing is disabled — and a
-      // tenant/onprem deployment still has one OpenAI key with one rate limit.
-      loggers.realtime.warn('Realtime attach refused: user is already on their limit of calls', {
-        callId,
-        userId,
-        usersCalls,
-        perUserCap,
-      });
-      return {
-        status: 429,
-        body: { success: false, error: 'Too many concurrent voice calls for this user' },
-      };
-    }
-
     // The hold comes BEFORE the socket. Voice is the one AI path with no
     // natural end at which an unaffordable call would be noticed.
     let runtime: VoiceCallRuntime | undefined;
@@ -237,8 +243,10 @@ export const handleRealtimeAttachRequest = async (
       },
     };
   } finally {
-    // Released on every path: the slot's job ended the moment the call either
-    // entered the registry (where it is now counted) or failed to.
-    deps.registry.releaseSlot();
+    // Released on every path: the reservation's job ended the moment the call
+    // either entered the registry (where it is now counted, deployment-wide and
+    // per user) or failed to. A refusal above returns before this block, so a
+    // slot that was never claimed is never released.
+    deps.registry.releaseSlot(userId);
   }
 };

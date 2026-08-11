@@ -111,6 +111,25 @@ describe('handleRealtimeAttachRequest — admission', () => {
     );
   });
 
+  it('given a timezone and a location, should hand BOTH to the runtime that dispatches tools', async () => {
+    // These are what make a spoken "what's on this page?" answerable: the web
+    // tier holds no per-call state, so the process on the call is the one that
+    // remembers where the caller is standing.
+    const startRuntime = vi.fn(() => ({ stop: vi.fn(async () => {}) }));
+    const locationContext = {
+      currentPage: { id: 'p1', title: 'Roadmap', type: 'DOCUMENT', path: '/roadmap' },
+    };
+
+    await handleRealtimeAttachRequest(
+      deps({ startRuntime }),
+      JSON.stringify({ ...VALID, timezone: 'Europe/London', locationContext }),
+    );
+
+    expect(startRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ timezone: 'Europe/London', locationContext }),
+    );
+  });
+
   it('given no conversationId, should still attach — binding state must not gate a call', async () => {
     const { conversationId: _omitted, ...withoutConversation } = VALID;
     const result = await handleRealtimeAttachRequest(
@@ -352,6 +371,36 @@ describe('handleRealtimeAttachRequest — metering and the runtime', () => {
     expect(second.status).toBe(429);
     expect((second.body as { error: string }).error).toContain('this user');
     expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('given SIMULTANEOUS attaches from ONE user against a per-user cap of one, should admit exactly one', async () => {
+    // The per-user twin of the deployment race above, and the reason the
+    // per-user claim had to move into `reserveSlot`: a call is registered two
+    // awaits after admission, so a check made from `getForUser` alone sees zero
+    // in both requests and lets one person hold as many calls as they can start
+    // at once.
+    const registry = new RealtimeCallRegistry(8);
+    let release: (() => void) | undefined;
+    const inFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const attach = vi.fn(async (options: AttachOptions) => {
+      await inFlight;
+      return fakeSession(options);
+    });
+    const d = deps({ registry, attach, maxCallsPerUser: 1 });
+
+    const both = Promise.all([
+      handleRealtimeAttachRequest(d, JSON.stringify(VALID)),
+      handleRealtimeAttachRequest(d, JSON.stringify({ ...VALID, callId: 'rtc_second' })),
+    ]);
+    release?.();
+    const [a, b] = await both;
+
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([200, 429]);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(registry.size).toBe(1);
   });
 
   it('given the per-user limit is reached by ONE user, should still admit a different user', async () => {

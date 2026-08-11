@@ -12,6 +12,7 @@
  * inside a function — the class is what makes it constructible per-test.
  */
 
+import { REALTIME_MAX_GLOBAL_SESSIONS } from '@pagespace/lib/billing/credit-pricing';
 import type { RealtimeCallSession } from './realtime-call-session';
 
 /**
@@ -20,8 +21,25 @@ import type { RealtimeCallSession } from './realtime-call-session';
  * calls is enough to start throttling everyone at once. Capping admission is
  * the only lever this process has: once a call is attached, its token spend is
  * the model's to decide.
+ *
+ * The number itself is `REALTIME_MAX_GLOBAL_SESSIONS`, which is where every
+ * other realtime budget knob lives and is what an operator actually tunes. A
+ * literal here would have been a second default that silently outranked the
+ * documented one.
  */
-export const DEFAULT_MAX_CONCURRENT_CALLS = 8;
+export const DEFAULT_MAX_CONCURRENT_CALLS = REALTIME_MAX_GLOBAL_SESSIONS;
+
+/**
+ * Why an attach was turned away. Named rather than boolean because the two caps
+ * mean different things to an operator: `deployment` says the whole process is
+ * full and every user is affected, `user` says one person is holding their own
+ * limit and nobody else is.
+ */
+export type SlotRefusal = 'deployment' | 'user';
+
+export type SlotReservation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly refusedBy: SlotRefusal };
 
 export class RealtimeCallRegistry {
   private readonly calls = new Map<string, RealtimeCallSession>();
@@ -37,6 +55,15 @@ export class RealtimeCallRegistry {
    */
   private pending = 0;
 
+  /**
+   * The same claim, per user. `getForUser` counts only REGISTERED calls, and a
+   * call is registered two awaits after admission — so a per-user check made
+   * from the registered count alone is exactly the race the deployment slot
+   * exists to prevent, one scope down: two simultaneous attaches from one
+   * person both see zero and both pass a cap of one.
+   */
+  private readonly pendingByUser = new Map<string, number>();
+
   constructor(private readonly maxConcurrent: number = DEFAULT_MAX_CONCURRENT_CALLS) {}
 
   /** True when another call would exceed the cap, counting in-flight attaches. */
@@ -44,20 +71,34 @@ export class RealtimeCallRegistry {
     return this.calls.size + this.pending >= this.maxConcurrent;
   }
 
-  /**
-   * Claim a slot for an attach that is about to start. Returns false when full.
-   * Every successful reserve MUST be matched by exactly one `releaseSlot()`,
-   * whether the attach succeeded or failed — `register` deliberately does not
-   * release it, so the accounting has one owner instead of two.
-   */
-  reserveSlot(): boolean {
-    if (this.atCapacity()) return false;
-    this.pending += 1;
-    return true;
+  /** A user's calls, live and in-flight — what the per-user cap is measured against. */
+  heldByUser(userId: string): number {
+    return this.getForUser(userId).length + (this.pendingByUser.get(userId) ?? 0);
   }
 
-  releaseSlot(): void {
+  /**
+   * Claim a slot for an attach that is about to start, against BOTH caps, in
+   * one synchronous step. Every successful reserve MUST be matched by exactly
+   * one `releaseSlot(userId)`, whether the attach succeeded or failed —
+   * `register` deliberately does not release it, so the accounting has one
+   * owner instead of two. A refusal claims nothing and must not be released.
+   */
+  reserveSlot(userId: string, maxPerUser: number): SlotReservation {
+    if (this.atCapacity()) return { ok: false, refusedBy: 'deployment' };
+    if (this.heldByUser(userId) >= maxPerUser) return { ok: false, refusedBy: 'user' };
+    this.pending += 1;
+    this.pendingByUser.set(userId, (this.pendingByUser.get(userId) ?? 0) + 1);
+    return { ok: true };
+  }
+
+  releaseSlot(userId: string): void {
     if (this.pending > 0) this.pending -= 1;
+    const held = this.pendingByUser.get(userId) ?? 0;
+    // Deleted rather than left at zero: the map is keyed by every user who has
+    // ever attached, and a process that keeps one entry per user forever is a
+    // slow leak in the thing whose job is to notice leaks.
+    if (held <= 1) this.pendingByUser.delete(userId);
+    else this.pendingByUser.set(userId, held - 1);
   }
 
   /** In-flight attaches, for tests and diagnostics. */

@@ -326,6 +326,23 @@ describe('attachToCall — event seam for B3/B4', () => {
     expect(seen).toEqual([]);
   });
 
+  it('given a frame that is valid JSON but not an event, should fan it out without reading a type off it', async () => {
+    // `JSON.parse` happily returns a number, a string or null, and a frame whose
+    // `type` is not a string is just as unusable. Neither may throw while the
+    // readiness check is reading the type off it.
+    const h = harness();
+    const session = await attachReady(h);
+
+    const seen: unknown[] = [];
+    session.subscribe((e) => seen.push(e));
+
+    expect(() => h.socket.receiveRaw('42')).not.toThrow();
+    expect(() => h.socket.receiveRaw('null')).not.toThrow();
+    expect(() => h.socket.receive({ type: 7 })).not.toThrow();
+
+    expect(seen).toEqual([42, null, { type: 7 }]);
+  });
+
   it('given send, should write the event as JSON — and stay silent once ended', async () => {
     const h = harness();
     const session = await attachReady(h);
@@ -365,6 +382,53 @@ describe('attachToCall — teardown', () => {
     expect(onClosed).toHaveBeenCalledTimes(1);
     expect(onClosed).toHaveBeenCalledWith(CALL_ID);
     expect(h.socket.closed).toBe(true);
+  });
+
+  it('given a socket whose close() THROWS, should still finish tearing down', async () => {
+    // The point of the close is to stop billing, and a socket that refuses it
+    // is a socket that is already closing. Letting that throw would abandon
+    // teardown half-done — no deregistration, no onClosed, a live registry
+    // entry for a dead call.
+    const h = harness();
+    const onClosed = vi.fn();
+    const promise = attachToCall({
+      callId: CALL_ID,
+      secret: SECRET,
+      userId: 'u1',
+      tools: TOOLS,
+      socketFactory: h.factory,
+      onClosed,
+    });
+    h.socket.open();
+    h.socket.receive({ type: 'session.updated', session: {} });
+    const session = await promise;
+
+    h.socket.close = () => {
+      throw new Error('already closing');
+    };
+
+    expect(() => session.end('test')).not.toThrow();
+    expect(session.ended).toBe(true);
+    expect(onClosed).toHaveBeenCalledWith(CALL_ID);
+  });
+
+  it('given a close with NO code, should still name the credential as the usual cause', async () => {
+    // A bare `1006` — or no code at all — is exactly what a wrong credential
+    // looks like from here, which is why the message says so rather than
+    // reporting the close verbatim.
+    const h = harness();
+    const promise = attachToCall({
+      callId: CALL_ID,
+      secret: SECRET,
+      userId: 'u1',
+      tools: TOOLS,
+      socketFactory: h.factory,
+    });
+    h.socket.open();
+    h.socket.onclose?.({});
+
+    await expect(promise).rejects.toMatchObject({ code: 'socket_closed_before_ready' });
+    await expect(promise).rejects.toThrow(/code unknown/);
   });
 
   it('given end() called twice, should tear down once and stay idempotent', async () => {

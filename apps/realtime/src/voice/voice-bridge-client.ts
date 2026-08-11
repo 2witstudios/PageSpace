@@ -10,12 +10,18 @@
  * surface already subscribes to. See `VOICE_CALLBACK_ROUTES` for the full
  * argument, including why metering is deliberately NOT routed through here.
  *
- * TIMEOUTS ARE ASYMMETRIC ON PURPOSE. A tool dispatch is inside the live turn:
- * the model has stopped and is waiting for `function_call_output`, so a slow
- * hop is heard as silence and the only acceptable outcome is a bounded wait
- * followed by something the model can say. A transcript is not in the loop at
- * all — nobody is waiting on it — so it gets a longer budget and its failure is
- * a dropped row, logged.
+ * TIMEOUTS ARE ASYMMETRIC ON PURPOSE, and the asymmetry follows the WORK behind
+ * each hop rather than who is waiting on it. A tool dispatch runs a real
+ * PageSpace tool — a page read, a search, a write — so it needs the larger
+ * budget or a legitimately slow tool is killed and the model apologises for
+ * something that was about to succeed. A transcript is one insert; a budget
+ * beyond that would only hold a socket handler open longer for a row nobody is
+ * waiting on.
+ *
+ * Being inside the live turn does NOT argue for a smaller tool budget — it
+ * argues for a bounded one. The ceiling exists so a dead web tier becomes
+ * something the model can say rather than an unbounded pause; it is not a
+ * latency target, and a tool that answers in 300ms still answers in 300ms.
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -34,7 +40,12 @@ import {
  */
 export const TOOL_DISPATCH_TIMEOUT_MS = 20_000;
 
-/** Nothing is blocked on a transcript, so it can afford to wait longer. */
+/**
+ * Half the tool budget, because a transcript is one row. Nothing is blocked on
+ * it, which is exactly why it does not get the larger ceiling: a longer wait
+ * would buy no additional successes, only a socket handler held open past the
+ * point the write was going to fail anyway.
+ */
 export const TRANSCRIPT_TIMEOUT_MS = 10_000;
 
 export type VoiceBridgeClient = {

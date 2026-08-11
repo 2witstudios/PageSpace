@@ -13,7 +13,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-import { startCallMeter, type CallMeterOptions, type MeterStopReason } from '../call-metering';
+import {
+  startCallMeter,
+  type CallMeter,
+  type CallMeterOptions,
+  type MeterStopReason,
+} from '../call-metering';
 import type { RealtimeUsage } from '@pagespace/lib/monitoring/voice-pricing';
 
 const usage = (over: Partial<RealtimeUsage> = {}): RealtimeUsage => ({
@@ -114,6 +119,22 @@ function harness(over: Partial<CallMeterOptions> = {}) {
   return { options, h };
 }
 
+/**
+ * Start a meter that is expected to pass the gate, and hand back the meter
+ * itself.
+ *
+ * The narrowing lives here rather than in every test because `startCallMeter`
+ * returns a refusal union: written inline it was the same unreachable `if
+ * (!started.ok) throw` twenty-two times, which is twenty-two copies of a
+ * sentence about a case each of those tests has already ruled out by
+ * construction. Tests that DO exercise a refusal call `startCallMeter` directly.
+ */
+async function startedMeter(options: CallMeterOptions): Promise<CallMeter> {
+  const started = await startCallMeter(options);
+  if (!started.ok) throw new Error(`expected a meter, but the gate refused: ${started.reason}`);
+  return started.meter;
+}
+
 describe('startCallMeter — the opening hold', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -153,12 +174,11 @@ describe('startCallMeter — settling', () => {
 
   it('given usage across two responses, should settle their SUM once', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.track).toHaveBeenCalledTimes(1);
     const call = h.track.mock.calls[0][0];
@@ -171,26 +191,24 @@ describe('startCallMeter — settling', () => {
     // `trackUsage` takes ownership of the hold, so a long call that did not
     // re-hold would run the rest of its length unreserved.
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.track.mock.calls[0][0].holdId).toBe('hold-1');
     expect(h.gate).toHaveBeenCalledTimes(2);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
     expect(h.track.mock.calls[1][0].holdId).toBe('hold-2');
   });
 
   it('given nothing was spent, should settle nothing and keep the existing hold', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await started.meter.settle();
+    await meter.settle();
 
     expect(h.track).not.toHaveBeenCalled();
     // No second gate call: the hold was never consumed, so there is nothing to
@@ -207,11 +225,10 @@ describe('startCallMeter — settling', () => {
         : { allowed: false, reason: 'insufficient_credits' as const };
     });
     const { options, h } = harness({ gate: gate as unknown as CallMeterOptions['gate'] });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.limits).toEqual([
       { reason: 'credit_exhausted', message: expect.any(String) },
@@ -224,44 +241,40 @@ describe('startCallMeter — settling', () => {
         throw new Error('ledger unreachable');
       }) as unknown as CallMeterOptions['track'],
     });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await expect(started.meter.settle()).resolves.toBeUndefined();
+    meter.record(usage());
+    await expect(meter.settle()).resolves.toBeUndefined();
     expect(h.limits).toEqual([]);
   });
 
   it('should settle on its own interval without being asked', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
+    meter.record(usage());
     h.fireSettle();
-    await started.meter.settle();
+    await meter.settle();
 
     expect(h.track).toHaveBeenCalledTimes(1);
   });
 
   it('given overlapping settles, should serialize them so one window is never billed twice', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await Promise.all([started.meter.settle(), started.meter.settle(), started.meter.settle()]);
+    meter.record(usage());
+    await Promise.all([meter.settle(), meter.settle(), meter.settle()]);
 
     expect(h.track).toHaveBeenCalledTimes(1);
   });
 
   it('should stamp the usage row as deterministic voice-realtime spend', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.track.mock.calls[0][0]).toMatchObject({
       provider: 'openai_voice',
@@ -275,13 +288,89 @@ describe('startCallMeter — settling', () => {
 
   it('given an unpriceable model, should still settle — at zero, loudly', async () => {
     const { options, h } = harness({ model: 'gpt-realtime-9-unreleased' });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.track.mock.calls[0][0].providerCostDollars).toBe(0);
+  });
+
+  it('given totals with NO modality attached, should still settle and report the zero-billed shape', async () => {
+    // A payload that reports tokens but attributes none of them: priced at zero
+    // by design, because audio input costs eight times text input and guessing
+    // over-charges half the time. The detail fields are absent entirely here,
+    // so the settle also has to survive reading through them.
+    const { options, h } = harness();
+    const meter = await startedMeter(options);
+
+    meter.record({ input_tokens: 100, output_tokens: 50, total_tokens: 150 });
+    await meter.settle();
+
+    const settled = h.track.mock.calls[0][0];
+    expect(settled.providerCostDollars).toBe(0);
+    expect(settled.inputTokens).toBe(100);
+    expect(settled.outputTokens).toBe(50);
+    expect(settled.cachedInputTokens).toBe(0);
+    expect(settled.metadata.audioInputTokens).toBe(0);
+    expect(settled.metadata.audioOutputTokens).toBe(0);
+  });
+
+  it('given a gate that allows without a hold id, should settle with no hold to consume', async () => {
+    // The gate short-circuits to "allowed, unlimited" when billing is off, and
+    // there is no reservation to hand the settle in that case.
+    const { options, h } = harness({
+      gate: (async () => ({ allowed: true, reason: 'ok' })) as unknown as CallMeterOptions['gate'],
+    });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    expect(h.track).toHaveBeenCalledTimes(1);
+    expect(h.track.mock.calls[0][0]).not.toHaveProperty('holdId');
+  });
+
+  it('given an UNBOUND call, should settle without a conversation id', async () => {
+    const { options, h } = harness({ conversationId: undefined });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    expect(h.track.mock.calls[0][0]).not.toHaveProperty('conversationId');
+  });
+
+  it('given a settle that rejects with a NON-Error, should keep the call up', async () => {
+    // The user is mid-sentence. A failed settle is a logged, unbilled window,
+    // never a dropped call — including when the rejection is not an Error.
+    const { options, h } = harness({
+      track: (async () => {
+        throw 'ledger string blip';
+      }) as unknown as CallMeterOptions['track'],
+    });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await expect(meter.settle()).resolves.toBeUndefined();
+    // The hold is released rather than left against the balance until its TTL.
+    expect(h.release).toHaveBeenCalled();
+  });
+
+  it('given a settle failure whose hold release ALSO rejects, should let the hold expire quietly', async () => {
+    const { options } = harness({
+      track: (async () => {
+        throw new Error('ledger unreachable');
+      }) as unknown as CallMeterOptions['track'],
+      release: (async () => {
+        throw 'release string blip';
+      }) as unknown as CallMeterOptions['release'],
+    });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    // Both failures are logged; neither may propagate into a live call.
+    await expect(meter.settle()).resolves.toBeUndefined();
   });
 });
 
@@ -290,8 +379,7 @@ describe('startCallMeter — limits', () => {
 
   it('given no activity for longer than the idle timeout, should report an idle limit', async () => {
     const { options, h } = harness({ idleTimeoutMs: 10_000 });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
     h.advance(10_001);
     h.fireIdleSweep();
@@ -301,11 +389,10 @@ describe('startCallMeter — limits', () => {
 
   it('given someone is still talking, should NOT report an idle limit', async () => {
     const { options, h } = harness({ idleTimeoutMs: 10_000 });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
     h.advance(9_000);
-    started.meter.touch();
+    meter.touch();
     h.advance(9_000);
     h.fireIdleSweep();
 
@@ -315,11 +402,10 @@ describe('startCallMeter — limits', () => {
   it('given recorded usage, should count as activity', async () => {
     // Usage means a response happened, which means someone is in the room.
     const { options, h } = harness({ idleTimeoutMs: 10_000 });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
     h.advance(9_000);
-    started.meter.record(usage());
+    meter.record(usage());
     h.advance(9_000);
     h.fireIdleSweep();
 
@@ -328,8 +414,7 @@ describe('startCallMeter — limits', () => {
 
   it('given the duration cap elapses, should report it', async () => {
     const { options, h } = harness({ maxDurationMs: 600_000 });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
     h.fireDurationCap();
 
@@ -344,11 +429,10 @@ describe('startCallMeter — stopping', () => {
   it('should settle the FINAL window before releasing anything', async () => {
     // The last thing said in a call is usually the most expensive part of it.
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.stop('call_ended');
+    meter.record(usage());
+    await meter.stop('call_ended');
 
     expect(h.track).toHaveBeenCalledTimes(1);
     expect(h.track.mock.calls[0][0].inputTokens).toBe(100);
@@ -356,10 +440,9 @@ describe('startCallMeter — stopping', () => {
 
   it('given an unspent hold at the end, should release it rather than leave it to its TTL', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await started.meter.stop('call_ended');
+    await meter.stop('call_ended');
 
     expect(h.release).toHaveBeenCalledWith('hold-1');
   });
@@ -369,11 +452,10 @@ describe('startCallMeter — stopping', () => {
     // has stopped has no next window to reserve for. Re-holding here would open
     // a reservation nothing will ever settle.
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.stop('call_ended');
+    meter.record(usage());
+    await meter.stop('call_ended');
 
     expect(h.track).toHaveBeenCalledTimes(1);
     expect(h.release).not.toHaveBeenCalled();
@@ -389,11 +471,10 @@ describe('startCallMeter — stopping', () => {
         throw new Error('ledger unreachable');
       }) as unknown as CallMeterOptions['track'],
     });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.release).toHaveBeenCalledWith('hold-1');
     expect(h.gate).toHaveBeenCalledTimes(2);
@@ -401,10 +482,9 @@ describe('startCallMeter — stopping', () => {
 
   it('should clear every timer so a stopped call cannot fire a limit', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await started.meter.stop('duration_cap');
+    await meter.stop('duration_cap');
 
     expect(h.intervals).toHaveLength(0);
     expect(h.timeouts).toHaveLength(0);
@@ -412,14 +492,13 @@ describe('startCallMeter — stopping', () => {
 
   it('should be idempotent', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await started.meter.stop('call_ended');
-    await started.meter.stop('call_ended');
+    await meter.stop('call_ended');
+    await meter.stop('call_ended');
 
     expect(h.release).toHaveBeenCalledTimes(1);
-    expect(started.meter.stopped).toBe(true);
+    expect(meter.stopped).toBe(true);
   });
 
   it('given a failing hold release, should not throw out of teardown', async () => {
@@ -428,37 +507,34 @@ describe('startCallMeter — stopping', () => {
         throw new Error('ledger unreachable');
       }) as unknown as CallMeterOptions['release'],
     });
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await expect(started.meter.stop('call_ended')).resolves.toBeUndefined();
+    await expect(meter.stop('call_ended')).resolves.toBeUndefined();
   });
 
   it('should report the total billed across every settle', async () => {
     const { options } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    started.meter.record(usage());
-    await started.meter.settle();
-    const afterFirst = started.meter.billedDollars;
+    meter.record(usage());
+    await meter.settle();
+    const afterFirst = meter.billedDollars;
 
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(afterFirst).toBeGreaterThan(0);
-    expect(started.meter.billedDollars).toBeCloseTo(afterFirst * 2, 10);
+    expect(meter.billedDollars).toBeCloseTo(afterFirst * 2, 10);
   });
 
   it('given the meter is stopped, should ignore further usage', async () => {
     const { options, h } = harness();
-    const started = await startCallMeter(options);
-    if (!started.ok) throw new Error('expected a meter');
+    const meter = await startedMeter(options);
 
-    await started.meter.stop('call_ended');
+    await meter.stop('call_ended');
     h.track.mockClear();
-    started.meter.record(usage());
-    await started.meter.settle();
+    meter.record(usage());
+    await meter.settle();
 
     expect(h.track).not.toHaveBeenCalled();
   });

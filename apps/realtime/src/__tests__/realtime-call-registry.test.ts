@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { REALTIME_MAX_GLOBAL_SESSIONS } from '@pagespace/lib/billing/credit-pricing';
 import {
   RealtimeCallRegistry,
   DEFAULT_MAX_CONCURRENT_CALLS,
@@ -110,27 +111,63 @@ describe('RealtimeCallRegistry', () => {
   it('given a reserved slot, should count it toward capacity before any call registers', () => {
     const registry = new RealtimeCallRegistry(1);
 
-    expect(registry.reserveSlot()).toBe(true);
+    expect(registry.reserveSlot('u1', 8)).toEqual({ ok: true });
     expect(registry.reserved).toBe(1);
     // Nothing is registered yet, and the registry is already full — this is the
     // whole point: an in-flight attach occupies the cap.
     expect(registry.size).toBe(0);
-    expect(registry.reserveSlot()).toBe(false);
+    expect(registry.reserveSlot('u2', 8)).toEqual({ ok: false, refusedBy: 'deployment' });
   });
 
-  it('given a released slot, should free the capacity again', () => {
+  it('given a user at their own cap, should refuse them by NAME while the deployment has room', () => {
+    const registry = new RealtimeCallRegistry(8);
+
+    expect(registry.reserveSlot('u1', 1)).toEqual({ ok: true });
+    // Still in flight — nothing registered — which is exactly the window a
+    // per-user check made from the registered count alone would wave through.
+    expect(registry.size).toBe(0);
+    expect(registry.reserveSlot('u1', 1)).toEqual({ ok: false, refusedBy: 'user' });
+    // One person's limit is not everyone's.
+    expect(registry.reserveSlot('u2', 1)).toEqual({ ok: true });
+  });
+
+  it('should count a REGISTERED call toward the per-user cap too, not just in-flight ones', () => {
+    const registry = new RealtimeCallRegistry(8);
+    registry.register(fakeSession('rtc_a', 'u1'));
+
+    expect(registry.heldByUser('u1')).toBe(1);
+    expect(registry.reserveSlot('u1', 1)).toEqual({ ok: false, refusedBy: 'user' });
+  });
+
+  it('given a released slot, should free the capacity again — deployment-wide and per user', () => {
     const registry = new RealtimeCallRegistry(1);
-    registry.reserveSlot();
-    registry.releaseSlot();
+    registry.reserveSlot('u1', 1);
+    registry.releaseSlot('u1');
 
     expect(registry.reserved).toBe(0);
-    expect(registry.reserveSlot()).toBe(true);
+    expect(registry.heldByUser('u1')).toBe(0);
+    expect(registry.reserveSlot('u1', 1)).toEqual({ ok: true });
+  });
+
+  it('given a released slot, should not keep an entry for a user with nothing in flight', () => {
+    const registry = new RealtimeCallRegistry(4);
+    registry.reserveSlot('u1', 4);
+    registry.reserveSlot('u1', 4);
+    expect(registry.heldByUser('u1')).toBe(2);
+
+    registry.releaseSlot('u1');
+    expect(registry.heldByUser('u1')).toBe(1);
+    registry.releaseSlot('u1');
+    expect(registry.heldByUser('u1')).toBe(0);
+    // Over-releasing a user must not drive their count below zero either.
+    registry.releaseSlot('u1');
+    expect(registry.heldByUser('u1')).toBe(0);
   });
 
   it('given more releases than reserves, should not go negative and hand out phantom slots', () => {
     const registry = new RealtimeCallRegistry(1);
-    registry.releaseSlot();
-    registry.releaseSlot();
+    registry.releaseSlot('u1');
+    registry.releaseSlot('u1');
 
     expect(registry.reserved).toBe(0);
     registry.register(fakeSession('rtc_a'));
@@ -154,5 +191,11 @@ describe('RealtimeCallRegistry', () => {
   it('should default to a cap low enough to matter against a 40k tokens/min budget', () => {
     expect(DEFAULT_MAX_CONCURRENT_CALLS).toBeGreaterThan(0);
     expect(new RealtimeCallRegistry().atCapacity()).toBe(false);
+  });
+
+  it('should take its default cap from the documented env knob, not a second literal', () => {
+    // An operator who sets REALTIME_MAX_GLOBAL_SESSIONS must see admission
+    // change; a hardcoded default here would outrank the knob silently.
+    expect(DEFAULT_MAX_CONCURRENT_CALLS).toBe(REALTIME_MAX_GLOBAL_SESSIONS);
   });
 });
