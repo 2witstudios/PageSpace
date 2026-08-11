@@ -41,6 +41,18 @@ vi.mock('@pagespace/lib/commands/starter-skill-installer', () => ({
   installStarterSkills: vi.fn().mockResolvedValue({ installed: [], skipped: [], alreadyInstalled: false }),
 }));
 
+// Same treatment, same reason: memory-page provisioning has its own behaviour
+// and its own coverage. Here we only care that provisioning calls it, so the
+// real implementation is not driven against this file's transaction stub.
+vi.mock('@pagespace/lib/memory/memory-pages', () => ({
+  provisionMemoryPages: vi.fn().mockResolvedValue({
+    folderId: 'memory-folder',
+    bioPageId: 'bio-page',
+    writingStylePageId: 'style-page',
+    rulesPageId: 'rules-page',
+  }),
+}));
+
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';

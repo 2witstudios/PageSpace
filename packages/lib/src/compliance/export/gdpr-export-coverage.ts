@@ -77,6 +77,12 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   notifications: 'notifications',
   display_preferences: 'displayPreferences',
   user_personalization: 'personalization',
+  // Machine-authored inferences ABOUT the subject, plus verbatim quotes of
+  // their own messages kept as justification — derived personal data under
+  // Art 4(1). Exported including rejected and still-pending rows: "we inferred
+  // this about you and did not act on it" is exactly the processing a subject
+  // access request exists to disclose.
+  personalization_candidates: 'personalizationCandidates',
   // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
   // the reasoning that the subject can read them in Settings — see the
   // `settings` collector for why that was not a basis (review finding).

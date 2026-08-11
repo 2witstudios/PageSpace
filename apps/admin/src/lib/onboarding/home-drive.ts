@@ -7,6 +7,7 @@ import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/driv
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
 import { populateUserDrive } from '@/lib/onboarding/drive-setup'
 import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer'
+import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -70,6 +71,13 @@ export async function provisionHomeDriveIfNeeded(
     // reaching Home lazily should get them too — and this adds content without
     // flipping `created`, so their post-login returnUrl is still not hijacked.
     await installStarterSkills(userId, newDrive.id, tx);
+
+    // Memory pages install here too, and for the same reason. This is the
+    // on-prem/admin account-creation path: once it has made the Home drive, the
+    // web provisioner sees one already exists and returns early, so a user
+    // created here would otherwise never get memory pages at all and the cron
+    // would have nowhere to write their personalization.
+    await provisionMemoryPages(userId, newDrive.id, tx);
 
     if (isExistingUser) {
       return { driveId: newDrive.id, created: false };

@@ -162,6 +162,11 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./memory/memory-pages": {
+      "types": "./dist/memory/memory-pages.d.ts",
+      "import": "./dist/memory/memory-pages.js",
+      "require": "./dist/memory/memory-pages.js"
+    },
     "./observability/sentry-env": {
       "types": "./dist/observability/sentry-env.d.ts",
       "import": "./dist/observability/sentry-env.js",

@@ -3,6 +3,10 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_DELETE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
@@ -71,6 +75,14 @@ export async function DELETE(request: Request) {
           { status: 403 }
         );
       }
+    }
+
+    // Refuse the whole batch if it contains a memory page, rather than deleting
+    // the rest around it: a partial success here is how someone loses their
+    // profile without noticing which item did it.
+    const protectedIds = await findProtectedMemoryPages(sourcePages.map((p) => p.id));
+    if (protectedIds.size > 0) {
+      return NextResponse.json({ error: MEMORY_PAGE_DELETE_ERROR }, { status: 403 });
     }
 
     // Track affected drives for broadcast events

@@ -1,414 +1,173 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi } from 'vitest';
 import { assert } from './riteway';
 
 /**
  * Integration Service Tests
  *
- * The integration service evaluates raw insights from discovery against
- * the user's current personalization profile. It decides whether to
- * append, skip, or reorganize content.
- *
- * Key behaviors to test:
- * 1. Returns skip decisions when insufficient insights
- * 2. Evaluates insights against current profile
- * 3. Returns append decisions with content when new insights found
- * 4. Handles provider errors gracefully
- * 5. Applies integration decisions to update personalization
+ * The integration service rewrites whole memory pages rather than appending to
+ * them. That is what lets the profile correct and forget — and also what makes
+ * a bad generation able to wipe a page the user wrote by hand. These tests pin
+ * the guards that bound that.
  */
 
-// Mock database
-const mockDbQuery = vi.fn();
-const mockDbInsert = vi.fn();
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    query: {
-      userPersonalization: {
-        findFirst: () => mockDbQuery(),
-      },
-    },
-    insert: () => mockDbInsert(),
-  },
-}));
+vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(),
   eq: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/personalization', () => ({
-  userPersonalization: { userId: 'userId' },
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', content: 'content', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
 }));
-
-// Mock AI provider
-const mockCreateAIProvider = vi.fn();
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: {
+    userId: 'userId',
+    bioPageId: 'bioPageId',
+    writingStylePageId: 'writingStylePageId',
+    rulesPageId: 'rulesPageId',
+  },
+  personalizationCandidates: { id: 'id' },
+}));
+vi.mock('@pagespace/lib/memory/memory-pages', () => ({
+  readMemoryPages: vi.fn(async () => ({})),
+}));
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: () => mockCreateAIProvider(),
-  isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
+  createAIProvider: vi.fn(),
+  isProviderError: vi.fn(() => false),
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_PROVIDER: 'anthropic',
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
-
-// Mock loggers
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn() },
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
-    api: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
+vi.mock('ai', () => ({ generateText: vi.fn() }));
 
-// Mock generateText
-const mockGenerateText = vi.fn();
-vi.mock('ai', () => ({
-  generateText: () => mockGenerateText(),
-}));
+describe('screenRewrite — deletion guard', () => {
+  it('rejects a rewrite that drops more than 40% of the page', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-// Helper to set up AI provider success
-function setupAIProviderSuccess(response: string) {
-  mockCreateAIProvider.mockResolvedValue({
-    model: 'test-model',
-    provider: 'test',
-    modelName: 'test',
-  });
-  mockGenerateText.mockResolvedValue({ text: response });
-}
+    const current = 'x'.repeat(1000);
+    const gutted = 'x'.repeat(400); // 60% deleted
 
-describe('integration-service', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockDbQuery.mockResolvedValue(null);
-    mockDbInsert.mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-      }),
+    assert({
+      given: 'a rewrite returning a fragment of an existing page',
+      should: 'reject it rather than silently wiping the page',
+      actual: screenRewrite('bio', current, gutted),
+      expected: { ok: false, reason: 'would delete >40% of existing content' },
     });
   });
 
-  describe('evaluateAndIntegrate', () => {
-    it('should exist and be callable', async () => {
-      const { evaluateAndIntegrate } = await import('../integration-service');
+  it('allows a rewrite that trims within the deletion budget', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-      assert({
-        given: 'integration-service module',
-        should: 'export evaluateAndIntegrate function',
-        actual: typeof evaluateAndIntegrate,
-        expected: 'function',
-      });
-    });
+    const current = 'x'.repeat(1000);
+    const trimmed = 'x'.repeat(700); // 30% deleted
 
-    it('should return IntegrationDecision with three field decisions', async () => {
-      setupAIProviderSuccess('{"bio":{"action":"skip"},"writingStyle":{"action":"skip"},"rules":{"action":"skip"}}');
-
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Expert in TypeScript'],
-        projects: ['Working on memory system'],
-        communication: [],
-        preferences: [],
-      };
-
-      const result = await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: 'insights and null personalization',
-        should: 'return decision with bio field',
-        actual: typeof result.bio,
-        expected: 'object',
-      });
-
-      assert({
-        given: 'insights and null personalization',
-        should: 'return decision with writingStyle field',
-        actual: typeof result.writingStyle,
-        expected: 'object',
-      });
-
-      assert({
-        given: 'insights and null personalization',
-        should: 'return decision with rules field',
-        actual: typeof result.rules,
-        expected: 'object',
-      });
-    });
-
-    it('should return skip decisions when insights total is below threshold', async () => {
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Single insight'],
-        projects: [],
-        communication: [],
-        preferences: [],
-      };
-
-      const result = await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: 'only 1 insight (below threshold of 2)',
-        should: 'return skip for bio',
-        actual: result.bio.action,
-        expected: 'skip',
-      });
-
-      assert({
-        given: 'only 1 insight (below threshold of 2)',
-        should: 'return skip for writingStyle',
-        actual: result.writingStyle.action,
-        expected: 'skip',
-      });
-
-      assert({
-        given: 'only 1 insight (below threshold of 2)',
-        should: 'return skip for rules',
-        actual: result.rules.action,
-        expected: 'skip',
-      });
-    });
-
-    it('should call LLM when sufficient insights exist', async () => {
-      setupAIProviderSuccess('{"bio":{"action":"append","content":"Expert in TypeScript"},"writingStyle":{"action":"skip"},"rules":{"action":"skip"}}');
-
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Expert in TypeScript', 'Values TDD'],
-        projects: [],
-        communication: [],
-        preferences: [],
-      };
-
-      await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: '2+ insights',
-        should: 'call LLM to evaluate',
-        actual: mockGenerateText.mock.calls.length,
-        expected: 1,
-      });
-    });
-
-    it('should return append decision with content from LLM', async () => {
-      setupAIProviderSuccess('{"bio":{"action":"append","content":"Expert in TypeScript"},"writingStyle":{"action":"skip"},"rules":{"action":"skip"}}');
-
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Expert in TypeScript', 'Values TDD'],
-        projects: [],
-        communication: [],
-        preferences: [],
-      };
-
-      const result = await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: 'LLM returns append decision',
-        should: 'return append action for bio',
-        actual: result.bio.action,
-        expected: 'append',
-      });
-
-      assert({
-        given: 'LLM returns append decision',
-        should: 'return content for bio',
-        actual: result.bio.content,
-        expected: 'Expert in TypeScript',
-      });
-    });
-
-    it('should handle markdown code block JSON responses', async () => {
-      setupAIProviderSuccess('```json\n{"bio":{"action":"append","content":"Expert in TypeScript"},"writingStyle":{"action":"skip"},"rules":{"action":"skip"}}\n```');
-
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Expert in TypeScript', 'Values TDD'],
-        projects: [],
-        communication: [],
-        preferences: [],
-      };
-
-      const result = await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: 'LLM returns markdown code block',
-        should: 'parse JSON and return append action',
-        actual: result.bio.action,
-        expected: 'append',
-      });
-    });
-
-    it('should return skip decisions when AI provider fails', async () => {
-      mockCreateAIProvider.mockResolvedValue({
-        error: 'API key not configured',
-        status: 400,
-      });
-
-      const { evaluateAndIntegrate } = await import('../integration-service');
-      const insights = {
-        worldview: ['Expert in TypeScript', 'Values TDD'],
-        projects: [],
-        communication: [],
-        preferences: [],
-      };
-
-      const result = await evaluateAndIntegrate('user-123', insights, null);
-
-      assert({
-        given: 'AI provider error',
-        should: 'return skip decisions without throwing',
-        actual: result.bio.action,
-        expected: 'skip',
-      });
+    assert({
+      given: 'a rewrite that consolidates without gutting',
+      should: 'allow it',
+      actual: screenRewrite('bio', current, trimmed),
+      expected: { ok: true },
     });
   });
 
-  describe('applyIntegrationDecisions', () => {
-    it('should exist and be callable', async () => {
-      const { applyIntegrationDecisions } = await import('../integration-service');
+  it('allows any first write when the page is empty', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-      assert({
-        given: 'integration-service module',
-        should: 'export applyIntegrationDecisions function',
-        actual: typeof applyIntegrationDecisions,
-        expected: 'function',
-      });
+    assert({
+      given: 'an empty existing page',
+      should: 'allow the first write, since nothing can be deleted',
+      actual: screenRewrite('bio', '', 'A short first entry.'),
+      expected: { ok: true },
     });
+  });
+});
 
-    it('should return updated: false when all decisions are skip', async () => {
-      const { applyIntegrationDecisions } = await import('../integration-service');
-      const decisions = {
-        bio: { action: 'skip' as const },
-        writingStyle: { action: 'skip' as const },
-        rules: { action: 'skip' as const },
-      };
+describe('screenRewrite — budget guard', () => {
+  it('rejects content over the field budget', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-      const result = await applyIntegrationDecisions('user-123', decisions, null);
+    const oversized = 'x'.repeat(3001); // bio budget is 3000
 
-      assert({
-        given: 'all skip decisions',
-        should: 'return updated: false',
-        actual: result.updated,
-        expected: false,
-      });
-
-      assert({
-        given: 'all skip decisions',
-        should: 'return empty fields array',
-        actual: result.fields,
-        expected: [],
-      });
-    });
-
-    it('should return updated: true and list fields when append decisions applied', async () => {
-      const { applyIntegrationDecisions } = await import('../integration-service');
-      const decisions = {
-        bio: { action: 'append' as const, content: 'Expert in TypeScript' },
-        writingStyle: { action: 'skip' as const },
-        rules: { action: 'append' as const, content: 'No emojis' },
-      };
-
-      const result = await applyIntegrationDecisions('user-123', decisions, null);
-
-      assert({
-        given: 'append decisions for bio and rules',
-        should: 'return updated: true',
-        actual: result.updated,
-        expected: true,
-      });
-
-      assert({
-        given: 'append decisions for bio and rules',
-        should: 'return fields array with bio and rules',
-        actual: result.fields,
-        expected: ['bio', 'rules'],
-      });
-    });
-
-    it('should append to existing content with double newline separator', async () => {
-      const { applyIntegrationDecisions } = await import('../integration-service');
-      const decisions = {
-        bio: { action: 'append' as const, content: 'New insight' },
-        writingStyle: { action: 'skip' as const },
-        rules: { action: 'skip' as const },
-      };
-      const currentPersonalization = {
-        bio: 'Existing bio',
-        writingStyle: '',
-        rules: '',
-        enabled: true,
-      };
-
-      // Capture what gets passed to updatePersonalization
-      let capturedBio = '';
-      mockDbInsert.mockReturnValue({
-        values: vi.fn((values) => {
-          capturedBio = values.bio;
-          return {
-            onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-          };
-        }),
-      });
-
-      await applyIntegrationDecisions('user-123', decisions, currentPersonalization);
-
-      assert({
-        given: 'append decision with existing bio',
-        should: 'append with double newline separator',
-        actual: capturedBio,
-        expected: 'Existing bio\n\nNew insight',
-      });
+    assert({
+      given: 'a rewrite exceeding the bio budget',
+      should: 'reject it so the injected prompt stays bounded',
+      actual: screenRewrite('bio', '', oversized).ok,
+      expected: false,
     });
   });
 
-  describe('getCurrentPersonalization', () => {
-    it('should exist and be callable', async () => {
-      const { getCurrentPersonalization } = await import('../integration-service');
+  it('applies the tighter budget to writingStyle than to bio', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-      assert({
-        given: 'integration-service module',
-        should: 'export getCurrentPersonalization function',
-        actual: typeof getCurrentPersonalization,
-        expected: 'function',
-      });
+    const content = 'x'.repeat(2750); // over writingStyle's 2500, under bio's 3000
+
+    assert({
+      given: 'content between the writingStyle and bio budgets',
+      should: 'reject for writingStyle but allow for bio',
+      actual: {
+        writingStyle: screenRewrite('writingStyle', '', content).ok,
+        bio: screenRewrite('bio', '', content).ok,
+      },
+      expected: { writingStyle: false, bio: true },
     });
+  });
 
-    it('should return null when no personalization record exists', async () => {
-      mockDbQuery.mockResolvedValue(null);
+  it('accepts content exactly at the budget', async () => {
+    const { screenRewrite } = await import('../integration-service');
 
-      const { getCurrentPersonalization } = await import('../integration-service');
-      const result = await getCurrentPersonalization('user-123');
-
-      assert({
-        given: 'no personalization record',
-        should: 'return null',
-        actual: result,
-        expected: null,
-      });
+    assert({
+      given: 'content exactly at the bio budget',
+      should: 'accept it — the limit is inclusive',
+      actual: screenRewrite('bio', '', 'x'.repeat(3000)),
+      expected: { ok: true },
     });
+  });
+});
 
-    it('should return personalization data when record exists', async () => {
-      mockDbQuery.mockResolvedValue({
-        bio: 'Test bio',
-        writingStyle: 'Concise',
-        rules: 'No emojis',
-        enabled: true,
-      });
+describe('applyIntegrationDecisions', () => {
+  it('reports a rejected field without updating it', async () => {
+    const { applyIntegrationDecisions } = await import('../integration-service');
 
-      const { getCurrentPersonalization } = await import('../integration-service');
-      const result = await getCurrentPersonalization('user-123');
+    const result = await applyIntegrationDecisions(
+      'user-123',
+      { bio: 'x'.repeat(100) },
+      { bio: 'x'.repeat(1000) }
+    );
 
-      assert({
-        given: 'existing personalization record',
-        should: 'return personalization data',
-        actual: result,
-        expected: {
-          bio: 'Test bio',
-          writingStyle: 'Concise',
-          rules: 'No emojis',
-          enabled: true,
-        },
-      });
+    assert({
+      given: 'a rewrite that trips the deletion guard',
+      should: 'report no update and name the rejected field',
+      actual: { updated: result.updated, fields: result.fields, rejected: result.rejected },
+      expected: {
+        updated: false,
+        fields: [],
+        rejected: [{ field: 'bio', reason: 'would delete >40% of existing content' }],
+      },
+    });
+  });
+
+  it('reports the rejected field as data, not a formatted string', async () => {
+    // The cron decides whether to retire a candidate or retry it next run based
+    // on which fields a guard refused. Parsing that back out of a message string
+    // would break silently the moment the wording changed.
+    const { applyIntegrationDecisions } = await import('../integration-service');
+
+    const result = await applyIntegrationDecisions(
+      'user-123',
+      { writingStyle: 'x'.repeat(3000) },
+      {}
+    );
+
+    assert({
+      given: 'a rewrite rejected by the budget guard',
+      should: 'expose the field as a discrete value',
+      actual: result.rejected.map((r) => r.field),
+      expected: ['writingStyle'],
     });
   });
 });
