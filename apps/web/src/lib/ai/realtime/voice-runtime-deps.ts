@@ -106,7 +106,7 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
  * has already loaded or created the row, so a row that is gone by now was
  * deleted, and refusing is the honest answer.
  */
-const activeConversationGuard =
+export const activeConversationGuard =
   (conversationId: string): BeforeSaveHook =>
   async (tx) => {
     const [row] = await tx
