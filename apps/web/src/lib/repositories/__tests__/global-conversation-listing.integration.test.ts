@@ -111,6 +111,26 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     expect(ids).not.toContain(pageId);
   });
 
+  it('does not leak the internal sort key into a returned row', async () => {
+    if (!dbAvailable) return;
+
+    // `sortKeyValue` is selected only so the last row can be frozen into the
+    // next cursor. It is this query's own ordering key, not part of what a
+    // caller is handed — and `ConversationSummary` cannot catch it escaping,
+    // because a spread through a mapped object is not subject to excess
+    // property checking.
+    const owner = await factories.createUser();
+    const id = await seedConversation({ userId: owner.id, type: 'global', title: 'a thread' });
+    await seedMessage(id);
+
+    const result = await globalConversationRepository.listConversationsPaginated(owner.id);
+
+    expect(result.conversations).toHaveLength(1);
+    expect(Object.keys(result.conversations[0]).sort()).toEqual(
+      ['contextId', 'createdAt', 'id', 'lastMessageAt', 'title', 'type'].sort(),
+    );
+  });
+
   it('excludes a type: "client" conversation, minted by the public API', async () => {
     if (!dbAvailable) return;
 
