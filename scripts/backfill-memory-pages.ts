@@ -3,7 +3,7 @@ import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
-import { and, asc, eq, gt, isNull, or } from '@pagespace/db/operators';
+import { and, asc, eq, gt, isNotNull, isNull, or } from '@pagespace/db/operators';
 import {
   provisionMemoryPages,
   MEMORY_FIELDS,
@@ -95,13 +95,32 @@ export async function runBackfill({
       .where(
         and(
           gt(userPersonalization.id, cursor),
-          // Only rows that still need work: no folder pointer yet, or a field
-          // whose page pointer was never written.
+          // Rows that still need work. This asks TWO questions, and the second
+          // one is the important one:
+          //
+          //   1. pointers missing  → pages have never been provisioned
+          //   2. legacy column still holds content → content has not been moved
+          //
+          // (2) is not implied by (1). The settings screen self-heals a
+          // pointerless profile by provisioning EMPTY pages, so a user who
+          // opened Settings before this ran has all four pointers set and all
+          // three columns still full. Selecting on pointers alone skipped
+          // exactly those users — permanently, since the pointers never go back
+          // to null — while the read path had already switched to the (empty)
+          // pages. Their memory silently stopped being injected and nothing
+          // would ever have copied it across.
+          //
+          // A migrated row is excluded by both arms: its pointers are set AND
+          // its columns were cleared in the same transaction that filled the
+          // pages, so this stays a shrinking work list rather than a re-scan.
           or(
             isNull(userPersonalization.memoryFolderId),
             isNull(userPersonalization.bioPageId),
             isNull(userPersonalization.writingStylePageId),
             isNull(userPersonalization.rulesPageId),
+            isNotNull(userPersonalization.bio),
+            isNotNull(userPersonalization.writingStyle),
+            isNotNull(userPersonalization.rules),
           ),
         ),
       )
