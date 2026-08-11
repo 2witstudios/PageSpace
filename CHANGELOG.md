@@ -23,6 +23,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   back to it. Deliberately choosing a different agent in the sidebar's switcher does move the call,
   because that is a different conversation. Ending a call is the End button on the call itself, and
   refreshing the page ends it too.
+- **The assistant on the call is the one you picked, with the instructions and the tools its owner
+  gave it** — an agent you built to answer a particular way answers that way out loud too, and one
+  whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **A call you cannot have does not start** — running out of credit, or already having as many calls
+  open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
+  talking to something nobody was counting.
 - **When voice cannot start, it says which problem you have** — a microphone you declined is
   different from a microphone you do not have, and the two now get different advice and only the
   fixable one offers to try again. If the call connects but the transcript service does not, the
