@@ -112,6 +112,12 @@ describe('listAllConversationsPaginated', () => {
       sessionName: null,
       sessionEndedAt: null,
       driveId: 'drive-1',
+      // Server-only, and carried DELIBERATELY: the route paginates a second
+      // time after permission filtering and mints its cursor from this, so it
+      // has to survive the mapping. `toWireRow` is what strips it before the
+      // response. Asserted with `toEqual` so a field added here has to be
+      // stated rather than arriving unnoticed.
+      sortKeyValue: PAGE_ROW.sortKeyValue,
     });
   });
 

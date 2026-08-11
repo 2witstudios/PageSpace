@@ -24,7 +24,7 @@ import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { listAllConversationsPaginated } from '@/lib/agent-workspaces/workspace-conversations-runtime';
 import { encodeCursor } from '@/lib/conversations/conversation-recency';
-import type { PastConversationServerRow } from '@/lib/agent-workspaces/past-conversation-dto';
+import { toWireRow, type PastConversationServerRow } from '@/lib/agent-workspaces/past-conversation-dto';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -155,7 +155,7 @@ async function fetchVisiblePage(
     // harmlessly). Otherwise carry forward wherever the internal loop
     // itself left off (still `hasMore` but hit the fetch cap, or genuinely
     // out of data).
-    nextCursor: lastRow ? encodeCursor(lastRow.lastMessageAt ?? lastRow.createdAt, lastRow.conversationId) : (hasMore ? cursor ?? null : null),
+    nextCursor: lastRow ? encodeCursor(lastRow.sortKeyValue, lastRow.conversationId) : (hasMore ? cursor ?? null : null),
   };
 }
 
@@ -189,7 +189,10 @@ export async function GET(request: Request) {
       cursor,
     );
 
-    return NextResponse.json({ conversations, pagination: { hasMore, nextCursor, limit } });
+    return NextResponse.json({
+      conversations: conversations.map(toWireRow),
+      pagination: { hasMore, nextCursor, limit },
+    });
   } catch (error) {
     loggers.api.error(
       'Past conversations list failed',

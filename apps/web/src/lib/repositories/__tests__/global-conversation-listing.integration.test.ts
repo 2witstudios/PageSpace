@@ -152,6 +152,11 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     const result = await globalConversationRepository.listConversationsPaginated(owner.id);
     const ids = result.conversations.map((c) => c.id);
 
+    // Presence first: `indexOf` yields -1 for a missing row, so a bare
+    // position comparison passes vacuously when the row under test is absent
+    // entirely (review finding).
+    expect(ids).toContain(recent);
+    expect(ids).toContain(stale);
     expect(ids.indexOf(recent)).toBeLessThan(ids.indexOf(stale));
   });
 
@@ -187,7 +192,39 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     const result = await globalConversationRepository.listConversationsPaginated(owner.id);
     const ids = result.conversations.map((c) => c.id);
 
+    expect(ids).toContain(longStream);
+    expect(ids).toContain(interim);
     expect(ids.indexOf(longStream)).toBeLessThan(ids.indexOf(interim));
+  });
+
+  it('clamps a non-positive limit instead of stranding the caller (review finding)', async () => {
+    if (!dbAvailable) return;
+
+    // `limit: 0` used to reach `.limit(1)` via `Math.min(limit, 100)`, which
+    // made `hasMore` true off a single probe row while the returned page was
+    // empty — so `nextCursor` was null and the caller was told there is more
+    // with no way to ask for it. A negative reached Postgres as a negative
+    // LIMIT and raised outright.
+    const owner = await factories.createUser();
+    for (let i = 0; i < 3; i++) {
+      const id = await seedConversation({
+        userId: owner.id,
+        type: 'global',
+        title: `c-${i}`,
+        lastMessageAt: new Date(`2026-05-0${i + 1}`),
+      });
+      await seedMessage(id, new Date(`2026-05-0${i + 1}`));
+    }
+
+    const zero = await globalConversationRepository.listConversationsPaginated(owner.id, { limit: 0 });
+    expect(zero.conversations).toHaveLength(1);
+    expect(zero.pagination.limit).toBe(1);
+    // The contract that was broken: claiming more exists implies a way to reach it.
+    if (zero.pagination.hasMore) expect(zero.pagination.nextCursor).not.toBeNull();
+
+    // A negative must not reach Postgres as a negative LIMIT.
+    const negative = await globalConversationRepository.listConversationsPaginated(owner.id, { limit: -5 });
+    expect(negative.conversations).toHaveLength(1);
   });
 
   it('paginates across a NULL-lastMessageAt boundary with no skipped or repeated rows', async () => {

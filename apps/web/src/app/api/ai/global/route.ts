@@ -19,7 +19,11 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *
  * Query Parameters:
  *   - limit (optional): Max conversations to return (default 20, max 100)
- *   - cursor (optional): Conversation ID for cursor-based pagination
+ *   - cursor (optional): Opaque token taken from a previous response's
+ *     `pagination.nextCursor`. NOT a conversation id — it encodes the sort key
+ *     that page ended on, so the boundary cannot shift when the underlying
+ *     messages change. Always means "older than this". An unrecognised or
+ *     malformed value is ignored and page one is returned.
  *   - paginated (optional): If 'true', returns paginated response format
  *
  * Without pagination (legacy): Returns array of conversations

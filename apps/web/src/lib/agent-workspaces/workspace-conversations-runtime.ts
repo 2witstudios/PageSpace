@@ -223,6 +223,9 @@ export async function listAllConversationsPaginated(
       sessionName: row.sessionName,
       sessionEndedAt: row.sessionEndedAt,
       driveId: row.driveId,
+      // Server-only; the route needs it to mint a cursor for a row IT
+      // truncates after permission filtering, and `toWireRow` strips it.
+      sortKeyValue: row.sortKeyValue,
     })),
     pagination: {
       hasMore,

@@ -259,7 +259,15 @@ export const globalConversationRepository = {
     options: ListConversationsPaginatedInput = {}
   ): Promise<PaginatedConversationsResult> {
     const { limit = 20, cursor } = options;
-    const maxLimit = Math.min(limit, 100);
+    // Clamped at BOTH ends, matching `listAllConversationsPaginated`. An
+    // upper bound alone leaves two broken states for a non-positive `limit`:
+    // `0` queries `.limit(1)`, which makes `hasMore` true with an empty page
+    // and therefore a null `nextCursor` — a caller told there is more, with no
+    // way to advance — and a negative reaches Postgres as a negative LIMIT and
+    // raises. The route guards its own input, so no shipped path reaches this,
+    // but the method is exported and called directly (this module's own
+    // integration suite does), so the guard is not structural (review finding).
+    const maxLimit = Math.min(Math.max(limit, 1), 100);
 
     // Build query conditions
     const conditions = [

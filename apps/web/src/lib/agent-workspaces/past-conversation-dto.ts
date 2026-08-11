@@ -89,4 +89,43 @@ export type PastConversationServerRow = OmitStrict<
   lastMessageAt: Date | null;
   createdAt: Date;
   sessionEndedAt: Date | null;
+  /**
+   * The ORDERING key this row was sorted by — server-only, and stripped by
+   * `toWireRow` before the response goes out.
+   *
+   * It exists because the route paginates a SECOND time, after permission
+   * filtering drops rows, and so has to mint a cursor for a row it truncated
+   * itself. It used to derive one from `lastMessageAt ?? createdAt`, which is
+   * a re-implementation of the sort key rather than the key itself, and lossy:
+   * these are hydrated `Date`s (millisecond) while the sort key is a Postgres
+   * timestamp string carrying microseconds, so `encodeCursor` truncated the
+   * boundary and could skip or re-admit a row at a page edge (review finding).
+   * Carrying the value the query actually ordered by removes the derivation.
+   *
+   * Typed as the same union `encodeCursor` accepts, and for the same reason:
+   * `sortKeyExpr` is DECLARED `sql<Date>`, but a raw computed expression is
+   * not hydrated the way a schema-known timestamp column is, so the driver
+   * hands this one back as a microsecond-precision STRING. The union is the
+   * honest description of a value whose static and runtime types disagree —
+   * `encodeCursor` is what reconciles them, preserving a string as given and
+   * only converting a genuine `Date`.
+   */
+  sortKeyValue: Date | string;
 };
+
+/**
+ * Drop the server-only fields — the single place a server row becomes the
+ * thing that goes out on the wire.
+ *
+ * Returns the server row MINUS `sortKeyValue`, not `PastConversationDTO`
+ * itself: the two still differ in their timestamp types (`Date` here, `string`
+ * there), and it is `NextResponse.json` that performs that conversion. Naming
+ * the DTO as the return type would need a cast that asserts a conversion this
+ * function does not do.
+ */
+export function toWireRow(
+  row: PastConversationServerRow,
+): OmitStrict<PastConversationServerRow, 'sortKeyValue'> {
+  const { sortKeyValue: _sortKeyValue, ...wire } = row;
+  return wire;
+}
