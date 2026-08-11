@@ -100,14 +100,30 @@ const unbound = (): VoiceBinding => ({
  * exists. The CONVERSATION's access check has already run by this point — the
  * caller may read this thread, and the agent is the thread's own, not one
  * named by the browser.
+ *
+ * A FAILED LOOKUP COSTS THE IDENTITY, NOT THE HISTORY. Caught here rather than
+ * left to the outer handler so a transient read does not also throw away a
+ * seed that was fetched successfully alongside it. The call then runs as the
+ * Global Assistant, acting as the authenticated user — which is what EVERY
+ * voice call did before the binding existed, and is bounded by that user's own
+ * ACL, never beyond it. Logged, because a page conversation whose agent cannot
+ * be read is not an ordinary outcome the way a missing page row is.
  */
 const resolveAgent = async (
   deps: BindingLoaderDeps,
   conversation: SeedConversation,
 ): Promise<AgentPage | undefined> => {
   if (conversation.type !== 'page' || !conversation.contextId) return undefined;
-  const page = await deps.loadAgentPage(conversation.contextId);
-  return page?.type === 'AI_CHAT' ? page : undefined;
+  try {
+    const page = await deps.loadAgentPage(conversation.contextId);
+    return page?.type === 'AI_CHAT' ? page : undefined;
+  } catch (error) {
+    deps.logger.warn('Realtime voice binding could not read its agent page; acting as the user', {
+      conversationId: conversation.contextId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return undefined;
+  }
 };
 
 export const loadVoiceBinding = async (

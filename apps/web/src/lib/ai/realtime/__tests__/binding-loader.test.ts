@@ -272,3 +272,22 @@ describe('loadVoiceBinding — the instructions', () => {
     expect(instructions).not.toMatch(/instructions follow/);
   });
 });
+
+describe('loadVoiceBinding — a failed agent read', () => {
+  it('should cost the identity but KEEP the history', async () => {
+    // The seed was fetched successfully alongside it; throwing it away because
+    // a different read failed helps nobody.
+    const { deps: d, warn } = deps({
+      loadConversation: vi.fn(async () => pageConversation()),
+      loadAgentPage: vi.fn(async () => {
+        throw new Error('db unreachable');
+      }),
+    });
+
+    const binding = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
+
+    expect(binding.seed).toHaveLength(2);
+    expect(binding.assistant).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+  });
+});
