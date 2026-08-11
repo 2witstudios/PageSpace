@@ -66,13 +66,19 @@ export type CallChromeFacts = {
 };
 
 /**
- * The two failures no retry can fix. Named as a set rather than tested inline
- * so adding a case is one edit in one place, and so the test can assert the
+ * The failures no retry can fix. Named as a set rather than tested inline so
+ * adding a case is one edit in one place, and so the test can assert the
  * membership directly.
+ *
+ * `no-credit` sits here for the same reason the two microphone cases do: it is
+ * the absence of something a retry cannot conjure. Its sibling `call-limit` is
+ * deliberately NOT here — a concurrency cap clears on its own, so trying again
+ * in a moment is exactly the right advice.
  */
 const UNRETRYABLE: ReadonlySet<VoiceConnectFailure> = new Set<VoiceConnectFailure>([
   'mic-missing',
   'mic-unsupported',
+  'no-credit',
 ]);
 
 const DEGRADED_DETAIL =

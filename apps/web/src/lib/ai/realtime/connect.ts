@@ -51,6 +51,10 @@ export type RouteFailure =
   | 'unavailable'
   /** Our server reached OpenAI and OpenAI refused the call. */
   | 'call-rejected'
+  /** Admission refused it: not enough credit for a call. */
+  | 'no-credit'
+  /** Admission refused it: already at the concurrent-call limit. */
+  | 'call-limit'
   /** The handshake broke on our side of the wire: SDP, transport, or route. */
   | 'signaling-failed';
 
@@ -134,6 +138,8 @@ const ROUTE_MESSAGES: Record<RouteFailure, string> = {
   'not-entitled': 'Voice calls need a Pro plan or above.',
   unavailable: 'Voice mode is not configured on this deployment.',
   'call-rejected': 'The voice service refused the call. Check the server logs.',
+  'no-credit': 'You do not have enough credit for a voice call.',
+  'call-limit': 'Too many voice calls are already running. Try again in a moment.',
   'signaling-failed': 'Could not reach the voice service.',
 };
 
@@ -154,10 +160,21 @@ const LOST_STATES = new Set<RTCPeerConnectionState>([
   'closed',
 ]);
 
-/** Map our route's status onto a named failure. */
+/**
+ * Map our route's status onto a named failure.
+ *
+ * 402 and 429 are POLICY, not a broken wire: admission refused the call, and
+ * the route has already hung up the one OpenAI made. They are named separately
+ * from `signaling-failed` because they want opposite advice — a concurrency
+ * limit clears on its own and is worth retrying, while retrying cannot conjure
+ * credit — and because a refusal reported as "could not reach the voice
+ * service" sends whoever reads it looking for an outage that is not there.
+ */
 export const failureForStatus = (status: number): RouteFailure => {
   if (status === 401) return 'unauthorized';
+  if (status === 402) return 'no-credit';
   if (status === 403) return 'not-entitled';
+  if (status === 429) return 'call-limit';
   if (status === 503) return 'unavailable';
   if (status === 502) return 'call-rejected';
   return 'signaling-failed';

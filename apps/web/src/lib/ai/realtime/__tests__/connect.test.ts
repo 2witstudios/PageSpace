@@ -67,11 +67,21 @@ beforeEach(() => {
 describe('failureForStatus', () => {
   it('given each status the route can refuse with, should name a distinct failure', () => {
     expect(failureForStatus(401)).toBe('unauthorized');
+    expect(failureForStatus(402)).toBe('no-credit');
     expect(failureForStatus(403)).toBe('not-entitled');
+    expect(failureForStatus(429)).toBe('call-limit');
     expect(failureForStatus(503)).toBe('unavailable');
     expect(failureForStatus(502)).toBe('call-rejected');
     expect(failureForStatus(400)).toBe('signaling-failed');
     expect(failureForStatus(500)).toBe('signaling-failed');
+  });
+
+  it('should name an admission refusal as POLICY rather than as a broken wire', () => {
+    // The route hung up the call OpenAI made before answering these, so
+    // reporting them as "could not reach the voice service" would send whoever
+    // reads it looking for an outage that is not there.
+    expect(failureForStatus(402)).not.toBe('signaling-failed');
+    expect(failureForStatus(429)).not.toBe('signaling-failed');
   });
 });
 

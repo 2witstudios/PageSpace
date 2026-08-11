@@ -101,3 +101,17 @@ describe('describeCall — idle', () => {
     }
   });
 });
+
+describe('describeCall — admission refusals', () => {
+  it('given no credit, should NOT offer a retry that cannot conjure any', () => {
+    expect(
+      describeCall(facts({ status: 'error', failure: 'no-credit', error: 'x' })).canRetry,
+    ).toBe(false);
+  });
+
+  it('given a concurrency limit, SHOULD offer a retry — that one clears on its own', () => {
+    expect(
+      describeCall(facts({ status: 'error', failure: 'call-limit', error: 'x' })).canRetry,
+    ).toBe(true);
+  });
+});
