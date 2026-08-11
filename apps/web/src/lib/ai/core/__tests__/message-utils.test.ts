@@ -222,3 +222,47 @@ describe('sanitizeMessagesForModel', () => {
     expect(result[0].parts).toEqual([{ type: 'text', text: 'done' }]);
   });
 });
+
+/**
+ * The transport a row was authored over has to survive the trip to the UI, or
+ * the mic glyph has nothing to read. `unifiedColumns` already SELECTs
+ * `messages.source`; this is the step where it either reaches the renderer or
+ * is silently dropped on the floor.
+ */
+describe('convertDbMessageToUIMessage — the authoring transport', () => {
+  const row = (source: string | null, content: string) => ({
+    id: 'm1',
+    pageId: 'p1',
+    userId: 'u1',
+    role: 'user',
+    content,
+    toolCalls: null,
+    toolResults: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    isActive: true,
+    source,
+  });
+
+  it('should carry a spoken turn\'s source through to the UI message', async () => {
+    const converted = await convertDbMessageToUIMessage(row('voice', 'what is on this page'));
+    expect((converted as { source?: string | null }).source).toBe('voice');
+  });
+
+  it('should carry it through the STRUCTURED-content path too', async () => {
+    // Two code paths reconstruct a message; a field added to only one of them
+    // makes the glyph appear or vanish depending on whether the turn happened
+    // to have attachments or tool calls.
+    const structured = JSON.stringify({
+      textParts: ['what is on this page'],
+      partsOrder: [{ index: 0, type: 'text' }],
+      originalContent: 'what is on this page',
+    });
+    const converted = await convertDbMessageToUIMessage(row('voice', structured));
+    expect((converted as { source?: string | null }).source).toBe('voice');
+  });
+
+  it('should report a typed turn as null rather than undefined', async () => {
+    const converted = await convertDbMessageToUIMessage(row(null, 'typed'));
+    expect((converted as { source?: string | null }).source).toBeNull();
+  });
+});

@@ -355,29 +355,40 @@ const serverTriggered = (userId: string): ConversationEventTriggeredBy => ({
   browserSessionId: SERVER_TRIGGERED_BROWSER_SESSION,
 });
 
-/** Minimal UIMessage for events when the caller has no full UIMessage. */
+/**
+ * Minimal UIMessage for events when the caller has no full UIMessage.
+ *
+ * `source` rides along for the same reason `status` does: the broadcast is what
+ * every OPEN surface renders from, and a field carried only by the DB read is a
+ * field that appears when the page is refreshed and not before. For voice that
+ * means a spoken turn would arrive in the thread with no mic glyph and grow one
+ * later, which is a thread that changes its account of itself.
+ */
 const buildEventMessage = (args: {
   messageId: string;
   role: string;
   content: string;
   uiMessage?: UIMessage;
   status: string;
-}): UIMessage & { status?: string; createdAt?: Date } => {
+  source?: string | null;
+}): UIMessage & { status?: string; createdAt?: Date; source?: string | null } => {
   if (args.uiMessage) {
     return {
       ...(args.uiMessage as UIMessage),
       id: args.messageId,
       status: args.status,
+      source: args.source ?? null,
       createdAt: new Date(),
-    } as UIMessage & { status?: string; createdAt?: Date };
+    } as UIMessage & { status?: string; createdAt?: Date; source?: string | null };
   }
   return {
     id: args.messageId,
     role: args.role,
     parts: [{ type: 'text', text: args.content }],
     status: args.status,
+    source: args.source ?? null,
     createdAt: new Date(),
-  } as unknown as UIMessage & { status?: string; createdAt?: Date };
+  } as unknown as UIMessage & { status?: string; createdAt?: Date; source?: string | null };
 };
 
 const normalizeHook = async (
@@ -640,6 +651,7 @@ export const messageRepository = {
         content: args.content,
         uiMessage: args.uiMessage,
         status: args.status ?? 'complete',
+        source: args.source ?? null,
       }),
       fallbackCtx: {
         conversationId: args.conversationId,
@@ -699,6 +711,7 @@ export const messageRepository = {
         content: args.content,
         uiMessage: args.uiMessage,
         status: args.status ?? 'complete',
+        source: args.source ?? null,
       }),
       fallbackCtx: {
         conversationId: args.conversationId,

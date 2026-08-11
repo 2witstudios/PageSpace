@@ -38,6 +38,7 @@ const { layoutState, mockConnect, stopSpy, setMicSpy } = vi.hoisted(() => ({
     setLeftSheetOpen: () => {},
     setRightSheetOpen: () => {},
     setLeftOverlayOpen: () => {},
+    setRightSidebarPageTab: () => {},
     setLeftSidebarSize: () => {},
     setRightSidebarSize: () => {},
   } as Record<string, unknown>,
@@ -94,8 +95,22 @@ vi.mock('@/stores/useEditingStore', () => ({
     }),
   },
 }));
+// `usePathname`/`useParams` are here for the real `VoiceSessionBridge` that
+// Layout mounts — it is not what this file is about, but mocking it away would
+// let a refactor delete it from Layout with nothing going red.
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: () => {}, replace: () => {}, prefetch: () => {} }),
+  usePathname: () => '/dashboard/drive-1/page-1',
+  useParams: () => ({ driveId: 'drive-1', pageId: 'page-1' }),
+}));
+vi.mock('@/hooks/useDrive', () => {
+  const state = { drives: [] as unknown[], fetchDrives: () => Promise.resolve() };
+  const useDriveStore = (selector: (s: typeof state) => unknown) => selector(state);
+  useDriveStore.getState = () => state;
+  return { useDriveStore };
+});
+vi.mock('@/lib/ai/shared/resolveLocationContext', () => ({
+  resolveLocationContext: () => Promise.resolve({ label: null, locationContext: null }),
 }));
 
 vi.mock('@/components/layout/main-header', () => ({
@@ -119,6 +134,7 @@ vi.mock('@/contexts/GlobalChatContext', () => ({
   GlobalChatProvider: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>
   ),
+  useGlobalChatConversation: () => ({ currentConversationId: null }),
 }));
 vi.mock('@/components/ui/resizable', () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => (

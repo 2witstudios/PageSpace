@@ -52,6 +52,8 @@ import { useChatTransport, useSendHandoff, useConversationSendHandoff, HANDOFF_R
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
+import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
@@ -910,9 +912,22 @@ const SidebarChatTab: React.FC = () => {
   });
 
   // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
+  //
+  // THE SWITCHER IS THE VOICE SWITCHER. Choosing a different agent is the one
+  // explicit act that moves a live call — navigation never does, which is why
+  // the rebind is recorded HERE, on the click, and not derived from the target
+  // changing (a route change changes the target identically, and following that
+  // would hang the user's call up every time they opened a page).
+  //
+  // It records an INTENT rather than rebinding directly because `selectAgent`
+  // clears the conversation id and re-resolves it asynchronously — there is
+  // nothing to bind to yet at this moment. `VoiceSessionBridge` applies it when
+  // there is, and drops it if no call is running.
+  const requestVoiceRebind = useVoiceRebindStore((state) => state.requestRebind);
   const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {
     selectAgent(agent);
-  }, [selectAgent]);
+    requestVoiceRebind(agent?.id ?? null);
+  }, [selectAgent, requestVoiceRebind]);
 
   // Stop, for both modes (PR 5A, leaf 5.5.6). One action, no dispatcher.
   //
@@ -1019,6 +1034,18 @@ const SidebarChatTab: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/*
+        Voice as a MODE on this surface, not a fourth tab and not an overlay:
+        the same message list below, with the live call's chrome above it. The
+        spoken turns themselves arrive as ordinary messages in that list (the
+        realtime server writes them through messageRepository, so they come down
+        the same `conversation:*` socket events every other message does).
+      */}
+      <VoiceCallBarForConversation
+        conversationId={currentConversationId}
+        assistantName={assistantName}
+      />
 
       {/* Message-load error (from the conversation cache) — shown above messages so
           it's always visible; a failed load keeps the prior snapshot. */}
