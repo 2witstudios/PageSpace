@@ -22,10 +22,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
-import {
-  listAllConversationsPaginated,
-  encodeCursor,
-} from '@/lib/agent-workspaces/workspace-conversations-runtime';
+import { listAllConversationsPaginated } from '@/lib/agent-workspaces/workspace-conversations-runtime';
+import { encodeCursor } from '@/lib/conversations/conversation-recency';
 import type { PastConversationServerRow } from '@/lib/agent-workspaces/past-conversation-dto';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

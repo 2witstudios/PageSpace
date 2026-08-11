@@ -23,6 +23,16 @@ import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { pages } from '@pagespace/db/schema/core';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
+// Recency, the sort key and the cursor codecs are declared ONCE, in the module
+// both history listings import — see that file's header for the drift that
+// motivated it.
+import {
+  recencyExpr,
+  sortKeyExpr,
+  encodeCursor,
+  decodeCursor,
+  olderThanCursor,
+} from '@/lib/conversations/conversation-recency';
 // The row shape is declared ONCE, in the wire contract both ends import, so
 // the client cannot silently drift from what this file actually emits — see
 // that file's header for the bug that motivated it.
@@ -83,97 +93,8 @@ const hasActiveMessage = exists(
     ),
 );
 
-/**
- * The real "last activity" timestamp — NOT `conversations.lastMessageAt`,
- * which nothing ever sets for `type: 'page'`/`type: 'client'` conversations
- * (grepping every `.set({...lastMessageAt...})` call in this codebase turns up
- * exactly two call sites, both in the global-assistant message routes).
- * Sorting or displaying recency by `conversations.lastMessageAt` alone left
- * every page-agent conversation permanently ordered by its CREATION time,
- * however recently it was actually used (review finding).
- *
- * Reads the unified `messages` table since the merge (Phase 4 / D6). The
- * `COALESCE` fallback to `lastMessageAt` is KEPT rather than deleted: it still
- * carries a conversation whose messages were all soft-deleted or are all
- * mid-flight, and — during the expand window — one whose legacy rows the
- * backfill has not copied across yet. For a global thread the two agree to
- * within the write itself (`lastMessageAt` is stamped in the same transaction
- * as the row), so the MAX simply becomes the more precise of the two.
- */
-const recencyExpr = sql<Date | null>`COALESCE(
-  (SELECT MAX(${messages.createdAt}) FROM messages
-   WHERE ${messages.conversationId} = ${conversations.id}
-     AND ${messages.isActive} = true
-     AND ${messages.status} != 'streaming'),
-  ${conversations.lastMessageAt}
-)`;
-
-/**
- * The sort/cursor key. NOT just `recencyExpr`: a brand-new agent-session
- * conversation can have zero messages yet — recency null — and still needs a
- * sensible position (its own creation time).
- */
-const sortKeyExpr = sql<Date>`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
-
 /** `pages.driveId` for a page conversation, `agentWorkspaces.driveId` for a session-bound one, the conversation's own contextId for a `type: 'client'` one (that column holds an optional driveId for API-managed conversations — see `buildCreateConversationPayload`) — else null (a driveless global-assistant conversation). */
 const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentWorkspaces.driveId}, CASE WHEN ${conversations.type} = 'client' THEN ${conversations.contextId} ELSE NULL END)`;
-
-/**
- * The cursor is an OPAQUE token encoding the sort key the caller last saw —
- * NOT just a bare conversationId re-resolved against LIVE data. `sortKeyExpr`
- * is derived from `chat_messages`, which can change between one page fetch
- * and the next: if the cursor conversation receives a new message in that
- * window, re-deriving its sortKey fresh would shift the boundary FORWARD,
- * re-admitting rows already shown on the previous page. Worse, if the cursor
- * row disappeared entirely (deleted), a live re-lookup finds nothing and
- * silently applies no boundary at all, returning page one again instead of
- * the requested next page (review finding). Freezing the observed sort key
- * into the cursor itself removes the live dependency — and the extra DB
- * round-trip a live lookup needed — entirely.
- */
-export function encodeCursor(sortKey: Date | string, id: string): string {
-  // The driver doesn't hydrate a raw computed SQL expression into a real
-  // `Date` the way it does a schema-known timestamp COLUMN (confirmed
-  // against real Postgres via drizzle's own query builder: `sortKeyExpr`'s
-  // runtime value is a STRING, e.g. `"2026-07-28 12:00:00.123456"`, with full
-  // microsecond precision — Postgres timestamps carry six fractional digits,
-  // a plain JS `Date` only three). Round-tripping that string through
-  // `new Date(...).toISOString()` truncates it to milliseconds — verified
-  // against the real test DB that this silently collapses two distinct
-  // sub-millisecond sort keys onto the same encoded value, making the next
-  // page's boundary re-admit a row it should have excluded (review finding).
-  // Preserve a string AS GIVEN; only a genuine `Date` (e.g. a plain
-  // `createdAt` fallback, which is already millisecond-limited at the
-  // column level) goes through `toISOString()`.
-  const encoded = typeof sortKey === 'string' ? sortKey : sortKey.toISOString();
-  return Buffer.from(JSON.stringify({ sortKey: encoded, id })).toString('base64url');
-}
-
-export function decodeCursor(cursor: string): { sortKey: string; id: string } | null {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      typeof (parsed as { sortKey?: unknown }).sortKey !== 'string' ||
-      typeof (parsed as { id?: unknown }).id !== 'string'
-    ) {
-      return null;
-    }
-    const sortKey = (parsed as { sortKey: string }).sortKey;
-    // Validate it's a real, parseable timestamp — but return the ORIGINAL
-    // string, not a `new Date(sortKey)` reconstruction, which would
-    // re-truncate any sub-millisecond precision right back out again.
-    if (Number.isNaN(new Date(sortKey).getTime())) return null;
-    return { sortKey, id: (parsed as { id: string }).id };
-  } catch {
-    // Malformed/tampered cursor — same treatment as a cursor whose id no
-    // longer resolves to anything: ignored, not an error (fails open to
-    // page one, consistent with how this listing already treats an unknown
-    // cursor id).
-    return null;
-  }
-}
 
 /**
  * The chat-bound nodes, as a joinable relation — a thread's MEMBERSHIP.
@@ -250,7 +171,7 @@ export async function listAllConversationsPaginated(
     const decoded = decodeCursor(cursor);
     if (decoded) {
       conditions.push(
-        sql`(${sortKeyExpr} < ${decoded.sortKey} OR (${sortKeyExpr} = ${decoded.sortKey} AND ${conversations.id} < ${decoded.id}))`,
+        olderThanCursor(decoded),
       );
     }
   }

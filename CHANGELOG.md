@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Your assistant's Conversation History is back to being just your assistant's, in the right
+  order** — the sidebar's history had filled up with chats belonging to page agents, hundreds of
+  them on a busy account, pushing the assistant's own threads down out of reach. The dates made no
+  sense either: the top of the list ran 28 days, 12 days, 11 days, a month, in no order at all.
+  Those page-agent chats carry no "last used" time, and the list was sorting by exactly that, so
+  they all landed at the top in whatever order the database happened to hand them over. Worst of
+  all, scrolling for more could step straight over conversations and never show them at all — the
+  reason history looked lost rather than merely untidy. The list now shows the assistant's own
+  conversations only (page agents keep their history on their own tab, where it always was), sorts
+  by when each one was genuinely last used, and reaches every conversation as you scroll. Nothing
+  was deleted at any point; every conversation that seemed missing was still there.
 - **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
   pane for a global assistant or a page agent worked once per session; every one after it appeared
   for a moment and then disappeared, with nothing said about why. The session had started placing a

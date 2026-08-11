@@ -59,7 +59,8 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import * as dbModule from '@pagespace/db/db';
-import { listAllConversationsPaginated, encodeCursor, decodeCursor } from '../workspace-conversations-runtime';
+import { listAllConversationsPaginated } from '../workspace-conversations-runtime';
+import { encodeCursor, decodeCursor } from '@/lib/conversations/conversation-recency';
 
 // The real `@pagespace/db/db` module only exports `db`, typed as
 // `NodePgDatabase<...>` (no `.limit()` of its own — only through a real query
