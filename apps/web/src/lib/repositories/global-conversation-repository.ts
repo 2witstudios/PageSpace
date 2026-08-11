@@ -377,7 +377,17 @@ export const globalConversationRepository = {
         eq(conversations.isActive, true),
         hasMessages,
       ))
-      .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`, desc(conversations.createdAt))
+      // The SAME ordering the history listing uses, because this answers the
+      // same question — which thread was used most recently — and two answers
+      // to it is the drift this module was on the wrong side of. The two
+      // diverge exactly where the raw column is absent but activity is not: a
+      // thread with messages and no `lastMessageAt` (one production account
+      // holds 30) sorted LAST under `NULLS LAST` while ranking FIRST by real
+      // activity, so the sidebar would show it at the top of history while this
+      // resumed a different one. `sortKeyExpr` is total, so it needs no null
+      // handling of its own, and its final fallback is `createdAt` — the same
+      // tiebreak this used to spell out.
+      .orderBy(desc(sortKeyExpr), desc(conversations.id))
       .limit(1);
 
     return results[0] || null;

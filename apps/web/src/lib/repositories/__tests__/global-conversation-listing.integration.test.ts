@@ -197,6 +197,48 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     expect(ids.indexOf(longStream)).toBeLessThan(ids.indexOf(interim));
   });
 
+  it('resumes the same conversation that tops the history list', async () => {
+    if (!dbAvailable) return;
+
+    // Two answers to "which is most recent" is the drift this PR exists to
+    // delete, and moving only the LISTING to the shared sort key would leave it
+    // one function away: `getActiveGlobalConversation` ranks by the raw
+    // `lastMessageAt` column with NULLS LAST.
+    //
+    // The shapes diverge exactly where the column is absent but real activity
+    // is not — a global thread with messages and no `lastMessageAt`, of which
+    // one production account holds 30. Ranked by the column that thread sorts
+    // LAST; ranked by actual activity it sorts FIRST. The sidebar would show it
+    // at the top of history while the assistant resumed a different one.
+    const owner = await factories.createUser();
+
+    const newestActivity = await seedConversation({
+      userId: owner.id,
+      type: 'global',
+      title: 'no column, but used most recently',
+      lastMessageAt: null,
+      createdAt: new Date('2026-08-01T09:00:00Z'),
+    });
+    await seedMessage(newestActivity, new Date('2026-08-01T10:10:00Z'));
+
+    const stampedButOlder = await seedConversation({
+      userId: owner.id,
+      type: 'global',
+      title: 'column set, but older',
+      lastMessageAt: new Date('2026-08-01T10:05:00Z'),
+      createdAt: new Date('2026-08-01T09:30:00Z'),
+    });
+    await seedMessage(stampedButOlder, new Date('2026-08-01T10:05:00Z'));
+
+    const listed = await globalConversationRepository.listConversationsPaginated(owner.id);
+    const active = await globalConversationRepository.getActiveGlobalConversation(owner.id);
+
+    expect(active).not.toBeNull();
+    expect(listed.conversations[0].id).toBe(newestActivity);
+    expect(active?.id).toBe(listed.conversations[0].id);
+    expect(listed.conversations.map((c) => c.id)).toContain(stampedButOlder);
+  });
+
   it('clamps a non-positive limit instead of stranding the caller (review finding)', async () => {
     if (!dbAvailable) return;
 
