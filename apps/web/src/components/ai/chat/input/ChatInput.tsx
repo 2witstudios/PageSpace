@@ -61,10 +61,6 @@ export interface ChatInputProps {
   selectedModel?: string | null;
   /** Handler when provider/model changes (for page-level settings) */
   onProviderModelChange?: (provider: string, model: string) => void;
-  /** Callback when voice mode button is clicked */
-  onVoiceModeClick?: () => void;
-  /** Whether voice mode is currently active */
-  isVoiceModeActive?: boolean;
   /** Image attachments for vision support */
   attachments?: ImageAttachment[];
   /** Handler to add image files */
@@ -125,8 +121,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       selectedProvider: propProvider,
       selectedModel: propModel,
       onProviderModelChange,
-      onVoiceModeClick,
-      isVoiceModeActive = false,
       attachments,
       onAddFiles,
       onRemoveFile,
@@ -303,8 +297,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           isMicSupported={isSupported}
           micError={speechError}
           onClearMicError={clearSpeechError}
-          onVoiceModeClick={onVoiceModeClick}
-          isVoiceModeActive={isVoiceModeActive}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}

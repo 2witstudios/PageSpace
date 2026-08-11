@@ -96,8 +96,8 @@ export interface SandboxQuotaDeps {
  * Optional — omitting it disables metering (no hold, no charge), mirroring
  * every other optional seam in this file (`screenOutput`, `notifyShellActivity`).
  *
- * The hold->settle protocol mirrors the voice STT recipe
- * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
+ * The hold->settle protocol mirrors the realtime voice recipe
+ * (apps/realtime/src/voice/call-metering.ts): `gate` places a flat-estimate
  * hold BEFORE the machine is acquired (the real active-window duration isn't known
  * until the run ends); `trackUsage` settles the hold to the real cost and hands off
  * its release to the credit pipeline on a SUCCESSFUL run only; `releaseHold` is the

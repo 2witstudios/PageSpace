@@ -124,7 +124,6 @@ vi.mock('@/components/layout/middle-content/CenterPanel', () => ({
 }));
 vi.mock('@/components/layout/tabs', () => ({ TabBar: () => <div /> }));
 vi.mock('@/components/layout/DebugPanel', () => ({ DebugPanel: () => <div /> }));
-vi.mock('@/components/ai/voice', () => ({ VoiceModeBorder: () => <div /> }));
 vi.mock('@/components/layout/NavigationProvider', () => ({
   NavigationProvider: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>

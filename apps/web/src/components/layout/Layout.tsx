@@ -35,7 +35,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { VoiceModeBorder } from "@/components/ai/voice";
 import { VoiceSessionBridge } from "@/components/ai/voice/realtime";
 import { decideReveal } from "@/lib/ai/realtime/voice-reveal";
 import type { VoiceSurface } from "@/lib/ai/realtime/voice-binding";
@@ -482,7 +481,6 @@ function Layout({ children }: LayoutProps) {
                   ) : (
                     <CenterPanel />
                   )}
-                  <VoiceModeBorder />
                   <AnimatePresence>
                     {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
                       <motion.div
