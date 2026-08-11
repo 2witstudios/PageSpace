@@ -350,14 +350,11 @@ async function runDiscoveryPass(
       metadata: { feature: 'memory_discovery', pass: passName },
     });
 
-    // Resolve each cited index to the real message timestamp. An out-of-range
-    // index falls back to the OLDEST message in the window: a model that cites
-    // nothing usable must not be able to make a claim look fresher than its
-    // evidence, which would let it clear the corroboration bar early.
-    // Transcript is chronological, so index 0 is the oldest message in the
-    // window. An unusable index falls back to it: a claim must never be able
-    // to look FRESHER than the evidence actually supports, since that is what
-    // would let it clear the corroboration bar early.
+    // Resolve each cited index to the real message timestamp. The transcript is
+    // chronological, so index 0 is the OLDEST message in the window, and an
+    // unusable index falls back to it: a claim must never be able to look
+    // fresher than the evidence actually supports, since that is what would let
+    // it clear the corroboration bar early.
     const oldest = messageDates[0] ?? new Date();
 
     // The model's own `field` tag is discarded in favour of `field`, the field
