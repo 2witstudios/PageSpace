@@ -129,6 +129,113 @@ describe('backfill-memory-pages (Postgres)', () => {
     expect(await readPage(first.bioPageId)).toMatchObject({ content: 'Hand-edited by the user' });
   });
 
+  it('rescues a user whose pages were provisioned before this ever ran', async () => {
+    // THE ORDERING THAT STRANDED PEOPLE.
+    //
+    // Opening Settings self-heals a pointerless profile by provisioning EMPTY
+    // pages, which sets all four pointers and copies nothing. From that moment
+    // the read path prefers the (empty) pages over the columns, so the user's
+    // memory stops being injected — and a backfill that selects rows by
+    // "pointers missing" skips them forever, because the pointers are set.
+    //
+    // Nothing recovers that state on its own: the content is not deleted, just
+    // orphaned in columns nothing reads. So the work list has to be keyed on
+    // the content, not the pointers.
+    await seedLegacyProfile();
+
+    // Provision empty pages exactly the way the settings GET route does.
+    const { rows } = await db.execute(
+      sql`SELECT id FROM drives WHERE "ownerId" = ${USER_ID} AND kind = 'HOME'`,
+    );
+    const driveId = (rows[0] as { id: string }).id;
+    for (const [field, title] of [
+      ['memoryFolderId', 'Memory'],
+      ['bioPageId', 'About You'],
+      ['writingStylePageId', 'Communication'],
+      ['rulesPageId', 'Rules'],
+    ]) {
+      const pageId = `pre_${field}`;
+      await db.execute(
+        sql`INSERT INTO pages (id, title, type, position, "driveId", content, "updatedAt")
+            VALUES (${pageId}, ${title}, 'DOCUMENT', 0, ${driveId}, '', now())`,
+      );
+      await db.execute(
+        sql`UPDATE user_personalization SET ${sql.raw(`"${field}"`)} = ${pageId} WHERE "userId" = ${USER_ID}`,
+      );
+    }
+
+    const summary = await runBackfill();
+
+    // The row must be SEEN at all — this is what the pointer-only predicate missed.
+    expect(summary.scanned).toBe(1);
+    expect(summary.fieldsCopied).toBe(3);
+
+    const profile = await readProfile();
+    expect(await readPage(profile.bioPageId)).toMatchObject({ content: 'Legacy bio' });
+    expect(await readPage(profile.writingStylePageId)).toMatchObject({ content: 'Legacy style' });
+    expect(await readPage(profile.rulesPageId)).toMatchObject({ content: 'Legacy rules' });
+    expect(profile.bio).toBeNull();
+  });
+
+  it('does not resurrect a page the user deliberately emptied', async () => {
+    // The other side of the rescue. A stranded user's pages are empty because
+    // they were provisioned empty — but a user who typed into one and then
+    // cleared it also has an empty page, and `content = ''` cannot tell the two
+    // apart. Restoring the legacy text there would undo an erasure the product
+    // explicitly tells people to perform ("clear the page" is the documented
+    // way to erase what memory says about you).
+    //
+    // `revision` separates them: provisioning inserts at 0, and every mutation
+    // increments, so a written-then-cleared page is above 0.
+    await seedLegacyProfile();
+
+    const { rows } = await db.execute(
+      sql`SELECT id FROM drives WHERE "ownerId" = ${USER_ID} AND kind = 'HOME'`,
+    );
+    const driveId = (rows[0] as { id: string }).id;
+    for (const [field, title] of [
+      ['memoryFolderId', 'Memory'],
+      ['bioPageId', 'About You'],
+      ['writingStylePageId', 'Communication'],
+      ['rulesPageId', 'Rules'],
+    ]) {
+      const pageId = `cleared_${field}`;
+      // `bio` is the one the user wrote in and then emptied again (revision 2);
+      // the rest are untouched provisioned pages.
+      const revision = field === 'bioPageId' ? 2 : 0;
+      await db.execute(
+        sql`INSERT INTO pages (id, title, type, position, "driveId", content, revision, "updatedAt")
+            VALUES (${pageId}, ${title}, 'DOCUMENT', 0, ${driveId}, '', ${revision}, now())`,
+      );
+      await db.execute(
+        sql`UPDATE user_personalization SET ${sql.raw(`"${field}"`)} = ${pageId} WHERE "userId" = ${USER_ID}`,
+      );
+    }
+
+    await runBackfill();
+
+    const profile = await readProfile();
+    // The erased page stays erased...
+    expect(await readPage(profile.bioPageId)).toMatchObject({ content: '' });
+    // ...while the untouched ones are still rescued.
+    expect(await readPage(profile.writingStylePageId)).toMatchObject({ content: 'Legacy style' });
+    expect(await readPage(profile.rulesPageId)).toMatchObject({ content: 'Legacy rules' });
+    // And the column goes either way, so the erasure cannot be undone by a
+    // later run rather than this one.
+    expect(profile.bio).toBeNull();
+  });
+
+  it('leaves a fully migrated row alone, so the work list keeps shrinking', async () => {
+    // The other half of the predicate change: widening it must not turn the
+    // backfill into a re-scan that rewrites everyone on every run.
+    await seedLegacyProfile();
+    await runBackfill();
+
+    const second = await runBackfill();
+
+    expect(second.scanned).toBe(0);
+  });
+
   it('retires the column of a field whose page already had content', async () => {
     // The leak this guards: the reader ignores a column as soon as its pointer
     // is set, so a column left populated here is invisible — until a hard-delete
