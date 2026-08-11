@@ -128,8 +128,16 @@ vi.mock('@/lib/integrations/google-calendar/push-service', () => ({
 }));
 
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({
+  isISODateOnly: vi.fn(() => false),
   isNaiveISODatetime: vi.fn(() => false),
   parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
+  parseWallClockInTimezone: vi.fn(() => null),
+}));
+
+// The route resolves the caller's timezone (explicit value -> profile -> UTC);
+// these tests aren't about that resolution, so it's stubbed to UTC.
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  resolveRequestTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));

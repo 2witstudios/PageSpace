@@ -37,6 +37,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Calendar work done through the SDK, the CLI's tools, or any other direct API caller now happens
+  on your day, not on UTC's** — asking for a 7pm meeting put it on the calendar at 7pm UTC, which is
+  1pm if you are in Chicago and the following morning if you are in Tokyo, and asking what was on
+  "today" returned a day that started and ended at the wrong hours. The same requests made in the
+  app's own chat were correct, which made this look like an intermittent problem rather than a
+  consistent one: chat knows what timezone you are in and the API did not, so anything sent without
+  a timezone spelled out was simply read as UTC. Those requests now fall back to the timezone on
+  your account, exactly the way tasks already did. A time sent with a timezone attached still means
+  precisely what it says, and the calendar in the app is unchanged — it always sent exact times.
+- **A new event is stamped with your timezone instead of UTC** — the timezone recorded on an event
+  is what later edits and its scheduled agent inherit, so an event created without one meant every
+  follow-up worked from UTC too. Events created before this keep whatever timezone they were saved
+  with; the times already on them were never wrong, only the zone they were labelled with.
 - **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
   pane for a global assistant or a page agent worked once per session; every one after it appeared
   for a moment and then disappeared, with nothing said about why. The session had started placing a

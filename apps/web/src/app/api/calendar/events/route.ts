@@ -14,7 +14,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
-import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isISODateOnly, isNaiveISODatetime, parseNaiveDatetimeInTimezone, parseWallClockInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { resolveRequestTimezone } from '@/lib/ai/core/personalization-utils';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 
@@ -40,7 +41,14 @@ const createEventSchema = z.object({
   startAt: z.coerce.date(),
   endAt: z.coerce.date(),
   allDay: z.boolean().default(false),
-  timezone: z.string().default('UTC'),
+  /**
+   * Left undefined rather than defaulted to 'UTC': the handler resolves it via
+   * resolveRequestTimezone (explicit → caller's profile → UTC). A hardcoded UTC
+   * default silently reinterpreted every naive datetime an SDK/CLI caller sent
+   * and stamped 'UTC' on the stored event, which then propagated to the event's
+   * agent trigger and to every later PATCH that fell back to event.timezone.
+   */
+  timezone: z.string().optional(),
   recurrenceRule: z.object({
     frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']),
     interval: z.number().int().min(1).default(1),
@@ -239,7 +247,25 @@ export async function GET(request: Request) {
       );
     }
 
-    const params = parseResult.data;
+    // z.coerce.date() reads a wall-clock window ("2026-02-19", or
+    // "2026-02-19T00:00:00") as UTC, so a caller west of Greenwich asking for
+    // "today" got a window shifted by their offset — the last hours of the day
+    // missing and the tail of the previous one included. Re-parse those inputs
+    // in the caller's timezone. A value carrying Z or an explicit offset is
+    // already an absolute instant and is left exactly as coerced — which is
+    // what the web client sends, so it costs that path no profile lookup.
+    const rawStartDate = searchParams.get('startDate');
+    const rawEndDate = searchParams.get('endDate');
+    const isWallClock = (value: string | null): value is string =>
+      typeof value === 'string' && (isISODateOnly(value) || isNaiveISODatetime(value));
+    const listTimezone = (isWallClock(rawStartDate) || isWallClock(rawEndDate))
+      ? await resolveRequestTimezone(undefined, userId)
+      : 'UTC';
+    const params = {
+      ...parseResult.data,
+      startDate: (rawStartDate && parseWallClockInTimezone(rawStartDate, listTimezone)) || parseResult.data.startDate,
+      endDate: (rawEndDate && parseWallClockInTimezone(rawEndDate, listTimezone)) || parseResult.data.endDate,
+    };
 
     if (params.context === 'drive') {
       if (!params.driveId) {
@@ -524,14 +550,18 @@ export async function POST(request: Request) {
 
     const data = parseResult.data;
 
+    // Resolve the event's timezone before anything is interpreted in it:
+    // explicit body value, else the caller's profile timezone, else UTC.
+    const timezone = await resolveRequestTimezone(data.timezone, userId);
+
     // Apply timezone-aware parsing for naive ISO datetimes.
-    // When a client sends "2026-02-19T19:00:00" with timezone "America/Chicago",
-    // the time should be interpreted as 7pm Central, not 7pm UTC.
+    // When a client sends "2026-02-19T19:00:00" and the resolved timezone is
+    // "America/Chicago", the time is 7pm Central, not 7pm UTC.
     const startAt = (typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
-      ? parseNaiveDatetimeInTimezone(body.startAt, data.timezone)
+      ? parseNaiveDatetimeInTimezone(body.startAt, timezone)
       : data.startAt;
     const endAt = (typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
-      ? parseNaiveDatetimeInTimezone(body.endAt, data.timezone)
+      ? parseNaiveDatetimeInTimezone(body.endAt, timezone)
       : data.endAt;
 
     // Check MCP create scope (scoped tokens can only create in their allowed drives).
@@ -638,7 +668,7 @@ export async function POST(request: Request) {
           startAt,
           endAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          timezone,
           recurrenceRule: data.recurrenceRule ?? null,
           visibility: data.visibility,
           color: data.color,
@@ -674,7 +704,7 @@ export async function POST(request: Request) {
           scheduledById: userId,
           calendarEventId: created.id,
           triggerAt: startAt,
-          timezone: data.timezone,
+          timezone,
           agentTrigger: {
             agentPageId,
             prompt: data.agentTrigger.prompt,

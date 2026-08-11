@@ -6,9 +6,11 @@ import {
   getStartOfTodayInTimezone,
   getUserTimeOfDay,
   isValidTimezone,
+  isISODateOnly,
   isNaiveISODatetime,
   normalizeTimezone,
   parseNaiveDatetimeInTimezone,
+  parseWallClockInTimezone,
   parseDateTime,
 } from '../timestamp-utils';
 import { OPENROUTER_CACHE_TTL_SECONDS, TIMESTAMP_BUCKET_MS } from '../ai-providers-config';
@@ -315,6 +317,48 @@ describe('timestamp-utils', () => {
 
     it('throws for invalid datetime strings', () => {
       expect(() => parseNaiveDatetimeInTimezone('not-a-date', 'UTC')).toThrow('Invalid datetime');
+    });
+  });
+
+  describe('isISODateOnly', () => {
+    it('matches a bare calendar date', () => {
+      expect(isISODateOnly('2026-02-19')).toBe(true);
+      expect(isISODateOnly('  2026-02-19  ')).toBe(true);
+    });
+
+    it('does not match anything carrying a time', () => {
+      expect(isISODateOnly('2026-02-19T00:00:00')).toBe(false);
+      expect(isISODateOnly('2026-02-19T00:00:00Z')).toBe(false);
+      expect(isISODateOnly('tomorrow')).toBe(false);
+    });
+  });
+
+  describe('parseWallClockInTimezone', () => {
+    it('resolves a date-only value to local midnight, not UTC midnight', () => {
+      // The bug this exists for: a calendar window of "2026-02-19" read as
+      // UTC midnight starts a Chicago user's day six hours early, so their
+      // evening events fall outside the window entirely.
+      const result = parseWallClockInTimezone('2026-02-19', 'America/Chicago');
+      expect(result?.toISOString()).toBe('2026-02-19T06:00:00.000Z');
+    });
+
+    it('resolves a naive datetime in the given timezone', () => {
+      const result = parseWallClockInTimezone('2026-02-19T19:00:00', 'America/Chicago');
+      expect(result?.toISOString()).toBe('2026-02-20T01:00:00.000Z');
+    });
+
+    it('returns null for a value that already names an instant', () => {
+      expect(parseWallClockInTimezone('2026-02-19T19:00:00Z', 'America/Chicago')).toBeNull();
+      expect(parseWallClockInTimezone('2026-02-19T19:00:00+05:00', 'America/Chicago')).toBeNull();
+    });
+
+    it('returns null for non-ISO input rather than guessing', () => {
+      expect(parseWallClockInTimezone('tomorrow', 'America/Chicago')).toBeNull();
+      expect(parseWallClockInTimezone('02/19/2026', 'America/Chicago')).toBeNull();
+    });
+
+    it('is a no-op offset for a UTC caller', () => {
+      expect(parseWallClockInTimezone('2026-02-19', 'UTC')?.toISOString()).toBe('2026-02-19T00:00:00.000Z');
     });
   });
 

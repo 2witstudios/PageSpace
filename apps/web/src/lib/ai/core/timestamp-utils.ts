@@ -124,6 +124,34 @@ export function parseNaiveDatetimeInTimezone(naiveDatetime: string, timezone: st
 }
 
 /**
+ * Check if a string is a date-only ISO value ("2026-02-19") — no time part and
+ * so no timezone indicator either.
+ */
+export function isISODateOnly(input: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(input.trim());
+}
+
+/**
+ * Interpret a wall-clock date input in the given IANA timezone.
+ *
+ * Accepts a date-only value ("2026-02-19", resolved to local midnight) or a
+ * naive datetime ("2026-02-19T19:00:00"). Returns null for anything else — an
+ * absolute instant carrying `Z` or a numeric offset, or a string that isn't ISO
+ * at all — so callers keep their existing parse for those rather than guessing
+ * a timezone for a value that already names one.
+ */
+export function parseWallClockInTimezone(input: string, timezone: string): Date | null {
+  const trimmed = input.trim();
+  if (isISODateOnly(trimmed)) {
+    return parseNaiveDatetimeInTimezone(`${trimmed}T00:00:00`, timezone);
+  }
+  if (isNaiveISODatetime(trimmed)) {
+    return parseNaiveDatetimeInTimezone(trimmed, timezone);
+  }
+  return null;
+}
+
+/**
  * Get user's time-of-day based on their timezone
  * @param timezone - IANA timezone string (e.g., "America/New_York")
  * @param now - Instant (epoch ms) to evaluate; defaults to the current clock.

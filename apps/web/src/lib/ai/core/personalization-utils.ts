@@ -18,6 +18,7 @@ import {
   type MemoryField,
 } from '@/lib/memory/budgets';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { isValidTimezone, normalizeTimezone } from './timestamp-utils';
 import type { PersonalizationInfo } from './system-prompt';
 
 // Budgets live in one place; see budgets.ts for why all three consumers must agree.
@@ -175,4 +176,30 @@ export async function getUserTimezone(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Resolve the timezone a route handler should interpret a request in:
+ * an explicit value from the caller, else the caller's stored profile
+ * timezone, else UTC.
+ *
+ * The AI tool path gets this for free — chat routes load the profile timezone
+ * into `ToolExecutionContext.timezone` and the tools read it. Direct REST
+ * callers (the SDK, integrations, the web UI) have no such context, so a route
+ * that defaults straight to `'UTC'` silently offsets every wall-clock time
+ * those callers send and stamps `'UTC'` on the stored record. This is the
+ * route-handler equivalent of that context lookup.
+ *
+ * An explicit value that isn't a valid IANA zone falls through to the profile
+ * rather than being stored as-is.
+ */
+export async function resolveRequestTimezone(
+  explicitTimezone: unknown,
+  userId: string,
+): Promise<string> {
+  if (typeof explicitTimezone === 'string') {
+    const trimmed = explicitTimezone.trim();
+    if (trimmed && isValidTimezone(trimmed)) return trimmed;
+  }
+  return normalizeTimezone(await getUserTimezone(userId));
 }

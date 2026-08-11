@@ -111,6 +111,15 @@ Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input*
 
 ### 2.10 Calendar (9 tools)
 
+> **Timezone note (superseding the "route truth" captured below):** the calendar routes no longer
+> treat an omitted `timezone` as UTC. `POST /api/calendar/events` resolves it as explicit value →
+> the authenticated user's profile timezone → UTC (`resolveRequestTimezone`, `personalization-utils.ts`),
+> and `GET /api/calendar/events` reads a date-only or naive `startDate`/`endDate` as local wall-clock
+> in that same resolved zone instead of `z.coerce.date()`'s UTC. Values carrying `Z` or an explicit
+> offset are unaffected in both cases. Before this, an SDK/MCP caller — which sends no `timezone` —
+> had every naive time reinterpreted as UTC while the in-app chat path (which loads the profile
+> timezone into `ToolExecutionContext`) looked correct.
+
 | Tool | Input | Call | Route | Response (route truth) |
 |---|---|---|---|---|
 | `list_calendar_events` (tools.js:821) | `startDate*`, `endDate*`, `driveId?` | GET `/api/calendar/events?startDate&endDate[&driveId]` (calendar.js:23–28) | `calendar/events/route.ts:217` | **`{events:[…], workflowEvents:[…]}`** (`:359, :481`). **DISCREPANCY (shape):** the handler treats the response as a bare array (`events.length`, `for…of events`, calendar.js:30–38) — iterating the object **throws**, so the tool errors on every non-empty result against the current route. Route accepts `context` (`user`/`drive`), `includePersonal` too (`:225–230`). Resolution: SDK output schema `{events, workflowEvents}`. |
