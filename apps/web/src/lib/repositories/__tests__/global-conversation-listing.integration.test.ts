@@ -259,6 +259,49 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     expect(listed.conversations.map((c) => c.id)).toContain(stampedButOlder);
   });
 
+  it('paginates conversations that share a sort key exactly, without skipping either', async () => {
+    if (!dbAvailable) return;
+
+    // The id tiebreak in the ORDER BY is not decoration. `olderThanCursor`
+    // compares `(sortKey, id)` as a pair, so the ORDER BY has to break ties the
+    // same way or the two disagree: with an unstable order between equal keys,
+    // Postgres may hand back either row first, and the boundary derived from
+    // whichever it chose can exclude the other one from every subsequent page.
+    //
+    // Identical timestamps are the case — not a contrived one, since a
+    // conversation's `lastMessageAt` and its message's `createdAt` are written
+    // in the same transaction.
+    const owner = await factories.createUser();
+    const sameInstant = new Date('2026-06-01T12:00:00.000Z');
+    const both: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const id = await seedConversation({
+        userId: owner.id,
+        type: 'global',
+        title: `tie-${i}`,
+        lastMessageAt: sameInstant,
+        createdAt: sameInstant,
+      });
+      await seedMessage(id, sameInstant);
+      both.push(id);
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const result = await globalConversationRepository.listConversationsPaginated(owner.id, {
+        limit: 1,
+        cursor,
+      });
+      seen.push(...result.conversations.map((c) => c.id));
+      if (!result.pagination.hasMore || !result.pagination.nextCursor) break;
+      cursor = result.pagination.nextCursor;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    expect([...seen].sort()).toEqual([...both].sort());
+  });
+
   it('clamps a non-positive limit instead of stranding the caller (review finding)', async () => {
     if (!dbAvailable) return;
 

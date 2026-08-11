@@ -17,7 +17,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
+import { and, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
@@ -29,6 +29,7 @@ import { conversationPageId } from '@pagespace/lib/conversations/conversation-pa
 import {
   recencyExpr,
   sortKeyExpr,
+  newestFirst,
   encodeCursor,
   decodeCursor,
   olderThanCursor,
@@ -203,7 +204,7 @@ export async function listAllConversationsPaginated(
     .leftJoin(agentWorkspaces, eq(agentWorkspaces.id, membershipNode.rootId))
     .leftJoin(pages, and(eq(conversations.contextId, pages.id), eq(conversations.type, 'page')))
     .where(and(...conditions))
-    .orderBy(desc(sortKeyExpr), desc(conversations.id))
+    .orderBy(...newestFirst())
     .limit(maxLimit + 1);
 
   const hasMore = rows.length > maxLimit;

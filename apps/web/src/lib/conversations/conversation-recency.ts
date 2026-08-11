@@ -20,7 +20,7 @@
  * that produced this, and a shared one cannot drift.
  */
 
-import { sql } from '@pagespace/db/operators';
+import { desc, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 
 /**
@@ -72,6 +72,26 @@ export const recencyExpr = sql<Date | null>`GREATEST(
  * its neighbours, merely at the other end.
  */
 export const sortKeyExpr = sql<Date>`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
+
+/**
+ * "Newest first", as the ORDER BY every conversation listing spreads.
+ *
+ * One declaration rather than four hand-written copies, for the reason this
+ * whole module exists: the id tiebreak is not decoration, it is what makes the
+ * order TOTAL, and it has to match `olderThanCursor`'s compound `(sortKey, id)`
+ * comparison exactly or pagination stops agreeing with the sort. Four call
+ * sites spelling that out independently is the drift this PR was written to
+ * remove, reintroduced one file down.
+ *
+ * A FUNCTION, not a module-scope constant, and the distinction is not
+ * cosmetic — `membershipNodeRelation` in `workspace-conversations-runtime.ts`
+ * documents the same rule for the same reason. Calling `desc()` at import time
+ * makes merely IMPORTING this module do query-builder work, so every suite that
+ * mocks `@pagespace/db/operators` has to export `desc` whether or not it uses
+ * the ordering. Six chat-route suites failed to collect on exactly that before
+ * this was a function.
+ */
+export const newestFirst = () => [desc(sortKeyExpr), desc(conversations.id)] as const;
 
 /**
  * The cursor is an OPAQUE token encoding the sort key the caller last saw —

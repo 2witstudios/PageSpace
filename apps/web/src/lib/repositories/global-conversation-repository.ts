@@ -32,6 +32,7 @@ import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
 import {
   recencyExpr,
   sortKeyExpr,
+  newestFirst,
   encodeCursor,
   decodeCursor,
   olderThanCursor,
@@ -248,7 +249,7 @@ export const globalConversationRepository = {
         isGlobalAssistantThread,
         hasMessages,
       ))
-      .orderBy(desc(sortKeyExpr), desc(conversations.id));
+      .orderBy(...newestFirst());
   },
 
   /**
@@ -304,7 +305,7 @@ export const globalConversationRepository = {
       })
       .from(conversations)
       .where(and(...conditions))
-      .orderBy(desc(sortKeyExpr), desc(conversations.id))
+      .orderBy(...newestFirst())
       .limit(maxLimit + 1);
 
     const hasMore = results.length > maxLimit;
@@ -387,7 +388,7 @@ export const globalConversationRepository = {
       // resumed a different one. `sortKeyExpr` is total, so it needs no null
       // handling of its own, and its final fallback is `createdAt` — the same
       // tiebreak this used to spell out.
-      .orderBy(desc(sortKeyExpr), desc(conversations.id))
+      .orderBy(...newestFirst())
       .limit(1);
 
     return results[0] || null;
