@@ -126,14 +126,21 @@ export function estimateVoiceHoldCents(model: string, quantity: VoiceUsageQuanti
  * at 0 rather than being billed at another model's rates — so bumping that env var
  * means adding its published rates here in the same change.
  *
- * Only `gpt-realtime` is listed because it is the only model the transport we use can
- * currently reach. `gpt-realtime-2.1` IS entitled on this key — a
- * `wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1` socket opens fine — but it
- * is not yet SERVED over the WebRTC path: `POST /v1/realtime/calls` answers
- * `403 model_not_found` for 2.1 where `gpt-realtime` returns 201. When 2.1 does reach
- * that endpoint, it needs its own row here (its rates differ) before the env var moves.
+ * `gpt-realtime-2.1` is the DEFAULT the app now pins (`DEFAULT_REALTIME_MODEL`), and it
+ * had to be added here in the same change that made the server meter a live call: an
+ * unpriced default is not a conservative default, it is a call that bills nothing.
+ * (The earlier note here said 2.1 was entitled but not served over WebRTC —
+ * `POST /v1/realtime/calls` answered `403 model_not_found`. That was true of the
+ * ACCOUNT, not the transport: once the project allowlisted 2.1 the same endpoint
+ * returned 201 for a real browser SDP offer.)
+ *
+ * `gpt-realtime-2.1-mini` is deliberately absent. It exists and `/v1/models` lists it,
+ * but only its audio rates are published in a form worth copying, and half a rate table
+ * bills wrongly in a direction nobody notices. Pointing `OPENAI_REALTIME_MODEL` at it
+ * means adding its verified rates here in the same change — which is exactly the rule
+ * this closed union exists to enforce.
  */
-export type RealtimeModel = 'gpt-realtime';
+export type RealtimeModel = 'gpt-realtime' | 'gpt-realtime-2.1';
 
 /** USD per token for each input modality. */
 export interface RealtimeInputRates {
@@ -167,23 +174,34 @@ export interface RealtimeModelRates {
  *   audio   $32         $0.40        $64
  *   image    $5         $0.50          —
  */
-export const REALTIME_RATES: Record<RealtimeModel, RealtimeModelRates> = {
-  'gpt-realtime': {
-    input: {
-      text: envFloat('REALTIME_INPUT_TEXT_USD_PER_TOKEN', 4 / 1_000_000),
-      audio: envFloat('REALTIME_INPUT_AUDIO_USD_PER_TOKEN', 32 / 1_000_000),
-      image: envFloat('REALTIME_INPUT_IMAGE_USD_PER_TOKEN', 5 / 1_000_000),
-    },
-    cachedInput: {
-      text: envFloat('REALTIME_CACHED_INPUT_TEXT_USD_PER_TOKEN', 0.4 / 1_000_000),
-      audio: envFloat('REALTIME_CACHED_INPUT_AUDIO_USD_PER_TOKEN', 0.4 / 1_000_000),
-      image: envFloat('REALTIME_CACHED_INPUT_IMAGE_USD_PER_TOKEN', 0.5 / 1_000_000),
-    },
-    output: {
-      text: envFloat('REALTIME_OUTPUT_TEXT_USD_PER_TOKEN', 24 / 1_000_000),
-      audio: envFloat('REALTIME_OUTPUT_AUDIO_USD_PER_TOKEN', 64 / 1_000_000),
-    },
+const publishedRates = (): RealtimeModelRates => ({
+  input: {
+    text: envFloat('REALTIME_INPUT_TEXT_USD_PER_TOKEN', 4 / 1_000_000),
+    audio: envFloat('REALTIME_INPUT_AUDIO_USD_PER_TOKEN', 32 / 1_000_000),
+    image: envFloat('REALTIME_INPUT_IMAGE_USD_PER_TOKEN', 5 / 1_000_000),
   },
+  cachedInput: {
+    text: envFloat('REALTIME_CACHED_INPUT_TEXT_USD_PER_TOKEN', 0.4 / 1_000_000),
+    audio: envFloat('REALTIME_CACHED_INPUT_AUDIO_USD_PER_TOKEN', 0.4 / 1_000_000),
+    image: envFloat('REALTIME_CACHED_INPUT_IMAGE_USD_PER_TOKEN', 0.5 / 1_000_000),
+  },
+  output: {
+    text: envFloat('REALTIME_OUTPUT_TEXT_USD_PER_TOKEN', 24 / 1_000_000),
+    audio: envFloat('REALTIME_OUTPUT_AUDIO_USD_PER_TOKEN', 64 / 1_000_000),
+  },
+});
+
+/**
+ * `gpt-realtime` and `gpt-realtime-2.1` publish the SAME rate card, verified
+ * against each model's own pricing table rather than assumed from the family
+ * name — so they share one builder and one set of env overrides instead of two
+ * copies that could be edited apart. A future model whose rates diverge gets
+ * its own literal here; that is the point at which the env vars need splitting,
+ * and not before.
+ */
+export const REALTIME_RATES: Record<RealtimeModel, RealtimeModelRates> = {
+  'gpt-realtime': publishedRates(),
+  'gpt-realtime-2.1': publishedRates(),
 };
 
 /** Per-modality breakdown of the cached SUBSET of input tokens. */

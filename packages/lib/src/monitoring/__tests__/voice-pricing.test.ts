@@ -279,13 +279,25 @@ describe('calculateRealtimeCostDollars — cached total with no modality breakdo
 
 describe('calculateRealtimeCostDollars — malformed input bills 0, never negative or NaN', () => {
   it('returns 0 for an unpriced model even with a fully valid usage object', () => {
-    // gpt-realtime-2.1 is entitled on this key (a wss realtime socket opens fine); it
-    // simply has no row in the table yet, because it is not served over the WebRTC
-    // calls endpoint we use. Unpriced means billed 0, never billed at another
-    // model's rates.
-    expect(calculateRealtimeCostDollars('gpt-realtime-2.1', MEASURED_USAGE)).toBe(0);
+    // Unpriced means billed 0, never billed at another model's rates. The mini
+    // is the live example: `/v1/models` lists it and `OPENAI_REALTIME_MODEL`
+    // could point at it, but only its audio rates are published in a form worth
+    // copying — and half a rate table bills wrongly in a direction nobody
+    // notices. Adding it means adding VERIFIED rates in the same change.
+    expect(calculateRealtimeCostDollars('gpt-realtime-2.1-mini', MEASURED_USAGE)).toBe(0);
     expect(calculateRealtimeCostDollars('whisper-1', MEASURED_USAGE)).toBe(0);
     expect(calculateRealtimeCostDollars('', MEASURED_USAGE)).toBe(0);
+  });
+
+  it('prices gpt-realtime-2.1 — the model the app actually pins — rather than billing it 0', () => {
+    // This is the failure the closed union exists to make loud: the default
+    // model having no row is not a conservative default, it is a call that
+    // bills nothing. 2.1 publishes the same rate card as gpt-realtime, verified
+    // against its own pricing table rather than assumed from the family name.
+    const priced = calculateRealtimeCostDollars('gpt-realtime-2.1', MEASURED_USAGE);
+
+    expect(priced).toBeGreaterThan(0);
+    expect(priced).toBe(calculateRealtimeCostDollars('gpt-realtime', MEASURED_USAGE));
   });
 
   it('returns 0 for absent usage', () => {

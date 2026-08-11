@@ -33,6 +33,9 @@ import { resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { buildRealtimeTools } from '@/lib/ai/realtime/tools';
 import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
+import { loadRealtimeSeed } from '@/lib/ai/realtime/seed-loader';
+import { voiceSeedDeps } from '@/lib/ai/realtime/voice-runtime-deps';
+import { voiceLocationContextSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -48,10 +51,17 @@ export async function POST(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
+    // Read once, used twice: the entitlement gate here, and the credit gate the
+    // realtime server runs when it starts metering the call. Still only read
+    // when billing is on — `canConsumeAI` short-circuits to unlimited otherwise,
+    // so the tier it would be handed is a value nothing reads, and a DB round
+    // trip for it on every onprem/tenant call would buy nothing.
+    let tier: SubscriptionTier = 'free';
+
     // Free users can't use voice at all — same gate, same message as STT/TTS.
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      const tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+      tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
       if (!PAID_TIERS.has(tier)) {
         return NextResponse.json(
           {
@@ -78,6 +88,14 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => undefined);
     const sdp = (body as { sdp?: unknown } | undefined)?.sdp;
     const conversationIdRaw = (body as { conversationId?: unknown } | undefined)?.conversationId;
+    const timezoneRaw = (body as { timezone?: unknown } | undefined)?.timezone;
+    // Parsed rather than trusted: it is forwarded into a `ToolExecutionContext`,
+    // and the tools read page/drive ids off it. Permissions still decide access
+    // — a location is a default, never an authorization — but a malformed one
+    // should be dropped at the edge rather than carried across two processes.
+    const locationContext = voiceLocationContextSchema.safeParse(
+      (body as { locationContext?: unknown } | undefined)?.locationContext,
+    );
 
     if (typeof sdp !== 'string' || sdp.length === 0) {
       return NextResponse.json(
@@ -92,6 +110,20 @@ export async function POST(request: Request) {
       );
     }
 
+    const conversationId =
+      typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
+        ? conversationIdRaw
+        : undefined;
+
+    // Voice starts on a conversation that already exists: the thread is replayed
+    // into the session as text before the model speaks. Hard-capped, and an
+    // empty seed is a normal outcome (a fresh thread, or one this caller may
+    // not read) — never a reason to fail the call.
+    const seed = await loadRealtimeSeed(voiceSeedDeps, {
+      userId,
+      ...(conversationId === undefined ? {} : { conversationId }),
+    });
+
     const result = await runCallHandshake(
       {
         fetch,
@@ -105,6 +137,7 @@ export async function POST(request: Request) {
         // decision. The realtime server cannot build these itself — the
         // registry lives in this app — so they ride the signed internal hop.
         tools: buildRealtimeTools(buildPageSpaceTools()),
+        subscriptionTier: tier,
         internalRealtimeUrl: process.env.INTERNAL_REALTIME_URL,
         signHeaders: createSignedBroadcastHeaders,
         logger: loggers.ai,
@@ -112,9 +145,12 @@ export async function POST(request: Request) {
       {
         offerSdp: sdp,
         userId,
-        ...(typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
-          ? { conversationId: conversationIdRaw }
+        ...(conversationId === undefined ? {} : { conversationId }),
+        seed,
+        ...(typeof timezoneRaw === 'string' && timezoneRaw.length > 0
+          ? { timezone: timezoneRaw }
           : {}),
+        ...(locationContext.success ? { locationContext: locationContext.data } : {}),
       }
     );
 

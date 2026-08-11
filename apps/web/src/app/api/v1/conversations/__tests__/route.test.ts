@@ -389,6 +389,7 @@ describe('GET /api/v1/conversations/[id]', () => {
         editedAt: null,
         toolCalls: null,
         toolResults: null,
+        source: null,
         status: 'complete' as const,
       },
     ]);

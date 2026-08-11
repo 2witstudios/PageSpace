@@ -430,9 +430,20 @@ nothing for the length of the deploy, invisibly, with no signal the client could
 on.
 
 Realtime-first inverts that into the benign case: an old web client simply never emits
-the new joins, and the new handlers idle until it reloads. Nothing depends on web-first —
-realtime makes no outbound HTTP calls to web at all (`WEB_APP_URL` is a CORS origin),
+the new joins, and the new handlers idle until it reloads. Nothing depends on web-first,
 and both services deploy after the migration step they share.
+
+**Amended by the voice bridge.** This section used to add "realtime makes no outbound HTTP
+calls to web at all (`WEB_APP_URL` is a CORS origin)" as a supporting fact. That stopped
+being true when audio-native voice landed: `apps/realtime` holds the OpenAI realtime socket
+for the life of a call and calls **back** into web at `/api/internal/voice/bridge`
+(`VOICE_CALLBACK_ROUTES`) to run tools and persist transcripts, because the tool registry
+and `messageRepository` live in web and cannot move. The ORDERING is unchanged — new
+realtime against old web is still the benign direction — because every hop on that bridge
+is best-effort per call: an unrecognised route answers 404, the client reports a failure,
+and the call degrades to audio without tools or transcripts rather than dropping. Metering
+is unaffected either way; it runs inside `apps/realtime` against `@pagespace/lib` and
+crosses no process boundary.
 
 ## 4. Vocabulary
 

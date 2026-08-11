@@ -16,8 +16,11 @@ import { describe, expect, it } from 'vitest';
 import {
   realtimeToolSchema,
   realtimeAttachPayloadSchema,
+  realtimeSeedEventSchema,
+  type RealtimeSeedEventWire,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 import { buildRealtimeTools } from '../tools';
+import { buildRealtimeSeed, type SeedEvent } from '../seed';
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import type { RealtimeTool } from '../session';
 
@@ -40,6 +43,7 @@ describe('realtime tool wire shape', () => {
       secret: 'ek_secret',
       userId: 'u1',
       tools,
+      model: 'gpt-realtime-2.1',
     });
 
     expect(parsed.success).toBe(true);
@@ -69,5 +73,75 @@ describe('realtime tool wire shape', () => {
       function: { name: 'read_page', description: 'Read.', parameters: {} },
     };
     expect(realtimeToolSchema.safeParse(nested).success).toBe(false);
+  });
+});
+
+/**
+ * The seed's two declarations, guarded the same way and for a sharper reason:
+ * the content-part type differs by role (`input_text` for the user, `text` for
+ * the assistant) and getting it wrong is not a validation error on the wire —
+ * it is an opaque `error` event on a socket that then just sits there.
+ */
+describe('realtime seed wire shape', () => {
+  const history = [
+    { role: 'user', content: 'where are my notes?', createdAt: new Date(1) },
+    { role: 'assistant', content: 'In your Inbox.', createdAt: new Date(2) },
+  ];
+
+  it('given a built seed, every item should satisfy the shared schema', () => {
+    const seed = buildRealtimeSeed(history);
+    expect(seed).toHaveLength(2);
+
+    for (const item of seed) {
+      expect(realtimeSeedEventSchema.safeParse(item).success).toBe(true);
+    }
+  });
+
+  it('should carry a built seed through the attach payload unchanged', () => {
+    const seed = buildRealtimeSeed(history);
+
+    const parsed = realtimeAttachPayloadSchema.safeParse({
+      callId: 'rtc_u0_abc',
+      secret: 'ek_secret',
+      userId: 'u1',
+      model: 'gpt-realtime-2.1',
+      seed,
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.seed).toEqual(seed);
+  });
+
+  it('a SeedEvent should be assignable to the wire type in both directions', () => {
+    const fromApp: SeedEvent = {
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    };
+    const onWire: RealtimeSeedEventWire = realtimeSeedEventSchema.parse(fromApp);
+    const backToApp: SeedEvent = onWire;
+
+    expect(backToApp).toEqual(fromApp);
+  });
+
+  it('should reject an audio content part — assistant audio cannot be seeded at all', () => {
+    expect(
+      realtimeSeedEventSchema.safeParse({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'input_audio', text: '' }],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('should reject an item with no content at all', () => {
+    expect(
+      realtimeSeedEventSchema.safeParse({
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'user', content: [] },
+      }).success,
+    ).toBe(false);
   });
 });

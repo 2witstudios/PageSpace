@@ -99,13 +99,34 @@ export function toRealtimeTool(name: string, tool: Tool): RealtimeTool {
  * matches the text stack's catalog.
  */
 export function buildRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
+  return Object.entries(buildRealtimeToolSet(tools)).map(([name, tool]) =>
+    toRealtimeTool(name, tool),
+  );
+}
+
+/**
+ * The EXECUTABLE set behind those definitions — the same objects, before the
+ * projection onto the wire shape.
+ *
+ * Split out from `buildRealtimeTools` so that what the session ADVERTISES and
+ * what the dispatcher RUNS are one expression evaluated twice, not two lists
+ * that agree today. They are built in different processes (definitions ride the
+ * attach payload to `apps/realtime`; execution happens back here on the bridge),
+ * which is exactly the arrangement where two hand-kept lists drift — the model
+ * would call a name nothing answers, and the call would hang on a tool result
+ * that never comes.
+ *
+ * It is also what makes `execute_tool` work over voice unchanged: the deferred
+ * half is captured in the closure this returns, so a spoken request that
+ * reaches a non-core tool goes through the SAME allowlist re-check and the SAME
+ * `safeParse` the text stack uses.
+ */
+export function buildRealtimeToolSet(tools: ToolSet): ToolSet {
   const { coreTools, nonCoreTools } = splitToolsForExposure(tools);
 
-  const upfront: ToolSet = {
+  return {
     ...coreTools,
     tool_search: createToolSearchTool(tools),
     execute_tool: createExecuteTool(nonCoreTools),
   };
-
-  return Object.entries(upfront).map(([name, tool]) => toRealtimeTool(name, tool));
 }

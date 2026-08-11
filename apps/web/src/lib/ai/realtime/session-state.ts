@@ -1,4 +1,4 @@
-import { extractTranscript, type TranscriptEntry } from './events';
+import { extractTranscript, type TranscriptEntry } from '@pagespace/lib/realtime/voice-events';
 
 /**
  * Everything the voice UI shows, as a pure reducer. The hook owns the wiring;
