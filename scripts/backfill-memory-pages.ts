@@ -162,14 +162,33 @@ export async function runBackfill({
           for (const field of populated) {
             const content = (row[LEGACY_COLUMN[field]] ?? '').trim();
 
-            // Copy into the page only while it is still empty. This is what
-            // makes a re-run safe: once the page has content — from the first
-            // run, the memory cron, or the user typing in it — we never touch
-            // it again.
+            // Copy into the page only while it is still empty AND has never
+            // been touched. Both halves are load-bearing:
+            //
+            //   content = ''   → a re-run never overwrites what is there now
+            //   revision = 0   → and never overwrites what someone DELETED
+            //
+            // `revision` is the only thing that separates a page provisioned
+            // empty by the settings screen from one a user deliberately
+            // emptied: both are `content = ''`. Provisioning inserts at the
+            // schema default of 0 and `applyPageMutation` increments on every
+            // mutation, so a page that was written to and then cleared is at 2.
+            //
+            // Without this, widening the work list above to include populated
+            // legacy columns would resurrect text a user had just erased —
+            // while MEMORY_PAGE_DELETE_ERROR is telling them that clearing the
+            // page is how you erase it. The column is still retired below, so
+            // their erasure sticks rather than lying in wait for a later run.
             const updated = await tx
               .update(pages)
               .set({ content, contentMode: 'markdown', updatedAt: new Date() })
-              .where(and(eq(pages.id, pageIdFor[field]), eq(pages.content, '')))
+              .where(
+                and(
+                  eq(pages.id, pageIdFor[field]),
+                  eq(pages.content, ''),
+                  eq(pages.revision, 0),
+                ),
+              )
               .returning({ id: pages.id });
 
             if (updated.length > 0) {
