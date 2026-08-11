@@ -12,6 +12,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ── Mocks (before imports) ──────────────────────────────────────────────
 
+// Real refusal string kept, so a reworded constant cannot pass silently.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return { ...actual, findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()) };
+});
+
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
   validatePageMove: vi.fn().mockResolvedValue({ valid: true }),
 }));
@@ -87,6 +93,10 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 import { movePagesToDrive, MAX_SUBTREE_DEPTH } from '../page-cross-drive-move-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
 // @ts-expect-error - accessing test-only export
@@ -143,6 +153,7 @@ function setupSuccessScenario() {
   vi.mocked(db.query.pages.findMany).mockResolvedValue([sourcePage()] as never);
   vi.mocked(db.query.pages.findFirst).mockResolvedValue({ position: 5 } as never);
   vi.mocked(validatePageMove).mockResolvedValue({ valid: true });
+  vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set<string>());
 
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   txUpdateSet.mockReturnValue({ where: txUpdateWhere });
@@ -167,6 +178,55 @@ describe('movePagesToDrive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupSuccessScenario();
+  });
+
+  // ── Memory page protection ────────────────────────────────────────────
+
+  describe('memory page protection', () => {
+    it('refuses to move a memory page to another drive', async () => {
+      // This service is the ONLY cross-drive move path, shared by
+      // /api/pages/bulk-move and the AI move_page tool. pageService.updatePage's
+      // guard never runs here, so without this the REST route could relocate a
+      // memory page out of the Home drive its pointers assume.
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['page-1']));
+
+      const result = await run();
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected refusal');
+      expect(result.code).toBe('MEMORY_PAGE_PROTECTED');
+      expect(result.status).toBe(403);
+      expect(result.message).toBe(MEMORY_PAGE_MOVE_ERROR);
+
+      // Refused before the write, not rolled back after one.
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses the whole batch when only one page is protected', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        sourcePage({ id: 'page-1' }),
+        sourcePage({ id: 'memory-bio' }),
+      ] as never);
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['memory-bio']));
+
+      const result = await run({ pageIds: ['page-1', 'memory-bio'] });
+
+      expect(result.success).toBe(false);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('checks permission before revealing that a page is a memory page', async () => {
+      // A caller who cannot edit the source page must not learn what it holds.
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['page-1']));
+      const authorize = makeAuthorizer({ canEditPage: vi.fn().mockResolvedValue(false) });
+
+      const result = await run({}, authorize);
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected refusal');
+      expect(result.code).toBe('SOURCE_PAGE_FORBIDDEN');
+      expect(findProtectedMemoryPages).not.toHaveBeenCalled();
+    });
   });
 
   // ── Authorizer contract ───────────────────────────────────────────────

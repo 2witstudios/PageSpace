@@ -22,6 +22,11 @@ import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -299,6 +304,12 @@ async function recursivelyTrash(
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
+    // `parentId` is user-editable, so a memory page can be moved under an
+    // ordinary page and would otherwise be swept up by that page's cascade —
+    // deleting a profile as a side effect of deleting something else. The
+    // top-level guard in `trashPage` only sees the page it was asked about.
+    if (await isProtectedMemoryPage(child.id)) continue;
+
     const childTriggers = await recursivelyTrash(child.id, tx, context);
     triggers.push(...childTriggers);
   }
@@ -486,6 +497,14 @@ export const pageService = {
 
     // Validate parent change
     if (updates.parentId !== undefined) {
+      // Memory pages stay in their Memory folder. Moving one out is how it ends
+      // up under an ordinary page and inside that page's delete cascade, and it
+      // also breaks the folder link the settings screen offers. Editing the
+      // CONTENT is untouched — only relocation is refused.
+      if (await isProtectedMemoryPage(pageId)) {
+        return { success: false, error: MEMORY_PAGE_MOVE_ERROR, status: 403 };
+      }
+
       const validation = await validatePageMove(pageId, updates.parentId);
       if (!validation.valid) {
         return { success: false, error: validation.error || 'Invalid parent', status: 400 };
@@ -589,6 +608,14 @@ export const pageService = {
     const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
+    }
+
+    // Memory pages are structural, like the Home drive: the cron writes to them
+    // by pointer and the settings screen links to them, so deleting one leaves
+    // a profile with nowhere to live. Emptying the page is the way to erase the
+    // content; the personalization toggle is the way to stop it being used.
+    if (await isProtectedMemoryPage(pageId)) {
+      return { success: false, error: MEMORY_PAGE_DELETE_ERROR, status: 403 };
     }
 
     // Get page info before trashing

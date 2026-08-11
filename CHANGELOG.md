@@ -5,6 +5,36 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A microphone in the top bar, on every page, that talks to whichever assistant you are already
+  looking at** — there is no separate voice screen and nothing to set up first. Press it on a page
+  and the assistant sidebar opens in voice mode, talking to the agent you had selected there; press
+  it on the dashboard and it talks to the assistant already in the middle of your screen. Nothing
+  connects until you press it.
+- **A spoken conversation is the same conversation you can read and type in** — voice is a way into
+  a thread that already existed and still exists after you hang up. What is said appears in that
+  thread as ordinary messages while the call is running, marked with a small microphone so you can
+  tell later what was spoken and what was typed. There is no separate voice history to go looking
+  for, and nothing to replay.
+- **The call survives you walking around the app** — moving between pages does not end it or move it
+  to a different assistant; it just tells the assistant where you now are. Closing the sidebar
+  minimizes the call rather than hanging up, and the top-bar microphone stays lit so you can get
+  back to it. Deliberately choosing a different agent in the sidebar's switcher does move the call,
+  because that is a different conversation. Ending a call is the End button on the call itself, and
+  refreshing the page ends it too.
+- **The assistant on the call is the one you picked, with the instructions and the tools its owner
+  gave it** — an agent you built to answer a particular way answers that way out loud too, and one
+  whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **A call you cannot have does not start** — running out of credit, or already having as many calls
+  open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
+  talking to something nobody was counting.
+- **When voice cannot start, it says which problem you have** — a microphone you declined is
+  different from a microphone you do not have, and the two now get different advice and only the
+  fixable one offers to try again. If the call connects but the transcript service does not, the
+  call says so rather than letting you talk for ten minutes into something that was never going to
+  be saved.
+
 ### Fixed
 
 - **Your assistant's Conversation History is back to being just your assistant's, in the right
@@ -39,6 +69,52 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   reads what the session contains the same way it reads everything else about it, so its controls
   work exactly as they do in a session of your own. Nothing changes about whose sandbox the
   conversation uses, or about which sessions appear in your sidebar.
+
+### Changed
+
+- **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
+  to an assistant used to mean recording a clip, having it transcribed into text, and having the
+  reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
+  in — was thrown away before the assistant ever saw your words, and you had to wait for a whole
+  reply to be written before hearing any of it. The assistant now hears you directly and answers in
+  the same breath, so you can interrupt it and it stops. The way in is the microphone in the top
+  bar, on every page; the hands-free button that used to sit in the chat box next to the model
+  picker has been removed, along with its separate panel of voice settings for reading speed,
+  spoken voice and tap-to-speak.
+- **What the AI has learned about you is now a set of pages you can read and edit** — your
+  personalization lived in three text boxes in Settings that a nightly process also wrote to, with
+  no indication of what it had added or why. It is now three pages in a Memory folder in your Home
+  drive: About You, Communication and Rules. You can open them and edit them like any other page,
+  and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
+  that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
+  The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
+  drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
+  emptying a page erases what it says, so deleting one would only leave the AI's memory with
+  nowhere to live. They also stay in the Memory folder rather than being moved elsewhere, since a
+  page moved out of it can be swept up by another page's deletion. What they say stays yours to
+  edit either way.
+- **The AI stops recording things about you that do not change how it answers** — the nightly
+  process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
+  teams, family details and the names of colleagues, none of which affects a reply. It now records
+  something only if knowing it would genuinely change how the AI responds, and never records
+  personal history, beliefs, hobbies, other people's names, or numbers you have claimed about
+  yourself.
+- **Something you mention once no longer becomes a permanent fact about you** — a single remark
+  could end up in your profile and stay there. A new observation now has to show up on at least two
+  separate days, from things you actually wrote on those days, before it is added to your profile —
+  and three days for anything describing who you are. Until then it is held aside as a pending
+  observation, which your data export includes. Observations that stop recurring are dropped after
+  a month.
+- **Your profile can now correct itself instead of only growing** — it could only ever have text
+  added, so a wrong guess stayed forever and the profile grew until it was trimmed at around 14,000
+  characters. It is now rewritten in place, superseded lines are removed, and each page is kept to
+  a size that reflects what is actually useful. A rewrite that would delete most of a page is
+  refused rather than applied.
+- **Your data export now includes what the AI inferred about you** — a subject access request
+  covered your profile but not the observations behind it. The export now contains every inference
+  drawn about you, including ones that were rejected or are still pending, along with the quote
+  from your own messages each was based on. Those quotes are removed 90 days after an observation
+  is settled.
 
 ## [1.7.1] — 2026-08-10
 

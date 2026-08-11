@@ -13,6 +13,7 @@ import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { TabBar } from "@/components/layout/tabs";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
+import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
@@ -34,7 +35,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { VoiceModeBorder } from "@/components/ai/voice";
+import { VoiceSessionBridge } from "@/components/ai/voice/realtime";
+import { decideReveal } from "@/lib/ai/realtime/voice-reveal";
+import type { VoiceSurface } from "@/lib/ai/realtime/voice-binding";
 import {
   LEFT_SIDEBAR_MAX_SIZE,
   MAIN_MIN_SIZE,
@@ -86,6 +89,7 @@ function Layout({ children }: LayoutProps) {
   // Desktop overlay state (1024-1279px) — transient, starts closed each load
   const leftOverlayOpen = useLayoutStore(state => state.leftOverlayOpen);
   const setLeftOverlayOpen = useLayoutStore(state => state.setLeftOverlayOpen);
+  const setRightSidebarPageTab = useLayoutStore(state => state.setRightSidebarPageTab);
 
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
@@ -283,6 +287,52 @@ function Layout({ children }: LayoutProps) {
     toggleRightSidebar,
   ]);
 
+  /**
+   * Bring the assistant into view for a voice call — OPEN-ONLY.
+   *
+   * NOT `handleRightPanelToggle`. That one closes an open sidebar, and the nav
+   * trigger's second job is being the way BACK to a minimized call: a toggle
+   * there means pressing the live indicator hides the call you pressed it to
+   * see. The breakpoint reasoning is the same and lives in `decideReveal`,
+   * where it can be tested at every breakpoint without a viewport.
+   */
+  const handleRevealAssistant = useCallback(
+    (surface: VoiceSurface) => {
+      const writes = decideReveal({
+        surface,
+        isSheetBreakpoint,
+        shouldOverlayRightSidebar,
+        shouldOverlayLeftSidebar,
+        rightSheetOpen,
+        leftSheetOpen,
+        rightSidebarOpen,
+        leftOverlayOpen,
+      });
+
+      if (writes.leftSheetOpen !== undefined) setLeftSheetOpen(writes.leftSheetOpen);
+      if (writes.rightSheetOpen !== undefined) setRightSheetOpen(writes.rightSheetOpen);
+      if (writes.leftOverlayOpen !== undefined) setLeftOverlayOpen(writes.leftOverlayOpen);
+      if (writes.rightSidebarOpen !== undefined) setRightSidebarOpen(writes.rightSidebarOpen);
+      // Voice is a mode on the CHAT surface, so revealing a call means the chat
+      // tab, not whichever tab the sidebar was left on.
+      if (writes.showChatTab) setRightSidebarPageTab('chat');
+    },
+    [
+      isSheetBreakpoint,
+      shouldOverlayRightSidebar,
+      shouldOverlayLeftSidebar,
+      rightSheetOpen,
+      leftSheetOpen,
+      rightSidebarOpen,
+      leftOverlayOpen,
+      setLeftSheetOpen,
+      setRightSheetOpen,
+      setLeftOverlayOpen,
+      setRightSidebarOpen,
+      setRightSidebarPageTab,
+    ],
+  );
+
   // Dismiss keyboard when tapping outside editable content (iOS Capacitor fix)
   // iOS contenteditable elements don't automatically blur on outside taps like regular inputs
   const handleLayoutClick = useCallback((e: React.MouseEvent) => {
@@ -336,7 +386,30 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
+      {/*
+        THE app-wide voice session. Mounted HERE — above the panel group, not
+        inside RightPanel — because `rightPanelVisible && …` below unmounts the
+        right sidebar outright when it closes, and a session owned by the panel
+        would hang up the user's call every time they collapsed it. Voice is a
+        transport onto a conversation, not a property of a panel; the sidebar is
+        its home, not its owner.
+
+        Outside GlobalChatProvider rather than inside it: this provider consumes
+        nothing from it, and a session that cannot be interrupted by anything
+        below it is the whole point.
+      */}
+      <VoiceSessionProvider>
       <GlobalChatProvider>
+        {/*
+          Renders nothing. It keeps a live call's sense of place current as the
+          user navigates (WITHOUT rebinding), and applies the agent switcher's
+          rebind once the new agent's conversation resolves. Mounted here, above
+          every panel, for the same reason the session itself is: both jobs
+          outlive the sidebar, which is unmounted whenever it is collapsed.
+          Inside GlobalChatProvider because the binding it computes reads the
+          global conversation from it.
+        */}
+        <VoiceSessionBridge />
         <div
           className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
           style={{ height: 'var(--app-height, 100dvh)' }}
@@ -345,6 +418,7 @@ function Layout({ children }: LayoutProps) {
           <TopBar
             onToggleLeftPanel={handleLeftPanelToggle}
             onToggleRightPanel={handleRightPanelToggle}
+            onRevealAssistant={handleRevealAssistant}
           />
 
           {/* TabBar: auto-hides when <=1 tab, accordion from TopBar */}
@@ -407,7 +481,6 @@ function Layout({ children }: LayoutProps) {
                   ) : (
                     <CenterPanel />
                   )}
-                  <VoiceModeBorder />
                   <AnimatePresence>
                     {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
                       <motion.div
@@ -518,6 +591,7 @@ function Layout({ children }: LayoutProps) {
         </>
         )}
       </GlobalChatProvider>
+      </VoiceSessionProvider>
     </NavigationProvider>
   );
 }

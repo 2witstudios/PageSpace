@@ -53,8 +53,8 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChatConfig, useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
+import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
@@ -105,12 +105,8 @@ import {
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
-import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
-import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
-import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 
-const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -167,19 +163,9 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
-  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
-
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -198,6 +184,18 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // The switcher is the voice switcher — see the twin of this comment in
+  // SidebarChatTab. Records an intent on the explicit act; navigation records
+  // nothing and therefore can never rebind.
+  const requestVoiceRebind = useVoiceRebindStore((state) => state.requestRebind);
+  const handleSelectAgentForVoice = useCallback(
+    (agent: Parameters<typeof selectAgent>[0]) => {
+      selectAgent(agent);
+      requestVoiceRebind(agent?.id ?? null);
+    },
+    [selectAgent, requestVoiceRebind],
+  );
 
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
@@ -439,12 +437,6 @@ const GlobalAssistantView: React.FC = () => {
   // Loading/error UI reads the cache entry's state (replaces the context's
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
   const messagesLoadState = useConversationLoadState(currentConversationId);
-
-  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
-  const streamingAssistantText = useMemo(
-    () => selectVoiceStreamText(renderedMessages),
-    [renderedMessages],
-  );
   // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
   // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
   // in the store the same way a bootstrapped or remote one is. Everything above derives from
@@ -741,7 +733,7 @@ const GlobalAssistantView: React.FC = () => {
     setActiveTab('history');
   };
 
-  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // Shared by every send-shaped request (typed send, AskUser resume) — one
   // definition means the body a resume POST carries can't drift from what a real send
   // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
   const buildRequestBody = useCallback(() => {
@@ -834,29 +826,6 @@ const GlobalAssistantView: React.FC = () => {
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback(async (text: string) => {
-    if (!text.trim() || !currentConversationId) return;
-
-    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
-    // with feedback, or the transcript would vanish silently.
-    if (!(await prepareSendForMode(currentConversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      return;
-    }
-
-    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
-    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    rollbackOptimisticSendOnFailure(
-      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
-      currentConversationId,
-      userMessage.id,
-    );
-  }, [currentConversationId, sendMessage, buildRequestBody, wrapSend, prepareSendForMode]);
-
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message, and
   // remote edits/deletes/messages update the store, not useChat's local array.
@@ -875,38 +844,6 @@ const GlobalAssistantView: React.FC = () => {
     // Answering re-invokes the chat — same cross-conversation handoff as every send path.
     prepareSend: prepareSendForMode,
   });
-
-  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
-  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      voiceBaselineRef.current = undefined;
-      setLastAIResponse(null);
-      return;
-    }
-
-    // Initialize baseline BEFORE the streaming guard. If we waited until after,
-    // activating voice mid-stream would leave the baseline unset and then silence
-    // the in-flight response when it finishes.
-    if (voiceBaselineRef.current === undefined) {
-      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
-      return;
-    }
-
-    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
-    if (!next) return;
-
-    setLastAIResponse((current) => (current?.id === next.id ? current : next));
-  }, [renderedMessages, isVoiceModeActive]);
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER
@@ -942,7 +879,7 @@ const GlobalAssistantView: React.FC = () => {
         <div className="flex items-center space-x-2">
           <AISelector
             selectedAgent={selectedAgent}
-            onSelectAgent={selectAgent}
+            onSelectAgent={handleSelectAgentForVoice}
             disabled={isStreaming}
           />
         </div>
@@ -978,6 +915,16 @@ const GlobalAssistantView: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/*
+        Voice as a MODE on this surface — same conversation, same message list,
+        with the live call's chrome above it. Spoken turns arrive in that list as
+        ordinary messages, so there is no second transcript here.
+      */}
+      <VoiceCallBarForConversation
+        conversationId={currentConversationId}
+        assistantName={selectedAgent ? selectedAgent.title : 'Global Assistant'}
+      />
 
       {/* Usage Monitor */}
       {displayPreferences.showTokenCounts && (
@@ -1063,17 +1010,6 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
-            {isVoiceModeActive && (
-              <VoiceCallPanel
-                owner={VOICE_OWNER}
-                onSend={handleVoiceSend}
-                latestAssistantMessage={lastAIResponse}
-                isAIStreaming={effectiveIsStreaming}
-                streamingText={streamingAssistantText}
-                onStopStream={stop}
-                onClose={disableVoiceMode}
-              />
-            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
@@ -1094,8 +1030,6 @@ const GlobalAssistantView: React.FC = () => {
               onMcpServerToggle={props.onMcpServerToggle}
               showMcp={props.showMcp}
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
-              onVoiceModeClick={handleVoiceModeToggle}
-              isVoiceModeActive={isVoiceModeActive}
               attachments={attachments}
               onAddFiles={addFiles}
               onRemoveFile={removeFile}

@@ -94,7 +94,7 @@ interface ToolPart {
 /** Extended UIMessage with extra fields stored in our database */
 type MessageStatus = 'streaming' | 'complete' | 'interrupted';
 
-type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; status?: MessageStatus };
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; status?: MessageStatus; source?: string | null };
 
 interface DatabaseMessage {
   id: string;
@@ -118,6 +118,13 @@ interface DatabaseMessage {
   messageType?: 'standard' | 'todo_list';
   userName?: string | null;
   status?: MessageStatus;
+  /**
+   * The transport the row was authored over — `MESSAGE_SOURCE_VOICE` for a turn
+   * spoken into a live call, null for a typed one. Already selected by every
+   * unified reader (`unifiedColumns`); carried out to the UI here so a thread
+   * can be honest about how it was made.
+   */
+  source?: string | null;
 }
 
 
@@ -306,7 +313,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 
     try {
       const structured = await reconstructFromStructuredContent(dbMessage, parsed);
-      return { ...structured, userName: dbMessage.userName, status: dbMessage.status } as ExtendedUIMessage;
+      return { ...structured, userName: dbMessage.userName, status: dbMessage.status, source: dbMessage.source ?? null } as ExtendedUIMessage;
     } catch (error) {
       // Reconstruction failed (e.g. S3 presign error) — fall back to the
       // original plain-text content rather than leaking the raw structured
@@ -321,6 +328,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
         messageType: dbMessage.messageType || 'standard',
         userName: dbMessage.userName,
         status: dbMessage.status,
+        source: dbMessage.source ?? null,
       } as ExtendedUIMessage;
     }
   }
@@ -337,6 +345,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
     messageType: dbMessage.messageType || 'standard',
     status: dbMessage.status,
     userName: dbMessage.userName,
+    source: dbMessage.source ?? null,
   } as ExtendedUIMessage;
 }
 

@@ -228,6 +228,7 @@ const mockChatMessage = (overrides: Partial<{
   editedAt: null,
   toolCalls: null,
   toolResults: null,
+  source: null,
   status: overrides.status || 'complete' as const,
 });
 

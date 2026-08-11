@@ -90,34 +90,85 @@ export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
 
 /**
- * Flat per-call hold estimate for voice STT (Whisper), where the audio duration —
- * and therefore the real cost — isn't known until the provider responds, so the gate
- * has nothing exact to reserve against. A short voice-mode clip costs a fraction of a
- * cent ($0.006/min × 1.5), so 2¢ is a reasonable approximate reservation that keeps
- * the spendable-floor check meaningful without over-reserving. It is an ESTIMATE, not
- * a guaranteed cap (a very long upload could exceed it); the real cost always settles
- * exactly via consumeCredits and the 1.5× markup — not this hold — is the solvency
- * guarantee. Because a single STT call can settle above this estimate, concurrent
- * paid-voice overdraw is bounded by VOICE_MAX_INFLIGHT (a per-user concurrency cap),
- * not by this reservation. TTS does NOT use this: its character count is known up
- * front, so it reserves the exact charged amount via estimateVoiceHoldCents(). Tune
- * via env.
- */
-export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
-
-/**
- * Max concurrent in-flight VOICE calls per user, applied to ALL tiers (paid voice
+ * Max concurrent in-flight TTS calls per user, applied to ALL tiers (paid voice
  * is otherwise uncapped). Bounds worst-case concurrent overdraw: a hold reserves an
  * ESTIMATE, but the real cost only lands at settle, so without a cap a paid user
  * could open many simultaneous calls that each reserve little yet collectively
- * settle past their balance. STT especially can't reserve exactly (audio duration
- * is unknown until Whisper responds, and file size isn't a usable cost bound), so
- * this concurrency cap — not the per-call hold — is what bounds that exposure to
- * `VOICE_MAX_INFLIGHT × worst-case single call`. TTS already reserves its exact
- * charged amount. Voice mode plays chunks sequentially (≤2 in flight), so 4 is
- * comfortable for legitimate use. Default 4.
+ * settle past their balance. TTS already reserves its exact charged amount via
+ * estimateVoiceHoldCents(), so this cap is the belt to that braces. Read Aloud
+ * plays chunks sequentially (≤2 in flight), so 4 is comfortable for legitimate
+ * use. Default 4.
  */
 export const VOICE_MAX_INFLIGHT = envInt('VOICE_MAX_INFLIGHT', 4);
+
+/**
+ * Per-SESSION hold estimate for an audio-native realtime call. Realtime differs from
+ * every other hold in this file in a way that lets it be small: usage arrives
+ * INCREMENTALLY, as a `usage` object on each `response.done`, so the session settles
+ * continuously as it talks rather than once at the end. The hold therefore only has to
+ * cover the window between settles plus the session's opening moments — not the whole
+ * call — and a long conversation is billed as it happens instead of arriving as one
+ * surprise at hangup.
+ *
+ * 10¢ is roughly 1.5–2 minutes of live conversation at the 1.5x markup (a chatty minute
+ * runs a few cents of real cost, dominated by audio output at $64/1M tokens). Like every
+ * hold here it is an ESTIMATE, not a cap: the real cost always settles exactly via
+ * consumeCredits, {@link REALTIME_MAX_SESSION_SECONDS} bounds the tail of a single
+ * session, and {@link REALTIME_MAX_INFLIGHT} bounds concurrent overdraw. Tune via env.
+ */
+export const REALTIME_SESSION_HOLD_ESTIMATE_CENTS = envInt('REALTIME_SESSION_HOLD_ESTIMATE_CENTS', 10);
+
+/**
+ * Hard ceiling on a single realtime session's wall-clock duration — the backstop for a
+ * call nobody ever hangs up (a pinned-open tab with a hot mic bills for room noise:
+ * server VAD happily fires on ambient sound).
+ *
+ * The 600s default is NOT arbitrary — it is bounded by {@link CREDIT_HOLD_TTL_SECONDS}
+ * (900s), the age at which the reconcile cron may sweep a hold. A session allowed to
+ * outlive that would have its own reservation reclaimed out from under it mid-call. 600s
+ * leaves a 5-minute settle margin inside that TTL. Raising this REQUIRES raising the hold
+ * TTL in the same change; ten minutes is also a generous ceiling for one voice session,
+ * and starting another call is free.
+ */
+export const REALTIME_MAX_SESSION_SECONDS = envInt('REALTIME_MAX_SESSION_SECONDS', 600);
+
+/**
+ * Reap a realtime session after this long with no conversational activity. Distinct from
+ * the hard duration cap: this catches the ABANDONED call — the user walked away or
+ * switched apps — which otherwise keeps a WebRTC session open, holds a concurrency slot,
+ * and streams ambient audio into a model that bills per input token. 120s is far longer
+ * than any natural pause in speech, so it cannot cut off someone who is merely thinking,
+ * while still freeing the slot promptly.
+ */
+export const REALTIME_IDLE_TIMEOUT_SECONDS = envInt('REALTIME_IDLE_TIMEOUT_SECONDS', 120);
+
+/**
+ * Max concurrent realtime sessions per user. Voice is physically exclusive — one mouth,
+ * one pair of ears — so the semantically "correct" cap is 1. The default is 2 on purpose:
+ * a call ends on hard refresh, but the server-side session record can linger until the
+ * idle reaper catches it, and a cap of 1 would lock the user out of reconnecting for up to
+ * {@link REALTIME_IDLE_TIMEOUT_SECONDS}. The spare slot makes a zombie session an
+ * annoyance instead of a lockout, while still refusing the many-simultaneous-calls
+ * overdraw that {@link VOICE_MAX_INFLIGHT} exists to prevent on the TTS path.
+ */
+export const REALTIME_MAX_INFLIGHT = envInt('REALTIME_MAX_INFLIGHT', 2);
+
+/**
+ * Max concurrent realtime sessions across the WHOLE deployment — a ceiling the per-user
+ * cap structurally cannot enforce, because the binding constraint is not per user: the
+ * OpenAI account is rate-limited to 40,000 tokens/MINUTE (measured live via
+ * `rate_limits.updated`), shared by every session on our key. Past that ceiling OpenAI
+ * throttles, and the failure lands on whichever calls happen to be in flight — including
+ * calls that were already going fine. A global cap converts that into a clean refusal at
+ * session start.
+ *
+ * Sizing: a continuously-talking session burns roughly 4,000 tokens/min once audio in,
+ * audio out and replayed conversation context are counted, which puts the account ceiling
+ * near 10 concurrent sessions. The default of 8 leaves headroom, since a long model
+ * response bursts well above the average. Raise it only alongside the account's rate
+ * limit — this number is a fact about the OpenAI account, not a product decision.
+ */
+export const REALTIME_MAX_GLOBAL_SESSIONS = envInt('REALTIME_MAX_GLOBAL_SESSIONS', 8);
 
 /**
  * Flat per-call hold estimate for AI image generation. The real cost isn't known
@@ -171,8 +222,8 @@ export function resolveImageCost(
 /**
  * Flat per-call hold estimate for a Machine run, where the active-window
  * duration — and therefore the real cost — isn't known until the run ends, so the
- * gate has nothing exact to reserve against (mirrors VOICE_HOLD_ESTIMATE_CENTS' STT
- * rationale). A short tool call or PTY burst costs a small fraction of a cent at the
+ * gate has nothing exact to reserve against (mirrors
+ * REALTIME_SESSION_HOLD_ESTIMATE_CENTS' rationale). A short tool call or PTY burst costs a small fraction of a cent at the
  * assumed default machine shape, so 2¢ is a reasonable approximate reservation. The
  * real cost always settles exactly via consumeCredits and the 1.5× markup; concurrent
  * overdraw is bounded by MACHINE_MAX_INFLIGHT instead. Tune via env.

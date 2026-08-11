@@ -12,14 +12,22 @@ import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
 import RecentsDropdown from "@/components/shared/RecentsDropdown";
 import { AiBalanceWidget } from "@/components/billing/AiBalanceWidget";
+import { VoiceNavTrigger } from "@/components/ai/voice/realtime";
+import type { VoiceSurface } from "@/lib/ai/realtime/voice-binding";
 import NavButtons from "./NavButtons";
 
 interface TopBarProps {
   onToggleLeftPanel: () => void;
   onToggleRightPanel: () => void;
+  /**
+   * Bring the conversation a voice call is on into view — OPEN-ONLY, unlike
+   * `onToggleRightPanel`. Owned by `Layout` because only it knows which
+   * breakpoint's panel/sheet/overlay is the one to open.
+   */
+  onRevealAssistant: (surface: VoiceSurface) => void;
 }
 
-export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBarProps) {
+export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onRevealAssistant }: TopBarProps) {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   return (
@@ -75,6 +83,14 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
         </div>
 
         <div className="flex flex-shrink-0 items-center gap-2">
+          {/*
+            THE voice trigger, in the one piece of chrome that is on every
+            route. Voice is not a feature of a panel — it is a second transport
+            onto whatever conversation is already in view — so its one control
+            lives here and not inside the assistant sidebar it usually reveals.
+          */}
+          <VoiceNavTrigger onReveal={onRevealAssistant} />
+
           <AiBalanceWidget />
 
           <VerifyEmailButton />
