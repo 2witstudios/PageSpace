@@ -55,6 +55,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
+  to an assistant used to mean recording a clip, having it transcribed into text, and having the
+  reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
+  in — was thrown away before the assistant ever saw your words, and you had to wait for a whole
+  reply to be written before hearing any of it. The assistant now hears you directly and answers in
+  the same breath, so you can interrupt it and it stops. The way in is the microphone in the top
+  bar, on every page; the hands-free button that used to sit in the chat box next to the model
+  picker has been removed, along with its separate panel of voice settings for reading speed,
+  spoken voice and tap-to-speak.
 - **What the AI has learned about you is now a set of pages you can read and edit** — your
   personalization lived in three text boxes in Settings that a nightly process also wrote to, with
   no indication of what it had added or why. It is now three pages in a Memory folder in your Home

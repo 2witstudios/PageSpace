@@ -1,10 +1,10 @@
 /**
  * Why `getUserMedia` failed, and what to tell the user about it.
  *
- * Extracted from `useVoiceMode` rather than reimplemented alongside it: the
- * audio-native path asks for the same microphone through the same API and hits
- * the same five failures, and the desktop branch below is the reason a fresh
- * port would be a regression. In an Electron shell a blocked prompt is NOT
+ * Extracted from the retired STT -> text -> TTS voice loop rather than
+ * reimplemented alongside it: the audio-native path asks for the same microphone
+ * through the same API and hits the same five failures, and the desktop branch
+ * below is the reason a fresh port would be a regression. In an Electron shell a blocked prompt is NOT
  * fixable in browser settings — the block lives in macOS System Settings, and a
  * message that says "check your browser settings" sends the user somewhere that
  * has no such control.

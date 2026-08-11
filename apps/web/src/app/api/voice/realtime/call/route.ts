@@ -9,7 +9,7 @@
  * credential. Our server keeps the call id and hands the call's ephemeral
  * secret straight to the realtime server, which attaches for the duration.
  *
- * Auth, tier gate and managed-key lookup follow `../transcribe/route.ts`
+ * Auth, tier gate and managed-key lookup follow `../synthesize/route.ts`
  * exactly — voice is one feature with one entitlement, and a second auth shape
  * here would be a second thing to keep in step.
  *

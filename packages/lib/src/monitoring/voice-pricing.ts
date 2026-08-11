@@ -1,17 +1,16 @@
 /**
- * voice-pricing — real provider cost for voice (STT/TTS) calls.
+ * voice-pricing — real provider cost for voice (TTS) calls.
  *
  * Voice does NOT go through OpenRouter, and OpenAI's audio endpoints return no
- * per-call cost or token figure (Whisper `verbose_json` gives the exact audio
- * `duration`; TTS returns only audio bytes). So there is no live provider-returned
- * cost to read back the way chat does via `extractOpenRouterCostDollars`.
+ * per-call cost or token figure (TTS returns only audio bytes). So there is no
+ * live provider-returned cost to read back the way chat does via
+ * `extractOpenRouterCostDollars`.
  *
  * Instead the billable cost is computed DETERMINISTICALLY as
  *   exact billed quantity × OpenAI's published unit rate
- * — Whisper: audio seconds × per-minute rate (prorated to the second); TTS: input
- * characters × per-char rate. Both quantities are exact and both rates are fixed,
- * so `quantity × rate` equals what OpenAI bills us. This is real cost, not a
- * probabilistic estimate.
+ * — TTS: input characters × per-char rate. The quantity is exact and the rate is
+ * fixed, so `quantity × rate` equals what OpenAI bills us. This is real cost, not
+ * a probabilistic estimate.
  *
  * The returned value is PRE-markup. Callers hand it to `AIMonitoring.trackUsage`
  * as `providerCostDollars`, and the credit pipeline applies the same 1.5× markup
@@ -23,9 +22,9 @@
  * a deploy. Defaults pinned to OpenAI's published audio pricing (see the unit test).
  *
  * The REALTIME section at the bottom of this file prices the audio-native path
- * (`gpt-realtime`), which bills TOKENS per modality rather than seconds/characters.
- * It is additive: the whisper/tts rates and behaviour above are untouched, because
- * on-demand TTS (Read Aloud) is a separate feature that is NOT being retired.
+ * (`gpt-realtime`), which bills TOKENS per modality rather than characters. The
+ * TTS rates above survive the retirement of the STT->LLM->TTS loop because
+ * on-demand TTS (Read Aloud) is a separate feature that still bills through them.
  */
 
 import { MARKUP_BPS } from '../billing/credit-pricing';
@@ -38,22 +37,18 @@ function envFloat(name: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-export type VoiceModel = 'whisper-1' | 'tts-1' | 'tts-1-hd';
+export type VoiceModel = 'tts-1' | 'tts-1-hd';
 
 /**
  * Published OpenAI audio rates, in USD per base unit:
- *   - STT (whisper-1): USD per audio SECOND (= $0.006 / minute ÷ 60).
  *   - TTS (tts-1 / tts-1-hd): USD per input CHARACTER ($15 / $30 per 1M chars).
  */
 export const VOICE_RATES = {
-  'whisper-1': { usdPerSecond: envFloat('VOICE_WHISPER_USD_PER_SECOND', 0.006 / 60) },
   'tts-1': { usdPerChar: envFloat('VOICE_TTS1_USD_PER_CHAR', 15 / 1_000_000) },
   'tts-1-hd': { usdPerChar: envFloat('VOICE_TTS1_HD_USD_PER_CHAR', 30 / 1_000_000) },
 } as const;
 
 export interface VoiceUsageQuantity {
-  /** Audio duration in seconds (STT / whisper-1). */
-  seconds?: number;
   /** Input character count (TTS / tts-1, tts-1-hd). */
   chars?: number;
 }
@@ -65,12 +60,6 @@ export interface VoiceUsageQuantity {
  * routes only pass validated models, so 0 here means "nothing to bill".
  */
 export function calculateVoiceCostDollars(model: string, quantity: VoiceUsageQuantity): number {
-  if (model === 'whisper-1') {
-    const seconds = quantity.seconds;
-    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return 0;
-    return Number((seconds * VOICE_RATES['whisper-1'].usdPerSecond).toFixed(6));
-  }
-
   if (model === 'tts-1' || model === 'tts-1-hd') {
     const chars = quantity.chars;
     if (typeof chars !== 'number' || !Number.isFinite(chars) || chars <= 0) return 0;
@@ -86,8 +75,6 @@ export function calculateVoiceCostDollars(model: string, quantity: VoiceUsageQua
  * in hand before the provider call. Reserves exactly what the call will be charged
  * (real cost × markup), so the gate's spendable-floor check is accurate per call
  * instead of relying on a flat estimate that a long TTS request would blow past.
- * STT can't use this (audio duration is unknown until the provider responds) and
- * falls back to the flat VOICE_HOLD_ESTIMATE_CENTS.
  */
 export function estimateVoiceHoldCents(model: string, quantity: VoiceUsageQuantity): number {
   const charged = calculateVoiceCostDollars(model, quantity) * (MARKUP_BPS / 10_000) * 100;
@@ -98,8 +85,8 @@ export function estimateVoiceHoldCents(model: string, quantity: VoiceUsageQuanti
 /* ------------------------------------------------------------------------- *
  * REALTIME (audio-native) — token-metered, per modality.
  *
- * The STT/TTS path above bills a quantity we choose (seconds we uploaded,
- * characters we sent). The realtime API instead REPORTS what it billed, as a
+ * The TTS path above bills a quantity we choose (the characters we sent). The
+ * realtime API instead REPORTS what it billed, as a
  * `usage` object on every `response.done` — so here the exact quantity comes
  * off the wire and this table only supplies the rate. Still deterministic,
  * still real cost rather than an estimate.

@@ -1,11 +1,8 @@
 /**
- * The audio-native voice UI.
- *
- * Kept in its own directory beside the legacy `../` components (VoiceCallPanel
- * and friends, which drive the Whisper -> text -> TTS path) because both exist
- * at once for now: the old path still backs Read Aloud and is not retired until
- * chunk C-E. Two directories is how a reader tells which era a component
- * belongs to without reading it.
+ * The audio-native voice UI — now the only voice UI. The legacy `../`
+ * components that drove the STT -> text -> TTS loop are gone; this directory
+ * kept its name because the distinction it marked is settled, not because a
+ * second era still exists.
  */
 export { VoiceNavTrigger, type VoiceNavTriggerProps } from './VoiceNavTrigger';
 export { VoiceCallBar, type VoiceCallBarProps } from './VoiceCallBar';
