@@ -86,9 +86,13 @@ describe('hangUpCall', () => {
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(response(200));
 
-    await expect(hangUpCall('rtc_abc', 'ek_secret')).resolves.toBe(true);
-    expect(globalFetch).toHaveBeenCalled();
-
-    globalFetch.mockRestore();
+    // Restored in a `finally`: a spy on the global fetch that survives a failing
+    // assertion is a spy every later test in this file runs under.
+    try {
+      await expect(hangUpCall('rtc_abc', 'ek_secret')).resolves.toBe(true);
+      expect(globalFetch).toHaveBeenCalled();
+    } finally {
+      globalFetch.mockRestore();
+    }
   });
 });

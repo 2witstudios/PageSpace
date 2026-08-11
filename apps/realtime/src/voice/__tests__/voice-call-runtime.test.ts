@@ -715,3 +715,58 @@ describe('startVoiceCallRuntime — the bound assistant', () => {
     expect(bridge.requests[0]).not.toHaveProperty('assistant');
   });
 });
+
+describe('startVoiceCallRuntime — a failing meter settle', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('should STILL hang up and end the session, rather than leave a live unmetered call', async () => {
+    // Awaiting the settle first is right — the final window is usually the most
+    // expensive part of the call — but it must not be able to block the
+    // teardown it precedes.
+    const meter = fakeMeter();
+    meter.stop = vi.fn(async () => {
+      throw new Error('ledger unreachable');
+    });
+    const hangUp = vi.fn(async () => true);
+    const session = fakeSession();
+    const runtime = startVoiceCallRuntime({
+      session,
+      bridge: fakeBridge().client,
+      meter,
+      secret: 'ek_1',
+      seed: [],
+      hangUp,
+    });
+
+    await expect(runtime.stop('credit_exhausted')).resolves.toBeUndefined();
+
+    expect(hangUp).toHaveBeenCalledWith('rtc_1', 'ek_1');
+    expect(session.end).toHaveBeenCalledWith('credit_exhausted');
+  });
+
+  it('should not let the rejection escape into the void stop() callers', async () => {
+    // attach-handler fires `void runtime?.stop(...)`; an unhandled rejection
+    // there takes the process down and every other live call with it.
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const meter = fakeMeter();
+    meter.stop = vi.fn(async () => {
+      throw 'ledger string blip';
+    });
+    const runtime = startVoiceCallRuntime({
+      session: fakeSession(),
+      bridge: fakeBridge().client,
+      meter,
+      secret: 'ek_1',
+      seed: [],
+      hangUp: vi.fn(async () => true),
+    });
+
+    void runtime.stop('call_ended');
+    await flush();
+
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+});

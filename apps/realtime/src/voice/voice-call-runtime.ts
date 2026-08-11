@@ -263,7 +263,23 @@ export const startVoiceCallRuntime = (
       // Metering settles BEFORE the call is torn down: the final window is
       // usually the most expensive part of the call, and a teardown that raced
       // it would drop it.
-      await meter.stop(reason);
+      //
+      // But it must not BLOCK the teardown. A rejecting settle used to skip
+      // both the hangup and `session.end` below, leaving exactly the state this
+      // whole path exists to prevent — a live browser call with nobody metering
+      // it — and the rejection then escaped into the `void runtime?.stop(…)`
+      // calls in `attach-handler.ts`, where an unhandled rejection takes the
+      // process down and every other live call with it. An unbilled final
+      // window is a bad outcome; an unbilled ONGOING call is a worse one.
+      try {
+        await meter.stop(reason);
+      } catch (error) {
+        loggers.realtime.error(
+          'Realtime voice meter settle threw during teardown; tearing the call down anyway',
+          error instanceof Error ? error : new Error(String(error)),
+          { callId, userId, reason },
+        );
+      }
       // Ends the BROWSER's call, not just our view of it — on EVERY reason,
       // including 'call_ended'.
       //
