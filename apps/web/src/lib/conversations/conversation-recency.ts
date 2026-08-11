@@ -32,14 +32,26 @@ import { conversations, messages } from '@pagespace/db/schema/conversations';
  * every page-agent conversation permanently ordered by its CREATION time,
  * however recently it was actually used (review finding).
  *
- * Reads the unified `messages` table since the merge (Phase 4 / D6). The
- * `COALESCE` fallback to `lastMessageAt` is KEPT rather than deleted: it still
- * carries a conversation whose messages were all soft-deleted or are all
- * mid-flight. For a global thread the two agree to within the write itself
- * (`lastMessageAt` is stamped in the same transaction as the row), so the MAX
- * simply becomes the more precise of the two.
+ * Reads the unified `messages` table since the merge (Phase 4 / D6).
+ *
+ * `GREATEST`, NOT `COALESCE` — the LATER of the two, not the message time with
+ * the column as a fallback (review finding). A streaming placeholder is
+ * inserted at stream START, and the write that completes it
+ * (`saveGlobalMessageRow`) upserts on the message id with a `set` that does not
+ * include `createdAt`, so the finished row keeps its start time — while the
+ * same transaction bumps `conversations.lastMessageAt` to `now()`. Preferring
+ * the MAX therefore sorted a long answer by the moment it BEGAN, letting every
+ * conversation touched while it generated float above it. Taking the later of
+ * the two puts it where the user last saw activity.
+ *
+ * The fallback the `COALESCE` existed for is not lost: Postgres `GREATEST`
+ * IGNORES nulls and returns null only when every argument is null, so a
+ * conversation whose messages were all soft-deleted or are all mid-flight still
+ * reads through to `lastMessageAt`, and a conversation with messages but no
+ * column still reads the MAX. It is the same expression in all three of those
+ * cases and a correction only in the fourth.
  */
-export const recencyExpr = sql<Date | null>`COALESCE(
+export const recencyExpr = sql<Date | null>`GREATEST(
   (SELECT MAX(${messages.createdAt}) FROM messages
    WHERE ${messages.conversationId} = ${conversations.id}
      AND ${messages.isActive} = true

@@ -155,6 +155,41 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     expect(ids.indexOf(recent)).toBeLessThan(ids.indexOf(stale));
   });
 
+  it('sorts a long stream by when it FINISHED, not when it started (review finding)', async () => {
+    if (!dbAvailable) return;
+
+    // A streaming placeholder is inserted at stream START and completed via
+    // `saveGlobalMessage`, whose `onConflictDoUpdate` set does not include
+    // `createdAt` — so the finished row keeps its start time, while the same
+    // transaction bumps `conversations.lastMessageAt` to `now()`. Preferring
+    // MAX(createdAt) therefore sorted a long answer by the moment it began,
+    // letting anything used while it generated float above it.
+    const owner = await factories.createUser();
+
+    const longStream = await seedConversation({
+      userId: owner.id,
+      type: 'global',
+      title: 'long stream',
+      lastMessageAt: new Date('2026-08-01T10:05:00Z'), // finished
+      createdAt: new Date('2026-08-01T09:59:00Z'),
+    });
+    await seedMessage(longStream, new Date('2026-08-01T10:00:00Z')); // started
+
+    const interim = await seedConversation({
+      userId: owner.id,
+      type: 'global',
+      title: 'used while it generated',
+      lastMessageAt: new Date('2026-08-01T10:02:00Z'),
+      createdAt: new Date('2026-08-01T10:01:00Z'),
+    });
+    await seedMessage(interim, new Date('2026-08-01T10:02:00Z'));
+
+    const result = await globalConversationRepository.listConversationsPaginated(owner.id);
+    const ids = result.conversations.map((c) => c.id);
+
+    expect(ids.indexOf(longStream)).toBeLessThan(ids.indexOf(interim));
+  });
+
   it('paginates across a NULL-lastMessageAt boundary with no skipped or repeated rows', async () => {
     if (!dbAvailable) return;
 
