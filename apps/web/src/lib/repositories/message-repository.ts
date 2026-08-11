@@ -128,7 +128,8 @@ async function savePageMessageRow({
   status?: 'complete' | 'interrupted';
   source?: string | null;
   dbClient: DbExecutor;
-}): Promise<void> {
+  /** The `source` the row actually holds — see the return of the upsert. */
+}): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
@@ -159,7 +160,7 @@ async function savePageMessageRow({
     createdAt,
   });
 
-  if (outcome === 'no_match') {
+  if (outcome.outcome === 'no_match') {
     loggers.ai.warn(
       'messageRepository: client-supplied id collided with a message in a different conversation — rejected',
       { messageId, conversationId, pageId },
@@ -180,6 +181,8 @@ async function savePageMessageRow({
       mentionerNameOverride: mentionNotify.mentionerName,
     });
   }
+
+  return outcome.source;
 }
 
 async function saveGlobalMessageRow({
@@ -206,7 +209,8 @@ async function saveGlobalMessageRow({
   status?: 'complete' | 'interrupted';
   source?: string | null;
   dbClient: DbExecutor;
-}): Promise<void> {
+  /** The `source` the row actually holds — insert-only, so not always the argument. */
+}): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
@@ -253,7 +257,10 @@ async function saveGlobalMessageRow({
       },
       where: and(eq(messages.conversationId, conversationId), eq(messages.role, role)),
     })
-    .returning({ id: messages.id });
+    // `source` comes back for the reason it is missing from the conflict set
+    // above: it survives a later write, so the argument is not necessarily what
+    // the row holds — and the broadcast must agree with the row.
+    .returning({ id: messages.id, source: messages.source });
 
   if (result.length === 0) {
     loggers.ai.warn(
@@ -262,6 +269,8 @@ async function saveGlobalMessageRow({
     );
     throw new MessageConversationConflictError(messageId, conversationId);
   }
+
+  return result[0].source ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -632,11 +641,16 @@ export const messageRepository = {
         .from(messages)
         .where(eq(messages.id, args.messageId))
         .limit(1);
-      await savePageMessageRow({ ...args, dbClient: tx });
+      const storedSource = await savePageMessageRow({ ...args, dbClient: tx });
       const row = await bumpConversationRev(tx, args.conversationId, {
         touchLastMessageAt: new Date(),
       });
-      return { row, existed: existing !== undefined, conversationCreated: hook.conversationCreated };
+      return {
+        row,
+        storedSource,
+        existed: existing !== undefined,
+        conversationCreated: hook.conversationCreated,
+      };
     });
     if (!outcome) return { saved: false, rev: 0 };
 
@@ -651,7 +665,13 @@ export const messageRepository = {
         content: args.content,
         uiMessage: args.uiMessage,
         status: args.status ?? 'complete',
-        source: args.source ?? null,
+        // The PERSISTED value, not the argument. `source` is insert-only, so a
+        // second write to the same id without one would otherwise broadcast
+        // `null` over a row that still says 'voice' — and `isSpokenTurn` reads
+        // this field, so an open thread would drop the mic glyph and grow it
+        // back on refresh. That is exactly what carrying the field was meant to
+        // prevent.
+        source: outcome.storedSource,
       }),
       fallbackCtx: {
         conversationId: args.conversationId,
@@ -692,11 +712,16 @@ export const messageRepository = {
         .from(messages)
         .where(eq(messages.id, args.messageId))
         .limit(1);
-      await saveGlobalMessageRow({ ...args, dbClient: tx });
+      const storedSource = await saveGlobalMessageRow({ ...args, dbClient: tx });
       const row = await bumpConversationRev(tx, args.conversationId, {
         touchLastMessageAt: new Date(),
       });
-      return { row, existed: existing !== undefined, conversationCreated: hook.conversationCreated };
+      return {
+        row,
+        storedSource,
+        existed: existing !== undefined,
+        conversationCreated: hook.conversationCreated,
+      };
     });
     if (!outcome) return { saved: false, rev: 0 };
 
@@ -711,7 +736,13 @@ export const messageRepository = {
         content: args.content,
         uiMessage: args.uiMessage,
         status: args.status ?? 'complete',
-        source: args.source ?? null,
+        // The PERSISTED value, not the argument. `source` is insert-only, so a
+        // second write to the same id without one would otherwise broadcast
+        // `null` over a row that still says 'voice' — and `isSpokenTurn` reads
+        // this field, so an open thread would drop the mic glyph and grow it
+        // back on refresh. That is exactly what carrying the field was meant to
+        // prevent.
+        source: outcome.storedSource,
       }),
       fallbackCtx: {
         conversationId: args.conversationId,

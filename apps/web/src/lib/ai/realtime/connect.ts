@@ -265,7 +265,65 @@ export const connectVoiceCall = async (
   };
   setMicrophoneEnabled(deps.microphoneEnabled ?? true);
 
-  const peer = createPeerConnection();
+  const releaseMicrophone = () => {
+    for (const track of microphone.getTracks()) {
+      track.stop();
+    }
+  };
+
+  // Each step is named so a failure says which one broke. "Handshake failed" is
+  // what makes somebody re-debug this stack from scratch.
+  let step = 'createPeerConnection';
+
+  /**
+   * PEER SETUP IS INSIDE A TRY BECAUSE ALL OF IT THROWS IN REAL BROWSERS.
+   * `RTCPeerConnection` rejects a configuration it dislikes, and `addTrack` and
+   * `createDataChannel` raise `InvalidStateError` on a connection that has
+   * already closed. The microphone is live by this point, so a throw here used
+   * to reject out of this function with the tracks still running — the
+   * recording indicator stayed on and the device stayed held. On the reuse path
+   * the cloned tracks leaked once per attempt, so a repeated failure
+   * accumulated them.
+   */
+  let peer: RTCPeerConnection;
+  let channel: RTCDataChannel;
+  try {
+    peer = createPeerConnection();
+
+    step = 'setupPeer';
+    peer.ontrack = (event: RTCTrackEvent) => {
+      const stream = event.streams[0];
+      if (stream) deps.onRemoteTrack(stream);
+    };
+    peer.onconnectionstatechange = () => {
+      if (LOST_STATES.has(peer.connectionState)) {
+        deps.onConnectionLost();
+      }
+    };
+
+    for (const track of microphone.getTracks()) {
+      peer.addTrack(track, microphone);
+    }
+
+    channel = peer.createDataChannel(REALTIME_DATA_CHANNEL);
+    channel.onmessage = (message: MessageEvent) => {
+      const event = parseEvent(message.data);
+      if (event !== undefined) {
+        deps.onEvent(event);
+      }
+    };
+  } catch (error) {
+    // `stop()` is not available yet — it closes over `peer`, which may be the
+    // thing that failed to exist. Releasing the microphone directly is the part
+    // that matters: an unclosed peer is garbage-collectable, a live mic track
+    // is a hardware capture the user can see.
+    releaseMicrophone();
+    return failure(
+      'signaling-failed',
+      `${step} — ${describeThrown(error)}`,
+      ROUTE_MESSAGES['signaling-failed'],
+    );
+  }
 
   /**
    * Teardown. The state handler is detached BEFORE closing, because closing
@@ -276,37 +334,11 @@ export const connectVoiceCall = async (
   const stop = () => {
     peer.onconnectionstatechange = null;
     peer.ontrack = null;
-    for (const track of microphone.getTracks()) {
-      track.stop();
-    }
+    releaseMicrophone();
     peer.close();
   };
 
-  peer.ontrack = (event: RTCTrackEvent) => {
-    const stream = event.streams[0];
-    if (stream) deps.onRemoteTrack(stream);
-  };
-  peer.onconnectionstatechange = () => {
-    if (LOST_STATES.has(peer.connectionState)) {
-      deps.onConnectionLost();
-    }
-  };
-
-  for (const track of microphone.getTracks()) {
-    peer.addTrack(track, microphone);
-  }
-
-  const channel = peer.createDataChannel(REALTIME_DATA_CHANNEL);
-  channel.onmessage = (message: MessageEvent) => {
-    const event = parseEvent(message.data);
-    if (event !== undefined) {
-      deps.onEvent(event);
-    }
-  };
-
-  // Each step is named so a failure says which one broke. "Handshake failed" is
-  // what makes somebody re-debug this stack from scratch.
-  let step = 'createOffer';
+  step = 'createOffer';
   let response: Response;
   try {
     const offer = await peer.createOffer();

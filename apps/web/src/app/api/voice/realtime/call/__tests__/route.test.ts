@@ -16,7 +16,9 @@ const {
   mockRunCallHandshake,
   mockBuildRealtimeTools,
   mockSignHeaders,
+  mockLoadVoiceBinding,
 } = vi.hoisted(() => ({
+  mockLoadVoiceBinding: vi.fn(),
   mockAuth: vi.fn(),
   mockIsAuthError: vi.fn(),
   mockGetManagedKey: vi.fn(),
@@ -44,6 +46,8 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCallHandshake }));
 vi.mock('@/lib/ai/realtime/tools', () => ({ buildRealtimeTools: mockBuildRealtimeTools }));
+vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: {} }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -74,6 +78,7 @@ describe('POST /api/voice/realtime/call', () => {
     mockIsBillingEnabled.mockReturnValue(true);
     mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'pro' });
     mockBuildRealtimeTools.mockReturnValue(TOOLS);
+    mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'Speak out loud.' });
     mockSignHeaders.mockReturnValue({ 'X-Broadcast-Signature': 't=1,v1=sig' });
     mockRunCallHandshake.mockResolvedValue({
       ok: true,
@@ -237,6 +242,57 @@ describe('POST /api/voice/realtime/call', () => {
     });
   });
 
+  it('given a MINT failure, should NOT pass the upstream body through', async () => {
+    // A mint body describes the managed API key request — it can name the
+    // organization, the quota state or a masked key. The passthrough exists
+    // only so a bad OPENAI_REALTIME_MODEL is visible, and only the
+    // calls-endpoint body carries that.
+    mockRunCallHandshake.mockResolvedValue({
+      ok: false,
+      code: 'mint_failed',
+      message: 'Could not mint a realtime session secret.',
+      upstream: { error: { message: 'quota exceeded for org-acme, key sk-...9f2' } },
+      upstreamStatus: 429,
+    });
+
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+    const body = (await res.json()) as Record<string, unknown>;
+    const text = JSON.stringify(body);
+
+    expect(res.status).toBe(502);
+    // The code and status still reach the caller — those are the diagnosis.
+    expect(body).toMatchObject({ code: 'mint_failed', upstreamStatus: 429 });
+    expect(body).not.toHaveProperty('upstream');
+    expect(text).not.toContain('org-acme');
+  });
+
+  it('given admission refused for credit, should answer 402 rather than a 502 that reads as "retry"', async () => {
+    mockRunCallHandshake.mockResolvedValue({
+      ok: false,
+      code: 'admission_refused',
+      message: 'You do not have enough credit for a voice call.',
+      upstreamStatus: 402,
+    });
+
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+
+    expect(res.status).toBe(402);
+    await expect(res.json()).resolves.toMatchObject({ code: 'admission_refused' });
+  });
+
+  it('given admission refused for concurrency, should answer 429', async () => {
+    mockRunCallHandshake.mockResolvedValue({
+      ok: false,
+      code: 'admission_refused',
+      message: 'Too many voice calls are already running. Try again in a moment.',
+      upstreamStatus: 429,
+    });
+
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+
+    expect(res.status).toBe(429);
+  });
+
   it('given the handshake throws, should 500 rather than leak the error', async () => {
     mockRunCallHandshake.mockRejectedValue(new Error('boom'));
 
@@ -261,5 +317,76 @@ describe('POST /api/voice/realtime/call', () => {
 
     expect(text).not.toContain(SECRET);
     expect(text).not.toContain('ek_');
+  });
+
+  /**
+   * The binding is resolved from the AUTHORIZED conversation, and nothing about
+   * it is read off the request body — which is what stops a caller naming an
+   * agent whose reach is wider than the conversation they can actually see.
+   */
+  describe('the bound assistant', () => {
+    const assistant = {
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+      enabledTools: ['read_page'],
+    };
+
+    it("should advertise only the bound agent's allowed tools", async () => {
+      mockLoadVoiceBinding.mockResolvedValue({
+        seed: [],
+        instructions: 'You are "Release Notes Bot".',
+        assistant,
+      });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockBuildRealtimeTools).toHaveBeenCalledWith(expect.anything(), ['read_page']);
+    });
+
+    it('given no bound agent, should advertise the registry unrestricted', async () => {
+      await POST(callRequest({ sdp: 'v=0 offer' }));
+
+      expect(mockBuildRealtimeTools).toHaveBeenCalledWith(expect.anything(), null);
+    });
+
+    it('should hand the instructions and the assistant to the handshake', async () => {
+      mockLoadVoiceBinding.mockResolvedValue({
+        seed: [],
+        instructions: 'You are "Release Notes Bot".',
+        assistant,
+      });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          instructions: 'You are "Release Notes Bot".',
+          assistant,
+        }),
+      );
+    });
+
+    it('should resolve the binding from the CONVERSATION, never from the request body', async () => {
+      // A body naming its own agentPageId must change nothing.
+      await POST(
+        callRequest({
+          sdp: 'v=0 offer',
+          conversationId: 'conv1',
+          assistant: { agentPageId: 'someone-elses-agent', agentTitle: 'x', enabledTools: null },
+        }),
+      );
+
+      expect(mockLoadVoiceBinding).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ userId: 'u1', conversationId: 'conv1' }),
+      );
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({
+          assistant: expect.objectContaining({ agentPageId: 'someone-elses-agent' }),
+        }),
+      );
+    });
   });
 });

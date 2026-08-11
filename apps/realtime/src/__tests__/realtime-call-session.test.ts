@@ -150,6 +150,39 @@ describe('attachToCall — readiness', () => {
     expect((update.session as { tools: unknown[] }).tools).toEqual(TOOLS);
   });
 
+  it('given instructions, should push them on the SAME session.update as the tools', async () => {
+    // The mint carries neither, so this is the only moment the model is told
+    // which assistant it is. Without it the call ran on the realtime model's
+    // default persona while the UI presented the assistant the user picked.
+    const h = harness();
+    const promise = attachToCall({
+      callId: CALL_ID,
+      secret: SECRET,
+      userId: 'u1',
+      tools: TOOLS,
+      instructions: 'You are "Release Notes Bot". Answer out loud.',
+      socketFactory: h.factory,
+    });
+    h.socket.open();
+    h.socket.receive({ type: 'session.updated', session: {} });
+    await promise;
+
+    const update = h.socket.sentEvents()[0];
+    expect((update.session as { instructions: string }).instructions).toBe(
+      'You are "Release Notes Bot". Answer out loud.',
+    );
+  });
+
+  it('given NO instructions, should omit the key rather than clear the session persona', async () => {
+    // An empty `instructions` REPLACES whatever the session already had, so
+    // "nothing to say" must not be sent as "say nothing".
+    const h = harness();
+    await attachReady(h);
+
+    const update = h.socket.sentEvents()[0];
+    expect(update.session as Record<string, unknown>).not.toHaveProperty('instructions');
+  });
+
   it('given session.created (never sent by a real attach) instead of session.updated, should NOT resolve', async () => {
     const h = harness();
     const promise = attachToCall({

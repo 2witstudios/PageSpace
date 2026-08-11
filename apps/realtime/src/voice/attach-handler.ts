@@ -120,6 +120,8 @@ export const handleRealtimeAttachRequest = async (
     timezone,
     locationContext,
     seed,
+    instructions,
+    assistant,
   } = parsed.data;
 
   // Claimed synchronously, before the first `await`. Checking the live counts
@@ -193,6 +195,7 @@ export const handleRealtimeAttachRequest = async (
       userId,
       conversationId,
       tools,
+      ...(instructions === undefined ? {} : { instructions }),
       // Deregistration is wired at attach time rather than after the await, so
       // a socket that dies during the handshake cannot leave an entry behind.
       // The runtime teardown rides along: a call that ends for ANY reason —
@@ -213,6 +216,7 @@ export const handleRealtimeAttachRequest = async (
       seed,
       ...(timezone === undefined ? {} : { timezone }),
       ...(locationContext === undefined ? {} : { locationContext }),
+      ...(assistant === undefined ? {} : { assistant }),
     });
 
     loggers.realtime.info('Realtime voice call attached', {
@@ -222,6 +226,9 @@ export const handleRealtimeAttachRequest = async (
       toolCount: tools.length,
       seedItems: seed.length,
       model,
+      // Which assistant, not what it was told: the instructions can carry an
+      // agent owner's own prompt, and a log is not the place for it.
+      agentPageId: assistant?.agentPageId,
       live: deps.registry.size,
     });
     return { status: 200, body: { success: true, callId } };

@@ -55,7 +55,11 @@ export function useAudioLevel(stream: MediaStream | null, active: boolean): numb
     const Ctor = audioContextConstructor();
     if (!Ctor || typeof requestAnimationFrame !== 'function') return;
 
-    let context: AudioContext;
+    // Declared as possibly-undefined so the failure path below can close a
+    // context that WAS constructed before a later step threw. The context is
+    // created first and every subsequent step can raise, so "we failed" and "we
+    // have nothing to clean up" are not the same statement.
+    let context: AudioContext | undefined;
     let analyser: AnalyserNode;
     let source: MediaStreamAudioSourceNode;
     try {
@@ -68,8 +72,16 @@ export function useAudioLevel(stream: MediaStream | null, active: boolean): numb
       source.connect(analyser);
     } catch {
       // A stream with no live audio track, or a context the browser refused.
+      //
+      // Closed HERE rather than left to the cleanup function, because returning
+      // early means no cleanup function is ever installed — so a context built
+      // on line one and orphaned on line four would leak a hardware audio
+      // thread per attempt. A stream with no live track is named above as an
+      // EXPECTED cause, which makes this a normal-use path, not a rare one.
+      void context?.close().catch(() => {});
       return;
     }
+    const audioContext = context;
 
     const samples = new Uint8Array(analyser.frequencyBinCount);
     let frame = 0;
@@ -105,7 +117,7 @@ export function useAudioLevel(stream: MediaStream | null, active: boolean): numb
       analyser.disconnect();
       // The context holds a hardware audio thread; leaking one per call is a
       // browser that eventually refuses to make any more of them.
-      void context.close().catch(() => {});
+      void audioContext.close().catch(() => {});
       bucketRef.current = 0;
     };
   }, [stream, active]);

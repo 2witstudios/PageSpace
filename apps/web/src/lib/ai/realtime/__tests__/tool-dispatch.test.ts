@@ -179,6 +179,60 @@ describe('buildVoiceToolContext', () => {
     expect('timezone' in context).toBe(false);
     expect('locationContext' in context).toBe(false);
   });
+
+  it('given a bound page agent, should name it as the ACTOR the tools authorize as', () => {
+    // `resolveActingAgentId` reads chatSource.agentPageId, and every canActor*
+    // check falls through to the invoking user's own reach without it — so an
+    // agent with a narrower ACL silently borrowed the caller's.
+    const context = buildVoiceToolContext(
+      request({
+        assistant: {
+          agentPageId: 'agent1',
+          agentTitle: 'Release Notes Bot',
+          enabledTools: ['read_page'],
+        },
+      }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(context.chatSource).toEqual({
+      type: 'page',
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+    });
+  });
+
+  it("given a bound agent's allowlist, should carry it so execute_tool re-checks against it", () => {
+    // execute_tool reads `enabledTools` off this context and treats undefined
+    // as unrestricted, which re-opened exactly the tools the owner switched off.
+    const context = buildVoiceToolContext(
+      request({
+        assistant: { agentPageId: 'agent1', agentTitle: 'Bot', enabledTools: ['read_page'] },
+      }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(context.enabledTools).toEqual(['read_page']);
+  });
+
+  it('given an agent with an EMPTY allowlist, should carry [] rather than drop the field', () => {
+    // Dropping it would read as unrestricted — the opposite of what [] means.
+    const context = buildVoiceToolContext(
+      request({ assistant: { agentPageId: 'agent1', agentTitle: 'Bot', enabledTools: [] } }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(context.enabledTools).toEqual([]);
+  });
+
+  it('given NO bound agent, should act as the user rather than invent an agent', () => {
+    // The Global Assistant and an unbound call have no agent page; falling
+    // through to the authenticated user is the honest actor.
+    const context = buildVoiceToolContext(request(), 'gpt-realtime-2.1');
+
+    expect('chatSource' in context).toBe(false);
+    expect('enabledTools' in context).toBe(false);
+  });
 });
 
 describe('dispatchRealtimeToolCall', () => {

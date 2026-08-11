@@ -34,8 +34,8 @@ import { resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { buildRealtimeTools } from '@/lib/ai/realtime/tools';
 import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
-import { loadRealtimeSeed } from '@/lib/ai/realtime/seed-loader';
-import { voiceSeedDeps } from '@/lib/ai/realtime/voice-runtime-deps';
+import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
+import { voiceBindingDeps } from '@/lib/ai/realtime/voice-runtime-deps';
 import { voiceLocationContextSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -116,11 +116,17 @@ export async function POST(request: Request) {
         ? conversationIdRaw
         : undefined;
 
-    // Voice starts on a conversation that already exists: the thread is replayed
-    // into the session as text before the model speaks. Hard-capped, and an
-    // empty seed is a normal outcome (a fresh thread, or one this caller may
-    // not read) — never a reason to fail the call.
-    const seed = await loadRealtimeSeed(voiceSeedDeps, {
+    // Voice starts on a conversation that already exists, so the conversation is
+    // what says which assistant is being talked to, what it was told to be, and
+    // which tools its owner allowed it — as well as supplying the history
+    // replayed into the session as text before the model speaks.
+    //
+    // Read HERE, from the authorized conversation, and never from the request
+    // body: the browser names a conversation, and everything else about the
+    // binding is derived behind that conversation's own access check. An empty
+    // binding is a normal outcome (a fresh thread, or one this caller may not
+    // read) — never a reason to fail the call.
+    const binding = await loadVoiceBinding(voiceBindingDeps, {
       userId,
       ...(conversationId === undefined ? {} : { conversationId }),
     });
@@ -137,7 +143,15 @@ export async function POST(request: Request) {
         // branches (the code-execution kill switch) that are the caller's
         // decision. The realtime server cannot build these itself — the
         // registry lives in this app — so they ride the signed internal hop.
-        tools: buildRealtimeTools(buildPageSpaceTools()),
+        //
+        // Filtered by the bound agent's own allowlist, so voice advertises what
+        // the text surface would advertise for the same agent. Advertising the
+        // whole deployment registry told the model it could call tools the
+        // agent's owner had switched off.
+        tools: buildRealtimeTools(
+          buildPageSpaceTools(),
+          binding.assistant?.enabledTools ?? null,
+        ),
         subscriptionTier: tier,
         internalRealtimeUrl: process.env.INTERNAL_REALTIME_URL,
         signHeaders: createSignedBroadcastHeaders,
@@ -147,7 +161,9 @@ export async function POST(request: Request) {
         offerSdp: sdp,
         userId,
         ...(conversationId === undefined ? {} : { conversationId }),
-        seed,
+        seed: binding.seed,
+        instructions: binding.instructions,
+        ...(binding.assistant === undefined ? {} : { assistant: binding.assistant }),
         ...(typeof timezoneRaw === 'string' && timezoneRaw.length > 0
           ? { timezone: timezoneRaw }
           : {}),
@@ -156,6 +172,21 @@ export async function POST(request: Request) {
     );
 
     if (!result.ok) {
+      // An admission refusal is a POLICY outcome, not a malfunction: the credit
+      // gate or the concurrency cap answered, the just-created OpenAI call has
+      // been hung up, and the caller needs the refusal itself — 402 or 429 —
+      // rather than a 502 that reads as "try again, something broke".
+      if (result.code === 'admission_refused') {
+        loggers.ai.info('Realtime voice call refused at admission', {
+          userId,
+          upstreamStatus: result.upstreamStatus,
+        });
+        return NextResponse.json(
+          { error: 'Voice call refused', code: result.code, message: result.message },
+          { status: result.upstreamStatus ?? 429 }
+        );
+      }
+
       loggers.ai.error(
         'Realtime voice handshake failed',
         new Error(result.message),
@@ -174,7 +205,15 @@ export async function POST(request: Request) {
           ...(result.upstreamStatus === undefined
             ? {}
             : { upstreamStatus: result.upstreamStatus }),
-          ...(result.upstream === undefined ? {} : { upstream: result.upstream }),
+          // ONLY the calls-endpoint body. That is the one that makes a bad
+          // OPENAI_REALTIME_MODEL visible, which is the entire reason this
+          // passthrough exists. A `mint_failed` body describes the managed API
+          // key request instead — it can name the organization, the quota
+          // state or a masked key — and no authenticated caller has any use
+          // for that.
+          ...(result.code === 'realtime_call_rejected' && result.upstream !== undefined
+            ? { upstream: result.upstream }
+            : {}),
         },
         { status: 502 }
       );

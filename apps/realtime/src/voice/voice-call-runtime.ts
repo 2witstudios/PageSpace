@@ -30,6 +30,7 @@ import {
 } from '@pagespace/lib/realtime/voice-events';
 import type {
   RealtimeSeedEventWire,
+  VoiceAssistant,
   VoiceLocationContext,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 import type { RealtimeCallSession } from './realtime-call-session';
@@ -67,6 +68,12 @@ export type VoiceCallRuntimeOptions = {
   readonly seed: readonly RealtimeSeedEventWire[];
   readonly timezone?: string;
   readonly locationContext?: VoiceLocationContext;
+  /**
+   * The page agent this call is bound to. Echoed on every tool dispatch so the
+   * web tier authorizes the tool as that agent rather than as the person who
+   * started the call, and applies the agent's own tool allowlist.
+   */
+  readonly assistant?: VoiceAssistant;
   readonly hangUp?: typeof hangUpCall;
 };
 
@@ -85,7 +92,8 @@ export type VoiceCallRuntime = {
 export const startVoiceCallRuntime = (
   options: VoiceCallRuntimeOptions,
 ): VoiceCallRuntime => {
-  const { session, bridge, meter, secret, seed, timezone, locationContext } = options;
+  const { session, bridge, meter, secret, seed, timezone, locationContext, assistant } =
+    options;
   const hangUp = options.hangUp ?? hangUpCall;
   const { callId, userId, conversationId } = session;
 
@@ -121,6 +129,7 @@ export const startVoiceCallRuntime = (
       argumentsJson: call.argumentsJson,
       ...(timezone === undefined ? {} : { timezone }),
       ...(locationContext === undefined ? {} : { locationContext }),
+      ...(assistant === undefined ? {} : { assistant }),
     });
 
     const output =

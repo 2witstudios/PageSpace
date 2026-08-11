@@ -66,10 +66,16 @@ export function VoiceSessionBridge() {
     if (!callIsLive) return;
     let ignore = false;
 
-    void resolveLocationContext(pathname, drives).then(({ locationContext }) => {
-      if (ignore) return;
-      setLocationContext(toVoiceLocationContext(locationContext));
-    });
+    // Caught, not merely voided: a rejection here would escape as an unhandled
+    // rejection from an effect. Leaving the call on its PREVIOUS location is
+    // the right degrade — a stale "where you are standing" is a worse answer
+    // than the current one, and a far better one than a dropped call.
+    void resolveLocationContext(pathname, drives)
+      .then(({ locationContext }) => {
+        if (ignore) return;
+        setLocationContext(toVoiceLocationContext(locationContext));
+      })
+      .catch(() => {});
 
     return () => {
       ignore = true;
@@ -88,7 +94,10 @@ export function VoiceSessionBridge() {
     // effect re-runs on the resulting state change would ask for the same
     // rebind a second time.
     clearRebind();
-    void start(action.target);
+    // The session reports a failed rebind through its own state, which the call
+    // chrome already renders; this catch exists so the rejection does not ALSO
+    // escape the effect as an unhandled one.
+    void start(action.target).catch(() => {});
   }, [intent, binding, callIsLive, clearRebind, start]);
 
   return null;

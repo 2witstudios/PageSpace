@@ -111,6 +111,39 @@ describe('handleRealtimeAttachRequest — admission', () => {
     );
   });
 
+  it('given a bound assistant, should hand its instructions to the SOCKET and its identity to the RUNTIME', async () => {
+    // Two different consumers, one binding: the persona is something only the
+    // session.update can deliver, and the identity is what every tool dispatch
+    // has to be authorized as.
+    const attach = vi.fn(async (options: AttachOptions) => fakeSession(options));
+    const startRuntime = vi.fn(() => ({ stop: vi.fn(async () => {}) }));
+    const assistant = {
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+      enabledTools: ['read_page'],
+    };
+
+    await handleRealtimeAttachRequest(
+      deps({ attach, startRuntime }),
+      JSON.stringify({ ...VALID, instructions: 'Answer out loud.', assistant }),
+    );
+
+    expect(attach).toHaveBeenCalledWith(
+      expect.objectContaining({ instructions: 'Answer out loud.' }),
+    );
+    expect(startRuntime).toHaveBeenCalledWith(expect.objectContaining({ assistant }));
+  });
+
+  it('given no assistant, should omit both rather than attach with empty ones', async () => {
+    const attach = vi.fn(async (options: AttachOptions) => fakeSession(options));
+    const startRuntime = vi.fn(() => ({ stop: vi.fn(async () => {}) }));
+
+    await handleRealtimeAttachRequest(deps({ attach, startRuntime }), JSON.stringify(VALID));
+
+    expect(attach.mock.calls[0][0]).not.toHaveProperty('instructions');
+    expect(startRuntime.mock.calls[0][0]).not.toHaveProperty('assistant');
+  });
+
   it('given a timezone and a location, should hand BOTH to the runtime that dispatches tools', async () => {
     // These are what make a spoken "what's on this page?" answerable: the web
     // tier holds no per-call state, so the process on the call is the one that

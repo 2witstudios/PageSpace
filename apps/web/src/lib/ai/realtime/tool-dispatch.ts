@@ -10,11 +10,17 @@
  * PERMISSIONS ARE NOT RE-IMPLEMENTED HERE, and that is the design, not an
  * omission. Every PageSpace tool enforces access INSIDE itself — `canActorViewPage`,
  * `canActorAccessDrive`, `resolveActorAccessiblePagesInDrive` — against the
- * `userId` on the context it is handed. So the single security-relevant thing
- * this module does is build that context from the REAL acting user and pass it
+ * ACTOR on the context it is handed. So the single security-relevant thing
+ * this module does is build that context from the REAL actor and pass it
  * unchanged. A second permission layer here would be a second thing to keep in
  * step with `packages/lib/src/permissions/`, and the first time they disagreed,
  * one of them would be wrong.
+ *
+ * "The real actor" is the invoking user OR the page agent the call is bound to
+ * — the same choice `page-chat-turn.ts` makes for the same conversation. It is
+ * resolved once, server-side, from the authorized conversation at handshake
+ * time; nothing the browser or the model says selects it. See
+ * `buildVoiceToolContext`.
  *
  * Two shapes on the wire are load-bearing and are handled defensively:
  *   - `function_call.arguments` is a newline-laden STRING, not an object, and
@@ -37,7 +43,10 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
-import type { VoiceLocationContext } from '@pagespace/lib/realtime/voice-bridge-contract';
+import type {
+  VoiceAssistant,
+  VoiceLocationContext,
+} from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /**
  * How much of a tool result is worth reading aloud. 700 characters is roughly
@@ -186,6 +195,12 @@ export type RealtimeToolDispatchRequest = {
   readonly timezone?: string;
   readonly locationContext?: VoiceLocationContext;
   readonly callId: string;
+  /**
+   * The page agent this call is bound to, resolved server-side from the
+   * authorized conversation at handshake time. Absent for the Global Assistant
+   * and for an unbound call, which act as the user.
+   */
+  readonly assistant?: VoiceAssistant;
 };
 
 export type RealtimeToolDispatchDeps = {
@@ -206,9 +221,20 @@ export type RealtimeToolDispatchDeps = {
  * agent-chain behaviour have to say so or a voice call would be attributed as
  * a sub-agent run.
  *
- * `enabledTools` is left undefined (unrestricted): the restriction that matters
- * already happened when `buildRealtimeToolSet` decided what to advertise, and
- * an allowlist here would be a third place tool exposure is decided.
+ * WHO THE TOOLS RUN AS. `chatSource` is what `resolveActingAgentId` reads, and
+ * every centralized `canActor*` check falls through to the INVOKING USER's own
+ * reach without it. For a call bound to a page agent that is the wrong actor in
+ * both directions: an agent whose memberships are narrower than the caller's
+ * would silently borrow the caller's, and the text surface
+ * (`page-chat-turn.ts`) authorizes as the agent for the same conversation. So a
+ * bound agent is named here, exactly as the text path names it.
+ *
+ * `enabledTools` is carried for the same reason, not as a second exposure
+ * decision. `execute_tool` re-checks the allowlist off THIS field and reads
+ * `undefined` as unrestricted, so omitting it on a call bound to a restricted
+ * agent re-opens through `execute_tool` precisely the tools its owner switched
+ * off. `null` — an agent with no allowlist — is the honest "unrestricted", and
+ * is passed through as null rather than dropped.
  */
 export const buildVoiceToolContext = (
   request: RealtimeToolDispatchRequest,
@@ -220,6 +246,16 @@ export const buildVoiceToolContext = (
   ...(request.locationContext === undefined
     ? {}
     : { locationContext: request.locationContext }),
+  ...(request.assistant === undefined
+    ? {}
+    : {
+        chatSource: {
+          type: 'page' as const,
+          agentPageId: request.assistant.agentPageId,
+          agentTitle: request.assistant.agentTitle,
+        },
+        enabledTools: request.assistant.enabledTools,
+      }),
   aiProvider: 'openai_voice',
   aiModel: model,
   requestOrigin: 'user',

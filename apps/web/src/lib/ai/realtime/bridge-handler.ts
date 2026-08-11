@@ -23,7 +23,14 @@ import {
 } from './transcript-persistence';
 
 export type VoiceBridgeDeps = {
-  readonly toolDeps: () => RealtimeToolDispatchDeps;
+  /**
+   * The executable tool set, built under the bound agent's allowlist.
+   *
+   * Takes the allowlist rather than closing over one because this handler is
+   * shared by every live call in the process, and each call is bound to a
+   * different assistant.
+   */
+  readonly toolDeps: (allowlist: readonly string[] | null) => RealtimeToolDispatchDeps;
   readonly transcriptDeps: TranscriptPersistenceDeps;
   /** Resolved from env at the edge, for tool-call attribution. */
   readonly model: string;
@@ -68,8 +75,12 @@ export const handleVoiceBridgeRequest = async (
   const request = parsed.data;
 
   if (request.kind === 'tool') {
+    // Both halves of the allowlist in one place: the set the dispatcher may
+    // resolve a name in, and the `enabledTools` that `execute_tool` re-checks
+    // off the execution context. An agent with no allowlist configured is
+    // `null` — unrestricted — and the Global Assistant has no agent at all.
     const output = await dispatchRealtimeToolCall(
-      deps.toolDeps(),
+      deps.toolDeps(request.assistant?.enabledTools ?? null),
       {
         name: request.name,
         argumentsJson: request.argumentsJson,
@@ -82,6 +93,7 @@ export const handleVoiceBridgeRequest = async (
         ...(request.locationContext === undefined
           ? {}
           : { locationContext: request.locationContext }),
+        ...(request.assistant === undefined ? {} : { assistant: request.assistant }),
       },
       deps.model,
     );

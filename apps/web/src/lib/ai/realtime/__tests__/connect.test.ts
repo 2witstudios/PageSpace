@@ -340,6 +340,71 @@ describe('connectVoiceCall — refusals from our route', () => {
   });
 });
 
+/**
+ * The microphone is live from the moment it is acquired, and everything between
+ * that and the signaling try block throws in real browsers. A rejection there
+ * left the recording indicator on and the device held — and on the reuse path,
+ * one cloned track per attempt.
+ */
+describe('connectVoiceCall — a throw during peer setup', () => {
+  it('given createPeerConnection throws, should release the microphone and fail by name', async () => {
+    const h = harness({
+      createPeerConnection: () => {
+        throw new Error('bad ICE configuration');
+      },
+    });
+
+    const result = await connectVoiceCall(h.deps);
+
+    expect(h.microphone.tracks.every((t) => t.stopped)).toBe(true);
+    expect(result).toMatchObject({ ok: false, reason: 'signaling-failed' });
+    expect((result as { detail: string }).detail).toContain('createPeerConnection');
+  });
+
+  it('given addTrack throws, should release the microphone rather than reject with it live', async () => {
+    const peer = new FakePeerConnection();
+    peer.addTrack = () => {
+      throw new Error('InvalidStateError');
+    };
+    const h = harness({ createPeerConnection: () => asPeer(peer) });
+
+    const result = await connectVoiceCall(h.deps);
+
+    expect(h.microphone.tracks.every((t) => t.stopped)).toBe(true);
+    expect((result as { detail: string }).detail).toContain('setupPeer');
+  });
+
+  it('given createDataChannel throws, should release the microphone too', async () => {
+    const peer = new FakePeerConnection();
+    peer.createDataChannel = () => {
+      throw new Error('InvalidStateError');
+    };
+    const h = harness({ createPeerConnection: () => asPeer(peer) });
+
+    const result = await connectVoiceCall(h.deps);
+
+    expect(h.microphone.tracks.every((t) => t.stopped)).toBe(true);
+    expect(result).toMatchObject({ ok: false, reason: 'signaling-failed' });
+  });
+
+  it('given a REUSED microphone, should stop the clone it took rather than accumulate one per attempt', async () => {
+    const existing = fakeStream('mic-1');
+    const h = harness({
+      microphone: asStream(existing),
+      getUserMedia: undefined,
+      createPeerConnection: () => {
+        throw new Error('bad ICE configuration');
+      },
+    });
+
+    await connectVoiceCall(h.deps);
+
+    // The caller's own track survives — that is what reuse means — while the
+    // clone this attempt took does not outlive the failure.
+    expect(existing.tracks.map((t) => t.stopped)).toEqual([false]);
+  });
+});
+
 describe('connectVoiceCall — broken handshakes', () => {
   it('given the route is unreachable, should fail by name and leak nothing', async () => {
     const h = harness();

@@ -57,6 +57,7 @@ const okCall = () =>
     headers: { Location: `/v1/realtime/calls/${CALL_ID}` },
   });
 const okHandoff = () => response({ json: { success: true } });
+const HANGUP_URL = `${REALTIME_CALLS_URL}/${encodeURIComponent(CALL_ID)}/hangup`;
 
 function silentLogger(): HandshakeLogger {
   return { warn: vi.fn(), error: vi.fn() };
@@ -71,6 +72,7 @@ function harness(
     mint?: () => Response;
     call?: () => Response;
     handoff?: () => Response | Promise<never>;
+    hangup?: () => Response | Promise<never>;
     internalRealtimeUrl?: string | undefined;
     model?: string;
     tools?: HandshakeDeps['tools'];
@@ -84,6 +86,9 @@ function harness(
     calls.push({ url, init: init ?? {} });
     if (url === CLIENT_SECRETS_URL) return (overrides.mint ?? okMint)();
     if (url === REALTIME_CALLS_URL) return (overrides.call ?? okCall)();
+    // The hangup hangs off the calls endpoint too, so it has to be matched
+    // before the handoff catch-all or an abandoned call looks like an attach.
+    if (url === HANGUP_URL) return (overrides.hangup ?? (() => response({})))();
     return (overrides.handoff ?? okHandoff)();
   });
 
@@ -302,6 +307,124 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
 
     expect(result).toMatchObject({ ok: true, attached: false });
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A refusal is not an outage, and the difference is the whole point: a degraded
+ * call is a working call with fewer features, while a refused one must not
+ * happen at all. Both arrive as a non-2xx from the same endpoint.
+ */
+describe('runCallHandshake — admission', () => {
+  it('given the credit gate refuses (402), should FAIL the call and hang up the one OpenAI just made', async () => {
+    // Degrading here meant a user with no credit kept a working OpenAI call
+    // that nothing was metering — the gate was worse than absent.
+    const { deps, calls } = harness({
+      handoff: () => response({ ok: false, status: 402, json: { error: 'insufficient_credits' } }),
+    });
+
+    const result = await run(deps);
+
+    expect(result).toMatchObject({ ok: false, code: 'admission_refused', upstreamStatus: 402 });
+    const hangup = byUrl(calls, HANGUP_URL);
+    expect(hangup).toBeDefined();
+    // Addressed with the call's OWN ephemeral secret — the only credential that
+    // can end it.
+    expect((hangup?.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${SECRET}`);
+  });
+
+  it('given the concurrency cap refuses (429), should FAIL the call and hang up too', async () => {
+    const { deps, calls } = harness({
+      handoff: () => response({ ok: false, status: 429, json: { error: 'too many' } }),
+    });
+
+    const result = await run(deps);
+
+    expect(result).toMatchObject({ ok: false, code: 'admission_refused', upstreamStatus: 429 });
+    expect(byUrl(calls, HANGUP_URL)).toBeDefined();
+  });
+
+  it('given a refusal, should NOT return an answer SDP the browser could still use', async () => {
+    const { deps } = harness({
+      handoff: () => response({ ok: false, status: 402 }),
+    });
+
+    const result = await run(deps);
+
+    expect(result).not.toHaveProperty('answerSdp');
+    expect(result).not.toHaveProperty('callId');
+  });
+
+  it('given the hangup itself fails, should still report the refusal rather than throw', async () => {
+    // The refusal is the outcome being reported; a hangup that does not land
+    // degrades to "the call runs until OpenAI's timeout with nobody on it",
+    // which must not become a 500 on top of a policy decision.
+    const { deps, logger } = harness({
+      handoff: () => response({ ok: false, status: 402 }),
+      hangup: () => Promise.reject(new Error('ECONNRESET')),
+    });
+
+    const result = await run(deps);
+
+    expect(result).toMatchObject({ ok: false, code: 'admission_refused' });
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('given a 400 from our own wire, should DEGRADE — that is a malfunction, not a policy', async () => {
+    const { deps, calls } = harness({
+      handoff: () => response({ ok: false, status: 400, json: { error: 'bad payload' } }),
+    });
+
+    const result = await run(deps);
+
+    expect(result).toMatchObject({ ok: true, answerSdp: ANSWER_SDP, attached: false });
+    expect(byUrl(calls, HANGUP_URL)).toBeUndefined();
+  });
+
+  it('given a 502 from the attach, should DEGRADE rather than refuse a call nobody declined', async () => {
+    const { deps, calls } = harness({
+      handoff: () => response({ ok: false, status: 502, json: { error: 'openai said no' } }),
+    });
+
+    const result = await run(deps);
+
+    expect(result).toMatchObject({ ok: true, attached: false });
+    expect(byUrl(calls, HANGUP_URL)).toBeUndefined();
+  });
+});
+
+describe('runCallHandshake — the bound assistant', () => {
+  it('given an assistant and instructions, should carry both to the realtime server', async () => {
+    const { deps, calls } = harness();
+    const assistant = {
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+      enabledTools: ['read_page'],
+    };
+
+    await runCallHandshake(deps, {
+      offerSdp: OFFER_SDP,
+      userId: 'u1',
+      conversationId: 'conv1',
+      instructions: 'You are speaking out loud.',
+      assistant,
+    });
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
+    expect(payload.assistant).toEqual(assistant);
+    expect(payload.instructions).toBe('You are speaking out loud.');
+  });
+
+  it('given no assistant, should omit the field rather than send a null one', async () => {
+    const { deps, calls } = harness();
+
+    await run(deps, 'conv1');
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('assistant');
+    expect(payload).not.toHaveProperty('instructions');
   });
 });
 

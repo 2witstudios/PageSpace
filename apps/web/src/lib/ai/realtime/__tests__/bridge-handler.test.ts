@@ -174,3 +174,64 @@ describe('handleVoiceBridgeRequest — transcripts', () => {
     expect(result.body).toMatchObject({ ok: true, kind: 'transcript', saved: false, messageId: null });
   });
 });
+
+/**
+ * The bound agent has to survive the return hop intact. The realtime server is
+ * the only party that remembers which assistant a live call belongs to — the
+ * web tier holds no per-call state — so anything dropped here is a tool run as
+ * the wrong actor, with the wrong allowlist.
+ */
+describe('handleVoiceBridgeRequest — the bound assistant', () => {
+  const assistant = {
+    agentPageId: 'agent1',
+    agentTitle: 'Release Notes Bot',
+    enabledTools: ['read_page'],
+  };
+
+  it("should build the executable tool set under the agent's OWN allowlist", async () => {
+    // Built unrestricted, the model would be offered the agent's allowed tools
+    // and permitted to run any of them — the wider list winning.
+    const toolDeps = vi.fn(() => ({
+      tools: { read_page: tool(() => ({ title: 'Notes' })) },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    }));
+
+    await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody({ assistant }));
+
+    expect(toolDeps).toHaveBeenCalledWith(['read_page']);
+  });
+
+  it('given NO assistant, should build it unrestricted rather than blocked', async () => {
+    // The Global Assistant has no agent page, and null is "never restricted".
+    const toolDeps = vi.fn(() => ({
+      tools: { read_page: tool(() => ({ title: 'Notes' })) },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    }));
+
+    await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody());
+
+    expect(toolDeps).toHaveBeenCalledWith(null);
+  });
+
+  it('should reach the tool as the AGENT, not merely as the user who started the call', async () => {
+    let seen: { chatSource?: unknown; enabledTools?: unknown } | undefined;
+    const toolDeps = () => ({
+      tools: {
+        read_page: tool(function (this: unknown, ...args: unknown[]) {
+          seen = (args[1] as { experimental_context: typeof seen }).experimental_context;
+          return { title: 'Notes' };
+        }) as Tool,
+      },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+
+    await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody({ assistant }));
+
+    expect(seen?.chatSource).toEqual({
+      type: 'page',
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+    });
+    expect(seen?.enabledTools).toEqual(['read_page']);
+  });
+});

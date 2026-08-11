@@ -668,3 +668,50 @@ describe('startVoiceCallRuntime — teardown', () => {
     expect(meter.stop).toHaveBeenCalledWith('idle_timeout');
   });
 });
+
+describe('startVoiceCallRuntime — the bound assistant', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('should echo the assistant on every tool dispatch', async () => {
+    // The web tier holds no per-call state, so this process is the only one
+    // that remembers which agent the call belongs to. Dropping it means the
+    // tool runs as the caller, with the caller's broader reach.
+    const assistant = {
+      agentPageId: 'agent1',
+      agentTitle: 'Release Notes Bot',
+      enabledTools: ['read_page'],
+    };
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+      assistant,
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.requests[0]).toMatchObject({ assistant });
+  });
+
+  it('given no assistant, should omit the field rather than send an empty one', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.requests[0]).not.toHaveProperty('assistant');
+  });
+});

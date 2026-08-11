@@ -19,7 +19,19 @@ import type { Tool, ToolSet } from 'ai';
 import { splitToolsForExposure } from '../tools/tool-exposure';
 import { createToolSearchTool } from '../tools/tool-search-tool';
 import { createExecuteTool } from '../tools/execute-tool';
+import { filterToolsForAgentAllowlist } from '../core/tool-filtering';
 import type { RealtimeTool } from './session';
+
+/**
+ * A bound page agent's saved tool allowlist (`pages.enabledTools`), or null for
+ * an unconfigured agent and for the Global Assistant.
+ *
+ * `null` and `[]` are NOT the same value and the difference is the whole point:
+ * null is "its owner never restricted it", `[]` is "its owner switched every
+ * PageSpace tool off". Collapsing them — which is what passing `undefined`
+ * around does — turns the second into the first.
+ */
+export type ToolAllowlist = readonly string[] | null;
 
 /**
  * Convert one tool's zod `inputSchema` to the plain JSON Schema the realtime
@@ -98,8 +110,11 @@ export function toRealtimeTool(name: string, tool: Tool): RealtimeTool {
  * are directly callable, so letting the model look one up is harmless, and it
  * matches the text stack's catalog.
  */
-export function buildRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
-  return Object.entries(buildRealtimeToolSet(tools)).map(([name, tool]) =>
+export function buildRealtimeTools(
+  tools: ToolSet,
+  allowlist: ToolAllowlist = null,
+): readonly RealtimeTool[] {
+  return Object.entries(buildRealtimeToolSet(tools, allowlist)).map(([name, tool]) =>
     toRealtimeTool(name, tool),
   );
 }
@@ -120,13 +135,30 @@ export function buildRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
  * half is captured in the closure this returns, so a spoken request that
  * reaches a non-core tool goes through the SAME allowlist re-check and the SAME
  * `safeParse` the text stack uses.
+ *
+ * THE AGENT'S ALLOWLIST IS APPLIED FIRST, before the exposure split and before
+ * `tool_search` is handed its catalog — the same order `page-chat-turn.ts`
+ * uses, and for the same reason: filtering afterwards would leave blocked tools
+ * discoverable through `tool_search` and callable through `execute_tool`, which
+ * is every tool the agent's owner switched off. `tool_search` therefore also
+ * gets the FILTERED set here rather than the whole registry, so it cannot
+ * describe a tool the model is not allowed to reach.
+ *
+ * `tool_search` and `execute_tool` are added AFTER the filter and are never
+ * subject to it. They are the scaffolding that makes the allowlist reachable at
+ * all, not capabilities in their own right — and `execute_tool` re-checks the
+ * allowlist internally anyway, over the already-filtered deferred half.
  */
-export function buildRealtimeToolSet(tools: ToolSet): ToolSet {
-  const { coreTools, nonCoreTools } = splitToolsForExposure(tools);
+export function buildRealtimeToolSet(tools: ToolSet, allowlist: ToolAllowlist = null): ToolSet {
+  const allowed = filterToolsForAgentAllowlist(
+    tools,
+    allowlist === null ? null : [...allowlist],
+  ) as ToolSet;
+  const { coreTools, nonCoreTools } = splitToolsForExposure(allowed);
 
   return {
     ...coreTools,
-    tool_search: createToolSearchTool(tools),
+    tool_search: createToolSearchTool(allowed),
     execute_tool: createExecuteTool(nonCoreTools),
   };
 }

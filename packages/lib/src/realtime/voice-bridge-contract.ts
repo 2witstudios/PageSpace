@@ -179,6 +179,42 @@ export const realtimeSeedEventSchema = z.object({
 export type RealtimeSeedEventWire = z.infer<typeof realtimeSeedEventSchema>;
 
 /**
+ * WHO the caller is talking to, resolved server-side from the bound
+ * conversation and carried for the life of the call.
+ *
+ * A voice call binds to a conversation that already exists, and a page
+ * conversation's `contextId` IS its agent page — so "which assistant" is a
+ * fact about the authorized conversation, never a claim the browser makes. It
+ * travels because two things downstream cannot derive it:
+ *
+ *   - TOOL EXECUTION has to run as the agent, not merely as the person who
+ *     started the call. `resolveActingAgentId` reads `chatSource.agentPageId`
+ *     and every centralized `canActor*` check falls through to the invoking
+ *     user's own (often broader) reach without it, so a page agent bound to a
+ *     narrower ACL would silently borrow the caller's.
+ *   - THE TOOL ALLOWLIST (`enabledTools`) is the agent owner's decision about
+ *     what their agent may do. `undefined` means unrestricted, so omitting it
+ *     is not a smaller claim than sending it — it is the largest one.
+ *
+ * `enabledTools` is nullable rather than optional because null is a real,
+ * distinct value here: an agent with no allowlist configured is unrestricted,
+ * and that has to be expressible without meaning "field absent, assume the
+ * worst".
+ *
+ * ECHOING IT BACK on the tool hop adds no trust assumption. That hop already
+ * carries `userId` under the same HMAC — anything able to forge this could
+ * already claim to be any user, which is strictly more powerful than claiming
+ * to be any agent.
+ */
+export const voiceAssistantSchema = z.object({
+  agentPageId: z.string().min(1),
+  agentTitle: z.string(),
+  enabledTools: z.array(z.string()).nullable(),
+});
+
+export type VoiceAssistant = z.infer<typeof voiceAssistantSchema>;
+
+/**
  * What `POST /api/realtime/attach` receives.
  *
  * `conversationId` is optional because voice is a second transport onto a
@@ -198,6 +234,13 @@ export type RealtimeSeedEventWire = z.infer<typeof realtimeSeedEventSchema>;
  * owns the repositories. Shipping it in this payload rather than fetching it
  * over the return hop also keeps it off the critical path — the browser is
  * already in a call, and the seed must land before the model speaks.
+ *
+ * `instructions` and `assistant` come from the SAME authorized conversation
+ * read as the seed, for the same reason: the agent's own `systemPrompt` and
+ * `enabledTools` live in the web tier's tables, and the model is otherwise
+ * handed the realtime default persona on a call the UI presents as talking to
+ * a specific assistant. Both are optional because an unbound call is a real,
+ * supported state — it has no assistant to be.
  */
 export const realtimeAttachPayloadSchema = z.object({
   callId: realtimeCallIdSchema,
@@ -210,6 +253,8 @@ export const realtimeAttachPayloadSchema = z.object({
   timezone: z.string().min(1).optional(),
   locationContext: voiceLocationContextSchema.optional(),
   seed: z.array(realtimeSeedEventSchema).default([]),
+  instructions: z.string().min(1).optional(),
+  assistant: voiceAssistantSchema.optional(),
 });
 
 export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
@@ -229,11 +274,13 @@ export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
  * side of the boundary — the dispatcher is where a malformed argument string
  * has to become a sentence the model can say.
  *
- * `timezone` and `locationContext` are echoed back rather than looked up: the
- * web tier holds no per-call state (a call is served by whichever instance
- * answers, and PROVEN FACT #2 is that per-call state cannot live in one
- * instance's memory), so the process that owns the call is the one that
- * remembers its context.
+ * `timezone`, `locationContext` and `assistant` are echoed back rather than
+ * looked up: the web tier holds no per-call state (a call is served by
+ * whichever instance answers, and PROVEN FACT #2 is that per-call state cannot
+ * live in one instance's memory), so the process that owns the call is the one
+ * that remembers its context. `assistant` is what makes a tool run as the
+ * bound agent instead of as the person who started the call — see
+ * `voiceAssistantSchema` for why echoing it is not a new trust assumption.
  */
 export const voiceToolDispatchSchema = z.object({
   kind: z.literal('tool'),
@@ -244,6 +291,7 @@ export const voiceToolDispatchSchema = z.object({
   argumentsJson: z.string(),
   timezone: z.string().min(1).optional(),
   locationContext: voiceLocationContextSchema.optional(),
+  assistant: voiceAssistantSchema.optional(),
 });
 
 /**

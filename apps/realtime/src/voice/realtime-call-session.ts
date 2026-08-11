@@ -124,6 +124,12 @@ export type AttachOptions = {
   readonly userId: string;
   readonly conversationId?: string;
   readonly tools: readonly RealtimeToolWire[];
+  /**
+   * What the model is told it is. Sent with the tools, on the same
+   * `session.update`, because both are things the session did not have until
+   * this socket supplied them — the mint carries neither.
+   */
+  readonly instructions?: string;
   readonly socketFactory?: AttachSocketFactory;
   /** Called once the session stops, for whatever reason. Used to deregister. */
   readonly onClosed?: (callId: string) => void;
@@ -166,6 +172,7 @@ export const attachToCall = (options: AttachOptions): Promise<RealtimeCallSessio
     userId,
     conversationId,
     tools,
+    instructions,
     socketFactory = defaultAttachSocketFactory,
     onClosed,
     readyTimeoutMs = ATTACH_READY_TIMEOUT_MS,
@@ -282,10 +289,24 @@ export const attachToCall = (options: AttachOptions): Promise<RealtimeCallSessio
     socket.onopen = () => {
       // Tools land here, on the server socket, and therefore never touch the
       // browser. This is also the event whose reply defines readiness.
+      //
+      // The instructions ride along because the mint deliberately carries
+      // neither: `buildSessionConfig` is called with the model and nothing
+      // else, so a call that never gets a server attached advertises no tools
+      // to a model with nobody listening. The persona has the same shape — the
+      // assistant a caller selected is only knowable to the side holding the
+      // conversation — so it arrives with the thing that acts on it, or not at
+      // all. Omitted rather than sent empty when there is none: an empty
+      // `instructions` would REPLACE whatever the session already had.
       socket.send(
         JSON.stringify({
           type: 'session.update',
-          session: { type: 'realtime', tools, tool_choice: 'auto' },
+          session: {
+            type: 'realtime',
+            tools,
+            tool_choice: 'auto',
+            ...(instructions === undefined ? {} : { instructions }),
+          },
         }),
       );
     };

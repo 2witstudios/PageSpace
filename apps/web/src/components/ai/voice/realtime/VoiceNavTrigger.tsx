@@ -125,6 +125,17 @@ export function VoiceNavTrigger({ onReveal, className }: VoiceNavTriggerProps) {
       );
       setLocationContext(toVoiceLocationContext(locationContext));
       await start(binding.target);
+    } catch (error) {
+      // Without this the spinner just stops and nothing else happens: a failure
+      // BEFORE `start` runs never reaches `chrome.state === 'error'`, because
+      // there is no call yet for the session to report an error on. The press
+      // would look like it did nothing at all.
+      //
+      // It is also what keeps this off the unhandled-rejection path —
+      // `pressRef` fires this with `void`, so a rejection had nowhere to go.
+      toast.error('Could not start the call', {
+        description: error instanceof Error ? error.message : 'Try again in a moment.',
+      });
     } finally {
       setIsStarting(false);
     }

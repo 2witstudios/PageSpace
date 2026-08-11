@@ -42,6 +42,7 @@ import {
   VOICE_BRIDGE_ROUTES,
   type RealtimeAttachPayload,
   type RealtimeSeedEventWire,
+  type VoiceAssistant,
   type VoiceLocationContext,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 
@@ -56,6 +57,10 @@ import {
  * surfaces here and ONLY here, as a 403 `model_not_found` from
  * `/v1/realtime/calls`. That upstream body has to reach the caller intact or
  * the misconfiguration is invisible.
+ *
+ * `admission_refused` is the one failure that is not a malfunction. It means
+ * the realtime server applied a POLICY — out of credit, or already on the
+ * concurrency limit — and the call must not proceed. See `handOff`.
  */
 export type HandshakeErrorCode =
   | 'mint_failed'
@@ -63,7 +68,8 @@ export type HandshakeErrorCode =
   | 'realtime_call_rejected'
   | 'missing_call_location'
   | 'malformed_call_location'
-  | 'missing_answer_sdp';
+  | 'missing_answer_sdp'
+  | 'admission_refused';
 
 export type HandshakeFailure = {
   readonly ok: false;
@@ -130,6 +136,14 @@ export type HandshakeInput = {
   /** Threaded into the tool-execution context the realtime server dispatches with. */
   readonly timezone?: string;
   readonly locationContext?: VoiceLocationContext;
+  /**
+   * What the model is told it is — the bound assistant's persona plus the
+   * spoken-turn guidance. Resolved from the same authorized conversation read
+   * as the seed.
+   */
+  readonly instructions?: string;
+  /** The bound page agent, for tool execution. Absent for the Global Assistant. */
+  readonly assistant?: VoiceAssistant;
 };
 
 /** Upstream calls are short; a hung one must not hold the request open. */
@@ -167,26 +181,56 @@ export const parseCallId = (location: string | null): string | undefined => {
 };
 
 /**
- * Hand the live call to the realtime server. Best-effort BY DESIGN: at this
- * point the browser has a valid answer SDP and can hold a working audio call.
- * Failing the handshake because the tool/transcript/metering plane is
+ * What the handoff decided, and it is NOT one bit.
+ *
+ * `degraded` and `refused` look identical on the wire — both are a non-2xx from
+ * the same endpoint — and collapsing them is what let a refused call keep
+ * running: the browser already holds a valid answer SDP, so "we could not
+ * attach" and "you may not have this call" both ended as `attached: false` and
+ * the call went ahead unmetered.
+ */
+type HandoffOutcome =
+  | { readonly kind: 'attached' }
+  /** The tool/transcript/metering plane is unreachable. Degrade, do not fail. */
+  | { readonly kind: 'degraded' }
+  /** A policy said no: out of credit, or on the concurrency limit. */
+  | { readonly kind: 'refused'; readonly status: number; readonly message: string };
+
+/**
+ * Statuses that mean POLICY rather than malfunction.
+ *
+ * 402 is the credit gate and 429 is a concurrency cap — the two admission
+ * decisions `apps/realtime` takes BEFORE opening a socket, both of which exist
+ * precisely so an unaffordable or over-limit call does not happen. Everything
+ * else (a 400 from our own wire, a 502 from OpenAI's side of the attach) is a
+ * malfunction in an optional plane, and the caller keeps a degraded call.
+ */
+const ADMISSION_REFUSAL_STATUSES = new Set([402, 429]);
+
+/**
+ * Hand the live call to the realtime server. Best-effort for OUTAGES by design:
+ * at this point the browser has a valid answer SDP and can hold a working audio
+ * call, so failing the handshake because the tool/transcript/metering plane is
  * unreachable would trade a degraded call for no call at all.
  *
- * Returns whether the realtime server accepted it, so the caller can report the
- * degrade honestly instead of implying full capability.
+ * NOT best-effort for REFUSALS. A 402 or a 429 is the credit gate or the
+ * concurrency cap answering, and those gates only mean anything if the call
+ * they refuse does not happen. Treated as a degrade they were worse than
+ * absent: the browser kept a working OpenAI call that nothing was metering, so
+ * a user out of credit got an unlimited one.
  */
 const handOff = async (
   deps: HandshakeDeps,
   input: HandshakeInput,
   callId: string,
   secret: string,
-): Promise<boolean> => {
+): Promise<HandoffOutcome> => {
   if (!deps.internalRealtimeUrl) {
     deps.logger.warn(
       'Realtime voice call has no server attach: INTERNAL_REALTIME_URL is unset',
       { callId, userId: input.userId },
     );
-    return false;
+    return { kind: 'degraded' };
   }
 
   // Signed, not merely internal. A valid HMAC proves the sender is the web
@@ -210,6 +254,8 @@ const handOff = async (
       ? {}
       : { locationContext: input.locationContext }),
     seed: [...(input.seed ?? [])],
+    ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+    ...(input.assistant === undefined ? {} : { assistant: input.assistant }),
   };
   const body = JSON.stringify(payload);
 
@@ -231,16 +277,59 @@ const handOff = async (
         userId: input.userId,
         status: response.status,
       });
-      return false;
+      return ADMISSION_REFUSAL_STATUSES.has(response.status)
+        ? {
+            kind: 'refused',
+            status: response.status,
+            message:
+              response.status === 402
+                ? 'You do not have enough credit for a voice call.'
+                : 'Too many voice calls are already running. Try again in a moment.',
+          }
+        : { kind: 'degraded' };
     }
-    return true;
+    return { kind: 'attached' };
   } catch (error) {
+    // An unreachable realtime server is an outage, not a refusal: nothing
+    // decided anything about this call, so the caller keeps the degraded one.
     deps.logger.error(
       'Realtime server attach handoff failed',
       error instanceof Error ? error : new Error(String(error)),
       { callId, userId: input.userId },
     );
-    return false;
+    return { kind: 'degraded' };
+  }
+};
+
+/**
+ * End a call we just created and are not going to use.
+ *
+ * Only reached when admission refused the call AFTER OpenAI had already
+ * accepted it. Without this the refusal is only half enforced — the browser
+ * holds an answer SDP for a live session, and our refusing to attach does not
+ * end it.
+ *
+ * Never throws and never fails the caller: the refusal is the outcome being
+ * reported, and a hangup that does not land degrades to "the call runs until
+ * OpenAI's own timeout with nobody on it", which is strictly better than
+ * turning a policy refusal into a 500.
+ */
+const abandonCall = async (
+  deps: HandshakeDeps,
+  callId: string,
+  secret: string,
+): Promise<void> => {
+  try {
+    await deps.fetch(`${REALTIME_CALLS_URL}/${encodeURIComponent(callId)}/hangup`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(HANDOFF_TIMEOUT_MS),
+    });
+  } catch (error) {
+    deps.logger.warn('Could not hang up a realtime call that admission refused', {
+      callId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
   }
 };
 
@@ -332,7 +421,19 @@ export const runCallHandshake = async (
     };
   }
 
-  const attached = await handOff(deps, input, callId, secret);
+  const outcome = await handOff(deps, input, callId, secret);
 
-  return { ok: true, callId, answerSdp, attached };
+  if (outcome.kind === 'refused') {
+    // The call exists at OpenAI and the browser is holding an answer for it, so
+    // refusing to attach is not enough — it has to be ended.
+    await abandonCall(deps, callId, secret);
+    return {
+      ok: false,
+      code: 'admission_refused',
+      message: outcome.message,
+      upstreamStatus: outcome.status,
+    };
+  }
+
+  return { ok: true, callId, answerSdp, attached: outcome.kind === 'attached' };
 };

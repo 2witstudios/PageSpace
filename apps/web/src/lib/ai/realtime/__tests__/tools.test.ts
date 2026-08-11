@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { buildRealtimeTools, toRealtimeTool } from '../tools';
+import { buildRealtimeTools, buildRealtimeToolSet, toRealtimeTool } from '../tools';
 import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 import { createToolSearchTool } from '../../tools/tool-search-tool';
 import { createExecuteTool } from '../../tools/execute-tool';
@@ -243,5 +243,77 @@ describe('buildRealtimeTools', () => {
     expect(buildRealtimeTools(set)).toEqual(buildRealtimeTools(set));
     expect(Object.keys(set)).toEqual(snapshot);
     expect(set).not.toHaveProperty('tool_search');
+  });
+});
+
+/**
+ * The agent's allowlist is what its owner switched off. Advertising past it
+ * told the model it could call write and delete tools an owner had disabled —
+ * and because `execute_tool` reaches everything the split deferred, filtering
+ * only the upfront half would have left them all callable anyway.
+ */
+describe('buildRealtimeTools — the bound agent allowlist', () => {
+  it('given an allowlist, should advertise only what it names', () => {
+    const emitted = names(
+      buildRealtimeTools(
+        { read_page: fakeTool(), delete_page: fakeTool(), rename_drive: fakeTool() },
+        ['read_page'],
+      ),
+    );
+
+    expect(emitted).toEqual(['read_page', 'tool_search', 'execute_tool']);
+  });
+
+  it('given null, should treat the agent as unrestricted', () => {
+    const set = { read_page: fakeTool(), rename_drive: fakeTool() };
+    expect(names(buildRealtimeTools(set, null))).toEqual(names(buildRealtimeTools(set)));
+  });
+
+  it('given an EMPTY allowlist, should advertise nothing but the scaffolding', () => {
+    // [] is "every PageSpace tool off", not "unconfigured".
+    const emitted = names(
+      buildRealtimeTools({ read_page: fakeTool(), rename_drive: fakeTool() }, []),
+    );
+
+    expect(emitted).toEqual(['tool_search', 'execute_tool']);
+  });
+
+  it('should keep a blocked tool out of the EXECUTABLE set as well, not just the advertised one', () => {
+    // The advertised list is what the model is told about; execute_tool is how
+    // it reaches everything else. A filter applied to only one of them is not a
+    // filter.
+    const executable = buildRealtimeToolSet(
+      { read_page: fakeTool(), rename_drive: fakeTool() },
+      ['read_page'],
+    );
+
+    expect(Object.keys(executable).sort()).toEqual(
+      ['execute_tool', 'read_page', 'tool_search'].sort(),
+    );
+  });
+
+  it('should keep a blocked tool out of what tool_search can DESCRIBE', async () => {
+    // Otherwise the model is handed the name and schema of a tool it is then
+    // refused — which is both a leak of the agent's configuration and an
+    // invitation to spend a turn failing.
+    const search = buildRealtimeToolSet(
+      { read_page: fakeTool(), rename_drive: fakeTool() },
+      ['read_page'],
+    ).tool_search;
+    const described = JSON.stringify(
+      await (search.execute as (a: unknown, o: unknown) => unknown)(
+        { query: 'rename' },
+        { experimental_context: {}, toolCallId: 't1', messages: [] },
+      ),
+    );
+
+    expect(described).not.toContain('rename_drive');
+  });
+
+  it('should never filter away the scaffolding itself', () => {
+    // tool_search and execute_tool are how an allowlist is reached at all, not
+    // capabilities an owner grants.
+    const emitted = names(buildRealtimeTools({ read_page: fakeTool() }, ['nothing_matches']));
+    expect(emitted).toEqual(['tool_search', 'execute_tool']);
   });
 });
