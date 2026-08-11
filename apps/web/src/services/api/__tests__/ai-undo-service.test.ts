@@ -117,13 +117,11 @@ const BUMPED_ROW = {
   rev: 7,
   userId: 'user_123',
   isShared: false,
-  workspaceId: null,
   type: 'page',
   contextId: 'page_123',
   title: null,
   lastMessageAt: null,
   createdAt: new Date(),
-  closedInWorkspaceAt: null,
   isActive: true,
 };
 /** The surviving message the post-undo `lastMessageAt` recompute settles on. */

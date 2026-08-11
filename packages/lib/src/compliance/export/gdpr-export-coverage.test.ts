@@ -76,6 +76,7 @@ const EMPTY: AllUserData = {
   displayPreferences: [],
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
+  personalizationCandidates: [],
   agentWorkspaces: [],
   streamState: [],
 };
@@ -158,6 +159,7 @@ describe('GDPR export table coverage', () => {
       settings: 'settings.json',
       // Omitted entirely when the user has none, so an empty bundle lacks it.
       personalization: null,
+      personalizationCandidates: 'personalization-candidates.json',
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
     };

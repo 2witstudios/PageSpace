@@ -38,9 +38,10 @@
  * message text: the message is prose Postgres is free to reword, the constraint
  * name is the identifier the migration created.
  *
- * The backfill already does this arbitration for historical rows
- * (`resolveChatClaims` in ./workspace-node-backfill.ts, fed by a query across
- * the whole table). This is the same fact asked at runtime.
+ * The one-shot backfill used to do this same arbitration for historical rows,
+ * off a query across the whole table; it was deleted with the legacy tables at
+ * migration 0256. This is that fact asked at runtime instead, and it is now the
+ * only place it is asked.
  */
 
 /**

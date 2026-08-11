@@ -242,20 +242,19 @@ export async function readWorkspaceNodeSnapshot(
  * because the constraint it stands in front of is:
  * `UNIQUE (targetId) WHERE targetKind = 'chat'` has no `rootId` in its key, so
  * "is this conversation free to bind" is not a question a workspace's own rows
- * can be asked. Mirrors `loadClaimedChatTargets` in
- * `scripts/backfill-agent-workspace-nodes.ts`, which asks the identical
- * question of the identical index for historical rows — one shape, two
- * callers, rather than a second way of asking.
+ * can be asked. The one-shot backfill asked this same question of this same
+ * index for historical rows; it was deleted with the legacy tables at migration
+ * 0256, so this is now the only caller.
  *
  * It returns the HOLDER, not a boolean: the caller has to tell "held here" from
  * "held elsewhere", and that discrimination belongs in
  * {@link conflictingChatTargets} where it can be read, not in a `where` clause
  * where it cannot.
  *
- * Unchunked, unlike the backfill's version, and the difference is a real bound
- * rather than an oversight: a write payload is capped at `MAX_NODES` (2048) by
- * the wire schema, so the `IN` list has a ceiling the migration's full-table
- * sweep does not have.
+ * Unchunked, unlike the backfill's version was, and the difference is a real
+ * bound rather than an oversight: a write payload is capped at `MAX_NODES`
+ * (2048) by the wire schema, so the `IN` list has a ceiling the migration's
+ * full-table sweep did not have.
  *
  * Takes the caller's executor so the lookup runs on the transaction that will
  * do the write, rather than reaching past it for a second pooled connection
@@ -452,90 +451,6 @@ export async function readConversationDirectoryRows(
  * to be in the same lock scope, or two callers compute from one base and the
  * later commit silently drops the earlier one's change.
  */
-/**
- * Is this workspace still WAITING FOR THE BACKFILL — does it hold membership
- * the old model records and the node model has never been given?
- *
- * Two conditions, and the shape of them is the third attempt. The refusal this
- * feeds is unrecoverable by design, so the predicate has to be true for every
- * workspace the backfill still owes a node to, and false the moment it has paid.
- *
- *  1. **No `agent_workspace_node_revs` row.** THE MIGRATION MARKER, and the
- *     reason this is not simply "are there nodes?". The backfill writes
- *     `rev = 0` in the same transaction as the nodes, `writeWorkspaceNodes` only
- *     ever increments it, and nothing deletes it — `destroy` removes nodes and
- *     leaves the rev standing. So it answers "has this workspace ever been
- *     through the node model" monotonically and cannot un-answer itself.
- *
- *     An earlier cut asked "is there a legacy row with no node", which is a
- *     different question that coincides during the migration window and diverges
- *     the moment a tree is legitimately emptied: `endSession` destroys the whole
- *     tree, so ending a session and reusing it made a correctly-backfilled
- *     workspace look un-backfilled and refused every write after that.
- *
- *  2. **Some legacy source row exists.** This is what separates "never
- *     backfilled" from "brand new". Given (1), any such row is one the backfill
- *     has not processed, so the three sources it derives from are checked the
- *     way it derives them — panes, conversations, AND shells. An earlier cut
- *     looked only at `conversations.workspaceId` while claiming to cover the
- *     backfill's sources, so a workspace whose legacy membership was a pane row
- *     or a shell passed the guard, got seeded, and was then reported
- *     `alreadyMigrated` by the very run that should have saved it.
- *
- *     A brand-new workspace matches none of them: the pane tables are dead,
- *     nothing writes `conversations.workspaceId`, and a shell created after the
- *     cutover goes through the node write path and therefore already has (1).
- *
- * **There is deliberately no `endedAt` clause.** One used to be here, exempting
- * ended workspaces because the backfill skipped them. That exemption permitted
- * exactly the write that makes the exemption false: claiming a thread into an
- * ended workspace UN-ENDS it (`planSessionReopen` clears `endedAt`), which mints
- * a rev row and disarms this guard for good, after which the backfill reports
- * the workspace `alreadyMigrated` and its real membership is stranded forever.
- * The backfill now covers every workspace instead, so the guard needs no
- * exemption and its scope is the drop's scope.
- *
- * Costs two indexed lookups, and only on the seed path — a workspace's first
- * write while it has no tree. After the follow-up migration drops the old
- * columns and tables, this function and its call site go with them.
- */
-export async function awaitsBackfill(
-  executor: DbExecutor,
-  workspaceId: string,
-): Promise<boolean> {
-  const { agentWorkspaceNodeRevs } = await import('@pagespace/db/schema/agent-workspace-nodes');
-
-  const [migrated] = await executor
-    .select({ rootId: agentWorkspaceNodeRevs.rootId })
-    .from(agentWorkspaceNodeRevs)
-    .where(eq(agentWorkspaceNodeRevs.rootId, workspaceId))
-    .limit(1);
-
-  if (migrated !== undefined) return false;
-
-  // The backfill's own three sources, asked as one question. `sql` rather than
-  // the query builder because this is a pure existence test across three
-  // unrelated tables and a UNION of `SELECT 1`s says that plainly.
-  const result = await executor.execute(sql`
-    SELECT 1 AS present WHERE EXISTS (
-      SELECT 1 FROM "agent_workspace_panes" p WHERE p."workspaceId" = ${workspaceId}
-      UNION ALL
-      SELECT 1 FROM "agent_workspace_shells" s WHERE s."workspaceId" = ${workspaceId}
-      UNION ALL
-      SELECT 1 FROM "conversations" c
-       WHERE c."workspaceId" = ${workspaceId}
-         AND c."isActive" = true
-         AND c."closedInWorkspaceAt" IS NULL
-    )
-  `);
-
-  // node-postgres hands back a `QueryResult`; a driver that returns the rows
-  // directly is handled too, because this module is also run against a
-  // transaction executor and the two differ on exactly this.
-  const rows = Array.isArray(result) ? result : (result as { rows?: unknown[] }).rows ?? [];
-  return rows.length > 0;
-}
-
 export async function writeWorkspaceNodes(
   executor: DbExecutor,
   input: { workspaceId: string; write: PersistedNodeWrite },

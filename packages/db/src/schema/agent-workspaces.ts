@@ -3,7 +3,6 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
-import { conversations } from './conversations';
 
 /**
  * Agent Sessions
@@ -20,15 +19,24 @@ import { conversations } from './conversations';
  * from it, which forced one environment per chat thread and made it
  * structurally impossible for two conversations to share a working context
  * (it is why panes could not share a sandbox). A session and a conversation
- * have different lifecycles and a genuine one-to-many relationship:
- * `conversations.workspaceId` FKs here, set at creation and permanent — a
- * thread's history and its filesystem always agree. Moving a thread elsewhere
- * is a FORK (a new value), never a rebind (a retroactive mutation).
+ * have different lifecycles and a genuine one-to-many relationship: a thread's
+ * membership is a node in `agent_workspace_nodes` whose `rootId` is this row,
+ * so a thread's history and its filesystem always agree. Moving a thread
+ * elsewhere is a FORK (a new node in another tree), never a rebind (a
+ * retroactive mutation).
  *
- * **A session is never empty, in both directions.** It is born with its first
- * conversation (spawning a session spawns an agent), and closing its last pane
- * ends it — so no zero-conversation session exists for the reclaim machinery
- * to reason about.
+ * That membership USED to be `conversations.workspaceId`, a FK pointing here,
+ * with pane rows saying separately where the thread appeared on screen. Two
+ * structures for one fact; the column and the pane tables were dropped at
+ * migration 0256 and the node tree is now the only record of either.
+ *
+ * **A session is born non-empty, and stays open until it is ended.** It is born
+ * with its first conversation (spawning a session spawns an agent). It is NOT
+ * ended by its last pane going away: closing the last pane leaves the session
+ * open holding an empty tree, and ending is its own act aimed at the session
+ * (`endedAt`), so closing something can never end more than was asked. An
+ * earlier cut of this docblock claimed the reverse, and the reclaim machinery
+ * must not assume a live session holds at least one node.
  *
  * **Ids address, names label.** `name` is a display label with NO uniqueness
  * constraint of any kind — nothing ever looks a session up by it, so renaming
@@ -237,7 +245,11 @@ export const agentWorkspacesRelations = relations(agentWorkspaces, ({ one, many 
     fields: [agentWorkspaces.ownerId],
     references: [users.id],
   }),
-  conversations: many(conversations),
+  // NO `conversations: many(...)`. A workspace hosts threads, but the row that
+  // says so is a node in `agent_workspace_nodes` (`targetKind = 'chat'`), not a
+  // FK on `conversations` — that column was dropped at 0256. Membership is not
+  // a relation Drizzle can infer, and asking it to would resurrect the second
+  // structure this epic exists to delete.
   shells: many(agentWorkspaceShells),
 }));
 

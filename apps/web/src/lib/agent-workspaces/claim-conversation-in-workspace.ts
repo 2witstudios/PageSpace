@@ -35,16 +35,6 @@ export type AdmitConversationOutcome =
   | 'already_a_member'
   | 'session_full'
   | 'bound_elsewhere'
-  /**
-   * The workspace is waiting for the backfill. Kept distinct for the same
-   * reason `session_full` and `bound_elsewhere` are — except more so: those two
-   * are recoverable by the caller, and this one is not recoverable by anybody
-   * except an operator running the backfill. Folding it into `refused` made the
-   * unrecoverable case the ONLY refusal on this path that arrived disguised, as
-   * `not_found` — telling a user their conversation does not exist, and giving
-   * the operator a log line with no mention of the backfill.
-   */
-  | 'awaiting_backfill'
   | 'refused';
 
 export type ClaimConversationOutcome =
@@ -52,9 +42,7 @@ export type ClaimConversationOutcome =
   | 'already_in_session'
   | 'not_found'
   | 'cross_drive_denied'
-  | 'session_full'
-  /** The workspace has not been backfilled. Never `not_found`: it exists. */
-  | 'awaiting_backfill';
+  | 'session_full';
 
 /**
  * The membership deps every path into a workspace shares.
@@ -101,6 +89,16 @@ export interface AdmitConversationInput<Tx = unknown> {
   workspaceId: string;
   /** The spawning conversation, never evicted by the thing it spawned. */
   excludeTargetId?: string;
+  /**
+   * The pane a HUMAN pointed at, when one did. A preference the placement policy
+   * weighs first — never an instruction, since `open()` still refuses a pane it
+   * may not give up.
+   *
+   * Supplied by the three paths a person drives from a pane — the two mints and
+   * the History claim. Absent for anything an agent or a background path admits:
+   * those add a surface and have no pane to speak for.
+   */
+  activeNodeId?: string;
   /** Work that must land in the SAME transaction as the node. Only the create path has any. */
   within?: (tx: Tx) => Promise<void>;
 }
@@ -111,7 +109,8 @@ export async function claimConversationInSessionWith<Tx>(
     conversationId,
     userId,
     workspaceId,
-  }: { conversationId: string; userId: string; workspaceId: string },
+    activeNodeId,
+  }: { conversationId: string; userId: string; workspaceId: string; activeNodeId?: string },
 ): Promise<ClaimConversationOutcome> {
   const row = await deps.findConversation(conversationId);
   if (row === null) return 'not_found';
@@ -157,7 +156,11 @@ export async function claimConversationInSessionWith<Tx>(
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
   }
 
-  const admitted = await deps.admitConversation({ conversationId, workspaceId });
+  const admitted = await deps.admitConversation({
+    conversationId,
+    workspaceId,
+    ...(activeNodeId === undefined ? {} : { activeNodeId }),
+  });
   switch (admitted) {
     case 'admitted':
       return 'claimed';
@@ -165,13 +168,6 @@ export async function claimConversationInSessionWith<Tx>(
       return 'already_in_session';
     case 'session_full':
       return 'session_full';
-    // Distinct from `not_found` on purpose. The conversation exists, it is the
-    // caller's, and the workspace is real — the server simply has not migrated
-    // it yet, and only an operator can change that. Answering "no such
-    // conversation" would be false and would send the user looking for a thread
-    // that is sitting right there.
-    case 'awaiting_backfill':
-      return 'awaiting_backfill';
     // The world changed between the reads above and the write: another request
     // claimed it first, or the tree refused the shape. Both collapse to the
     // same answer a stale read would have produced — an id-guessing caller

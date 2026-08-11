@@ -127,11 +127,6 @@
       "import": "./dist/agent-workspaces/workspace-node-validate.js",
       "require": "./dist/agent-workspaces/workspace-node-validate.js"
     },
-    "./agent-workspaces/workspace-node-backfill": {
-      "types": "./dist/agent-workspaces/workspace-node-backfill.d.ts",
-      "import": "./dist/agent-workspaces/workspace-node-backfill.js",
-      "require": "./dist/agent-workspaces/workspace-node-backfill.js"
-    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",
@@ -166,6 +161,11 @@
       "types": "./dist/logging/ai-usage-purge.d.ts",
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
+    },
+    "./memory/memory-pages": {
+      "types": "./dist/memory/memory-pages.d.ts",
+      "import": "./dist/memory/memory-pages.js",
+      "require": "./dist/memory/memory-pages.js"
     },
     "./observability/sentry-env": {
       "types": "./dist/observability/sentry-env.d.ts",

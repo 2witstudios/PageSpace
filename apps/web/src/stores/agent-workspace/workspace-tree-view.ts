@@ -121,6 +121,111 @@ export function isOnGrid(nodes: readonly WorkspaceNode[], nodeId: string): boole
 }
 
 // ---------------------------------------------------------------------------
+// The pane grid's conversation directory
+// ---------------------------------------------------------------------------
+
+/**
+ * One conversation the workspace holds, as the grid's pure deciders need it.
+ *
+ * Structurally identical to `SessionConversationSummary` in
+ * `components/agents/panes/workspace-conversations.ts`, and deliberately NOT an
+ * import of it: that type describes a row of the `/api/agent-workspaces`
+ * LISTING, and this one describes a member of the TREE. They agree because the
+ * deciders need the same three facts, not because one is derived from the
+ * other — and a store-layer module importing a component-layer type to say so
+ * would invert the dependency. Structural assignability is what lets
+ * `selectPaneAgent`/`decideClosePane` take either.
+ */
+export interface WorkspaceConversationMember {
+  conversationId: string;
+  /** `null` is the Global Assistant — a REAL agent, never "unknown". See below. */
+  agentPageId: string | null;
+  lastMessageAt: string | null;
+}
+
+/**
+ * The conversations in one workspace, split by whether their facts have arrived.
+ *
+ * **Membership and facts come from different halves of the tree, and they have
+ * to.** `nodes` is the membership — complete and live, because a structural
+ * `session:<id>` broadcast updates it. `targets[]` carries the per-viewer facts
+ * (agent, activity) and does NOT ride that broadcast: `applyRemoteUpdate` swaps
+ * `base` and carries the previous targets forward, since a room event cannot be
+ * redacted per viewer. So a conversation another member just placed is a member
+ * here IMMEDIATELY, with no facts, until the next authorized read.
+ *
+ * Deriving both from `targets` would hide such a member from the switch
+ * decision, which would then read "no thread for this agent" and mint a
+ * duplicate.
+ */
+export interface WorkspaceConversationDirectory {
+  /** Every conversation the tree holds. The membership question's whole answer. */
+  memberConversationIds: Set<string>;
+  /** Members whose `targets[]` entry has arrived — the only safe input to an agent-keyed decision. */
+  resolved: WorkspaceConversationMember[];
+  /** A member exists whose facts have not arrived. Callers must not decide against a partial list. */
+  hasUnresolved: boolean;
+}
+
+/**
+ * THE PANE GRID'S CONVERSATION DIRECTORY, from the tree the grid already holds.
+ *
+ * This replaced a second read of `GET /api/agent-workspaces`, whose every filter
+ * carries `ownerId` — so a workspace owned by ANOTHER drive member (a legitimate
+ * shared working context: `decideAgentSessionAccess` grants by drive membership)
+ * was never in it, and the grid concluded it knew nothing about a workspace it
+ * was rendering. The tree comes from the membership-gated nodes route, which is
+ * the same gate the grid passed to exist at all.
+ *
+ * `null` means NOT RESOLVED YET — never "empty". The distinction is the whole
+ * reason this returns a nullable: a close acting on an unverified listing would
+ * destroy a node while leaving its thread open server-side, and
+ * `decideClosePane` refuses to act until it has a real answer.
+ *
+ * A merely-LOCAL tree is not an answer either, which is what `hasServerSnapshot`
+ * settles: `runCommand` seeds a root client-side at rev 0, so nodes can exist
+ * having never been read.
+ */
+export function conversationDirectoryOf(
+  tree: WorkspaceTree | undefined,
+): WorkspaceConversationDirectory | null {
+  if (tree === undefined || !tree.hasServerSnapshot) return null;
+
+  const index = indexTargets(tree.targets);
+  const memberConversationIds = new Set<string>();
+  const resolved: WorkspaceConversationMember[] = [];
+  let hasUnresolved = false;
+
+  for (const node of paneNodesOf(tree.nodes)) {
+    if (node.target === null || node.target.kind !== 'chat') continue;
+    const conversationId = node.target.id;
+    // `agent_workspace_nodes_chat_target_idx` makes one node per chat a global
+    // invariant, so this can only fire on a local tree that has not been through
+    // a write yet. Dedupe anyway: the deciders count matches, and a doubled row
+    // would make one thread look like two.
+    if (memberConversationIds.has(conversationId)) continue;
+
+    memberConversationIds.add(conversationId);
+
+    const target = lookupTarget(index, node);
+    if (target === undefined) {
+      // NOT pushed with a null agent. `null` means the Global Assistant, so a
+      // placeholder would make `findOpenForAgent(list, null)` focus a thread
+      // whose agent nobody knows — absence is the only honest encoding.
+      hasUnresolved = true;
+      continue;
+    }
+    resolved.push({
+      conversationId,
+      agentPageId: target.agentPageId,
+      lastMessageAt: target.lastMessageAt,
+    });
+  }
+
+  return { memberConversationIds, resolved, hasUnresolved };
+}
+
+// ---------------------------------------------------------------------------
 // The sidebar's rows
 // ---------------------------------------------------------------------------
 

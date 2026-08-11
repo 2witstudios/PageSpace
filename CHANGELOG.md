@@ -3,6 +3,69 @@
 All notable user-facing changes to PageSpace are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
+  pane for a global assistant or a page agent worked once per session; every one after it appeared
+  for a moment and then disappeared, with nothing said about why. The session had started placing a
+  new conversation into your pane itself, and the browser was still expecting to do that job — so it
+  read the pane arriving correctly as evidence that something else had claimed it, and quietly
+  deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
+  Pages were never affected. Second, third and fourth panes now open and stay open.
+- **Whatever you open lands in the pane you opened it from** — with more than one empty pane on
+  screen, the session had no way of knowing which one you meant, so it filled whichever came first
+  and left yours blank. It applied to everything you can put in a pane: picking an agent, opening a
+  terminal, and reopening a past conversation from a pane's History. The pane you clicked is now
+  part of the request in all three cases.
+- **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
+  work in that drive's sessions, so a conversation of yours can live in a session someone else
+  started. Opening one of those from your conversation list gave you a pane you could read and type
+  in, but with the agent switcher and New Conversation greyed out and the pane's close button doing
+  nothing, and no explanation for any of it. Those sessions never appear in your sidebar, so that
+  list was the only way back to the conversation and it led somewhere half-broken. The pane now
+  reads what the session contains the same way it reads everything else about it, so its controls
+  work exactly as they do in a session of your own. Nothing changes about whose sandbox the
+  conversation uses, or about which sessions appear in your sidebar.
+
+### Changed
+
+- **What the AI has learned about you is now a set of pages you can read and edit** — your
+  personalization lived in three text boxes in Settings that a nightly process also wrote to, with
+  no indication of what it had added or why. It is now three pages in a Memory folder in your Home
+  drive: About You, Communication and Rules. You can open them and edit them like any other page,
+  and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
+  that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
+  The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
+  drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
+  emptying a page erases what it says, so deleting one would only leave the AI's memory with
+  nowhere to live. They also stay in the Memory folder rather than being moved elsewhere, since a
+  page moved out of it can be swept up by another page's deletion. What they say stays yours to
+  edit either way.
+- **The AI stops recording things about you that do not change how it answers** — the nightly
+  process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
+  teams, family details and the names of colleagues, none of which affects a reply. It now records
+  something only if knowing it would genuinely change how the AI responds, and never records
+  personal history, beliefs, hobbies, other people's names, or numbers you have claimed about
+  yourself.
+- **Something you mention once no longer becomes a permanent fact about you** — a single remark
+  could end up in your profile and stay there. A new observation now has to show up on at least two
+  separate days, from things you actually wrote on those days, before it is added to your profile —
+  and three days for anything describing who you are. Until then it is held aside as a pending
+  observation, which your data export includes. Observations that stop recurring are dropped after
+  a month.
+- **Your profile can now correct itself instead of only growing** — it could only ever have text
+  added, so a wrong guess stayed forever and the profile grew until it was trimmed at around 14,000
+  characters. It is now rewritten in place, superseded lines are removed, and each page is kept to
+  a size that reflects what is actually useful. A rewrite that would delete most of a page is
+  refused rather than applied.
+- **Your data export now includes what the AI inferred about you** — a subject access request
+  covered your profile but not the observations behind it. The export now contains every inference
+  drawn about you, including ones that were rejected or are still pending, along with the quote
+  from your own messages each was based on. Those quotes are removed 90 days after an observation
+  is settled.
+
 ## [1.7.1] — 2026-08-10
 
 ### Fixed
