@@ -13,6 +13,7 @@ import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { TabBar } from "@/components/layout/tabs";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
+import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
@@ -336,6 +337,19 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
+      {/*
+        THE app-wide voice session. Mounted HERE — above the panel group, not
+        inside RightPanel — because `rightPanelVisible && …` below unmounts the
+        right sidebar outright when it closes, and a session owned by the panel
+        would hang up the user's call every time they collapsed it. Voice is a
+        transport onto a conversation, not a property of a panel; the sidebar is
+        its home, not its owner.
+
+        Outside GlobalChatProvider rather than inside it: this provider consumes
+        nothing from it, and a session that cannot be interrupted by anything
+        below it is the whole point.
+      */}
+      <VoiceSessionProvider>
       <GlobalChatProvider>
         <div
           className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
@@ -518,6 +532,7 @@ function Layout({ children }: LayoutProps) {
         </>
         )}
       </GlobalChatProvider>
+      </VoiceSessionProvider>
     </NavigationProvider>
   );
 }

@@ -4,34 +4,12 @@ import { useRef, useCallback, useEffect } from 'react';
 import { useVoiceModeStore, type TTSVoice, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { splitOversizedForTts } from '@/lib/voice/chunkForTts';
+// Shared with the audio-native path: same API, same five failures, and the
+// desktop-shell branch inside it is not one to keep two copies of.
+import { getMicPermissionErrorMessage } from '@/lib/voice/mic-errors';
 import { createId } from '@paralleldrive/cuid2';
 
 const TTS_MAX_CHARS = 1500;
-
-function getMicPermissionErrorMessage(err: unknown): string {
-  const isDesktop = typeof window !== 'undefined' && !!window.electron?.isDesktop;
-
-  if (err instanceof DOMException) {
-    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-      if (isDesktop) {
-        return 'Microphone access was blocked. Allow PageSpace in System Settings > Privacy & Security > Microphone, then try again.';
-      }
-      return 'Microphone access was blocked. Please allow microphone permissions in your browser settings and try again.';
-    }
-    if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-      return 'No microphone was detected. Connect a microphone and try again.';
-    }
-    if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-      return 'Your microphone is busy in another app. Close other apps using the mic and try again.';
-    }
-  }
-
-  if (err instanceof TypeError) {
-    return 'This browser does not support microphone capture for voice mode.';
-  }
-
-  return 'Unable to start voice mode because microphone access failed. Please try again.';
-}
 
 function getTranscriptionErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim()) {

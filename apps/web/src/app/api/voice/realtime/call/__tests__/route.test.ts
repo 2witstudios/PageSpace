@@ -51,6 +51,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { POST } from '../route';
+import { REALTIME_MAX_SESSION_SECONDS } from '@pagespace/lib/billing/credit-pricing';
 
 const SECRET = 'ek_never_leaves_the_server';
 const TOOLS = [{ type: 'function' as const, name: 'read_page', description: 'r', parameters: {} }];
@@ -184,7 +185,19 @@ describe('POST /api/voice/realtime/call', () => {
       callId: 'rtc_abc',
       answerSdp: 'v=0 answer',
       attached: true,
+      maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
     });
+  });
+
+  it('should report the server-enforced duration cap so the client can chain ahead of it', async () => {
+    // The browser cannot read REALTIME_MAX_SESSION_SECONDS, and the realtime
+    // server hangs the call up when it passes. Without this field the client
+    // would have to keep its own copy of a server env var.
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+
+    const body = (await res.json()) as { maxDurationMs?: unknown };
+    expect(body.maxDurationMs).toBe(REALTIME_MAX_SESSION_SECONDS * 1000);
+    expect(typeof body.maxDurationMs).toBe('number');
   });
 
   it('given the realtime server was unreachable, should still return 200 with attached:false', async () => {

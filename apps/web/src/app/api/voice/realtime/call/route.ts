@@ -26,6 +26,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
+import { REALTIME_MAX_SESSION_SECONDS } from '@pagespace/lib/billing/credit-pricing';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -188,10 +189,28 @@ export async function POST(request: Request) {
     });
 
     // The ephemeral secret is deliberately absent: it never leaves the server.
+    //
+    // `maxDurationMs` is here because the CLIENT cannot derive it and needs it.
+    // A call is hung up by the realtime server once it passes
+    // REALTIME_MAX_SESSION_SECONDS — a per-deployment env value the browser has
+    // no access to — and the browser's job is to chain into a fresh call bound
+    // to the same conversation shortly BEFORE that lands, so a long
+    // conversation outlives the ceiling that bounds a single call. The
+    // alternative is a client-side copy of a server env var, which is a copy
+    // that drifts, and whose failure mode is a user cut off mid-sentence on the
+    // one deployment that tuned it.
+    //
+    // The realtime server also caps a socket at an hour, so the true ceiling is
+    // the smaller of the two. That constant lives in `apps/realtime` and is not
+    // importable here (there is no dependency edge, deliberately), so this
+    // reports the cap THIS tier owns — correct unless a deployment sets
+    // REALTIME_MAX_SESSION_SECONDS above 3600, at which point the socket's hour
+    // binds first and the chain lands late rather than early.
     return NextResponse.json({
       callId: result.callId,
       answerSdp: result.answerSdp,
       attached: result.attached,
+      maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
     });
   } catch (error) {
     loggers.ai.error('Realtime voice call error', error as Error);
