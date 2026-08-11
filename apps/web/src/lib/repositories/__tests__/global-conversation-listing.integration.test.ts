@@ -261,12 +261,19 @@ describe('globalConversationRepository.listConversationsPaginated — real Postg
     const zero = await globalConversationRepository.listConversationsPaginated(owner.id, { limit: 0 });
     expect(zero.conversations).toHaveLength(1);
     expect(zero.pagination.limit).toBe(1);
-    // The contract that was broken: claiming more exists implies a way to reach it.
-    if (zero.pagination.hasMore) expect(zero.pagination.nextCursor).not.toBeNull();
+    // UNCONDITIONAL: three rows match and one was returned, so there is more by
+    // construction — and the contract that was broken is precisely that
+    // claiming more exists implies a way to reach it. Guarding this behind
+    // `if (hasMore)` would let the wrong answer pass silently (review finding).
+    expect(zero.pagination.hasMore).toBe(true);
+    expect(zero.pagination.nextCursor).not.toBeNull();
 
     // A negative must not reach Postgres as a negative LIMIT.
     const negative = await globalConversationRepository.listConversationsPaginated(owner.id, { limit: -5 });
     expect(negative.conversations).toHaveLength(1);
+    expect(negative.pagination.limit).toBe(1);
+    expect(negative.pagination.hasMore).toBe(true);
+    expect(negative.pagination.nextCursor).not.toBeNull();
   });
 
   it('paginates across a NULL-lastMessageAt boundary with no skipped or repeated rows', async () => {
