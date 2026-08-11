@@ -5,6 +5,36 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A microphone in the top bar, on every page, that talks to whichever assistant you are already
+  looking at** — there is no separate voice screen and nothing to set up first. Press it on a page
+  and the assistant sidebar opens in voice mode, talking to the agent you had selected there; press
+  it on the dashboard and it talks to the assistant already in the middle of your screen. Nothing
+  connects until you press it.
+- **A spoken conversation is the same conversation you can read and type in** — voice is a way into
+  a thread that already existed and still exists after you hang up. What is said appears in that
+  thread as ordinary messages while the call is running, marked with a small microphone so you can
+  tell later what was spoken and what was typed. There is no separate voice history to go looking
+  for, and nothing to replay.
+- **The call survives you walking around the app** — moving between pages does not end it or move it
+  to a different assistant; it just tells the assistant where you now are. Closing the sidebar
+  minimizes the call rather than hanging up, and the top-bar microphone stays lit so you can get
+  back to it. Deliberately choosing a different agent in the sidebar's switcher does move the call,
+  because that is a different conversation. Ending a call is the End button on the call itself, and
+  refreshing the page ends it too.
+- **The assistant on the call is the one you picked, with the instructions and the tools its owner
+  gave it** — an agent you built to answer a particular way answers that way out loud too, and one
+  whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **A call you cannot have does not start** — running out of credit, or already having as many calls
+  open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
+  talking to something nobody was counting.
+- **When voice cannot start, it says which problem you have** — a microphone you declined is
+  different from a microphone you do not have, and the two now get different advice and only the
+  fixable one offers to try again. If the call connects but the transcript service does not, the
+  call says so rather than letting you talk for ten minutes into something that was never going to
+  be saved.
+
 ### Fixed
 
 - **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
@@ -31,6 +61,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
+  to an assistant used to mean recording a clip, having it transcribed into text, and having the
+  reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
+  in — was thrown away before the assistant ever saw your words, and you had to wait for a whole
+  reply to be written before hearing any of it. The assistant now hears you directly and answers in
+  the same breath, so you can interrupt it and it stops. The way in is the microphone in the top
+  bar, on every page; the hands-free button that used to sit in the chat box next to the model
+  picker has been removed, along with its separate panel of voice settings for reading speed,
+  spoken voice and tap-to-speak.
 - **What the AI has learned about you is now a set of pages you can read and edit** — your
   personalization lived in three text boxes in Settings that a nightly process also wrote to, with
   no indication of what it had added or why. It is now three pages in a Memory folder in your Home

@@ -53,6 +53,8 @@ import { buildShellCheckAuth } from './terminal/shell-access';
 import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { handleShellActivityRequest } from './terminal/shell-activity';
+import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { handleRealtimeAttachRequest, defaultAttachHandlerDeps } from './voice/attach-handler';
 import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
 import {
   resolveSessionTenantId,
@@ -954,6 +956,30 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
             const result = handleKickRequest(io, body);
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.body));
+        });
+    } else if (req.method === 'POST' && req.url === VOICE_BRIDGE_ROUTES.attach) {
+        // Voice attach: the web tier hands over a live OpenAI realtime call so
+        // THIS process — which can hold a socket for the whole call, unlike a
+        // Next route handler — owns its tools, transcripts and metering.
+        //
+        // The body carries a live ephemeral OpenAI credential, so the signature
+        // check is not optional and runs before anything is parsed.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleRealtimeAttachRequest(defaultAttachHandlerDeps, body).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Realtime attach request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
         });
     } else {
         res.writeHead(404);

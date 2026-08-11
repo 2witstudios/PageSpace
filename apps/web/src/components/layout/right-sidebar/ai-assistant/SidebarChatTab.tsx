@@ -17,7 +17,6 @@ import {
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { useDualModeChat } from '@/hooks/useDualModeChat';
@@ -42,23 +41,19 @@ import {
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
-import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
-import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
-import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { useChatTransport, useSendHandoff, useConversationSendHandoff, HANDOFF_REFUSED_MESSAGE, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
-import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
+import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
-
-const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -406,12 +401,6 @@ const SidebarChatTab: React.FC = () => {
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
     : null;
 
-  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
-  const streamingAssistantText = useMemo(
-    () => selectVoiceStreamText(renderedMessages),
-    [renderedMessages],
-  );
-
 
 
   // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
@@ -533,16 +522,6 @@ const SidebarChatTab: React.FC = () => {
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [contextLabel, setContextLabel] = useState<string | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
-  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
-
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -635,29 +614,6 @@ const SidebarChatTab: React.FC = () => {
   }, [errorCause]);
 
 
-  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
-  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      voiceBaselineRef.current = undefined;
-      setLastAIResponse(null);
-      return;
-    }
-
-    // Initialize baseline BEFORE the streaming guard. If we waited until after,
-    // activating voice mid-stream would leave the baseline unset and then silence
-    // the in-flight response when it finishes.
-    if (voiceBaselineRef.current === undefined) {
-      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
-      return;
-    }
-
-    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
-    if (!next) return;
-
-    setLastAIResponse((current) => (current?.id === next.id ? current : next));
-  }, [renderedMessages, isVoiceModeActive]);
-
   // Refresh this surface from the DB — the `reload` step of app-resume (useResumeBootstrap
   // below), catching a reply that landed while we were away. One cache reload for both
   // modes (leaf 5.4 W3).
@@ -707,8 +663,8 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, createAgentConversation, createGlobalConversation]);
 
-  // Shared shape for every sidebar send path (text, voice, ask-user-answer) —
-  // all three need "the request body for wherever we're sending right now,
+  // Shared shape for every sidebar send path (text, ask-user-answer) —
+  // both need "the request body for wherever we're sending right now,
   // given a freshly-built contextRef." Centralized so the agent-mode vs
   // global-mode branch and field list can't drift between call sites.
   const buildSidebarChatRequestBody = useCallback((
@@ -812,40 +768,6 @@ const SidebarChatTab: React.FC = () => {
     prepareSendForMode,
   ]);
 
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback(async (text: string) => {
-    if (!text.trim() || !currentConversationId) return;
-
-    const isReadOnly = !writeMode;
-    const contextRef = buildFreshContextRef();
-
-    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
-    // with feedback, or the transcript would vanish silently.
-    if (!(await prepareSendForMode(currentConversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      return;
-    }
-
-    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
-    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    rollbackOptimisticSendOnFailure(
-      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
-      currentConversationId,
-      userMessage.id,
-    );
-  }, [
-    currentConversationId,
-    writeMode,
-    buildFreshContextRef,
-    buildSidebarChatRequestBody,
-    sendMessage,
-    wrapSend,
-    prepareSendForMode,
-  ]);
-
   // renderedMessages (selector output): "answerable" is decided by the conversation's
   // LAST message, and remote edits/deletes/messages update the store, not useChat.
   // isConversationBusy replaces status==='ready'. displayIsStreaming, not isOwnSendLive:
@@ -865,15 +787,6 @@ const SidebarChatTab: React.FC = () => {
       [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
     ),
   });
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // NO heldStreamMsgIdRef (PR 5A): the stream's assistant messageId was latched here on the
   // first 'streaming' render and held so Stop could name it after the surface moved on. The store
@@ -910,9 +823,22 @@ const SidebarChatTab: React.FC = () => {
   });
 
   // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
+  //
+  // THE SWITCHER IS THE VOICE SWITCHER. Choosing a different agent is the one
+  // explicit act that moves a live call — navigation never does, which is why
+  // the rebind is recorded HERE, on the click, and not derived from the target
+  // changing (a route change changes the target identically, and following that
+  // would hang the user's call up every time they opened a page).
+  //
+  // It records an INTENT rather than rebinding directly because `selectAgent`
+  // clears the conversation id and re-resolves it asynchronously — there is
+  // nothing to bind to yet at this moment. `VoiceSessionBridge` applies it when
+  // there is, and drops it if no call is running.
+  const requestVoiceRebind = useVoiceRebindStore((state) => state.requestRebind);
   const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {
     selectAgent(agent);
-  }, [selectAgent]);
+    requestVoiceRebind(agent?.id ?? null);
+  }, [selectAgent, requestVoiceRebind]);
 
   // Stop, for both modes (PR 5A, leaf 5.5.6). One action, no dispatcher.
   //
@@ -1020,6 +946,18 @@ const SidebarChatTab: React.FC = () => {
         )}
       </div>
 
+      {/*
+        Voice as a MODE on this surface, not a fourth tab and not an overlay:
+        the same message list below, with the live call's chrome above it. The
+        spoken turns themselves arrive as ordinary messages in that list (the
+        realtime server writes them through messageRepository, so they come down
+        the same `conversation:*` socket events every other message does).
+      */}
+      <VoiceCallBarForConversation
+        conversationId={currentConversationId}
+        assistantName={assistantName}
+      />
+
       {/* Message-load error (from the conversation cache) — shown above messages so
           it's always visible; a failed load keeps the prior snapshot. */}
       {messagesLoadState.hasError && (
@@ -1093,17 +1031,6 @@ const SidebarChatTab: React.FC = () => {
           />
         </div>
 
-        {isVoiceModeActive && (
-          <VoiceCallPanel
-            owner={VOICE_OWNER}
-            onSend={handleVoiceSend}
-            latestAssistantMessage={lastAIResponse}
-            isAIStreaming={displayIsStreaming}
-            streamingText={streamingAssistantText}
-            onStopStream={handleStop}
-            onClose={disableVoiceMode}
-          />
-        )}
         <ChatInput
           ref={chatInputRef}
           value={input}
@@ -1116,8 +1043,6 @@ const SidebarChatTab: React.FC = () => {
           crossDrive={true}
           hideModelSelector={true}
           variant="sidebar"
-          onVoiceModeClick={handleVoiceModeToggle}
-          isVoiceModeActive={isVoiceModeActive}
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}

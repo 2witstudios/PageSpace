@@ -260,6 +260,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'conversationId', 'userId', 'role', 'messageType', 'content',
       'toolCalls', 'toolResults', 'createdAt', 'isActive', 'editedAt', 'status',
       'sourceAgentId',
+      // Carried, not excluded: `source` is how a turn is known to have been
+      // spoken rather than typed, and the thread renders a microphone from it.
+      // A tenant that migrated without it would keep every word and silently
+      // lose the account of how they were said — the same "thread that changes
+      // its account of itself" this column exists to prevent.
+      'source',
     ],
   },
 

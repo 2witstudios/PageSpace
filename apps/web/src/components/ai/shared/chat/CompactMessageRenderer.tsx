@@ -13,6 +13,7 @@ import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { ImageMessageContent } from './ImageMessageContent';
+import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import styles from './CompactMessageRenderer.module.css';
 
 interface CompactTextBlockProps {
@@ -30,6 +31,8 @@ interface CompactTextBlockProps {
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** Turn was spoken into a live voice call, not typed. */
+  spoken?: boolean;
 }
 
 /**
@@ -49,7 +52,8 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  spoken = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -90,13 +94,14 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">
-            <div className="text-[10px] text-gray-500">
+            <div className="flex items-center gap-1 text-[10px] text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   {editedAt && <span className="ml-1">(edited)</span>}
                 </>
               )}
+              {spoken && <SpokenTurnGlyph />}
             </div>
             {onEdit && onDelete && !isEditing && (
               <MessageActionButtons
@@ -262,6 +267,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                spoken={isSpokenTurn(message)}
               />
             );
           } else if (isFileGroupPart(group)) {

@@ -179,6 +179,13 @@ export const conversations = pgTable('conversations', {
  * the backfill or forced us to invent attribution we do not have. The rule is
  * documented and tested, not enforced by the database.
  */
+/**
+ * The value `messages.source` carries for a turn spoken into a live voice call.
+ * Named once so the UI's glyph check, the realtime writer and the seed builder
+ * cannot drift onto three spellings of one string.
+ */
+export const MESSAGE_SOURCE_VOICE = 'voice';
+
 export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   conversationId: text('conversationId').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
@@ -212,6 +219,26 @@ export const messages = pgTable('messages', {
    * conversation's business (`derivedPageId()`).
    */
   sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
+  /**
+   * The TRANSPORT this row was authored over — `'voice'` for a turn spoken into
+   * a live realtime call, NULL for a typed one.
+   *
+   * A column and not a jsonb flag because it is a fact about the row that two
+   * unrelated readers need cheaply: the UI, to mark a spoken turn (the mic
+   * glyph) so a thread is honest about how it was made; and the realtime SEED
+   * builder, which replays prior turns into a new call and can only tell a
+   * spoken turn from a typed one if the row says so.
+   *
+   * NULLABLE, not `default 'text'`: purely widening, so every pre-existing row
+   * and every INSERT from old code during a rolling deploy stays valid, and
+   * "unknown/typed" needs no backfill to be correct. Read it through
+   * {@link MESSAGE_SOURCE_VOICE} rather than a string literal.
+   *
+   * NOT an enum column and NOT CHECK-constrained: a one-way CHECK on a table
+   * this size is a migration hazard for a value with exactly one non-null
+   * member today, and the write path is a single repository.
+   */
+  source: text('source'),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),

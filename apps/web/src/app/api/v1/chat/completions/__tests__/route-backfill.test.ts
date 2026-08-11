@@ -247,6 +247,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       editedAt: null,
       toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
       toolResults: null,
+      source: null,
       status: 'complete' as const,
     }]);
 
@@ -316,6 +317,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       editedAt: null,
       toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
       toolResults: null,
+      source: null,
       status: 'complete' as const,
     }]);
 
