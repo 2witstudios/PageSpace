@@ -55,6 +55,8 @@ import { useGlobalChatConfig, useGlobalChatConversation } from '@/contexts/Globa
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
+import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
@@ -198,6 +200,18 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // The switcher is the voice switcher — see the twin of this comment in
+  // SidebarChatTab. Records an intent on the explicit act; navigation records
+  // nothing and therefore can never rebind.
+  const requestVoiceRebind = useVoiceRebindStore((state) => state.requestRebind);
+  const handleSelectAgentForVoice = useCallback(
+    (agent: Parameters<typeof selectAgent>[0]) => {
+      selectAgent(agent);
+      requestVoiceRebind(agent?.id ?? null);
+    },
+    [selectAgent, requestVoiceRebind],
+  );
 
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
@@ -942,7 +956,7 @@ const GlobalAssistantView: React.FC = () => {
         <div className="flex items-center space-x-2">
           <AISelector
             selectedAgent={selectedAgent}
-            onSelectAgent={selectAgent}
+            onSelectAgent={handleSelectAgentForVoice}
             disabled={isStreaming}
           />
         </div>
@@ -978,6 +992,16 @@ const GlobalAssistantView: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/*
+        Voice as a MODE on this surface — same conversation, same message list,
+        with the live call's chrome above it. Spoken turns arrive in that list as
+        ordinary messages, so there is no second transcript here.
+      */}
+      <VoiceCallBarForConversation
+        conversationId={currentConversationId}
+        assistantName={selectedAgent ? selectedAgent.title : 'Global Assistant'}
+      />
 
       {/* Usage Monitor */}
       {displayPreferences.showTokenCounts && (

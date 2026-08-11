@@ -75,6 +75,13 @@ export type VoiceSessionState = SessionState & {
   readonly localStream: MediaStream | null;
   /** The model's voice. Already routed to the speaker; here for visualisation. */
   readonly remoteStream: MediaStream | null;
+  /**
+   * Whether the microphone is silenced. Owned here, with the microphone itself
+   * — a mute held by whatever chrome is on screen would come back UNMUTED
+   * every time that chrome unmounted, which for a sidebar the user can collapse
+   * means a muted call quietly starts transmitting again.
+   */
+  readonly muted: boolean;
 };
 
 export type VoiceSessionControls = {
@@ -86,6 +93,19 @@ export type VoiceSessionControls = {
   readonly start: (target: VoiceTarget) => Promise<void>;
   /** Hang up. Safe to call when nothing is running. */
   readonly stop: () => void;
+  /**
+   * Silence or unsilence the microphone WITHOUT touching the call — no
+   * renegotiation, no reconnect, no gap in the session. Safe to call when
+   * nothing is running.
+   *
+   * Mute survives a CHAIN and is cleared by a HANGUP. Both halves matter: a
+   * chain is the same conversation continuing across the API's duration
+   * ceiling, and a mute that expired there would start transmitting a room the
+   * user believed was private; a new call after hanging up is a new
+   * conversation, and starting it silently muted is a call the user would
+   * spend thirty seconds talking into for nothing.
+   */
+  readonly setMuted: (muted: boolean) => void;
   /**
    * Tell the session where the user is now standing. Does NOT rebind and does
    * not interrupt: navigating is not switching who you are talking to.
@@ -139,6 +159,14 @@ export function VoiceSessionProvider({
   const [attached, setAttached] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [muted, setMutedState] = useState(false);
+  /**
+   * Read at the moment a call goes live, which can be after the user has
+   * already pressed mute — held in a ref for the same reason `boundTargetRef`
+   * is: the connect path must see what is true NOW, not what was captured when
+   * the callback was created.
+   */
+  const mutedRef = useRef(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   /** The attempt currently feeding the speaker and the UI. */
@@ -286,7 +314,10 @@ export function VoiceSessionProvider({
         boundTargetRef.current = null;
         clearSessionState();
         setTarget(null);
-        dispatch({ type: 'failed', message: result.message });
+        // The classified reason travels with the sentence: the chrome branches
+        // on it to decide whether a Try again is honest (a denied prompt) or a
+        // guaranteed failure (no capture device at all).
+        dispatch({ type: 'failed', message: result.message, failure: result.reason });
         return;
       }
 
@@ -294,7 +325,11 @@ export function VoiceSessionProvider({
       // outgoing one is stopped, so there is no moment with no session.
       activeRef.current = attempt;
       attempt.connection = result.connection;
-      result.connection.setMicrophoneEnabled(true);
+      // NOT an unconditional `true`. A chained call is negotiated silent and
+      // opened here, so hardcoding `true` would unmute the user at the duration
+      // ceiling — in the middle of a call they had deliberately muted, without
+      // any control being touched.
+      result.connection.setMicrophoneEnabled(!mutedRef.current);
       if (attempt.remoteStream) playRemote(attempt.remoteStream);
 
       if (options.chained && previous?.connection) {
@@ -346,8 +381,20 @@ export function VoiceSessionProvider({
     teardown();
     clearSessionState();
     setTarget(null);
+    // A hangup ends the conversation, and with it the reason to stay muted.
+    mutedRef.current = false;
+    setMutedState(false);
     dispatch({ type: 'disconnected' });
   }, [clearSessionState, teardown]);
+
+  const setMuted = useCallback((next: boolean) => {
+    mutedRef.current = next;
+    setMutedState(next);
+    // Applied to the call being HEARD, never to a chain still negotiating: that
+    // one is deliberately silent until the swap, and unmuting it early is two
+    // sessions hearing the same sentence.
+    activeRef.current?.connection?.setMicrophoneEnabled(!next);
+  }, []);
 
   const setLocationContext = useCallback(
     (locationContext: VoiceLocationContext | undefined) => {
@@ -369,13 +416,14 @@ export function VoiceSessionProvider({
       attached,
       localStream,
       remoteStream,
+      muted,
     }),
-    [state, target, callId, attached, localStream, remoteStream],
+    [state, target, callId, attached, localStream, remoteStream, muted],
   );
 
   const controlsValue: VoiceSessionControls = useMemo(
-    () => ({ start, stop, setLocationContext }),
-    [start, stop, setLocationContext],
+    () => ({ start, stop, setLocationContext, setMuted }),
+    [start, stop, setLocationContext, setMuted],
   );
 
   return (
@@ -422,8 +470,14 @@ export function useVoiceSession(): VoiceSessionState {
  *   - the agent switcher calls `start(…)` with the new agent's target and gets a
  *     rebind for free — it does not stop and start;
  *   - route changes call `setLocationContext(…)` and MUST NOT call `start`;
- *   - call chrome reads `useVoiceSession()` for `status`, `error`, `transcript`,
- *     `userSpeaking`, `tools`, `attached` and the two streams.
+ *   - call chrome reads `useVoiceSession()` for `status`, `error`, `failure`,
+ *     `transcript`, `userSpeaking`, `tools`, `attached`, `muted` and the two
+ *     streams, and calls `setMuted(…)` to silence the mic mid-call.
+ * `failure` and `muted`/`setMuted` were added by chunk C-D, which found the
+ * original seam one field short in each direction: `error` alone is a sentence
+ * the UI cannot branch on (a denied prompt and an absent device need opposite
+ * affordances), and mute has to live with the microphone or it comes back
+ * un-muted every time the sidebar holding it is collapsed.
  * The `<audio>` element and the microphone belong to this provider. UI that
  * mounts its own sink, or that owns a session per panel, is the failure mode
  * this file exists to prevent.

@@ -267,8 +267,12 @@ export const voiceBridgeRequestSchema = z.discriminatedUnion('kind', [
   voiceTranscriptSchema,
 ]);
 
-export type VoiceToolDispatchRequest = z.infer<typeof voiceToolDispatchSchema>;
-export type VoiceTranscriptRequest = z.infer<typeof voiceTranscriptSchema>;
+/**
+ * The union, and only the union. Per-member aliases were exported alongside it
+ * and never imported anywhere — every consumer takes the whole request and
+ * narrows on `kind`, which is what a discriminated union is for. Re-add one
+ * only when something actually needs to name a single member.
+ */
 export type VoiceBridgeRequest = z.infer<typeof voiceBridgeRequestSchema>;
 
 /**

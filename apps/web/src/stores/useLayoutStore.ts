@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { SidebarTab } from '@/stores/page-agents';
 
 type TaskListViewMode = 'table' | 'kanban' | 'editor';
 export type TaskListPageFilter = 'all' | 'active' | 'completed';
@@ -28,6 +29,20 @@ interface LayoutState {
   favoritesCollapsed: boolean;
   recentsCollapsed: boolean;
 
+  /**
+   * Which tab the right sidebar shows on a PAGE route (the dashboard has its
+   * own, in `usePageAgentDashboardStore`, because it is synced with the centre
+   * panel there).
+   *
+   * Lifted out of `RightPanel`'s local state so it can be driven from outside
+   * the panel: the nav-bar voice trigger has to bring the chat tab to the front
+   * when it reveals a call, and a panel-local `useState` is unreachable from a
+   * button in the header. NOT persisted — it starts on 'chat' every load,
+   * exactly as the local state it replaced did, so nothing about the first
+   * render changed.
+   */
+  rightSidebarPageTab: SidebarTab;
+
   // Mobile sheet state (NOT persisted - sheets start closed on page load)
   leftSheetOpen: boolean;
   rightSheetOpen: boolean;
@@ -49,6 +64,7 @@ interface LayoutState {
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
   setLeftOverlayOpen: (open: boolean) => void;
+  setRightSidebarPageTab: (tab: SidebarTab) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
   setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => void;
   setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => void;
@@ -76,6 +92,8 @@ export const useLayoutStore = create<LayoutState>()(
       favoritesCollapsed: false,
       recentsCollapsed: false,
       rehydrated: false,
+
+      rightSidebarPageTab: 'chat',
 
       // Mobile sheet state (NOT persisted)
       leftSheetOpen: false,
@@ -133,6 +151,10 @@ export const useLayoutStore = create<LayoutState>()(
 
       setLeftOverlayOpen: (open: boolean) => {
         set({ leftOverlayOpen: open });
+      },
+
+      setRightSidebarPageTab: (tab: SidebarTab) => {
+        set({ rightSidebarPageTab: tab });
       },
 
       setDriveFooterCollapsed: (collapsed: boolean) => {

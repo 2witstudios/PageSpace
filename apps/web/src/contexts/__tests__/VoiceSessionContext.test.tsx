@@ -663,3 +663,87 @@ describe('VoiceSessionProvider — the live event stream', () => {
     expect(probe.state.remoteStream).toBe(modelVoice);
   });
 });
+
+/**
+ * Mute belongs to the provider because the MICROPHONE does. Held by whatever
+ * chrome is on screen it would come back un-muted every time that chrome
+ * unmounted — and the chrome in question is a sidebar the user can collapse,
+ * so a muted call would quietly start transmitting the room again.
+ */
+describe('VoiceSessionProvider — muting', () => {
+  const tracksEnabled = (peer: FakePeerConnection) =>
+    peer.addedTracks.map((track) => track.enabled);
+
+  it('should silence the live microphone without touching the call', async () => {
+    const h = harness();
+    render(<App deps={h.deps} />);
+    await startCall();
+
+    expect(tracksEnabled(h.peers[0])).toEqual([true]);
+
+    await act(async () => {
+      probe.controls.setMuted(true);
+    });
+
+    expect(probe.state.muted).toBe(true);
+    expect(tracksEnabled(h.peers[0])).toEqual([false]);
+    // Still the same call: no renegotiation, no reconnect, no gap.
+    expect(h.peers).toHaveLength(1);
+    expect(h.peers[0].closed).toBe(false);
+    expect(probe.state.status).toBe('connected');
+    expect(probe.state.callId).toBe('rtc_call_1');
+  });
+
+  it('should stay muted across a chain', async () => {
+    // A chained call is negotiated SILENT and opened at the swap. Opening it
+    // unconditionally would un-mute the user at the duration ceiling, in the
+    // middle of a call they had deliberately muted, with no control touched.
+    vi.useFakeTimers();
+    const h = harness();
+    render(<App deps={h.deps} />);
+    await startCall();
+
+    await act(async () => {
+      probe.controls.setMuted(true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MAX_DURATION_MS - CHAIN_LEAD_MS);
+    });
+
+    expect(h.peers).toHaveLength(2);
+    expect(probe.state.callId).toBe('rtc_call_2');
+    expect(probe.state.muted).toBe(true);
+    expect(tracksEnabled(h.peers[1])).toEqual([false]);
+  });
+
+  it('should un-mute when the call ends, so the next one is not silently dead', async () => {
+    const h = harness();
+    render(<App deps={h.deps} />);
+    await startCall();
+
+    await act(async () => {
+      probe.controls.setMuted(true);
+    });
+    await act(async () => {
+      probe.controls.stop();
+    });
+
+    expect(probe.state.muted).toBe(false);
+
+    await startCall();
+    expect(tracksEnabled(h.peers[1])).toEqual([true]);
+  });
+
+  it('should be safe to press with nothing running', async () => {
+    const h = harness();
+    render(<App deps={h.deps} />);
+
+    await act(async () => {
+      probe.controls.setMuted(true);
+    });
+
+    expect(probe.state.muted).toBe(true);
+    expect(h.peers).toHaveLength(0);
+  });
+});
