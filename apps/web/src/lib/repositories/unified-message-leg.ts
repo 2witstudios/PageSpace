@@ -57,6 +57,13 @@ export interface UnifiedPageMessageRow {
   toolResultsJson: string | null;
   sourceAgentId: string | null;
   status: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * The transport that authored the row — `MESSAGE_SOURCE_VOICE` for a spoken
+   * turn, null/omitted for a typed one. Set on INSERT only, never in the
+   * conflict action below: a message's transport is a fact about how it was
+   * made, and a later terminal write to the same id does not change that.
+   */
+  source?: string | null;
   /** Omit to let the column default to now(). */
   createdAt?: Date;
 }
@@ -92,6 +99,7 @@ export async function upsertUnifiedPageMessage(
       isActive: true,
       status: row.status,
       sourceAgentId: row.sourceAgentId,
+      source: row.source ?? null,
     })
     .onConflictDoUpdate({
       target: messages.id,

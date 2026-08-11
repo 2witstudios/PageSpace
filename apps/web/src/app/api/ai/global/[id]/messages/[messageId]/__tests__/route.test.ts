@@ -137,6 +137,7 @@ const mockMessage = (overrides: Partial<{
   editedAt: null as Date | null,
   toolCalls: null as unknown,
   toolResults: null as unknown,
+  source: null,
 });
 
 const createContext = (id: string, messageId: string) => ({

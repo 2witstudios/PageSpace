@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFunctionOutput,
   extractFunctionCalls,
+  extractRateLimits,
   extractTranscript,
+  extractUsage,
   parseEvent,
   RESPONSE_CREATE,
-} from '../events';
+} from '../voice-events';
 
 const call = (over: Record<string, unknown> = {}) => ({
   type: 'function_call',
@@ -205,5 +207,84 @@ describe('parseEvent', () => {
     // string is not an event.
     expect(parseEvent(42)).toBeUndefined();
     expect(parseEvent(null)).toBeUndefined();
+  });
+});
+
+describe('extractUsage', () => {
+  it('given a completed response, should extract its usage', () => {
+    expect(
+      extractUsage({
+        type: 'response.done',
+        response: {
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            input_token_details: { audio_tokens: 80, text_tokens: 20 },
+          },
+        },
+      }),
+    ).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+      input_token_details: { audio_tokens: 80, text_tokens: 20 },
+    });
+  });
+
+  it('given a response with no usage, should return undefined rather than an empty object', () => {
+    // An interrupted or errored response reports none, and the accumulator must
+    // not have to tell "no usage" from "zero usage".
+    expect(extractUsage({ type: 'response.done', response: {} })).toBeUndefined();
+  });
+
+  it('given any other event, should return undefined', () => {
+    expect(extractUsage({ type: 'response.created', response: { usage: { input_tokens: 5 } } }))
+      .toBeUndefined();
+    expect(extractUsage({ type: 'session.updated' })).toBeUndefined();
+  });
+
+  it('given a malformed frame, should return undefined rather than throw', () => {
+    expect(extractUsage(undefined)).toBeUndefined();
+    expect(extractUsage('a string')).toBeUndefined();
+    expect(extractUsage({ type: 'response.done' })).toBeUndefined();
+    expect(extractUsage({ type: 'response.done', response: 'nope' })).toBeUndefined();
+    expect(extractUsage({ type: 'response.done', response: { usage: 7 } })).toBeUndefined();
+  });
+});
+
+describe('extractRateLimits', () => {
+  it('given a rate-limit update, should extract each named limit', () => {
+    expect(
+      extractRateLimits({
+        type: 'rate_limits.updated',
+        rate_limits: [
+          { name: 'tokens', limit: 40000, remaining: 39000, reset_seconds: 60 },
+          { name: 'requests', limit: 100, remaining: 99 },
+        ],
+      }),
+    ).toEqual([
+      { name: 'tokens', limit: 40000, remaining: 39000 },
+      { name: 'requests', limit: 100, remaining: 99 },
+    ]);
+  });
+
+  it('given entries missing a name or a number, should skip just those', () => {
+    expect(
+      extractRateLimits({
+        type: 'rate_limits.updated',
+        rate_limits: [
+          { limit: 1, remaining: 1 },
+          { name: 'tokens', limit: 'lots', remaining: 1 },
+          { name: 'tokens', limit: 1, remaining: null },
+          { name: 'ok', limit: 2, remaining: 1 },
+        ],
+      }),
+    ).toEqual([{ name: 'ok', limit: 2, remaining: 1 }]);
+  });
+
+  it('given any other event or a malformed frame, should return nothing', () => {
+    expect(extractRateLimits({ type: 'response.done' })).toEqual([]);
+    expect(extractRateLimits({ type: 'rate_limits.updated' })).toEqual([]);
+    expect(extractRateLimits({ type: 'rate_limits.updated', rate_limits: 'nope' })).toEqual([]);
+    expect(extractRateLimits(undefined)).toEqual([]);
   });
 });

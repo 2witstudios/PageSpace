@@ -41,6 +41,8 @@ import {
   REALTIME_CALL_ID_PREFIX,
   VOICE_BRIDGE_ROUTES,
   type RealtimeAttachPayload,
+  type RealtimeSeedEventWire,
+  type VoiceLocationContext,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /**
@@ -99,6 +101,13 @@ export type HandshakeDeps = {
   readonly model: string;
   /** Realtime tool definitions, forwarded to the realtime server unchanged. */
   readonly tools: readonly RealtimeTool[];
+  /**
+   * The caller's tier, already read for the entitlement gate one function
+   * earlier. Forwarded rather than re-read because the realtime server meters
+   * the call and the credit gate needs it — and a tier cannot change inside one
+   * call, so a second DB round trip would buy nothing.
+   */
+  readonly subscriptionTier: string;
   /** Unset means "no realtime server configured": degrade, do not fail. */
   readonly internalRealtimeUrl: string | undefined;
   /** `createSignedBroadcastHeaders`, injected so tests need no HMAC secret. */
@@ -110,6 +119,17 @@ export type HandshakeInput = {
   readonly offerSdp: string;
   readonly userId: string;
   readonly conversationId?: string;
+  /**
+   * The bound conversation's history, already loaded and capped
+   * (`loadRealtimeSeed`). Built here rather than fetched by the realtime server
+   * because the repositories and the access predicate live in this app — and
+   * because the browser is already in a call by the time the handoff happens,
+   * so the seed must arrive WITH it, not a round trip later.
+   */
+  readonly seed?: readonly RealtimeSeedEventWire[];
+  /** Threaded into the tool-execution context the realtime server dispatches with. */
+  readonly timezone?: string;
+  readonly locationContext?: VoiceLocationContext;
 };
 
 /** Upstream calls are short; a hung one must not hold the request open. */
@@ -183,6 +203,13 @@ const handOff = async (
     userId: input.userId,
     ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
     tools: [...deps.tools],
+    model: deps.model,
+    subscriptionTier: deps.subscriptionTier,
+    ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    ...(input.locationContext === undefined
+      ? {}
+      : { locationContext: input.locationContext }),
+    seed: [...(input.seed ?? [])],
   };
   const body = JSON.stringify(payload);
 

@@ -111,6 +111,7 @@ async function savePageMessageRow({
   sourceAgentId,
   mentionNotify,
   status = 'complete',
+  source,
   dbClient,
 }: {
   messageId: string;
@@ -125,6 +126,7 @@ async function savePageMessageRow({
   sourceAgentId?: string | null;
   mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
   status?: 'complete' | 'interrupted';
+  source?: string | null;
   dbClient: DbExecutor;
 }): Promise<void> {
   let structuredContent = content;
@@ -153,6 +155,7 @@ async function savePageMessageRow({
     toolResultsJson,
     sourceAgentId: sourceAgentId ?? null,
     status,
+    source: source ?? null,
     createdAt,
   });
 
@@ -189,6 +192,7 @@ async function saveGlobalMessageRow({
   toolResults,
   uiMessage,
   status = 'complete',
+  source,
   dbClient,
 }: {
   messageId: string;
@@ -200,6 +204,7 @@ async function saveGlobalMessageRow({
   toolResults?: ToolResult[];
   uiMessage?: UIMessage;
   status?: 'complete' | 'interrupted';
+  source?: string | null;
   dbClient: DbExecutor;
 }): Promise<void> {
   let structuredContent = content;
@@ -233,6 +238,10 @@ async function saveGlobalMessageRow({
       // id to attribute: NULL means "platform-authored, source not recorded",
       // which is exactly the attribution rule's second clause.
       sourceAgentId: null,
+      // INSERT only, deliberately absent from the conflict set below: a
+      // message's authoring transport is a fact about how it was made, and a
+      // later terminal write to the same id does not change that.
+      source: source ?? null,
     })
     .onConflictDoUpdate({
       target: messages.id,
@@ -287,6 +296,8 @@ export interface UnifiedMessageRow {
   toolCalls: unknown | null;
   toolResults: unknown | null;
   status: 'streaming' | 'complete' | 'interrupted';
+  /** The transport that authored the row: 'voice' for a spoken turn, null for typed. */
+  source: string | null;
 }
 
 /**
@@ -325,6 +336,7 @@ const unifiedColumns = {
   toolCalls: messages.toolCalls,
   toolResults: messages.toolResults,
   status: messages.status,
+  source: messages.source,
 } as const;
 
 export type BeforeSaveHook = (
@@ -596,6 +608,8 @@ export const messageRepository = {
     sourceAgentId?: string | null;
     mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
     status?: 'complete' | 'interrupted';
+    /** Authoring transport — `MESSAGE_SOURCE_VOICE` for a spoken turn. */
+    source?: string | null;
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {
@@ -653,6 +667,8 @@ export const messageRepository = {
     toolResults?: ToolResult[];
     uiMessage?: UIMessage;
     status?: 'complete' | 'interrupted';
+    /** Authoring transport — `MESSAGE_SOURCE_VOICE` for a spoken turn. */
+    source?: string | null;
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {

@@ -92,6 +92,7 @@ function harness(
     apiKey: 'sk-managed-key',
     model: overrides.model ?? 'gpt-realtime-2.1',
     tools: overrides.tools ?? TOOLS,
+    subscriptionTier: 'pro',
     internalRealtimeUrl:
       'internalRealtimeUrl' in overrides ? overrides.internalRealtimeUrl : 'http://realtime:4000',
     signHeaders: vi.fn((body: string) => ({
@@ -205,11 +206,61 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
       userId: 'u1',
       conversationId: 'conv1',
       tools: TOOLS,
+      // The realtime server meters the call itself and can derive neither:
+      // pricing is per-model, and the credit gate needs the tier.
+      model: 'gpt-realtime-2.1',
+      subscriptionTier: 'pro',
+      seed: [],
     });
 
     // Signed over the EXACT body posted — the HMAC is computed on those bytes.
     expect(deps.signHeaders).toHaveBeenCalledWith(String(handoff.init.body));
     expect((handoff.init.headers as Record<string, string>)['X-Broadcast-Signature']).toContain('v1=');
+  });
+
+  it('should carry the seed and the call context across to the realtime server', async () => {
+    // The seed is built HERE, behind the permission check, and rides the handoff
+    // so it is in the realtime server's hand before the model speaks.
+    const { deps, calls } = harness();
+    const seed = [
+      {
+        type: 'conversation.item.create' as const,
+        item: {
+          type: 'message' as const,
+          role: 'user' as const,
+          content: [{ type: 'input_text' as const, text: 'earlier question' }],
+        },
+      },
+    ];
+
+    await runCallHandshake(deps, {
+      offerSdp: OFFER_SDP,
+      userId: 'u1',
+      conversationId: 'conv1',
+      seed,
+      timezone: 'America/New_York',
+      locationContext: { currentPage: { id: 'p1', title: 'Notes', type: 'DOCUMENT', path: '/n' } },
+    });
+
+    const handoff = byUrl(calls, `http://realtime:4000${VOICE_BRIDGE_ROUTES.attach}`)!;
+    const body = JSON.parse(String(handoff.init.body));
+
+    expect(body.seed).toEqual(seed);
+    expect(body.timezone).toBe('America/New_York');
+    expect(body.locationContext).toEqual({
+      currentPage: { id: 'p1', title: 'Notes', type: 'DOCUMENT', path: '/n' },
+    });
+  });
+
+  it('given no timezone or location, should omit the keys rather than send undefined', async () => {
+    const { deps, calls } = harness();
+    await run(deps, 'conv1');
+
+    const handoff = byUrl(calls, `http://realtime:4000${VOICE_BRIDGE_ROUTES.attach}`)!;
+    const body = JSON.parse(String(handoff.init.body));
+
+    expect('timezone' in body).toBe(false);
+    expect('locationContext' in body).toBe(false);
   });
 
   it('given no conversationId, should omit the key rather than send undefined', async () => {
