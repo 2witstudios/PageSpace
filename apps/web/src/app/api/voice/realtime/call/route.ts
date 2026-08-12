@@ -126,7 +126,7 @@ export async function POST(request: Request) {
     // binding is derived behind that conversation's own access check. An empty
     // binding is a normal outcome (a fresh thread, or one this caller may not
     // read) — never a reason to fail the call.
-    const binding = await loadVoiceBinding(voiceBindingDeps, {
+    const binding = await loadVoiceBinding(voiceBindingDeps(auth), {
       userId,
       ...(conversationId === undefined ? {} : { conversationId }),
     });

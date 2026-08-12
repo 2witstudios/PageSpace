@@ -27,6 +27,7 @@
 
 import { buildRealtimeSeed, type SeedEvent, type SeedMessage } from './seed';
 import { buildVoiceInstructions } from './instructions';
+import type { VoiceSystemContextRequest } from './system-context';
 import type { VoiceAssistant } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /** The conversation facts the access check needs. A `conversations` row satisfies it. */
@@ -60,6 +61,14 @@ export type BindingLoaderDeps = {
   readonly canAccess: (userId: string, conversation: SeedConversation) => Promise<boolean>;
   readonly loadMessages: (conversationId: string) => Promise<readonly SeedMessage[]>;
   readonly loadAgentPage: (pageId: string) => Promise<AgentPage | undefined>;
+  /**
+   * The system prompt for whatever this call turned out to be bound to — the
+   * same assembly the typed surface builds. Injected rather than called
+   * directly so this module stays exercisable without a database, and so the
+   * one place that answers "what is this bound to?" is not also the place that
+   * does half a dozen reads to describe it. See `system-context.ts`.
+   */
+  readonly buildSystemContext: (request: VoiceSystemContextRequest) => Promise<string>;
   readonly logger: {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
   };
@@ -86,10 +95,19 @@ export type VoiceBinding = {
   readonly assistant?: VoiceAssistant;
 };
 
-/** The binding for a call with nothing to bind to: no history, default persona. */
-const unbound = (): VoiceBinding => ({
+/**
+ * The binding for a call with nothing to bind to: no history, and the Global
+ * Assistant's own prompt — which is the same assistant the dashboard talks to,
+ * so an unbound call is a real call, not a degraded one.
+ */
+const unbound = async (
+  deps: BindingLoaderDeps,
+  userId: string,
+): Promise<VoiceBinding> => ({
   seed: [],
-  instructions: buildVoiceInstructions({}),
+  instructions: buildVoiceInstructions({
+    agentSystemPrompt: await deps.buildSystemContext({ userId }),
+  }),
 });
 
 /**
@@ -130,20 +148,20 @@ export const loadVoiceBinding = async (
   deps: BindingLoaderDeps,
   request: BindingLoaderRequest,
 ): Promise<VoiceBinding> => {
-  if (!request.conversationId) return unbound();
+  if (!request.conversationId) return unbound(deps, request.userId);
 
   try {
     const conversation = await deps.loadConversation(request.conversationId);
     // No row is the ORDINARY case, not an error: a thread the user just opened
     // has a client-minted id and no row until its first message lands.
-    if (!conversation || !conversation.isActive) return unbound();
+    if (!conversation || !conversation.isActive) return unbound(deps, request.userId);
 
     if (!(await deps.canAccess(request.userId, conversation))) {
       deps.logger.warn('Realtime voice binding refused: caller cannot access the conversation', {
         userId: request.userId,
         conversationId: request.conversationId,
       });
-      return unbound();
+      return unbound(deps, request.userId);
     }
 
     const [messages, agent] = await Promise.all([
@@ -156,14 +174,32 @@ export const loadVoiceBinding = async (
       ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
     });
 
-    if (!agent) return { seed, instructions: buildVoiceInstructions({}) };
+    // A conversation the caller may read but that has no agent behind it is
+    // still the Global Assistant's — and it still has a conversation, so the
+    // prompt gets its coordinates and its plan pointer.
+    const contextOf = (): VoiceSystemContextRequest => ({
+      userId: request.userId,
+      conversationId: request.conversationId as string,
+      conversation: { type: conversation.type, contextId: conversation.contextId },
+      ...(agent === undefined
+        ? {}
+        : {
+            agent: {
+              pageId: agent.id,
+              title: agent.title,
+              systemPrompt: agent.systemPrompt,
+              enabledTools: agent.enabledTools,
+            },
+          }),
+    });
+
+    const agentSystemPrompt = await deps.buildSystemContext(contextOf());
+
+    if (!agent) return { seed, instructions: buildVoiceInstructions({ agentSystemPrompt }) };
 
     return {
       seed,
-      instructions: buildVoiceInstructions({
-        title: agent.title,
-        ...(agent.systemPrompt === null ? {} : { systemPrompt: agent.systemPrompt }),
-      }),
+      instructions: buildVoiceInstructions({ agentSystemPrompt, title: agent.title }),
       assistant: {
         agentPageId: agent.id,
         agentTitle: agent.title,
@@ -178,6 +214,6 @@ export const loadVoiceBinding = async (
       conversationId: request.conversationId,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return unbound();
+    return unbound(deps, request.userId);
   }
 };

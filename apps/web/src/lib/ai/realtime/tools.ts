@@ -2,9 +2,9 @@
  * PageSpace's AI SDK tool registry, projected onto the realtime wire shape.
  *
  * Voice is a second transport onto the conversations PageSpace already has, not
- * a second capability surface — so the realtime session gets the SAME exposure
- * split the text stack uses (`splitToolsForExposure`), and the SAME
- * tool_search / execute_tool scaffolding built by the SAME factories. Nothing
+ * a second capability surface — so the realtime session gets its exposure from
+ * the SAME function the text routes use (`applyToolExposureMode`), which yields
+ * the tool set and the discovery prompt describing it as one result. Nothing
  * here curates a "voice subset": a curated list would be a second tool surface
  * that silently drifts from the text one every time a tool is added.
  *
@@ -16,10 +16,9 @@
 
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { splitToolsForExposure } from '../tools/tool-exposure';
-import { createToolSearchTool } from '../tools/tool-search-tool';
-import { createExecuteTool } from '../tools/execute-tool';
+import { applyToolExposureMode } from '../tools/tool-exposure';
 import { filterToolsForAgentAllowlist } from '../core/tool-filtering';
+import type { SkillSearchEntry } from '../core/skill-catalog';
 import type { RealtimeTool } from './session';
 
 /**
@@ -88,34 +87,86 @@ export function toRealtimeTool(name: string, tool: Tool): RealtimeTool {
 }
 
 /**
+ * A voice call has no composer toggles, so nothing is rescued from deferral.
+ *
+ * The always-upfront set exists to keep `web_search` / `generate_image` directly
+ * callable on the text routes, where they are added independently of an agent's
+ * saved allowlist and would then fail execute_tool's re-check. Nothing adds
+ * them to a call, so they defer like any other non-core tool.
+ */
+const NO_COMPOSER_OVERRIDES: ReadonlySet<string> = new Set();
+
+/**
+ * How a call's tools are exposed to the model: the set it may call, and the
+ * prompt text that tells it how to reach everything else.
+ *
+ * THE TWO TRAVEL TOGETHER BECAUSE THEY ARE ONE DECISION. Voice used to build
+ * the tool half by hand and simply never build the prompt half — so `tool_search`
+ * and `execute_tool` rode every session while nothing in the instructions ever
+ * named them, and every non-core tool (the calendar family, spawn_session,
+ * create_task, the workflow tools) was loaded and undiscoverable. The model
+ * answered "I can't do that" about tools it was holding.
+ */
+export type RealtimeToolExposure = {
+  readonly tools: ToolSet;
+  /** Both halves as one block: how to reach deferred tools, then their names. */
+  readonly toolDiscoveryPrompt: string;
+  /** The catalog alone, for the surface that states the "how" earlier. */
+  readonly nonCoreToolNames: string;
+};
+
+/**
+ * Decide the exposure for a call: allowlist first, then the SAME search-mode
+ * split the text routes use.
+ *
+ * `applyToolExposureMode(_, 'search')` is called rather than reproduced. It
+ * already emits the core tools with full schemas, defers the rest behind
+ * `tool_search` / `execute_tool` built by the real factories, and returns the
+ * discovery prompt naming what was deferred — one expression, so the advertised
+ * tools and the text describing them cannot disagree. Reproducing its body here
+ * is what dropped the prompt in the first place.
+ *
+ * THE AGENT'S ALLOWLIST IS APPLIED FIRST, before the split and before
+ * `tool_search` is handed its catalog — the same order `page-chat-turn.ts` uses,
+ * and for the same reason: filtering afterwards would leave blocked tools
+ * discoverable through `tool_search` and callable through `execute_tool`, which
+ * is every tool the agent's owner switched off.
+ *
+ * WITH NOTHING TO DEFER THERE IS NO SCAFFOLDING. An agent allowed only core
+ * tools (or none at all) gets its tools and an empty discovery prompt, rather
+ * than a `tool_search` over an empty catalog and an `execute_tool` that can only
+ * refuse. That is `applyToolExposureMode`'s own rule and it is the honest one:
+ * two tools whose every call fails are worse than two tools absent.
+ */
+export function buildRealtimeToolExposure(
+  tools: ToolSet,
+  allowlist: ToolAllowlist = null,
+  searchableSkills: readonly SkillSearchEntry[] = [],
+): RealtimeToolExposure {
+  const allowed = filterToolsForAgentAllowlist(
+    tools,
+    allowlist === null ? null : [...allowlist],
+  ) as ToolSet;
+
+  return applyToolExposureMode(allowed, 'search', NO_COMPOSER_OVERRIDES, searchableSkills);
+}
+
+/**
  * Project a tool set onto the realtime tool definitions sent with the session.
  *
- * Emits the core tools with full schemas plus `tool_search` and `execute_tool`;
- * everything else is reachable through those two, exactly as in the Global
- * Assistant (`global-chat-turn.ts`). Front-loading every tool instead would
- * spend the session's context on schemas before the caller has said a word.
+ * Front-loading every tool instead would spend the session's context on schemas
+ * before the caller has said a word.
  *
- * `splitToolsForExposure` is called with NO always-upfront set. That set exists
- * to rescue composer-toggled tools (`web_search`, `generate_image`) from
- * execute_tool's allowlist re-check on the text routes — a voice call has no
- * composer toggles, so those tools defer like any other non-core tool and stay
- * reachable through execute_tool.
- *
- * The scaffolding is built by the real factories rather than hand-written
- * literals so the two tools cannot describe themselves differently to voice
- * than to text. Only their name/description/parameters are read here; wiring
- * their `execute` to the live call is the caller's job.
- *
- * `tool_search` receives the WHOLE set, not just the deferred half — core tools
- * are directly callable, so letting the model look one up is harmless, and it
- * matches the text stack's catalog.
+ * Only each tool's name/description/parameters are read here; wiring their
+ * `execute` to the live call is the caller's job.
  */
 export function buildRealtimeTools(
   tools: ToolSet,
   allowlist: ToolAllowlist = null,
+  searchableSkills: readonly SkillSearchEntry[] = [],
 ): readonly RealtimeTool[] {
-  return Object.entries(buildRealtimeToolSet(tools, allowlist)).map(([name, tool]) =>
-    toRealtimeTool(name, tool),
+  return Object.entries(buildRealtimeToolSet(tools, allowlist, searchableSkills)).map(
+    ([name, tool]) => toRealtimeTool(name, tool),
   );
 }
 
@@ -136,29 +187,14 @@ export function buildRealtimeTools(
  * reaches a non-core tool goes through the SAME allowlist re-check and the SAME
  * `safeParse` the text stack uses.
  *
- * THE AGENT'S ALLOWLIST IS APPLIED FIRST, before the exposure split and before
- * `tool_search` is handed its catalog — the same order `page-chat-turn.ts`
- * uses, and for the same reason: filtering afterwards would leave blocked tools
- * discoverable through `tool_search` and callable through `execute_tool`, which
- * is every tool the agent's owner switched off. `tool_search` therefore also
- * gets the FILTERED set here rather than the whole registry, so it cannot
- * describe a tool the model is not allowed to reach.
- *
- * `tool_search` and `execute_tool` are added AFTER the filter and are never
- * subject to it. They are the scaffolding that makes the allowlist reachable at
- * all, not capabilities in their own right — and `execute_tool` re-checks the
- * allowlist internally anyway, over the already-filtered deferred half.
+ * The discovery prompt half of the exposure is dropped here on purpose — the
+ * dispatcher runs tools, it does not prompt. `binding-loader.ts` takes the
+ * exposure whole.
  */
-export function buildRealtimeToolSet(tools: ToolSet, allowlist: ToolAllowlist = null): ToolSet {
-  const allowed = filterToolsForAgentAllowlist(
-    tools,
-    allowlist === null ? null : [...allowlist],
-  ) as ToolSet;
-  const { coreTools, nonCoreTools } = splitToolsForExposure(allowed);
-
-  return {
-    ...coreTools,
-    tool_search: createToolSearchTool(allowed),
-    execute_tool: createExecuteTool(nonCoreTools),
-  };
+export function buildRealtimeToolSet(
+  tools: ToolSet,
+  allowlist: ToolAllowlist = null,
+  searchableSkills: readonly SkillSearchEntry[] = [],
+): ToolSet {
+  return buildRealtimeToolExposure(tools, allowlist, searchableSkills).tools;
 }

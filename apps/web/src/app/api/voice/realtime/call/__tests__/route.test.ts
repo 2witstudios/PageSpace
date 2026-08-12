@@ -47,7 +47,9 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCallHandshake }));
 vi.mock('@/lib/ai/realtime/tools', () => ({ buildRealtimeTools: mockBuildRealtimeTools }));
 vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
-vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: {} }));
+// A FACTORY, not a value: the binding deps take the caller's auth principal,
+// because the active-plan lookup behind them needs a principal-aware page check.
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}) }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

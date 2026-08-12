@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { buildRealtimeTools, buildRealtimeToolSet, toRealtimeTool } from '../tools';
+import {
+  buildRealtimeTools,
+  buildRealtimeToolExposure,
+  buildRealtimeToolSet,
+  toRealtimeTool,
+} from '../tools';
 import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 import { createToolSearchTool } from '../../tools/tool-search-tool';
 import { createExecuteTool } from '../../tools/execute-tool';
@@ -220,8 +225,16 @@ describe('buildRealtimeTools', () => {
     });
   });
 
-  it('given an empty tool set, should still emit the discovery scaffolding', () => {
-    expect(names(buildRealtimeTools({}))).toEqual(['tool_search', 'execute_tool']);
+  it('given an empty tool set, should emit NOTHING — not scaffolding over an empty catalog', () => {
+    // Was: scaffolding regardless. `tool_search` over nothing and an
+    // `execute_tool` that can only refuse are two tools whose every call fails,
+    // which is worse than two tools absent. This is applyToolExposureMode's own
+    // rule (tool-exposure.ts:130-132), now shared rather than re-decided.
+    expect(names(buildRealtimeTools({}))).toEqual([]);
+  });
+
+  it('given only core tools, should skip the scaffolding — there is nothing to discover', () => {
+    expect(names(buildRealtimeTools({ read_page: fakeTool() }))).toEqual(['read_page']);
   });
 
   it('given composer-toggled tools, should defer them like any other non-core tool', () => {
@@ -247,6 +260,70 @@ describe('buildRealtimeTools', () => {
 });
 
 /**
+ * The half voice used to throw away.
+ *
+ * `tool_search` and `execute_tool` rode every session while nothing in the
+ * instructions named them, so every deferred tool — the calendar family,
+ * spawn_session, create_task, the workflow tools — was loaded and undiscoverable,
+ * and the model answered "I can't do that" about tools it was holding. The
+ * exposure now carries the text describing itself.
+ */
+describe('buildRealtimeToolExposure — the discovery prompt', () => {
+  it('given deferred tools, should return the prompt that tells the model how to reach them', () => {
+    const { toolDiscoveryPrompt } = buildRealtimeToolExposure(smallSet());
+
+    expect(toolDiscoveryPrompt).toContain('execute_tool');
+    expect(toolDiscoveryPrompt).toContain('tool_search');
+  });
+
+  it('should name the deferred tools, so the model knows what exists before it searches', () => {
+    const { toolDiscoveryPrompt } = buildRealtimeToolExposure({
+      read_page: fakeTool(),
+      create_task: fakeTool(),
+      rename_drive: fakeTool(),
+    });
+
+    expect(toolDiscoveryPrompt).toContain('create_task');
+    expect(toolDiscoveryPrompt).toContain('rename_drive');
+  });
+
+  it('should describe only tools the allowlist permits', () => {
+    // A name in the prompt is an invitation to call it. Naming a blocked tool
+    // both leaks the agent's configuration and spends a turn on a refusal.
+    const { toolDiscoveryPrompt } = buildRealtimeToolExposure(
+      { read_page: fakeTool(), create_task: fakeTool(), rename_drive: fakeTool() },
+      ['read_page', 'create_task'],
+    );
+
+    expect(toolDiscoveryPrompt).toContain('create_task');
+    expect(toolDiscoveryPrompt).not.toContain('rename_drive');
+  });
+
+  it('given nothing to defer, should return no prompt rather than an empty instruction', () => {
+    expect(buildRealtimeToolExposure({ read_page: fakeTool() }).toolDiscoveryPrompt).toBe('');
+    expect(buildRealtimeToolExposure({}).toolDiscoveryPrompt).toBe('');
+  });
+
+  it('should describe the SAME tools it advertises, never a wider or narrower set', () => {
+    // The prompt and the tool set are one decision. If they can disagree, the
+    // model is either told about a tool nothing answers, or holds one it was
+    // never told it had — which is the bug this whole seam exists to prevent.
+    const registry = buildPageSpaceTools({ codeExecutionEnabled: true });
+    const { tools, toolDiscoveryPrompt } = buildRealtimeToolExposure(registry);
+
+    const advertised = new Set(Object.keys(tools));
+    const deferred = Object.keys(registry).filter((n) => !advertised.has(n));
+
+    expect(deferred.length).toBeGreaterThan(0);
+    for (const name of deferred) {
+      expect(toolDiscoveryPrompt, `deferred tool "${name}" is not named in the prompt`).toContain(
+        name,
+      );
+    }
+  });
+});
+
+/**
  * The agent's allowlist is what its owner switched off. Advertising past it
  * told the model it could call write and delete tools an owner had disabled —
  * and because `execute_tool` reaches everything the split deferred, filtering
@@ -257,10 +334,12 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
     const emitted = names(
       buildRealtimeTools(
         { read_page: fakeTool(), delete_page: fakeTool(), rename_drive: fakeTool() },
-        ['read_page'],
+        ['read_page', 'rename_drive'],
       ),
     );
 
+    // rename_drive is allowed but non-core, so it defers behind the scaffolding
+    // rather than being front-loaded. delete_page is not allowed and is nowhere.
     expect(emitted).toEqual(['read_page', 'tool_search', 'execute_tool']);
   });
 
@@ -269,13 +348,14 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
     expect(names(buildRealtimeTools(set, null))).toEqual(names(buildRealtimeTools(set)));
   });
 
-  it('given an EMPTY allowlist, should advertise nothing but the scaffolding', () => {
-    // [] is "every PageSpace tool off", not "unconfigured".
+  it('given an EMPTY allowlist, should advertise nothing at all', () => {
+    // [] is "every PageSpace tool off", not "unconfigured" — and with every tool
+    // off there is nothing for the scaffolding to reach either.
     const emitted = names(
       buildRealtimeTools({ read_page: fakeTool(), rename_drive: fakeTool() }, []),
     );
 
-    expect(emitted).toEqual(['tool_search', 'execute_tool']);
+    expect(emitted).toEqual([]);
   });
 
   it('should keep a blocked tool out of the EXECUTABLE set as well, not just the advertised one', () => {
@@ -283,8 +363,8 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
     // it reaches everything else. A filter applied to only one of them is not a
     // filter.
     const executable = buildRealtimeToolSet(
-      { read_page: fakeTool(), rename_drive: fakeTool() },
-      ['read_page'],
+      { read_page: fakeTool(), create_task: fakeTool(), rename_drive: fakeTool() },
+      ['read_page', 'create_task'],
     );
 
     expect(Object.keys(executable).sort()).toEqual(
@@ -297,8 +377,8 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
     // refused — which is both a leak of the agent's configuration and an
     // invitation to spend a turn failing.
     const search = buildRealtimeToolSet(
-      { read_page: fakeTool(), rename_drive: fakeTool() },
-      ['read_page'],
+      { read_page: fakeTool(), create_task: fakeTool(), rename_drive: fakeTool() },
+      ['read_page', 'create_task'],
     ).tool_search;
     const described = JSON.stringify(
       await (search.execute as (a: unknown, o: unknown) => unknown)(
@@ -312,8 +392,11 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
 
   it('should never filter away the scaffolding itself', () => {
     // tool_search and execute_tool are how an allowlist is reached at all, not
-    // capabilities an owner grants.
-    const emitted = names(buildRealtimeTools({ read_page: fakeTool() }, ['nothing_matches']));
+    // capabilities an owner grants — so they appear even when the allowlist
+    // names neither of them, as no allowlist ever does.
+    const emitted = names(
+      buildRealtimeTools({ read_page: fakeTool(), rename_drive: fakeTool() }, ['rename_drive']),
+    );
     expect(emitted).toEqual(['tool_search', 'execute_tool']);
   });
 });

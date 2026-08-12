@@ -28,7 +28,13 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
+import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
+import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
+import { buildVoiceSystemContext, type VoiceSystemContextDeps } from './system-context';
 import type { BindingLoaderDeps, SeedConversation, AgentPage } from './binding-loader';
 import type {
   TranscriptPersistenceDeps,
@@ -118,7 +124,37 @@ export const activeConversationGuard =
     return row?.isActive === true;
   };
 
-export const voiceBindingDeps: BindingLoaderDeps = {
+/**
+ * The live reads behind the call's system prompt.
+ *
+ * A FACTORY, taking the caller's auth principal, because the active-plan lookup
+ * needs a principal-aware page check: a plan can be bound to a page in ANOTHER
+ * drive, and a user-level check would leak that page's title and id to a token
+ * that may not reach it. The typed surface makes the same distinction at
+ * `page-chat-turn.ts`, for the same reason.
+ */
+export const voiceSystemContextDeps = (auth: AuthResult): VoiceSystemContextDeps => ({
+  // Built per request, not at module load: `buildPageSpaceTools` branches on the
+  // code-execution kill switch, so a module-level constant would pin whatever
+  // the environment looked like at import time.
+  buildTools: () => buildPageSpaceTools(),
+  loadAgentMemory: async (pageId, userId) =>
+    buildAgentMemorySection(await getAgentMemoryContext(pageId, userId)),
+  loadActivePlan: async (conversationId, userId) =>
+    buildActivePlanPrompt(
+      await getActivePlan(conversationId, userId, (pageId) =>
+        canPrincipalViewPage(auth, pageId),
+      ),
+    ),
+  // `canDelegate` mirrors the typed surface: naming agents the model cannot
+  // reach makes it attempt a delegation that silently fails. A call has no
+  // read-only mode, so delegation is always available.
+  loadAgentAwareness: (userId) => buildAgentAwarenessPrompt(userId, { canDelegate: true }),
+  loadPersonalization: (userId) => getUserPersonalization(userId),
+  logger: loggers.ai,
+});
+
+export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   loadConversation,
   canAccess: (userId, conversation) => canAccessConversation(userId, conversation),
   // Streaming placeholders stay excluded (the default): an empty mid-flight row
@@ -126,8 +162,10 @@ export const voiceBindingDeps: BindingLoaderDeps = {
   loadMessages: (conversationId) =>
     messageRepository.getMessagesByConversationId(conversationId),
   loadAgentPage,
+  buildSystemContext: (request) =>
+    buildVoiceSystemContext(voiceSystemContextDeps(auth), request),
   logger: loggers.ai,
-};
+});
 
 export const voiceTranscriptDeps: TranscriptPersistenceDeps = {
   loadConversation,
