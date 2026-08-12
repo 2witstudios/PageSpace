@@ -168,6 +168,13 @@ export async function PATCH(
     .update(workflows)
     .set({
       ...data,
+      // Persist the CANONICAL zone this request validated, not the raw field —
+      // `...data` would spread a space-padded or whitespace-only string past the
+      // validation above and straight into the column. The cron runner hands
+      // that stored value to getNextRunDate on every tick, so an unschedulable
+      // string there leaves nextRunAt stale and the workflow re-firing forever.
+      // Absent stays undefined, which Drizzle reads as "no change".
+      timezone: data.timezone === undefined ? undefined : effectiveTimezone,
       nextRunAt,
       updatedAt: new Date(),
     })

@@ -243,6 +243,34 @@ describe('PATCH /api/calendar/events/[eventId] — timezone resolution', () => {
     }));
   });
 
+  /**
+   * What the request validated and what the column stores have to be the same
+   * string. `" America/Chicago "` resolves trimmed and `" "` resolves back to
+   * the event's own zone — writing the raw field back would leave the column
+   * holding a value nothing can schedule or render against, and the executor
+   * reads that column at fire time (PR #2405 review).
+   */
+  it('stores a space-padded timezone trimmed', async () => {
+    setupPatch({ timezone: 'UTC' });
+
+    const res = await PATCH(makeRequest({ timezone: '  America/Chicago  ' }), { params });
+
+    expect(res.status).toBe(200);
+    expect(setMock.mock.calls[0][0]).toMatchObject({ timezone: 'America/Chicago' });
+  });
+
+  it('stores the existing zone rather than whitespace when the field is blank', async () => {
+    setupPatch({ timezone: 'America/Chicago' });
+    profileWhere.mockResolvedValue([{ timezone: 'Asia/Tokyo' }]);
+
+    const res = await PATCH(makeRequest({ timezone: '   ' }), { params });
+
+    expect(res.status).toBe(200);
+    // Blank counts as absent, so resolution lands on the event's own zone — and
+    // that is what the column must hold, not the blank string.
+    expect(setMock.mock.calls[0][0]).toMatchObject({ timezone: 'America/Chicago' });
+  });
+
   it('hands the agent trigger the same resolved zone the datetimes were read in', async () => {
     setupPatch({ timezone: 'America/Chicago' });
 

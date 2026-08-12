@@ -303,7 +303,12 @@ export async function PATCH(
           startAt: adjustedStartAt,
           endAt: adjustedEndAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          // Persist the CANONICAL zone the request resolved to, not the raw
+          // field. `" America/Chicago "` resolves and validates trimmed, and
+          // `" "` resolves to the event's existing zone — writing the raw string
+          // back would store a value nothing can schedule against. Absent stays
+          // undefined, which Drizzle reads as "no change".
+          timezone: data.timezone === undefined ? undefined : effectiveTimezone,
           recurrenceRule: data.recurrenceRule,
           visibility: data.visibility,
           color: data.color,

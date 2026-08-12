@@ -30,3 +30,33 @@ export const optionalAbsoluteInstant = z.preprocess(
   (value) => (typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value),
   z.coerce.date().optional(),
 );
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The exclusive upper bound for an inclusive `endDate` filter.
+ *
+ * The two input shapes mean different things and only one of them wants a day
+ * added:
+ *
+ * - `endDate=2026-02-19` names a DAY. "Through the 19th" includes everything
+ *   that happened during it, so the exclusive bound is the start of the 20th.
+ * - `endDate=2026-02-19T19:00:00Z` names an INSTANT and means exactly that.
+ *   Adding a day here hands back 24 hours the caller never asked for.
+ *
+ * Callers used to add the day unconditionally, and with local `setDate` — so an
+ * explicit instant was stretched by a day, and the stretch itself depended on
+ * the server's own timezone. The day is added in UTC here for the same reason
+ * the bounds are parsed in UTC: a range must not mean different things in
+ * different deployments (#2404).
+ *
+ * Takes the RAW query string because the parsed `Date` cannot answer the
+ * question — a date-only value and an explicit `T00:00:00Z` both land on UTC
+ * midnight, and guessing from the instant would silently mis-handle one of them.
+ */
+export function exclusiveEndBound(raw: string | null | undefined, parsed: Date): Date {
+  if (!raw || !DATE_ONLY.test(raw.trim())) return parsed;
+  const nextDay = new Date(parsed);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  return nextDay;
+}
