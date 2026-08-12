@@ -26,7 +26,8 @@
  */
 
 import { buildRealtimeSeed, type SeedEvent, type SeedMessage } from './seed';
-import type { VoiceSystemContextRequest } from './system-context';
+import type { RealtimeTool } from './session';
+import type { VoiceCallContext, VoiceSystemContextRequest } from './system-context';
 import type { VoiceAssistant } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /** The conversation facts the access check needs. A `conversations` row satisfies it. */
@@ -61,14 +62,15 @@ export type BindingLoaderDeps = {
   readonly loadMessages: (conversationId: string) => Promise<readonly SeedMessage[]>;
   readonly loadAgentPage: (pageId: string) => Promise<AgentPage | undefined>;
   /**
-   * The finished instructions for whatever this call turned out to be bound to:
-   * the same system prompt the typed surface builds, capped with the
-   * spoken-medium override. Injected rather than called directly so this module
-   * stays exercisable without a database, and so the one place that answers
-   * "what is this bound to?" is not also the place that does half a dozen reads
-   * to describe it. See `system-context.ts`.
+   * Everything the session is opened with, for whatever this call turned out to
+   * be bound to: the same system prompt the typed surface builds capped with the
+   * spoken-medium override, and the tools to advertise — from one exposure, so
+   * the two cannot describe different capabilities. Injected rather than called
+   * directly so this module stays exercisable without a database, and so the one
+   * place that answers "what is this bound to?" is not also the place that does
+   * half a dozen reads to describe it. See `system-context.ts`.
    */
-  readonly buildInstructions: (request: VoiceSystemContextRequest) => Promise<string>;
+  readonly buildCallContext: (request: VoiceSystemContextRequest) => Promise<VoiceCallContext>;
   readonly logger: {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
   };
@@ -92,6 +94,13 @@ export type BindingLoaderRequest = {
 export type VoiceBinding = {
   readonly seed: SeedEvent[];
   readonly instructions: string;
+  /**
+   * The tools to advertise on this session. Carried on the binding rather than
+   * rebuilt by the route because they and `instructions` come from one exposure:
+   * a session that advertises `tool_search` while its prompt never names it is
+   * the exact failure this whole change is about.
+   */
+  readonly tools: readonly RealtimeTool[];
   readonly assistant?: VoiceAssistant;
 };
 
@@ -105,7 +114,7 @@ const unbound = async (
   userId: string,
 ): Promise<VoiceBinding> => ({
   seed: [],
-  instructions: await deps.buildInstructions({ userId }),
+  ...(await deps.buildCallContext({ userId })),
 });
 
 /**
@@ -191,13 +200,13 @@ export const loadVoiceBinding = async (
           }),
     });
 
-    const instructions = await deps.buildInstructions(contextOf());
+    const callContext = await deps.buildCallContext(contextOf());
 
-    if (!agent) return { seed, instructions };
+    if (!agent) return { seed, ...callContext };
 
     return {
       seed,
-      instructions,
+      ...callContext,
       assistant: {
         agentPageId: agent.id,
         agentTitle: agent.title,

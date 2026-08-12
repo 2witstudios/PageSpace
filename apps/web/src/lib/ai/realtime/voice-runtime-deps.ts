@@ -33,7 +33,7 @@ import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
-import { buildVoiceSystemContext, type VoiceSystemContextDeps } from './system-context';
+import { buildVoiceCallContext, type VoiceSystemContextDeps } from './system-context';
 import type { BindingLoaderDeps, SeedConversation, AgentPage } from './binding-loader';
 import type {
   TranscriptPersistenceDeps,
@@ -157,8 +157,8 @@ export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   loadMessages: (conversationId) =>
     messageRepository.getMessagesByConversationId(conversationId),
   loadAgentPage,
-  buildInstructions: (request) =>
-    buildVoiceSystemContext(voiceSystemContextDeps(auth), request),
+  buildCallContext: (request) =>
+    buildVoiceCallContext(voiceSystemContextDeps(auth), request),
   logger: loggers.ai,
 });
 

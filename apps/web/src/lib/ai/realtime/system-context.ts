@@ -24,14 +24,32 @@
 
 import type { ToolSet } from 'ai';
 import { buildAgentSystemPrompt } from '../core/prompt-assembly';
+import type { RealtimeTool } from './session';
 import { buildVoiceInstructions } from './instructions';
 import type { PersonalizationInfo } from '../core/system-prompt';
 import { buildBuiltinSkillCatalog } from '../core/skill-catalog';
 import {
   buildRealtimeToolExposure,
+  toRealtimeTool,
   type RealtimeToolExposure,
   type ToolAllowlist,
 } from './tools';
+
+/**
+ * What the session is told, and what it is given — from ONE exposure.
+ *
+ * They ship together because they are two projections of a single decision, and
+ * the whole bug this module exists to fix was those two disagreeing: the
+ * session carried `tool_search` while the prompt never named it. Computing the
+ * exposure once also keeps a second full registry build off the handshake,
+ * which the caller is waiting on.
+ */
+export type VoiceCallContext = {
+  /** The system prompt for the bound surface, capped with the spoken override. */
+  readonly instructions: string;
+  /** The tool definitions to advertise, already on the realtime wire shape. */
+  readonly tools: readonly RealtimeTool[];
+};
 
 /** The agent a call is bound to, when it is bound to one rather than to the Global Assistant. */
 export type BoundAgent = {
@@ -117,8 +135,12 @@ const withVoiceOverride = (
     },
   });
 
+/** The exposure's tool half, projected onto the realtime wire shape. */
+const advertise = (exposure: RealtimeToolExposure): readonly RealtimeTool[] =>
+  Object.entries(exposure.tools).map(([name, tool]) => toRealtimeTool(name, tool));
+
 /**
- * Assemble the call's system prompt.
+ * Assemble everything the session is opened with.
  *
  * THREE BLOCKS THE TYPED SURFACE CARRIES ARE DELIBERATELY OMITTED, and the
  * reason is the same for all three — a realtime session's instructions are sent
@@ -148,10 +170,10 @@ const withVoiceOverride = (
  * — that rides `enabledTools` through the exposure, which is a different
  * mechanism and is applied.
  */
-export const buildVoiceSystemContext = async (
+export const buildVoiceCallContext = async (
   deps: VoiceSystemContextDeps,
   request: VoiceSystemContextRequest,
-): Promise<string> => {
+): Promise<VoiceCallContext> => {
   const allowlist: ToolAllowlist = request.agent?.enabledTools ?? null;
   const exposure = buildRealtimeToolExposure(deps.buildTools(), allowlist);
   // The PRE-split names, not `Object.keys(exposure.tools)`. After the split that
@@ -196,7 +218,10 @@ export const buildVoiceSystemContext = async (
       toolDiscovery: exposure.toolDiscoveryPrompt,
     });
 
-    return withVoiceOverride(exposure, systemPrompt, request.agent.title);
+    return {
+      instructions: withVoiceOverride(exposure, systemPrompt, request.agent.title),
+      tools: advertise(exposure),
+    };
   }
 
   const systemPrompt = buildAgentSystemPrompt({
@@ -220,5 +245,5 @@ export const buildVoiceSystemContext = async (
     nonCoreToolNames: exposure.nonCoreToolNames,
   });
 
-  return withVoiceOverride(exposure, systemPrompt);
+  return { instructions: withVoiceOverride(exposure, systemPrompt), tools: advertise(exposure) };
 };

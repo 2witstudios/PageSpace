@@ -41,7 +41,10 @@ const agentPage = (over: Partial<AgentPage> = {}): AgentPage => ({
  * is to decide WHAT the call is bound to and hand that over; assembling the
  * instructions is `system-context.ts`, tested there.
  */
-const INSTRUCTIONS = '# PAGESPACE AI\n\n<<SHARED>>\n\n# THIS IS A VOICE CALL';
+const CALL_CONTEXT = {
+  instructions: '# PAGESPACE AI\n\n<<SHARED>>\n\n# THIS IS A VOICE CALL',
+  tools: [{ type: 'function' as const, name: 'read_page', description: '', parameters: {} }],
+};
 
 const history = [
   { role: 'user', content: 'where are my notes?', createdAt: new Date(1) },
@@ -55,7 +58,7 @@ function deps(over: Partial<BindingLoaderDeps> = {}) {
     canAccess: vi.fn(async () => true),
     loadMessages: vi.fn(async () => history),
     loadAgentPage: vi.fn(async () => agentPage()),
-    buildInstructions: vi.fn(async () => INSTRUCTIONS),
+    buildCallContext: vi.fn(async () => CALL_CONTEXT),
     logger: { warn },
     ...over,
   };
@@ -257,7 +260,7 @@ describe('loadVoiceBinding — the instructions', () => {
 
     await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(d.buildInstructions).toHaveBeenCalledWith({
+    expect(d.buildCallContext).toHaveBeenCalledWith({
       userId: 'u1',
       conversationId: 'conv1',
       conversation: { type: 'page', contextId: 'agent1' },
@@ -275,7 +278,7 @@ describe('loadVoiceBinding — the instructions', () => {
 
     await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(d.buildInstructions).toHaveBeenCalledWith({
+    expect(d.buildCallContext).toHaveBeenCalledWith({
       userId: 'u1',
       conversationId: 'conv1',
       conversation: { type: 'global', contextId: null },
@@ -289,7 +292,7 @@ describe('loadVoiceBinding — the instructions', () => {
 
     const { instructions } = await loadVoiceBinding(d, { userId: 'u1' });
 
-    expect(d.buildInstructions).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(d.buildCallContext).toHaveBeenCalledWith({ userId: 'u1' });
     expect(instructions).toContain('<<SHARED>>');
     expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
@@ -304,7 +307,7 @@ describe('loadVoiceBinding — the instructions', () => {
     });
 
     expect(seed).toEqual([]);
-    expect(d.buildInstructions).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(d.buildCallContext).toHaveBeenCalledWith({ userId: 'u1' });
     expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
 });

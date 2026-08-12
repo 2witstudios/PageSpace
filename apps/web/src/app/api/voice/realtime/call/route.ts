@@ -31,8 +31,6 @@ import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { resolveRealtimeModel } from '@/lib/ai/realtime/session';
-import { buildRealtimeTools } from '@/lib/ai/realtime/tools';
-import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
 import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
 import { voiceBindingDeps } from '@/lib/ai/realtime/voice-runtime-deps';
@@ -139,19 +137,17 @@ export async function POST(request: Request) {
         // the env override is the entire per-deployment model escape hatch, and
         // a default applied deeper down would silently swallow it.
         model: resolveRealtimeModel(process.env),
-        // Built here, at the edge, because the registry has env-dependent
-        // branches (the code-execution kill switch) that are the caller's
-        // decision. The realtime server cannot build these itself — the
-        // registry lives in this app — so they ride the signed internal hop.
+        // Built with the instructions, from ONE exposure, and carried here on
+        // the binding. They are two projections of a single decision — what
+        // this agent may reach — and a session that advertises `tool_search`
+        // while its prompt never names it is exactly the bug this replaced.
+        // Building them separately here also meant a second full registry
+        // build on a handshake the caller is waiting on.
         //
-        // Filtered by the bound agent's own allowlist, so voice advertises what
-        // the text surface would advertise for the same agent. Advertising the
-        // whole deployment registry told the model it could call tools the
-        // agent's owner had switched off.
-        tools: buildRealtimeTools(
-          buildPageSpaceTools(),
-          binding.assistant?.enabledTools ?? null,
-        ),
+        // Still built in this app rather than the realtime server: the registry
+        // lives here and has env-dependent branches (the code-execution kill
+        // switch), so the definitions ride the signed internal hop.
+        tools: binding.tools,
         subscriptionTier: tier,
         internalRealtimeUrl: process.env.INTERNAL_REALTIME_URL,
         signHeaders: createSignedBroadcastHeaders,

@@ -16,10 +16,16 @@ import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import type { Tool } from 'ai';
 import {
-  buildVoiceSystemContext,
+  buildVoiceCallContext,
   type VoiceSystemContextDeps,
   type BoundAgent,
 } from '../system-context';
+
+/** The assembled prompt alone — most cases here are about what it says. */
+const promptOf = async (
+  deps: VoiceSystemContextDeps,
+  request: Parameters<typeof buildVoiceCallContext>[1],
+): Promise<string> => (await buildVoiceCallContext(deps, request)).instructions;
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import { buildRealtimeToolExposure } from '../tools';
 
@@ -76,7 +82,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
   it('should tell the model how to reach the tools that are not advertised', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).toContain('call execute_tool');
     expect(prompt).toContain('tool_search("select:tool_name")');
@@ -85,7 +91,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
   it('should NAME the deferred tools, which is the whole delegation surface', async () => {
     const { deps: d } = deps();
 
-    const listed = catalog(await buildVoiceSystemContext(d, { userId: 'u1' }));
+    const listed = catalog(await promptOf(d, { userId: 'u1' }));
 
     expect(listed).toContain('create_task');
     expect(listed).toContain('spawn_session');
@@ -97,7 +103,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
     // tools in question are real ones.
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const listed = catalog(await buildVoiceSystemContext(d, { userId: 'u1' }));
+    const listed = catalog(await promptOf(d, { userId: 'u1' }));
 
     for (const name of ['create_task', 'spawn_session', 'list_calendar_events', 'create_workflow']) {
       expect(listed, `${name} is not discoverable on a call`).toContain(name);
@@ -110,7 +116,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
     const { deps: d } = deps();
 
     const listed = catalog(
-      await buildVoiceSystemContext(d, {
+      await promptOf(d, {
         userId: 'u1',
         agent: agent({ enabledTools: ['read_page', 'create_task'] }),
       }),
@@ -123,7 +129,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
   it('should carry the workspace knowledge, gated on those same tools', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).toContain('# PAGESPACE AI');
     expect(prompt).toMatch(/TASK/i);
@@ -143,7 +149,7 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
     // builder states them unconditionally and would pass either way.
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const prompt = await promptOf(d, { userId: 'u1', agent: agent() });
     const guidance = prompt.slice(0, prompt.indexOf('NON-CORE TOOLS'));
 
     expect(guidance).toContain('TASK MANAGEMENT:');
@@ -159,10 +165,43 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
     // miss.
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const prompt = await promptOf(d, { userId: 'u1', agent: agent() });
 
     expect(prompt).toContain('task-management');
     expect(prompt).toContain('spreadsheets');
+  });
+
+  it('should advertise exactly the tools its own prompt describes', async () => {
+    // The two used to be built in different places from the same inputs, which
+    // is the arrangement where they agree until someone edits one call site.
+    // Now they are two projections of one exposure, and this is the property
+    // that buys: every advertised name is either explained upfront or named in
+    // the deferred catalog, and nothing is advertised that the prompt is silent
+    // about.
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const { instructions, tools } = await buildVoiceCallContext(d, {
+      userId: 'u1',
+      agent: agent({ enabledTools: ['read_page', 'create_task', 'list_calendar_events'] }),
+    });
+
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(instructions, `${tool.name} is advertised but never mentioned`).toContain(tool.name);
+    }
+  });
+
+  it('given a core-only agent, should advertise no scaffolding AND promise none', async () => {
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const { instructions, tools } = await buildVoiceCallContext(d, {
+      userId: 'u1',
+      agent: agent({ enabledTools: ['read_page', 'list_pages'] }),
+    });
+
+    expect(tools.map((t) => t.name).sort()).toEqual(['list_pages', 'read_page']);
+    expect(instructions).not.toContain('tool_search');
+    expect(instructions).not.toContain('execute_tool');
   });
 
   it('should let tool_search resolve a skill the prompt advertises', async () => {
@@ -188,7 +227,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     const systemPrompt = 'Answer only in limericks. Never mention the weather.';
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, {
+    const prompt = await promptOf(d, {
       userId: 'u1',
       agent: agent({ systemPrompt }),
     });
@@ -203,7 +242,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     // makes it feel like the assistant they chose.
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const prompt = await promptOf(d, { userId: 'u1', agent: agent() });
 
     expect(prompt).toContain('"Release Notes Bot"');
   });
@@ -211,7 +250,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('should cap the assembly with the spoken override, after the shared prompt', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).toContain('# THIS IS A VOICE CALL');
     expect(prompt.indexOf('You are the Global Assistant')).toBeLessThan(
@@ -225,7 +264,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     // would name a tool the session never advertised.
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const prompt = await buildVoiceSystemContext(d, {
+    const prompt = await promptOf(d, {
       userId: 'u1',
       agent: agent({ enabledTools: ['read_page', 'list_pages'] }),
     });
@@ -237,7 +276,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('given a bound agent, should carry its memory', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const prompt = await promptOf(d, { userId: 'u1', agent: agent() });
 
     expect(prompt).toContain('<<MEMORY>>');
     expect(d.loadAgentMemory).toHaveBeenCalledWith('agent1', 'u1');
@@ -246,7 +285,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('given NO bound agent, should assemble the Global Assistant', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).toContain('You are the Global Assistant for PageSpace');
   });
@@ -258,7 +297,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     // stays; the list is fetched by `list_agents` on the turn that needs it.
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).not.toContain('## Available AI Agents');
     expect(prompt).toContain('list_agents');
@@ -267,7 +306,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('should carry the caller\'s own personalization, same as the typed surface', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt).toContain('ABOUT THE USER');
     expect(prompt).toContain('Ships release notes.');
@@ -276,7 +315,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('given a bound conversation, should carry its plan pointer', async () => {
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', conversationId: 'conv1' });
+    const prompt = await promptOf(d, { userId: 'u1', conversationId: 'conv1' });
 
     expect(prompt).toContain('<<PLAN>>');
     expect(d.loadActivePlan).toHaveBeenCalledWith('conv1', 'u1');
@@ -285,7 +324,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('given an UNBOUND call, should not go looking for a plan there is no thread for', async () => {
     const { deps: d } = deps();
 
-    await buildVoiceSystemContext(d, { userId: 'u1' });
+    await promptOf(d, { userId: 'u1' });
 
     expect(d.loadActivePlan).not.toHaveBeenCalled();
   });
@@ -293,7 +332,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
   it('should never describe ask_user, which draws a card nobody on a call can see', async () => {
     const { deps: d } = deps();
 
-    expect(await buildVoiceSystemContext(d, { userId: 'u1' })).not.toContain('ASKING THE USER:');
+    expect(await promptOf(d, { userId: 'u1' })).not.toContain('ASKING THE USER:');
   });
 
   it('should carry NOTHING turn-volatile — instructions are sent once, at socket open', async () => {
@@ -302,7 +341,7 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     // tools read the live location instead.
     const { deps: d } = deps();
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const prompt = await promptOf(d, { userId: 'u1', agent: agent() });
 
     expect(prompt).not.toContain('LOCATION CONTEXT');
     expect(prompt).not.toMatch(/CURRENT (DATE|TIME)/i);
@@ -326,7 +365,7 @@ describe('buildVoiceSystemContext — what it costs the session', () => {
   it('should assemble well inside the session context it shares with the audio', async () => {
     const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
 
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+    const prompt = await promptOf(d, { userId: 'u1' });
 
     expect(prompt.length, `assembled prompt is ${prompt.length} characters`).toBeLessThan(
       CEILING_CHARS,
@@ -346,7 +385,7 @@ describe('buildVoiceSystemContext — no block is worth the call', () => {
   ] as const)('given %s fails, should drop only that block', async (dep, marker) => {
     const { deps: d, warn } = deps({ [dep]: failing() });
 
-    const prompt = await buildVoiceSystemContext(d, {
+    const prompt = await promptOf(d, {
       userId: 'u1',
       conversationId: 'conv1',
       agent: agent(),
@@ -363,7 +402,7 @@ describe('buildVoiceSystemContext — no block is worth the call', () => {
     // something — invisible in a transcript, impossible to bisect without this.
     const { deps: d, warn } = deps({ loadActivePlan: failing() });
 
-    await buildVoiceSystemContext(d, { userId: 'u1', conversationId: 'conv1' });
+    await promptOf(d, { userId: 'u1', conversationId: 'conv1' });
 
     expect(warn).toHaveBeenCalledWith(
       expect.any(String),
