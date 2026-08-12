@@ -86,11 +86,11 @@ describe('the advertised tool definitions', () => {
     // any tool input is unrepresentable in JSON Schema and makes z.toJSONSchema
     // throw. This case fails the moment that lands, in whichever module it lands.
     //
-    // It drives `toRealtimeTool` directly, NOT buildRealtimeTools: the latter
+    // It drives `toRealtimeTool` directly, NOT the advertised set: an exposure
     // converts only the upfront half, so a deferred tool — which is most of the
     // registry — would never have its schema touched and the guard would pass
     // vacuously. (Mutation-checked: adding `z.date()` to a deferred tool goes red
-    // here and stays green through buildRealtimeTools.)
+    // here and stays green through the advertised set.)
     const registry = buildPageSpaceTools({ codeExecutionEnabled: true });
     expect(Object.keys(registry).length).toBeGreaterThan(50);
 

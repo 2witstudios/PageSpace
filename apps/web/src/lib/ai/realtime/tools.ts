@@ -204,9 +204,9 @@ export function toRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
  * The EXECUTABLE set behind those definitions — the same objects, before the
  * projection onto the wire shape.
  *
- * Split out from `buildRealtimeTools` so that what the session ADVERTISES and
- * what the dispatcher RUNS are one expression evaluated twice, not two lists
- * that agree today. They are built in different processes (definitions ride the
+ * Split out from the exposure's own projection so that what the session
+ * ADVERTISES and what the dispatcher RUNS are one expression evaluated twice,
+ * not two lists that agree today. They are built in different processes (definitions ride the
  * attach payload to `apps/realtime`; execution happens back here on the bridge),
  * which is exactly the arrangement where two hand-kept lists drift — the model
  * would call a name nothing answers, and the call would hang on a tool result
