@@ -1,5 +1,14 @@
 /**
- * The system prompt a call is given — the SAME one the typed surface builds.
+ * What a call is opened with: the tools it may use, and the instructions
+ * describing them — the SAME system prompt the typed surface builds, capped
+ * with what changes because the words are heard.
+ *
+ * BOTH COME FROM ONE EXPOSURE, which is the point of assembling them together.
+ * The tool set and the text describing it are two projections of a single
+ * decision — what this agent may reach — and the bug this module exists to fix
+ * was those two disagreeing: sessions carried `tool_search` and `execute_tool`
+ * while nothing in the prompt ever named them, so every deferred tool was
+ * loaded and undiscoverable.
  *
  * A voice call binds to a conversation that is either a page agent's or the
  * Global Assistant's. Those are exactly the two surfaces `buildAgentSystemPrompt`
