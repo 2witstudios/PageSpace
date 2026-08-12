@@ -1,4 +1,4 @@
-import { isToday, isYesterday, isThisWeek, format, addDays, startOfDay } from 'date-fns';
+import { isToday, isYesterday, isThisWeek, format, addDays, startOfDay, parseISO } from 'date-fns';
 import type {
   ActivityLog,
   ActivityGroupSummary,
@@ -303,4 +303,31 @@ export function dayRangeParams(
     ...(startDate ? { startDate: startOfDay(startDate).toISOString() } : {}),
     ...(endDate ? { endDate: addDays(startOfDay(endDate), 1).toISOString() } : {}),
   };
+}
+
+/**
+ * Read a day the user picked back out of a URL parameter.
+ *
+ * The filters live in the URL so a view can be reloaded or shared, and they are
+ * written as `YYYY-MM-DD` — a CALENDAR DAY, which only means anything in the
+ * reader's own timezone. `new Date("2026-02-19")` is the trap: ISO 8601 defines
+ * a bare date as UTC midnight, so west of Greenwich it reads back as the 18th
+ * and the whole range slides a day (#2404). `parseISO` reads a date-only value
+ * as local midnight, and still honours an explicit instant if one is present.
+ */
+export function parseDayParam(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined;
+  const parsed = parseISO(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+/**
+ * Write a picked day into a URL parameter, as the day the user sees.
+ *
+ * The counterpart trap to {@link parseDayParam}: `toISOString().split('T')[0]`
+ * takes the UTC day, which east of Greenwich is the day BEFORE the one that was
+ * picked (Tokyo midnight is 15:00Z the previous day). `format` is local.
+ */
+export function formatDayParam(date: Date): string {
+  return format(date, 'yyyy-MM-dd');
 }

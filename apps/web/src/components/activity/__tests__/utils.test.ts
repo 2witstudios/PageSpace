@@ -5,6 +5,8 @@ import {
   isEditSessionGroupable,
   groupConsecutiveActivities,
   dayRangeParams,
+  parseDayParam,
+  formatDayParam,
 } from '../utils';
 import type { ActivityLog } from '../types';
 
@@ -328,7 +330,11 @@ describe('groupConsecutiveActivities', () => {
 describe('dayRangeParams', () => {
   const originalTz = process.env.TZ;
   beforeAll(() => { process.env.TZ = 'America/Chicago'; });
-  afterAll(() => { process.env.TZ = originalTz; });
+  afterAll(() => {
+    // Assigning undefined would leave TZ set to the STRING "undefined".
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
 
   it('includes the whole of the selected end day', () => {
     // The picker hands back local midnight for each selected day.
@@ -365,5 +371,72 @@ describe('dayRangeParams', () => {
     expect(dayRangeParams(undefined, undefined)).toEqual({});
     expect(dayRangeParams(new Date(2026, 1, 19))).not.toHaveProperty('endDate');
     expect(dayRangeParams(undefined, new Date(2026, 1, 19))).not.toHaveProperty('startDate');
+  });
+});
+
+/**
+ * The filters live in the URL so a view can be reloaded or shared. Both ends of
+ * that round trip have a timezone trap, and they fail in OPPOSITE directions:
+ *
+ * - `new Date("2026-02-19")` is UTC midnight, so it reads back as the 18th
+ *   WEST of Greenwich.
+ * - `toISOString().split('T')[0]` is the UTC day, so it writes the 18th EAST
+ *   of Greenwich (Tokyo midnight is 15:00Z the previous day).
+ *
+ * Each half is therefore pinned in the hemisphere where it actually breaks —
+ * in UTC, and in the other hemisphere, both bugs are invisible.
+ */
+const withTimezone = (timezone: string) => {
+  const originalTz = process.env.TZ;
+  beforeAll(() => { process.env.TZ = timezone; });
+  afterAll(() => {
+    // Assigning undefined would leave TZ set to the STRING "undefined".
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+};
+
+describe('day URL params, west of Greenwich', () => {
+  withTimezone('America/Chicago');
+
+  it('reads a date-only value as the local day, not UTC midnight', () => {
+    // `new Date("2026-02-19")` would be Feb 18 18:00 here.
+    expect(parseDayParam('2026-02-19')).toEqual(new Date(2026, 1, 19));
+  });
+
+  it('survives the round trip a reload or shared link performs', () => {
+    const picked = new Date(2026, 1, 19);
+
+    const reloaded = parseDayParam(formatDayParam(picked));
+
+    expect(reloaded).toEqual(picked);
+    // And the request built from the reloaded value still covers that same day.
+    expect(dayRangeParams(reloaded, reloaded)).toEqual(dayRangeParams(picked, picked));
+  });
+
+  it('still honours an explicit instant in the URL', () => {
+    expect(parseDayParam('2026-02-19T06:00:00.000Z')).toEqual(new Date('2026-02-19T06:00:00.000Z'));
+  });
+
+  it('returns undefined for an absent or unparseable value', () => {
+    expect(parseDayParam(null)).toBeUndefined();
+    expect(parseDayParam('')).toBeUndefined();
+    expect(parseDayParam('not-a-date')).toBeUndefined();
+  });
+});
+
+describe('day URL params, east of Greenwich', () => {
+  withTimezone('Asia/Tokyo');
+
+  it('writes the day the user picked, not the UTC day', () => {
+    // Tokyo midnight on the 19th is 15:00Z on the 18th, so the UTC day is a day
+    // behind what the picker showed.
+    expect(formatDayParam(new Date(2026, 1, 19))).toBe('2026-02-19');
+  });
+
+  it('survives the round trip here too', () => {
+    const picked = new Date(2026, 1, 19);
+
+    expect(parseDayParam(formatDayParam(picked))).toEqual(picked);
   });
 });
