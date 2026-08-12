@@ -39,7 +39,7 @@ import type { PersonalizationInfo } from '../core/system-prompt';
 import { buildBuiltinSkillCatalog } from '../core/skill-catalog';
 import {
   buildRealtimeToolExposure,
-  toRealtimeTool,
+  toRealtimeTools,
   type RealtimeToolExposure,
   type ToolAllowlist,
 } from './tools';
@@ -144,10 +144,6 @@ const withVoiceOverride = (
     },
   });
 
-/** The exposure's tool half, projected onto the realtime wire shape. */
-const advertise = (exposure: RealtimeToolExposure): readonly RealtimeTool[] =>
-  Object.entries(exposure.tools).map(([name, tool]) => toRealtimeTool(name, tool));
-
 /**
  * Assemble everything the session is opened with.
  *
@@ -229,7 +225,7 @@ export const buildVoiceCallContext = async (
 
     return {
       instructions: withVoiceOverride(exposure, systemPrompt, request.agent.title),
-      tools: advertise(exposure),
+      tools: toRealtimeTools(exposure.tools),
     };
   }
 
@@ -254,5 +250,5 @@ export const buildVoiceCallContext = async (
     nonCoreToolNames: exposure.nonCoreToolNames,
   });
 
-  return { instructions: withVoiceOverride(exposure, systemPrompt), tools: advertise(exposure) };
+  return { instructions: withVoiceOverride(exposure, systemPrompt), tools: toRealtimeTools(exposure.tools) };
 };

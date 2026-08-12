@@ -1,7 +1,7 @@
 /**
  * Drift guard between the two declarations of one wire shape.
  *
- * `RealtimeTool` (this app) is what `buildRealtimeTools` produces; the shared
+ * `RealtimeTool` (this app) is what `toRealtimeTools` produces; the shared
  * `realtimeToolSchema` is what `apps/realtime` validates on arrival. They are
  * deliberately separate declarations — the realtime server must not import from
  * the web app — so the only thing keeping them honest is this file.
@@ -19,14 +19,14 @@ import {
   realtimeSeedEventSchema,
   type RealtimeSeedEventWire,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
-import { buildRealtimeTools } from '../tools';
+import { buildRealtimeToolExposure, toRealtimeTools } from '../tools';
 import { buildRealtimeSeed, type SeedEvent } from '../seed';
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import type { RealtimeTool } from '../session';
 
 describe('realtime tool wire shape', () => {
   it('given the real registry, every emitted tool should satisfy the shared schema', () => {
-    const tools = buildRealtimeTools(buildPageSpaceTools());
+    const tools = toRealtimeTools(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
     expect(tools.length).toBeGreaterThan(0);
 
     for (const tool of tools) {
@@ -36,7 +36,7 @@ describe('realtime tool wire shape', () => {
   });
 
   it('should carry the whole registry-built tool set through the attach payload intact', () => {
-    const tools = buildRealtimeTools(buildPageSpaceTools());
+    const tools = toRealtimeTools(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
 
     const parsed = realtimeAttachPayloadSchema.safeParse({
       callId: 'rtc_u0_abc',

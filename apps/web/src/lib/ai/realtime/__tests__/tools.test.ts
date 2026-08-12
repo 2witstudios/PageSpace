@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
 import {
-  buildRealtimeTools,
   buildRealtimeToolExposure,
   buildRealtimeToolSet,
   toRealtimeTool,
+  toRealtimeTools,
+  type ToolAllowlist,
 } from '../tools';
 import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 import { createToolSearchTool } from '../../tools/tool-search-tool';
@@ -29,6 +30,13 @@ const smallSet = (): ToolSet => ({
 
 const names = (tools: readonly { name: string }[]) => tools.map((t) => t.name);
 
+/**
+ * What the session would actually advertise: the exposure, projected. The two
+ * steps are one call here because every case below is about the result of both.
+ */
+const advertised = (tools: ToolSet, allowlist: ToolAllowlist = null) =>
+  toRealtimeTools(buildRealtimeToolExposure(tools, allowlist).tools);
+
 /** Every key anywhere in a JSON value, at any depth. */
 function deepKeys(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(deepKeys);
@@ -39,10 +47,10 @@ function deepKeys(value: unknown): string[] {
   ]);
 }
 
-describe('buildRealtimeTools', () => {
+describe('the advertised tool definitions', () => {
   it('given the full PageSpace ToolSet, should emit exactly the core tools plus the two scaffolding tools', () => {
     const registry = buildPageSpaceTools({ codeExecutionEnabled: true });
-    const emitted = names(buildRealtimeTools(registry));
+    const emitted = names(advertised(registry));
     const registryCoreNames = Object.keys(registry).filter((n) => CORE_TOOL_NAMES.has(n));
 
     expect(new Set(emitted)).toEqual(
@@ -63,7 +71,7 @@ describe('buildRealtimeTools', () => {
 
   it('given the full PageSpace ToolSet, should defer every non-core tool rather than front-loading it', () => {
     const registry = buildPageSpaceTools({ codeExecutionEnabled: true });
-    const emitted = new Set(names(buildRealtimeTools(registry)));
+    const emitted = new Set(names(advertised(registry)));
     const nonCore = Object.keys(registry).filter((n) => !CORE_TOOL_NAMES.has(n));
 
     // The registry is big enough for deferral to be the point of the split.
@@ -92,7 +100,7 @@ describe('buildRealtimeTools', () => {
         `tool "${name}" is not representable as realtime parameters`,
       ).not.toThrow();
     }
-    expect(() => buildRealtimeTools(registry)).not.toThrow();
+    expect(() => advertised(registry)).not.toThrow();
   });
 
   it('given an unrepresentable input schema, should throw rather than emit a lie', () => {
@@ -104,7 +112,7 @@ describe('buildRealtimeTools', () => {
   });
 
   it('given any tool, should emit the FLAT realtime function shape', () => {
-    for (const tool of buildRealtimeTools(smallSet())) {
+    for (const tool of advertised(smallSet())) {
       expect(tool.type).toBe('function');
       expect(typeof tool.name).toBe('string');
       expect(typeof tool.description).toBe('string');
@@ -121,7 +129,7 @@ describe('buildRealtimeTools', () => {
   });
 
   it('given a zod-object inputSchema, should emit inlined JSON Schema parameters', () => {
-    const [readPage] = buildRealtimeTools({
+    const [readPage] = advertised({
       read_page: fakeTool({
         description: 'Read a page.',
         inputSchema: z.object({
@@ -144,7 +152,7 @@ describe('buildRealtimeTools', () => {
 
   it('given a schema that reuses a sub-schema, should inline it with no $ref/$defs', () => {
     const shared = z.object({ id: z.string() });
-    const [tool] = buildRealtimeTools({
+    const [tool] = advertised({
       read_page: fakeTool({
         inputSchema: z.object({ from: shared, to: shared }),
       }),
@@ -169,12 +177,12 @@ describe('buildRealtimeTools', () => {
     const raw = z.toJSONSchema(z.object({ pageId: z.string() })) as Record<string, unknown>;
     expect(raw.$schema).toBeDefined();
 
-    const [tool] = buildRealtimeTools({ read_page: fakeTool() });
+    const [tool] = advertised({ read_page: fakeTool() });
     expect(tool.parameters).not.toHaveProperty('$schema');
   });
 
   it('given a tool with no description, should still emit a valid definition', () => {
-    const [tool] = buildRealtimeTools({
+    const [tool] = advertised({
       read_page: fakeTool({ description: undefined }),
     });
 
@@ -192,7 +200,7 @@ describe('buildRealtimeTools', () => {
   });
 
   it('given a tool with a description, should carry it through verbatim', () => {
-    const [tool] = buildRealtimeTools({
+    const [tool] = advertised({
       read_page: fakeTool({ description: 'Read a page aloud.' }),
     });
     expect(tool.description).toBe('Read a page aloud.');
@@ -202,7 +210,7 @@ describe('buildRealtimeTools', () => {
     // Built from the same factories, so voice and text cannot describe the two
     // discovery tools differently.
     const set = smallSet();
-    const emitted = buildRealtimeTools(set);
+    const emitted = advertised(set);
     const search = emitted.find((t) => t.name === 'tool_search');
     const execute = emitted.find((t) => t.name === 'execute_tool');
 
@@ -230,18 +238,18 @@ describe('buildRealtimeTools', () => {
     // `execute_tool` that can only refuse are two tools whose every call fails,
     // which is worse than two tools absent. This is applyToolExposureMode's own
     // rule (tool-exposure.ts:130-132), now shared rather than re-decided.
-    expect(names(buildRealtimeTools({}))).toEqual([]);
+    expect(names(advertised({}))).toEqual([]);
   });
 
   it('given only core tools, should skip the scaffolding — there is nothing to discover', () => {
-    expect(names(buildRealtimeTools({ read_page: fakeTool() }))).toEqual(['read_page']);
+    expect(names(advertised({ read_page: fakeTool() }))).toEqual(['read_page']);
   });
 
   it('given composer-toggled tools, should defer them like any other non-core tool', () => {
     // A voice call has no composer toggles, so `web_search`/`generate_image` get
     // no always-upfront rescue — they are reachable through execute_tool.
     const emitted = names(
-      buildRealtimeTools({
+      advertised({
         read_page: fakeTool(),
         web_search: fakeTool(),
         generate_image: fakeTool(),
@@ -253,7 +261,7 @@ describe('buildRealtimeTools', () => {
   it('given the same tool set twice, should be pure — equal output, input untouched', () => {
     const set = smallSet();
     const snapshot = Object.keys(set);
-    expect(buildRealtimeTools(set)).toEqual(buildRealtimeTools(set));
+    expect(advertised(set)).toEqual(advertised(set));
     expect(Object.keys(set)).toEqual(snapshot);
     expect(set).not.toHaveProperty('tool_search');
   });
@@ -329,10 +337,10 @@ describe('buildRealtimeToolExposure — the discovery prompt', () => {
  * and because `execute_tool` reaches everything the split deferred, filtering
  * only the upfront half would have left them all callable anyway.
  */
-describe('buildRealtimeTools — the bound agent allowlist', () => {
+describe('the advertised set — the bound agent allowlist', () => {
   it('given an allowlist, should advertise only what it names', () => {
     const emitted = names(
-      buildRealtimeTools(
+      advertised(
         { read_page: fakeTool(), delete_page: fakeTool(), rename_drive: fakeTool() },
         ['read_page', 'rename_drive'],
       ),
@@ -345,14 +353,14 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
 
   it('given null, should treat the agent as unrestricted', () => {
     const set = { read_page: fakeTool(), rename_drive: fakeTool() };
-    expect(names(buildRealtimeTools(set, null))).toEqual(names(buildRealtimeTools(set)));
+    expect(names(advertised(set, null))).toEqual(names(advertised(set)));
   });
 
   it('given an EMPTY allowlist, should advertise nothing at all', () => {
     // [] is "every PageSpace tool off", not "unconfigured" — and with every tool
     // off there is nothing for the scaffolding to reach either.
     const emitted = names(
-      buildRealtimeTools({ read_page: fakeTool(), rename_drive: fakeTool() }, []),
+      advertised({ read_page: fakeTool(), rename_drive: fakeTool() }, []),
     );
 
     expect(emitted).toEqual([]);
@@ -395,7 +403,7 @@ describe('buildRealtimeTools — the bound agent allowlist', () => {
     // capabilities an owner grants — so they appear even when the allowlist
     // names neither of them, as no allowlist ever does.
     const emitted = names(
-      buildRealtimeTools({ read_page: fakeTool(), rename_drive: fakeTool() }, ['rename_drive']),
+      advertised({ read_page: fakeTool(), rename_drive: fakeTool() }, ['rename_drive']),
     );
     expect(emitted).toEqual(['tool_search', 'execute_tool']);
   });

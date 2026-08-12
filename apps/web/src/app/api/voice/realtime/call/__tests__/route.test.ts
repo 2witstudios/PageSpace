@@ -14,7 +14,6 @@ const {
   mockIsBillingEnabled,
   mockGetUserSettings,
   mockRunCallHandshake,
-  mockBuildRealtimeTools,
   mockSignHeaders,
   mockLoadVoiceBinding,
 } = vi.hoisted(() => ({
@@ -25,7 +24,6 @@ const {
   mockIsBillingEnabled: vi.fn(),
   mockGetUserSettings: vi.fn(),
   mockRunCallHandshake: vi.fn(),
-  mockBuildRealtimeTools: vi.fn(),
   mockSignHeaders: vi.fn(),
 }));
 
@@ -45,7 +43,6 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: mockSignHeaders,
 }));
 vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCallHandshake }));
-vi.mock('@/lib/ai/realtime/tools', () => ({ buildRealtimeTools: mockBuildRealtimeTools }));
 vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
 // A FACTORY, not a value: the binding deps take the caller's auth principal,
 // because the active-plan lookup behind them needs a principal-aware page check.
@@ -79,7 +76,6 @@ describe('POST /api/voice/realtime/call', () => {
     mockGetManagedKey.mockReturnValue({ apiKey: 'sk-managed' });
     mockIsBillingEnabled.mockReturnValue(true);
     mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'pro' });
-    mockBuildRealtimeTools.mockReturnValue(TOOLS);
     mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'Speak out loud.', tools: TOOLS });
     mockSignHeaders.mockReturnValue({ 'X-Broadcast-Signature': 't=1,v1=sig' });
     mockRunCallHandshake.mockResolvedValue({
@@ -354,7 +350,6 @@ describe('POST /api/voice/realtime/call', () => {
         expect.objectContaining({ tools: agentTools }),
         expect.anything(),
       );
-      expect(mockBuildRealtimeTools).not.toHaveBeenCalled();
     });
 
     it('should hand the instructions and the assistant to the handshake', async () => {

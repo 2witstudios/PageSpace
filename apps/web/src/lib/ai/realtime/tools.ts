@@ -72,8 +72,8 @@ function toRealtimeParameters(inputSchema: Tool['inputSchema']): Record<string, 
  * tool stays callable. Dropping the whole tool would silently shrink voice's
  * capabilities relative to text.
  *
- * Exported for the registry-wide conversion guard: `buildRealtimeTools` only
- * converts the upfront half, so testing through it alone would never touch a
+ * Exported for the registry-wide conversion guard: an exposure only ever
+ * converts the upfront half, so testing through that alone would never touch a
  * deferred tool's schema and an unrepresentable one could sit in the registry
  * unnoticed until a caller went looking for it.
  */
@@ -186,21 +186,18 @@ export function buildRealtimeToolExposure(
 }
 
 /**
- * Project a tool set onto the realtime tool definitions sent with the session.
+ * Project an exposure's tool set onto the definitions sent with the session.
  *
- * Front-loading every tool instead would spend the session's context on schemas
- * before the caller has said a word.
+ * Takes the ALREADY-EXPOSED set rather than a registry and an allowlist,
+ * because its one caller has the exposure in hand and the prompt describing
+ * those same tools comes out of it: re-deriving the exposure here would put the
+ * advertised list and the text describing it back on separate computations.
  *
- * Only each tool's name/description/parameters are read here; wiring their
- * `execute` to the live call is the caller's job.
+ * Only each tool's name/description/parameters are read; wiring their `execute`
+ * to the live call is the caller's job.
  */
-export function buildRealtimeTools(
-  tools: ToolSet,
-  allowlist: ToolAllowlist = null,
-): readonly RealtimeTool[] {
-  return Object.entries(buildRealtimeToolSet(tools, allowlist)).map(([name, tool]) =>
-    toRealtimeTool(name, tool),
-  );
+export function toRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
+  return Object.entries(tools).map(([name, tool]) => toRealtimeTool(name, tool));
 }
 
 /**

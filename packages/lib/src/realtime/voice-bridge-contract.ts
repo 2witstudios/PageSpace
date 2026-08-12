@@ -7,7 +7,7 @@
  * validates it after the HMAC check and before touching a socket.
  *
  * WHY THE TOOLS TRAVEL IN THIS PAYLOAD. `apps/realtime` cannot build the
- * realtime tool definitions itself: the conversion (`buildRealtimeTools`) reads
+ * realtime tool definitions itself: the conversion (`toRealtimeTools`) reads
  * PageSpace's AI SDK tool registry, which lives in `apps/web/src/lib/ai` behind
  * the `@/` alias, imports `ai`/`zod`, and has env-dependent branches. There is
  * no dependency edge from `apps/realtime` to `apps/web` and there must not be
