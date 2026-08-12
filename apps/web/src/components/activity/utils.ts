@@ -1,4 +1,4 @@
-import { isToday, isYesterday, isThisWeek, format } from 'date-fns';
+import { isToday, isYesterday, isThisWeek, format, addDays, startOfDay } from 'date-fns';
 import type {
   ActivityLog,
   ActivityGroupSummary,
@@ -279,4 +279,28 @@ export function groupConsecutiveActivities(
   }
 
   return result;
+}
+
+/**
+ * The instant bounds the activity APIs want for a day-picker range.
+ *
+ * The picker selects DAYS, in the viewer's own timezone; `startDate`/`endDate`
+ * on the API are absolute instants and `endDate` is EXCLUSIVE. So the selected
+ * end day is included by sending the start of the *next* local day — which also
+ * means the window is the user's day wherever they are, with no day arithmetic
+ * on the server, which cannot know their zone.
+ *
+ * The routes used to add a day themselves, in the server's local time. That
+ * happened to reproduce this window (the browser sent local midnight and the
+ * server added 24h) but it stretched any explicit instant a caller sent by a
+ * whole day, and depended on where the server ran (#2404).
+ */
+export function dayRangeParams(
+  startDate?: Date,
+  endDate?: Date,
+): { startDate?: string; endDate?: string } {
+  return {
+    ...(startDate ? { startDate: startOfDay(startDate).toISOString() } : {}),
+    ...(endDate ? { endDate: addDays(startOfDay(endDate), 1).toISOString() } : {}),
+  };
 }

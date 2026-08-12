@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   isRollbackOperation,
   hasAiConversationId,
   isEditSessionGroupable,
   groupConsecutiveActivities,
+  dayRangeParams,
 } from '../utils';
 import type { ActivityLog } from '../types';
 
@@ -311,5 +312,58 @@ describe('groupConsecutiveActivities', () => {
       expect(result[2].type).toBe('rollback');
       expect(result[3].type).toBe('edit_session');
     });
+  });
+});
+
+/**
+ * The activity filters are a DAY picker over an API that takes instants, and
+ * `endDate` is exclusive — so the day the user picked is only included if the
+ * bound is the start of the following day. The routes used to add that day
+ * themselves in server-local time, which reproduced this window by accident
+ * while stretching any explicit instant a caller sent (#2404).
+ *
+ * TZ is pinned away from UTC because that is the only way these assertions can
+ * tell a LOCAL day window from a UTC one.
+ */
+describe('dayRangeParams', () => {
+  const originalTz = process.env.TZ;
+  beforeAll(() => { process.env.TZ = 'America/Chicago'; });
+  afterAll(() => { process.env.TZ = originalTz; });
+
+  it('includes the whole of the selected end day', () => {
+    // The picker hands back local midnight for each selected day.
+    const start = new Date(2026, 1, 10);
+    const end = new Date(2026, 1, 19);
+
+    const params = dayRangeParams(start, end);
+
+    expect(params.endDate).toBe(new Date(2026, 1, 20).toISOString());
+    // 10 days later, exactly — no DST in that window, and no server involved.
+    const span = Date.parse(params.endDate!) - Date.parse(params.startDate!);
+    expect(span).toBe(10 * 24 * 60 * 60 * 1000);
+  });
+
+  it("describes the viewer's local day, not a UTC one", () => {
+    const day = new Date(2026, 1, 19);
+
+    const params = dayRangeParams(day, day);
+
+    // Local midnight in Chicago is 06:00Z, so a UTC-day window would start at
+    // 00:00Z. The bounds have to carry the offset or the user gets someone
+    // else's day.
+    expect(params.startDate).toBe('2026-02-19T06:00:00.000Z');
+    expect(params.endDate).toBe('2026-02-20T06:00:00.000Z');
+  });
+
+  it('normalises a picked time-of-day down to the start of that day', () => {
+    const middleOfDay = new Date(2026, 1, 19, 14, 37, 12);
+
+    expect(dayRangeParams(middleOfDay).startDate).toBe(new Date(2026, 1, 19).toISOString());
+  });
+
+  it('omits whichever bound was not picked', () => {
+    expect(dayRangeParams(undefined, undefined)).toEqual({});
+    expect(dayRangeParams(new Date(2026, 1, 19))).not.toHaveProperty('endDate');
+    expect(dayRangeParams(undefined, new Date(2026, 1, 19))).not.toHaveProperty('startDate');
   });
 });

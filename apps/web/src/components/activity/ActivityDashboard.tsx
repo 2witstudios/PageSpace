@@ -13,6 +13,7 @@ import { ActivityTimeline } from './ActivityTimeline';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
+import { dayRangeParams } from './utils';
 import type { RollbackContext } from './ActivityItem';
 import type { ActivityActionResult } from '@/types/activity-actions';
 
@@ -121,11 +122,9 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
         } else if (context === 'user' && filters.driveId) {
           params.set('driveId', filters.driveId);
         }
-        if (filters.startDate) {
-          params.set('startDate', filters.startDate.toISOString());
-        }
-        if (filters.endDate) {
-          params.set('endDate', filters.endDate.toISOString());
+        // The picker selects DAYS; the API takes instants and endDate is exclusive.
+        for (const [key, value] of Object.entries(dayRangeParams(filters.startDate, filters.endDate))) {
+          params.set(key, value);
         }
         if (filters.actorId) {
           params.set('actorId', filters.actorId);
