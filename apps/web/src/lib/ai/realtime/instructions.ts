@@ -106,9 +106,10 @@ const voiceOverride = (title: string | undefined, tools: VoiceToolReach): string
     ? '- NEVER SAY SOMETHING IS IMPOSSIBLE BEFORE YOU HAVE CALLED tool_search.'
     : '- Every tool you have is already listed for you. If none of them fits, say so plainly rather than guessing at one.';
 
-  // Same rule for the hand-off targets: an agent whose owner granted neither
-  // spawn_session nor create_task cannot delegate at all, and telling it to
-  // would spend a turn on a call `execute_tool` rejects.
+  // Same rule for the hand-off targets: each is offered only when the agent can
+  // actually reach it, and an agent granted none of them cannot delegate at all.
+  // Naming one anyway would spend a turn on a call `execute_tool` rejects — out
+  // loud, in front of someone waiting.
   const handOffs = HAND_OFFS.filter(([names]) =>
     names.some((name) => tools.reachable.includes(name)),
   ).map(([, phrase]) => phrase);
