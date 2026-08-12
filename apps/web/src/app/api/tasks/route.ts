@@ -19,6 +19,7 @@ import {
   getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -34,8 +35,9 @@ const querySchema = z.object({
   // Filter parameters - status accepts any string for custom statuses
   status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   // New filter parameters
   search: z.string().optional(),
   assigneeId: z.string().optional(),

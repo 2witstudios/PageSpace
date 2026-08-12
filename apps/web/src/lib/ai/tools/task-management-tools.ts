@@ -20,6 +20,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import { compareByPagePosition } from '@/services/api/task-ordering';
 import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -97,6 +98,13 @@ Agent Triggers:
       if (!userId) {
         throw new Error('User authentication required');
       }
+
+      // The caller's timezone, resolved upstream onto the execution context. A
+      // naive due date ("2026-02-19T19:00:00") is a wall-clock time and is read
+      // in it; absolute values are untouched (#2404). The stored due date and
+      // the trigger scheduled against it must agree on the instant.
+      const taskTimezone = (context as ToolExecutionContext).timezone || 'UTC';
+      const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
 
       if (!taskId) {
         throw new Error('taskId is required to update a task. To create a new task, use create_task.');
@@ -181,7 +189,7 @@ Agent Triggers:
         if (priority !== undefined) updateData.priority = priority;
         if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
         if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
-        if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
+        if (dueDate !== undefined) updateData.dueDate = parsedDueDate;
 
         // Add note to metadata
         if (note || status !== undefined) {
@@ -314,13 +322,13 @@ Agent Triggers:
             taskMetadata: resultTask.metadata as Record<string, unknown> | null,
             agentTrigger,
             dueDate: resultTask.dueDate,
-            timezone: (context as ToolExecutionContext).timezone || 'UTC',
+            timezone: taskTimezone,
           });
         }
 
         // Task trigger cascades
         if (dueDate !== undefined) {
-          void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+          void syncTaskDueDateTrigger(taskId, parsedDueDate);
         }
         if (status !== undefined) {
           const completedSlugs = validConfigs.length > 0

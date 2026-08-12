@@ -11,10 +11,12 @@ import { assert } from '@/lib/memory/__tests__/riteway';
  */
 
 const findFirst = vi.fn();
+const selectWhere = vi.fn(() => Promise.resolve([] as Array<{ timezone: string | null }>));
+const select = vi.fn(() => ({ from: () => ({ where: selectWhere }) }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { userPersonalization: { findFirst: (...a: unknown[]) => findFirst(...a) } },
-    select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+    select: (...a: unknown[]) => select(...(a as [])),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
@@ -207,6 +209,105 @@ describe('getUserPersonalization', () => {
       should: 'inject the page, which is what the user can actually edit',
       actual: result?.bio,
       expected: 'current page bio',
+    });
+  });
+});
+
+/**
+ * The one place the body → profile → UTC order is defined.
+ *
+ * Every route that turns a naive wall-clock datetime into an instant resolves
+ * through this function, so a task due "tomorrow at 7pm" and a calendar event
+ * "tomorrow at 7pm" land at the same instant for the same caller. Calendar
+ * create used to re-derive the rule as a bare Zod `.default('UTC')` and booked
+ * events hours off for anyone who omitted the field (#2404).
+ */
+describe('resolveTimezone', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectWhere.mockResolvedValue([]);
+  });
+
+  it('prefers an explicit timezone over the stored profile', async () => {
+    selectWhere.mockResolvedValue([{ timezone: 'America/Chicago' }]);
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'a request that names its own timezone',
+      should: 'use it verbatim',
+      actual: await resolveTimezone('Asia/Tokyo', 'user-1'),
+      expected: 'Asia/Tokyo',
+    });
+  });
+
+  it('does not read the profile when the caller supplied a timezone', async () => {
+    const { resolveTimezone } = await import('../personalization-utils');
+    await resolveTimezone('Asia/Tokyo', 'user-1');
+
+    assert({
+      given: 'an explicit timezone',
+      should: 'skip the profile query entirely',
+      actual: select.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('trims an explicit timezone', async () => {
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'a padded timezone string',
+      should: 'return the trimmed zone',
+      actual: await resolveTimezone('  Europe/Berlin  ', 'user-1'),
+      expected: 'Europe/Berlin',
+    });
+  });
+
+  it("falls back to the caller's profile when the request omits a timezone", async () => {
+    selectWhere.mockResolvedValue([{ timezone: 'America/Chicago' }]);
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'no explicit timezone but a profile that has one',
+      should: 'use the profile zone rather than UTC',
+      actual: await resolveTimezone(undefined, 'user-1'),
+      expected: 'America/Chicago',
+    });
+  });
+
+  it('treats a blank explicit timezone as absent', async () => {
+    selectWhere.mockResolvedValue([{ timezone: 'America/Chicago' }]);
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'a whitespace-only timezone field',
+      should: 'fall through to the profile instead of storing an empty zone',
+      actual: await resolveTimezone('   ', 'user-1'),
+      expected: 'America/Chicago',
+    });
+  });
+
+  it('falls back to UTC when the profile has no timezone either', async () => {
+    selectWhere.mockResolvedValue([{ timezone: null }]);
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'a user who never set a timezone',
+      should: 'end at UTC',
+      actual: await resolveTimezone(null, 'user-1'),
+      expected: 'UTC',
+    });
+  });
+
+  it('falls back to UTC when the profile lookup fails', async () => {
+    selectWhere.mockRejectedValue(new Error('db down'));
+    const { resolveTimezone } = await import('../personalization-utils');
+
+    assert({
+      given: 'a database error during the profile read',
+      should: 'still resolve to UTC rather than failing the write',
+      actual: await resolveTimezone(undefined, 'user-1'),
+      expected: 'UTC',
     });
   });
 });

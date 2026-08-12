@@ -8,6 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { format } from 'date-fns';
+import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -15,8 +16,9 @@ const querySchema = z.object({
   context: z.enum(['user', 'drive', 'page']),
   driveId: z.string().optional(),
   pageId: z.string().optional(),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),

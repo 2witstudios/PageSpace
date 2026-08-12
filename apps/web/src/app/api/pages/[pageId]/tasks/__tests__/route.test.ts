@@ -59,6 +59,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 // Track mock values for transaction
 let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
 let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
+// Column values handed to tx.insert(...).values(...), newest last. Lets a test
+// assert what was actually written (e.g. the parsed due date) rather than only
+// what the route echoed back.
+const capturedInserts: Record<string, unknown>[] = [];
 
 // REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.transaction(tx => ...))
 // are used here because the route directly calls Drizzle ORM with no service layer.
@@ -113,13 +117,16 @@ vi.mock('@pagespace/db/db', () => {
         // Create a tx object that mimics the transaction context
         const tx = {
           insert: vi.fn(() => ({
-            values: vi.fn(() => ({
-              returning: vi.fn().mockImplementation(() => {
-                insertCallCount++;
-                // First insert is for pages, second is for taskItems
-                return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
-              }),
-            })),
+            values: vi.fn((values: Record<string, unknown>) => {
+              capturedInserts.push(values);
+              return {
+                returning: vi.fn().mockImplementation(() => {
+                  insertCallCount++;
+                  // First insert is for pages, second is for taskItems
+                  return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
+                }),
+              };
+            }),
           })),
         };
         return callback(tx);
@@ -172,9 +179,18 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   createTaskTriggerWorkflow: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/ai/core/personalization-utils', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue(undefined),
-}));
+// The route resolves its timezone through resolveTimezone. Wiring the mock's
+// resolveTimezone to the mocked getUserTimezone keeps the existing profile /
+// UTC assertions below testing the route end to end; the precedence rule
+// itself is pinned in personalization-utils.test.ts.
+vi.mock('@/lib/ai/core/personalization-utils', () => {
+  const getUserTimezone = vi.fn().mockResolvedValue(undefined);
+  return {
+    getUserTimezone,
+    resolveTimezone: async (explicit: string | null | undefined, userId: string) =>
+      explicit?.trim() || (await getUserTimezone(userId)) || 'UTC',
+  };
+});
 
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
@@ -262,12 +278,15 @@ describe('Task API Routes', () => {
       let insertCallCount = 0;
       const tx = {
         insert: vi.fn(() => ({
-          values: vi.fn(() => ({
-            returning: vi.fn().mockImplementation(() => {
-              insertCallCount++;
-              return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
-            }),
-          })),
+          values: vi.fn((values: Record<string, unknown>) => {
+            capturedInserts.push(values);
+            return {
+              returning: vi.fn().mockImplementation(() => {
+                insertCallCount++;
+                return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
+              }),
+            };
+          }),
         })),
       };
       return callback(tx);
@@ -1294,6 +1313,62 @@ describe('Task API Routes', () => {
       expect(response.status).toBe(201);
       expect(getUserTimezone).toHaveBeenCalledWith(mockUserId);
       expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Europe/Berlin' }));
+    });
+
+    /**
+     * A due date is stored as an instant, so a naive wall-clock value has to be
+     * read in the caller's zone — the same rule the trigger timezone already
+     * followed. Parsing it with a bare `new Date()` read it in the server
+     * process's zone instead, which silently disagreed with the trigger the
+     * route scheduled against that very date (#2404).
+     *
+     * The assertion is the GAP between two callers rather than one absolute
+     * instant, deliberately: a fixed expectation would pass under the old
+     * `new Date()` on any machine whose own zone happened to match the profile
+     * (this repo's development machines are US Central, so the buggy parse
+     * looked correct locally and only diverged in deployment).
+     */
+    const createTaskWithDueDate = async (profileTimezone: string, dueDate: string) => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+      capturedInserts.length = 0;
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(getUserTimezone).mockResolvedValue(profileTimezone);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({ title: 'Task', dueDate }), { params: mockParams });
+      expect(response.status).toBe(201);
+      return capturedInserts.find(values => 'dueDate' in values)?.dueDate as Date | null;
+    };
+
+    it('reads a naive due date in the caller profile timezone', async () => {
+      const chicago = await createTaskWithDueDate('America/Chicago', '2026-02-19T19:00:00');
+      const tokyo = await createTaskWithDueDate('Asia/Tokyo', '2026-02-19T19:00:00');
+
+      // 7pm Central is 15 hours after 7pm in Tokyo (UTC-6 vs UTC+9 in February).
+      // Read in the server's zone instead, both callers would get one instant.
+      expect(Number(chicago) - Number(tokyo)).toBe(15 * 60 * 60 * 1000);
+    });
+
+    it('leaves an absolute due date alone and never reads the profile for it', async () => {
+      const stored = await createTaskWithDueDate('America/Chicago', '2026-02-19T19:00:00Z');
+
+      expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
+      // An absolute value needs no zone, so the write costs no profile query.
+      expect(getUserTimezone).not.toHaveBeenCalled();
     });
 
     it('creates task page as TASK_LIST type with empty content', async () => {

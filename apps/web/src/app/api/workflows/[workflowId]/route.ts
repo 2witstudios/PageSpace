@@ -10,6 +10,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -132,8 +133,14 @@ export async function PATCH(
     stepWarnings = stepsResult.warnings;
   }
 
-  // Validate timezone
-  const effectiveTimezone = data.timezone ?? workflow.timezone;
+  // Validate timezone. Body value wins, else the workflow's own stored zone,
+  // else the caller's profile, else UTC — the same chain create resolves, so
+  // the rule is one rule (#2404). The stored column is NOT NULL, so the profile
+  // tier is a guard that costs no query in the normal case.
+  const effectiveTimezone = await resolveTimezone(
+    data.timezone?.trim() || workflow.timezone,
+    auth.userId,
+  );
   const tzValidation = validateTimezone(effectiveTimezone);
   if (!tzValidation.valid) {
     return NextResponse.json({ error: tzValidation.error }, { status: 400 });
@@ -155,8 +162,7 @@ export async function PATCH(
 
   // Compute nextRunAt based on updated fields (only for cron workflows)
   const isEnabled = data.isEnabled ?? workflow.isEnabled;
-  const timezone = data.timezone ?? workflow.timezone;
-  const nextRunAt = isEnabled ? getNextRunDate(cronExpr, timezone) : null;
+  const nextRunAt = isEnabled ? getNextRunDate(cronExpr, effectiveTimezone) : null;
 
   const [updated] = await db
     .update(workflows)
