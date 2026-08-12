@@ -20,16 +20,13 @@ import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
  * Values that already carry `Z` or an offset are untouched, as are date-only
  * values (`"2026-02-19"`), which ISO 8601 already defines as UTC.
  */
-export const absoluteInstant = z.preprocess(
-  (value) => (typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value),
-  z.coerce.date(),
-);
+const pinNaiveToUtc = (value: unknown) =>
+  typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value;
+
+export const absoluteInstant = z.preprocess(pinNaiveToUtc, z.coerce.date());
 
 /** {@link absoluteInstant} for filters where the bound may be omitted. */
-export const optionalAbsoluteInstant = z.preprocess(
-  (value) => (typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value),
-  z.coerce.date().optional(),
-);
+export const optionalAbsoluteInstant = z.preprocess(pinNaiveToUtc, z.coerce.date().optional());
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
