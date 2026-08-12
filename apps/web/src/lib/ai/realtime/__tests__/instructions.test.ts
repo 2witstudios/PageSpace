@@ -14,8 +14,26 @@ import { buildVoiceInstructions } from '../instructions';
 /** Stands in for whatever `buildAgentSystemPrompt` produced for this binding. */
 const AGENT_PROMPT = '# PAGESPACE AI\n\nYou are PageSpace AI. <<SHARED>>';
 
-const build = (over: { agentSystemPrompt?: string; title?: string } = {}) =>
-  buildVoiceInstructions({ agentSystemPrompt: AGENT_PROMPT, ...over });
+/** An ordinary agent: the split deferred something, so discovery exists. */
+const FULL_REACH = {
+  exposed: ['read_page', 'tool_search', 'execute_tool'],
+  reachable: ['read_page', 'create_task', 'spawn_session'],
+};
+
+/**
+ * An agent allowed only core tools. `applyToolExposureMode` registers no
+ * scaffolding when there is nothing to defer, so `tool_search` and
+ * `execute_tool` genuinely are not there.
+ */
+const CORE_ONLY_REACH = { exposed: ['read_page'], reachable: ['read_page'] };
+
+const build = (
+  over: {
+    agentSystemPrompt?: string;
+    title?: string;
+    tools?: { exposed: string[]; reachable: string[] };
+  } = {},
+) => buildVoiceInstructions({ agentSystemPrompt: AGENT_PROMPT, tools: FULL_REACH, ...over });
 
 describe('buildVoiceInstructions', () => {
   it('should carry the shared agent prompt VERBATIM', () => {
@@ -75,11 +93,39 @@ describe('buildVoiceInstructions', () => {
     expect(build()).toContain('NEVER SAY SOMETHING IS IMPOSSIBLE BEFORE YOU HAVE CALLED tool_search');
   });
 
+  it('given NO discovery tools, should not send it to a tool_search that is not there', () => {
+    // An agent allowed only core tools is registered no scaffolding at all, so
+    // this rule would order a call to a tool the session never advertised —
+    // spent out loud, in front of someone waiting.
+    const instructions = build({ tools: CORE_ONLY_REACH });
+
+    expect(instructions).not.toContain('tool_search');
+    expect(instructions).not.toContain('execute_tool');
+    expect(instructions).toContain('Every tool you have is already listed for you');
+  });
+
   it('should name where long work goes, so a call is not four minutes of silence', () => {
     const instructions = build();
 
     expect(instructions).toContain('spawn_session');
     expect(instructions).toContain('create_task');
+  });
+
+  it('given only one hand-off tool, should name that one and not the other', () => {
+    const instructions = build({
+      tools: { exposed: ['read_page', 'tool_search'], reachable: ['read_page', 'create_task'] },
+    });
+
+    expect(instructions).toContain('create_task');
+    expect(instructions).not.toContain('spawn_session');
+  });
+
+  it('given NO way to hand work off, should say to work through it instead of naming absent tools', () => {
+    const instructions = build({ tools: CORE_ONLY_REACH });
+
+    expect(instructions).not.toContain('spawn_session');
+    expect(instructions).not.toContain('create_task');
+    expect(instructions).toContain('work through it in steps');
   });
 
   it('should say the page id can be omitted, rather than asking the caller for one', () => {
@@ -118,6 +164,21 @@ describe('buildVoiceInstructions', () => {
 
     expect(instructions).toContain('speaking with someone out loud');
     expect(instructions).not.toContain('""');
+  });
+
+  it('should say its own tool results outrank the standing instructions it was given', () => {
+    // The instructions are assembled at socket open and never re-sent, so a
+    // block describing mutable state goes stale the moment the model mutates
+    // it. The ACTIVE PLAN pointer is the sharp case: it is a directive ("keep
+    // working against this page, re-read it before continuing"), so after a
+    // clear_plan on the call the model would otherwise go on being told to
+    // resume a plan the caller just ended. Its own tool result is the one
+    // channel that CAN correct the record mid-call, so it is named as
+    // authoritative.
+    const instructions = build();
+
+    expect(instructions).toContain('YOUR OWN TOOL RESULT IS WHAT IS CURRENT');
+    expect(instructions).toContain('Never re-follow a standing instruction about something you have since changed');
   });
 
   it('should carry NOTHING turn-volatile — instructions are sent once, at socket open', () => {

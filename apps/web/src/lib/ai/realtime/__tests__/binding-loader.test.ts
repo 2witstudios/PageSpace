@@ -39,9 +39,9 @@ const agentPage = (over: Partial<AgentPage> = {}): AgentPage => ({
 /**
  * Stands in for whatever `buildVoiceSystemContext` assembled. This module's job
  * is to decide WHAT the call is bound to and hand that over; assembling the
- * prompt is `system-context.ts`, tested there.
+ * instructions is `system-context.ts`, tested there.
  */
-const SYSTEM_CONTEXT = '# PAGESPACE AI\n\n<<SHARED>>';
+const INSTRUCTIONS = '# PAGESPACE AI\n\n<<SHARED>>\n\n# THIS IS A VOICE CALL';
 
 const history = [
   { role: 'user', content: 'where are my notes?', createdAt: new Date(1) },
@@ -55,7 +55,7 @@ function deps(over: Partial<BindingLoaderDeps> = {}) {
     canAccess: vi.fn(async () => true),
     loadMessages: vi.fn(async () => history),
     loadAgentPage: vi.fn(async () => agentPage()),
-    buildSystemContext: vi.fn(async () => SYSTEM_CONTEXT),
+    buildInstructions: vi.fn(async () => INSTRUCTIONS),
     logger: { warn },
     ...over,
   };
@@ -257,7 +257,7 @@ describe('loadVoiceBinding — the instructions', () => {
 
     await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(d.buildSystemContext).toHaveBeenCalledWith({
+    expect(d.buildInstructions).toHaveBeenCalledWith({
       userId: 'u1',
       conversationId: 'conv1',
       conversation: { type: 'page', contextId: 'agent1' },
@@ -270,23 +270,12 @@ describe('loadVoiceBinding — the instructions', () => {
     });
   });
 
-  it('given a page agent, should address it by name on the call', async () => {
-    const { deps: d } = deps({
-      loadConversation: vi.fn(async () => pageConversation()),
-      loadAgentPage: vi.fn(async () => agentPage()),
-    });
-
-    const { instructions } = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
-
-    expect(instructions).toContain('Release Notes Bot');
-  });
-
   it('given a conversation with no agent, should pass its coordinates but no agent', async () => {
     const { deps: d } = deps();
 
     await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(d.buildSystemContext).toHaveBeenCalledWith({
+    expect(d.buildInstructions).toHaveBeenCalledWith({
       userId: 'u1',
       conversationId: 'conv1',
       conversation: { type: 'global', contextId: null },
@@ -300,7 +289,7 @@ describe('loadVoiceBinding — the instructions', () => {
 
     const { instructions } = await loadVoiceBinding(d, { userId: 'u1' });
 
-    expect(d.buildSystemContext).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(d.buildInstructions).toHaveBeenCalledWith({ userId: 'u1' });
     expect(instructions).toContain('<<SHARED>>');
     expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
@@ -315,7 +304,7 @@ describe('loadVoiceBinding — the instructions', () => {
     });
 
     expect(seed).toEqual([]);
-    expect(d.buildSystemContext).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(d.buildInstructions).toHaveBeenCalledWith({ userId: 'u1' });
     expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
 });

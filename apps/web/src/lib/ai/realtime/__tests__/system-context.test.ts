@@ -21,6 +21,7 @@ import {
   type BoundAgent,
 } from '../system-context';
 import { buildPageSpaceTools } from '../../core/ai-tools';
+import { buildRealtimeToolExposure } from '../tools';
 
 const fakeTool = (description = 'A tool.'): Tool =>
   ({
@@ -50,7 +51,6 @@ function deps(over: Partial<VoiceSystemContextDeps> = {}) {
     buildTools: () => smallRegistry(),
     loadAgentMemory: vi.fn(async () => '\n\n<<MEMORY>>'),
     loadActivePlan: vi.fn(async () => '\n\n<<PLAN>>'),
-    loadAgentAwareness: vi.fn(async () => '<<AGENTS>>'),
     loadPersonalization: vi.fn(async () => ({ enabled: true, bio: 'Ships release notes.' })),
     logger: { warn },
     ...over,
@@ -128,6 +128,59 @@ describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
     expect(prompt).toContain('# PAGESPACE AI');
     expect(prompt).toMatch(/TASK/i);
   });
+
+  it('should explain the DEFERRED capabilities, not just list their names', async () => {
+    // THE TRAP. After the split, the tool set holds the core tools and the two
+    // scaffolding tools and nothing else. Gate the capability sections on ITS
+    // keys and the catalog goes on advertising create_task and spawn_session as
+    // callable while every word of guidance about tasks, delegation and
+    // automation is silently dropped — the model is told the tools exist and
+    // nothing about when to use them. `page-chat-turn.ts:1306` captures the
+    // pre-split list at the same point for the same reason.
+    //
+    // Asserted on the PAGE branch specifically: it is `buildInlineInstructions`
+    // that gates these sections on the names, whereas the Global Assistant's
+    // builder states them unconditionally and would pass either way.
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+    const guidance = prompt.slice(0, prompt.indexOf('NON-CORE TOOLS'));
+
+    expect(guidance).toContain('TASK MANAGEMENT:');
+    expect(guidance).toContain('AGENTS:');
+    expect(guidance).toContain('AUTOMATION:');
+  });
+
+  it('should offer the skills whose tools are DEFERRED, not only the core-tool ones', async () => {
+    // `task-management` needs create_task/update_task and `spreadsheets` needs
+    // edit_sheet_cells — all deferred. Gated on the post-split names they
+    // vanish, while `writing-documents` (core tools only) survives and keeps the
+    // SKILLS section looking populated, which is what makes the loss easy to
+    // miss.
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+
+    expect(prompt).toContain('task-management');
+    expect(prompt).toContain('spreadsheets');
+  });
+
+  it('should let tool_search resolve a skill the prompt advertises', async () => {
+    // The catalog says a skill is loadable and tool_search is where the model
+    // goes to find it. Advertising one the search cannot resolve sends it
+    // looking for something that, as far as the search is concerned, is not
+    // there — `searchableSkills` went unpassed and the corpus was tools-only.
+    const search = buildRealtimeToolExposure(buildPageSpaceTools()).tools.tool_search;
+
+    const found = JSON.stringify(
+      await (search.execute as (a: unknown, o: unknown) => unknown)(
+        { query: 'task-management' },
+        { experimental_context: {}, toolCallId: 't1', messages: [] },
+      ),
+    );
+
+    expect(found).toContain('task-management');
+  });
 });
 
 describe('buildVoiceSystemContext — which assistant it assembles', () => {
@@ -144,6 +197,43 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     expect(prompt).not.toContain('# PAGESPACE AI');
   });
 
+  it('given a bound agent, should address it by the name the user picked', async () => {
+    // The typed surface never names the agent because the user can see which
+    // one they opened. On a call, being called by that name is most of what
+    // makes it feel like the assistant they chose.
+    const { deps: d } = deps();
+
+    const prompt = await buildVoiceSystemContext(d, { userId: 'u1', agent: agent() });
+
+    expect(prompt).toContain('"Release Notes Bot"');
+  });
+
+  it('should cap the assembly with the spoken override, after the shared prompt', async () => {
+    const { deps: d } = deps();
+
+    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+
+    expect(prompt).toContain('# THIS IS A VOICE CALL');
+    expect(prompt.indexOf('You are the Global Assistant')).toBeLessThan(
+      prompt.indexOf('# THIS IS A VOICE CALL'),
+    );
+  });
+
+  it('given an agent allowed only core tools, should not name discovery tools anywhere', async () => {
+    // Nothing is deferred, so no scaffolding is registered. Every mention of
+    // tool_search or execute_tool — in the catalog or in the spoken rules —
+    // would name a tool the session never advertised.
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const prompt = await buildVoiceSystemContext(d, {
+      userId: 'u1',
+      agent: agent({ enabledTools: ['read_page', 'list_pages'] }),
+    });
+
+    expect(prompt).not.toContain('tool_search');
+    expect(prompt).not.toContain('execute_tool');
+  });
+
   it('given a bound agent, should carry its memory', async () => {
     const { deps: d } = deps();
 
@@ -153,13 +243,25 @@ describe('buildVoiceSystemContext — which assistant it assembles', () => {
     expect(d.loadAgentMemory).toHaveBeenCalledWith('agent1', 'u1');
   });
 
-  it('given NO bound agent, should assemble the Global Assistant, agents and all', async () => {
+  it('given NO bound agent, should assemble the Global Assistant', async () => {
     const { deps: d } = deps();
 
     const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
 
     expect(prompt).toContain('You are the Global Assistant for PageSpace');
-    expect(prompt).toContain('<<AGENTS>>');
+  });
+
+  it('should NOT scan the deployment for agents before the caller can be heard', async () => {
+    // `buildAgentAwarenessPrompt` selects every non-trashed drive and then
+    // awaits a check per drive and per agent, serially — all of it before the
+    // SDP exchange, with the caller on a dead line. The guidance about agents
+    // stays; the list is fetched by `list_agents` on the turn that needs it.
+    const { deps: d } = deps({ buildTools: () => buildPageSpaceTools() });
+
+    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
+
+    expect(prompt).not.toContain('## Available AI Agents');
+    expect(prompt).toContain('list_agents');
   });
 
   it('should carry the caller\'s own personalization, same as the typed surface', async () => {
@@ -269,12 +371,4 @@ describe('buildVoiceSystemContext — no block is worth the call', () => {
     );
   });
 
-  it('given the agent-awareness read fails, should still assemble the Global Assistant', async () => {
-    const { deps: d } = deps({ loadAgentAwareness: failing() });
-
-    const prompt = await buildVoiceSystemContext(d, { userId: 'u1' });
-
-    expect(prompt).toContain('You are the Global Assistant for PageSpace');
-    expect(prompt).not.toContain('<<AGENTS>>');
-  });
 });

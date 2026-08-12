@@ -18,7 +18,7 @@ import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
 import { applyToolExposureMode } from '../tools/tool-exposure';
 import { filterToolsForAgentAllowlist } from '../core/tool-filtering';
-import type { SkillSearchEntry } from '../core/skill-catalog';
+import { listEligibleSkills, type SkillSearchEntry } from '../core/skill-catalog';
 import type { RealtimeTool } from './session';
 
 /**
@@ -113,6 +113,28 @@ export type RealtimeToolExposure = {
   readonly toolDiscoveryPrompt: string;
   /** The catalog alone, for the surface that states the "how" earlier. */
   readonly nonCoreToolNames: string;
+  /**
+   * Every tool the agent may reach, named BEFORE the split moved most of them
+   * behind `execute_tool` — which is what the prompt's capability sections have
+   * to be gated on.
+   *
+   * Returned rather than left for the caller to derive because deriving it from
+   * `tools` is wrong in a way nothing catches: after the split that object holds
+   * the core tools and the two scaffolding tools and nothing else, so gating on
+   * its keys silently drops the task-management, delegation and automation
+   * guidance for every capability the split deferred — the exact capabilities
+   * the discovery catalog then advertises as callable. `page-chat-turn.ts:1306`
+   * captures the same list at the same point, for the same reason.
+   */
+  readonly allowedToolNames: string[];
+  /**
+   * The built-in skills reachable with those tools, ready for `tool_search`'s
+   * catalog. Computed here rather than accepted as a parameter: it is a pure
+   * function of the allowed names, it must be derived from the pre-split list
+   * for the same reason as above, and the one caller that has to get it right
+   * cannot now get it wrong by omission.
+   */
+  readonly eligibleSkills: readonly SkillSearchEntry[];
 };
 
 /**
@@ -137,18 +159,30 @@ export type RealtimeToolExposure = {
  * than a `tool_search` over an empty catalog and an `execute_tool` that can only
  * refuse. That is `applyToolExposureMode`'s own rule and it is the honest one:
  * two tools whose every call fails are worse than two tools absent.
+ *
+ * The skill catalog handed to `tool_search` is the BUILT-IN one only. The text
+ * routes also merge in per-viewer user/drive commands, which are volatile by
+ * nature — they change whenever anyone edits a command — and a call's
+ * instructions are sent once at socket open, so a snapshot of them would go
+ * stale mid-call with no way to correct it.
  */
 export function buildRealtimeToolExposure(
   tools: ToolSet,
   allowlist: ToolAllowlist = null,
-  searchableSkills: readonly SkillSearchEntry[] = [],
 ): RealtimeToolExposure {
   const allowed = filterToolsForAgentAllowlist(
     tools,
     allowlist === null ? null : [...allowlist],
   ) as ToolSet;
 
-  return applyToolExposureMode(allowed, 'search', NO_COMPOSER_OVERRIDES, searchableSkills);
+  const allowedToolNames = Object.keys(allowed);
+  const eligibleSkills = listEligibleSkills(allowedToolNames);
+
+  return {
+    ...applyToolExposureMode(allowed, 'search', NO_COMPOSER_OVERRIDES, eligibleSkills),
+    allowedToolNames,
+    eligibleSkills,
+  };
 }
 
 /**
@@ -163,10 +197,9 @@ export function buildRealtimeToolExposure(
 export function buildRealtimeTools(
   tools: ToolSet,
   allowlist: ToolAllowlist = null,
-  searchableSkills: readonly SkillSearchEntry[] = [],
 ): readonly RealtimeTool[] {
-  return Object.entries(buildRealtimeToolSet(tools, allowlist, searchableSkills)).map(
-    ([name, tool]) => toRealtimeTool(name, tool),
+  return Object.entries(buildRealtimeToolSet(tools, allowlist)).map(([name, tool]) =>
+    toRealtimeTool(name, tool),
   );
 }
 
@@ -191,10 +224,6 @@ export function buildRealtimeTools(
  * dispatcher runs tools, it does not prompt. `binding-loader.ts` takes the
  * exposure whole.
  */
-export function buildRealtimeToolSet(
-  tools: ToolSet,
-  allowlist: ToolAllowlist = null,
-  searchableSkills: readonly SkillSearchEntry[] = [],
-): ToolSet {
-  return buildRealtimeToolExposure(tools, allowlist, searchableSkills).tools;
+export function buildRealtimeToolSet(tools: ToolSet, allowlist: ToolAllowlist = null): ToolSet {
+  return buildRealtimeToolExposure(tools, allowlist).tools;
 }

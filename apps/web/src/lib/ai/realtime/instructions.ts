@@ -34,6 +34,22 @@
  * Pure: no I/O, no clock, no randomness, no module-level mutable state.
  */
 
+/**
+ * What the model can actually call, as the override block needs to know it.
+ *
+ * A RULE THAT NAMES A TOOL THE MODEL DOES NOT HAVE IS WORSE THAN NO RULE. It
+ * spends a turn on a call that is rejected, and spends it out loud, in front of
+ * someone waiting. Both halves are needed because they answer different
+ * questions: `tool_search` only ever exists in the exposed set, and
+ * `spawn_session` only ever exists in the reachable one.
+ */
+export type VoiceToolReach = {
+  /** Advertised with full schemas — the core tools, plus the scaffolding when there is any. */
+  readonly exposed: readonly string[];
+  /** Everything callable at all, including the half deferred behind `execute_tool`. */
+  readonly reachable: readonly string[];
+};
+
 /** What the call is bound to, as far as its instructions are concerned. */
 export type VoiceInstructionsInput = {
   /**
@@ -49,6 +65,8 @@ export type VoiceInstructionsInput = {
    * picked is most of what makes it feel like the one they picked.
    */
   readonly title?: string;
+  /** Omitted means "assume nothing is reachable" — the safe direction. */
+  readonly tools?: VoiceToolReach;
 };
 
 /**
@@ -58,10 +76,39 @@ export type VoiceInstructionsInput = {
  * Written as labeled sections of short bullets, with the load-bearing rules
  * capitalized, because that is the shape `gpt-realtime` follows most reliably.
  */
-const voiceOverride = (title?: string): string => {
+const voiceOverride = (title: string | undefined, tools: VoiceToolReach): string => {
   const identity = title
     ? `You are "${title}", speaking with someone out loud, in real time.`
     : 'You are speaking with someone out loud, in real time.';
+
+  // An agent allowed only core tools gets no `tool_search` and no
+  // `execute_tool` — there is nothing deferred for them to reach — so the rule
+  // sending the model to search before refusing would name a tool that is not
+  // there. In that case everything it can do is already in front of it, and
+  // saying so is the honest replacement.
+  const canSearch = tools.exposed.includes('tool_search');
+  const beforeRefusing = canSearch
+    ? '- NEVER SAY SOMETHING IS IMPOSSIBLE BEFORE YOU HAVE CALLED tool_search.'
+    : '- Every tool you have is already listed for you. If none of them fits, say so plainly rather than guessing at one.';
+
+  // Same rule for the hand-off targets: an agent whose owner granted neither
+  // spawn_session nor create_task cannot delegate at all, and telling it to
+  // would spend a turn on a call `execute_tool` rejects.
+  const HAND_OFFS: readonly (readonly [string, string])[] = [
+    ['spawn_session', 'spawn_session for work an agent should carry out'],
+    ['create_task', 'create_task for work a person should'],
+  ];
+  const handOffs = HAND_OFFS.filter(([name]) => tools.reachable.includes(name)).map(
+    ([, phrase]) => phrase,
+  );
+
+  const delegating =
+    handOffs.length === 0
+      ? `## Long work
+- Work that takes minutes does not belong inline on a call — the caller would wait in silence. Say what you are starting, work through it in steps, and keep saying where you have got to.`
+      : `## Delegating
+- Work that takes minutes does not belong inline on a call — the caller would wait in silence. Hand it off and say that you have: ${handOffs.join(', ')}.
+- Say what you handed off and where it will land, in one sentence. If the caller asks later in the call how it is going, check then.`;
 
   return `# THIS IS A VOICE CALL
 
@@ -83,12 +130,14 @@ ${identity} Everything above still applies EXCEPT where this section overrides i
 - "This page", "here" and "this drive" resolve on their own — call read_page, insert_content or replace_lines with NO page id and they act on wherever the caller is standing. Never ask the caller for an id.
 - Keep going until the request is resolved. An empty search is not an answer: try different wording, or another drive, before reporting nothing.
 - IF THE SAME TOOL FAILS TWICE ON THE SAME TASK, stop retrying, say plainly what failed, and offer the next best thing.
-- NEVER SAY SOMETHING IS IMPOSSIBLE BEFORE YOU HAVE CALLED tool_search.
+${beforeRefusing}
 - Close every stretch of tool calls with one spoken sentence saying what changed. Silence after a run of tool calls sounds like a dropped call.
 
-## Delegating
-- Work that takes minutes does not belong inline on a call — the caller would wait in silence. Hand it off and say that you have: spawn_session for work an agent should carry out, create_task for work a person should, a trigger or a workflow for work that should happen later.
-- Say what you handed off and where it will land, in one sentence. If the caller asks later in the call how it is going, check then.
+${delegating}
+
+## What you were told, and when
+- Everything above was assembled when this call started and is never re-sent. If you change any of it during the call — bind or clear a plan, edit your memory page, move or rename something — YOUR OWN TOOL RESULT IS WHAT IS CURRENT, and the description above is out of date from that moment on.
+- Never re-follow a standing instruction about something you have since changed. Say what the change was, then work from it.
 
 ## Asking
 - ask_user draws a card on a screen and does not work here. Ask out loud, in one sentence.
@@ -97,5 +146,7 @@ ${identity} Everything above still applies EXCEPT where this section overrides i
 - If the caller asks you to stop, stop immediately, mid-action.`;
 };
 
+const NOTHING_REACHABLE: VoiceToolReach = { exposed: [], reachable: [] };
+
 export const buildVoiceInstructions = (input: VoiceInstructionsInput): string =>
-  `${input.agentSystemPrompt}\n\n${voiceOverride(input.title)}`;
+  `${input.agentSystemPrompt}\n\n${voiceOverride(input.title, input.tools ?? NOTHING_REACHABLE)}`;

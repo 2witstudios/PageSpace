@@ -30,7 +30,6 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
-import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
@@ -146,10 +145,6 @@ export const voiceSystemContextDeps = (auth: AuthResult): VoiceSystemContextDeps
         canPrincipalViewPage(auth, pageId),
       ),
     ),
-  // `canDelegate` mirrors the typed surface: naming agents the model cannot
-  // reach makes it attempt a delegation that silently fails. A call has no
-  // read-only mode, so delegation is always available.
-  loadAgentAwareness: (userId) => buildAgentAwarenessPrompt(userId, { canDelegate: true }),
   loadPersonalization: (userId) => getUserPersonalization(userId),
   logger: loggers.ai,
 });
@@ -162,7 +157,7 @@ export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   loadMessages: (conversationId) =>
     messageRepository.getMessagesByConversationId(conversationId),
   loadAgentPage,
-  buildSystemContext: (request) =>
+  buildInstructions: (request) =>
     buildVoiceSystemContext(voiceSystemContextDeps(auth), request),
   logger: loggers.ai,
 });

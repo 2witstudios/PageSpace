@@ -223,6 +223,18 @@ describe('buildAgentSystemPrompt — the global surface', () => {
     expect(buildAgentSystemPrompt(globalInput())).not.toContain('ASKING THE USER:');
   });
 
+  it('given NOTHING deferred, should not explain how to reach it', () => {
+    // The discovery text names tool_search and execute_tool, and with nothing to
+    // defer `applyToolExposureMode` registers neither. Stating it anyway orders
+    // the model to call two tools the session never advertised.
+    const assembled = buildAgentSystemPrompt(globalInput({ nonCoreToolNames: '' }));
+
+    expect(assembled).not.toContain('execute_tool');
+    expect(assembled).not.toContain('tool_search');
+    // The rest of the persona is untouched.
+    expect(assembled).toContain('SMART EXPLORATION RULES:');
+  });
+
   it('given no agents to consult and no deferred tools, should omit their separators', () => {
     // An empty block must not leave a stray blank gap behind it.
     const assembled = buildAgentSystemPrompt(

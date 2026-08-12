@@ -24,9 +24,14 @@
 
 import type { ToolSet } from 'ai';
 import { buildAgentSystemPrompt } from '../core/prompt-assembly';
+import { buildVoiceInstructions } from './instructions';
 import type { PersonalizationInfo } from '../core/system-prompt';
 import { buildBuiltinSkillCatalog } from '../core/skill-catalog';
-import { buildRealtimeToolExposure, type ToolAllowlist } from './tools';
+import {
+  buildRealtimeToolExposure,
+  type RealtimeToolExposure,
+  type ToolAllowlist,
+} from './tools';
 
 /** The agent a call is bound to, when it is bound to one rather than to the Global Assistant. */
 export type BoundAgent = {
@@ -49,8 +54,6 @@ export type VoiceSystemContextDeps = {
   readonly loadAgentMemory: (pageId: string, userId: string) => Promise<string>;
   /** The active plan pointer, already rendered. Empty string when there is none. */
   readonly loadActivePlan: (conversationId: string, userId: string) => Promise<string>;
-  /** The agents this caller can consult, already rendered. */
-  readonly loadAgentAwareness: (userId: string) => Promise<string>;
   /** The caller's own bio, style and rules, when they enabled them. */
   readonly loadPersonalization: (userId: string) => Promise<PersonalizationInfo | null>;
   readonly logger: {
@@ -91,6 +94,30 @@ const softly = async <T>(
 };
 
 /**
+ * Cap the assembled prompt with the spoken-medium override.
+ *
+ * Done here rather than a layer up because the override has to know what the
+ * model can actually call: an agent allowed only core tools is given no
+ * `tool_search`, so the rule sending it to search before refusing would name a
+ * tool that is not there. This is the only place holding both halves of that —
+ * the exposed set and the reachable one — so it is the only place that can
+ * decide.
+ */
+const withVoiceOverride = (
+  exposure: RealtimeToolExposure,
+  title: string | undefined,
+  agentSystemPrompt: string,
+): string =>
+  buildVoiceInstructions({
+    agentSystemPrompt,
+    ...(title === undefined ? {} : { title }),
+    tools: {
+      exposed: Object.keys(exposure.tools),
+      reachable: exposure.allowedToolNames,
+    },
+  });
+
+/**
  * Assemble the call's system prompt.
  *
  * THREE BLOCKS THE TYPED SURFACE CARRIES ARE DELIBERATELY OMITTED, and the
@@ -106,6 +133,16 @@ const softly = async <T>(
  *   the moment the call connected would go quietly wrong the first time that
  *   happened; the tools read the live location instead.
  *
+ * THE EAGER AGENT LIST IS OMITTED FOR A DIFFERENT REASON: WHAT IT COSTS TO GET.
+ * `buildAgentAwarenessPrompt` selects every non-trashed drive in the deployment
+ * and then awaits an access check per drive and a view check per agent, one
+ * after another. Everything here runs BEFORE the SDP exchange, with the caller
+ * holding a dead line waiting to be heard, so that work would put a
+ * whole-deployment scan on the most latency-sensitive path in the product. The
+ * capability is not lost: the AGENTS guidance is still in the prompt, and
+ * `list_agents` fetches the list on the one turn that actually needs it rather
+ * than on every call that might.
+ *
  * Read-only mode is `false`: it is a property of a typed session's toggles, and
  * a call has none. An agent whose owner restricted its tools is still restricted
  * — that rides `enabledTools` through the exposure, which is a different
@@ -117,7 +154,11 @@ export const buildVoiceSystemContext = async (
 ): Promise<string> => {
   const allowlist: ToolAllowlist = request.agent?.enabledTools ?? null;
   const exposure = buildRealtimeToolExposure(deps.buildTools(), allowlist);
-  const allowedToolNames = Object.keys(exposure.tools);
+  // The PRE-split names, not `Object.keys(exposure.tools)`. After the split that
+  // object holds the core tools and the two scaffolding tools, so gating on its
+  // keys would drop the task-management, delegation and automation guidance for
+  // exactly the capabilities the discovery catalog goes on to advertise.
+  const { allowedToolNames } = exposure;
   const skillCatalog = buildBuiltinSkillCatalog(allowedToolNames);
 
   const [activePlan, personalization] = await Promise.all([
@@ -140,7 +181,10 @@ export const buildVoiceSystemContext = async (
       '',
     );
 
-    return buildAgentSystemPrompt({
+    return withVoiceOverride(
+      exposure,
+      request.agent.title,
+      buildAgentSystemPrompt({
       surface: 'page',
       readOnly: false,
       personalization,
@@ -153,17 +197,14 @@ export const buildVoiceSystemContext = async (
       memberDriveContextPrefix: '',
       agentMemory,
       toolDiscovery: exposure.toolDiscoveryPrompt,
-    });
+      }),
+    );
   }
 
-  const agentAwareness = await softly(
-    deps,
-    'agentAwareness',
-    () => deps.loadAgentAwareness(request.userId),
-    '',
-  );
-
-  return buildAgentSystemPrompt({
+  return withVoiceOverride(
+    exposure,
+    undefined,
+    buildAgentSystemPrompt({
     surface: 'global',
     readOnly: false,
     personalization,
@@ -179,7 +220,9 @@ export const buildVoiceSystemContext = async (
     // ask out loud instead, so describing the tool here would only argue with it.
     includeAskUser: false,
     drivePromptSection: '',
-    agentAwareness,
+    // Not the eager agent list the typed surface renders — see the note above.
+    agentAwareness: '',
     nonCoreToolNames: exposure.nonCoreToolNames,
-  });
+    }),
+  );
 };

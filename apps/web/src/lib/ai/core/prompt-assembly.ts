@@ -184,10 +184,17 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       codeExecutionEnabled,
     );
 
+    // TOOL_DISCOVERY_PROMPT explains how to reach the tools that were deferred,
+    // by name — so with nothing deferred it explains how to reach nothing, using
+    // two tools (`tool_search`, `execute_tool`) that are not registered in that
+    // case. Gated on the catalog it introduces, which is the same condition
+    // `applyToolExposureMode` uses to decide whether to register them at all.
+    // The text routes always defer something, so this changes nothing there.
+    const toolDiscovery = input.nonCoreToolNames ? '\n\n' + TOOL_DISCOVERY_PROMPT : '';
+
     const persona =
       base +
-      '\n\n' +
-      TOOL_DISCOVERY_PROMPT +
+      toolDiscovery +
       globalAssistantGuidance(input.conversationType, input.conversationContextId) +
       (input.includeAskUser ? `\n\n${ASK_USER_SECTION}` : '') +
       input.drivePromptSection;

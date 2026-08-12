@@ -26,7 +26,6 @@
  */
 
 import { buildRealtimeSeed, type SeedEvent, type SeedMessage } from './seed';
-import { buildVoiceInstructions } from './instructions';
 import type { VoiceSystemContextRequest } from './system-context';
 import type { VoiceAssistant } from '@pagespace/lib/realtime/voice-bridge-contract';
 
@@ -62,13 +61,14 @@ export type BindingLoaderDeps = {
   readonly loadMessages: (conversationId: string) => Promise<readonly SeedMessage[]>;
   readonly loadAgentPage: (pageId: string) => Promise<AgentPage | undefined>;
   /**
-   * The system prompt for whatever this call turned out to be bound to — the
-   * same assembly the typed surface builds. Injected rather than called
-   * directly so this module stays exercisable without a database, and so the
-   * one place that answers "what is this bound to?" is not also the place that
-   * does half a dozen reads to describe it. See `system-context.ts`.
+   * The finished instructions for whatever this call turned out to be bound to:
+   * the same system prompt the typed surface builds, capped with the
+   * spoken-medium override. Injected rather than called directly so this module
+   * stays exercisable without a database, and so the one place that answers
+   * "what is this bound to?" is not also the place that does half a dozen reads
+   * to describe it. See `system-context.ts`.
    */
-  readonly buildSystemContext: (request: VoiceSystemContextRequest) => Promise<string>;
+  readonly buildInstructions: (request: VoiceSystemContextRequest) => Promise<string>;
   readonly logger: {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
   };
@@ -105,9 +105,7 @@ const unbound = async (
   userId: string,
 ): Promise<VoiceBinding> => ({
   seed: [],
-  instructions: buildVoiceInstructions({
-    agentSystemPrompt: await deps.buildSystemContext({ userId }),
-  }),
+  instructions: await deps.buildInstructions({ userId }),
 });
 
 /**
@@ -193,13 +191,13 @@ export const loadVoiceBinding = async (
           }),
     });
 
-    const agentSystemPrompt = await deps.buildSystemContext(contextOf());
+    const instructions = await deps.buildInstructions(contextOf());
 
-    if (!agent) return { seed, instructions: buildVoiceInstructions({ agentSystemPrompt }) };
+    if (!agent) return { seed, instructions };
 
     return {
       seed,
-      instructions: buildVoiceInstructions({ agentSystemPrompt, title: agent.title }),
+      instructions,
       assistant: {
         agentPageId: agent.id,
         agentTitle: agent.title,
