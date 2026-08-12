@@ -105,8 +105,8 @@ const softly = async <T>(
  */
 const withVoiceOverride = (
   exposure: RealtimeToolExposure,
-  title: string | undefined,
   agentSystemPrompt: string,
+  title?: string,
 ): string =>
   buildVoiceInstructions({
     agentSystemPrompt,
@@ -181,10 +181,7 @@ export const buildVoiceSystemContext = async (
       '',
     );
 
-    return withVoiceOverride(
-      exposure,
-      request.agent.title,
-      buildAgentSystemPrompt({
+    const systemPrompt = buildAgentSystemPrompt({
       surface: 'page',
       readOnly: false,
       personalization,
@@ -197,14 +194,12 @@ export const buildVoiceSystemContext = async (
       memberDriveContextPrefix: '',
       agentMemory,
       toolDiscovery: exposure.toolDiscoveryPrompt,
-      }),
-    );
+    });
+
+    return withVoiceOverride(exposure, systemPrompt, request.agent.title);
   }
 
-  return withVoiceOverride(
-    exposure,
-    undefined,
-    buildAgentSystemPrompt({
+  const systemPrompt = buildAgentSystemPrompt({
     surface: 'global',
     readOnly: false,
     personalization,
@@ -223,6 +218,7 @@ export const buildVoiceSystemContext = async (
     // Not the eager agent list the typed surface renders — see the note above.
     agentAwareness: '',
     nonCoreToolNames: exposure.nonCoreToolNames,
-    }),
-  );
+  });
+
+  return withVoiceOverride(exposure, systemPrompt);
 };

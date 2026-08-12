@@ -18,7 +18,7 @@ import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
 import { applyToolExposureMode } from '../tools/tool-exposure';
 import { filterToolsForAgentAllowlist } from '../core/tool-filtering';
-import { listEligibleSkills, type SkillSearchEntry } from '../core/skill-catalog';
+import { listEligibleSkills } from '../core/skill-catalog';
 import type { RealtimeTool } from './session';
 
 /**
@@ -127,14 +127,6 @@ export type RealtimeToolExposure = {
    * captures the same list at the same point, for the same reason.
    */
   readonly allowedToolNames: string[];
-  /**
-   * The built-in skills reachable with those tools, ready for `tool_search`'s
-   * catalog. Computed here rather than accepted as a parameter: it is a pure
-   * function of the allowed names, it must be derived from the pre-split list
-   * for the same reason as above, and the one caller that has to get it right
-   * cannot now get it wrong by omission.
-   */
-  readonly eligibleSkills: readonly SkillSearchEntry[];
 };
 
 /**
@@ -176,12 +168,20 @@ export function buildRealtimeToolExposure(
   ) as ToolSet;
 
   const allowedToolNames = Object.keys(allowed);
-  const eligibleSkills = listEligibleSkills(allowedToolNames);
 
+  // The searchable skills are derived from the same pre-split names and handed
+  // straight to the exposure. Computed here rather than accepted as a parameter:
+  // it is a pure function of those names, and a parameter no caller passed is
+  // exactly how `tool_search` ended up with a tools-only corpus while the prompt
+  // advertised a skill catalog.
   return {
-    ...applyToolExposureMode(allowed, 'search', NO_COMPOSER_OVERRIDES, eligibleSkills),
+    ...applyToolExposureMode(
+      allowed,
+      'search',
+      NO_COMPOSER_OVERRIDES,
+      listEligibleSkills(allowedToolNames),
+    ),
     allowedToolNames,
-    eligibleSkills,
   };
 }
 

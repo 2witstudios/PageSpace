@@ -69,6 +69,12 @@ export type VoiceInstructionsInput = {
   readonly tools?: VoiceToolReach;
 };
 
+/** Where long work goes, each paired with the tool that has to be reachable to offer it. */
+const HAND_OFFS: readonly (readonly [string, string])[] = [
+  ['spawn_session', 'spawn_session for work an agent should carry out'],
+  ['create_task', 'create_task for work a person should'],
+];
+
 /**
  * How to behave because this is speech rather than text, and because the caller
  * is talking in order to get something DONE rather than to have a conversation.
@@ -94,10 +100,6 @@ const voiceOverride = (title: string | undefined, tools: VoiceToolReach): string
   // Same rule for the hand-off targets: an agent whose owner granted neither
   // spawn_session nor create_task cannot delegate at all, and telling it to
   // would spend a turn on a call `execute_tool` rejects.
-  const HAND_OFFS: readonly (readonly [string, string])[] = [
-    ['spawn_session', 'spawn_session for work an agent should carry out'],
-    ['create_task', 'create_task for work a person should'],
-  ];
   const handOffs = HAND_OFFS.filter(([name]) => tools.reachable.includes(name)).map(
     ([, phrase]) => phrase,
   );
