@@ -1371,6 +1371,17 @@ describe('Task API Routes', () => {
       expect(getUserTimezone).not.toHaveBeenCalled();
     });
 
+    // The body is not schema-validated here, so a non-string due date is
+    // reachable. It used to go through `new Date(value)` and work; routing it
+    // through the naive-aware parser would have stringified an epoch number into
+    // an Invalid Date.
+    it('still accepts an epoch-number due date', async () => {
+      const epoch = Date.UTC(2026, 1, 19, 19, 0, 0);
+      const stored = await createTaskWithDueDate('America/Chicago', epoch as unknown as string);
+
+      expect(stored).toEqual(new Date(epoch));
+    });
+
     it('creates task page as TASK_LIST type with empty content', async () => {
       const mockTaskList = { id: mockTaskListId };
       const mockNewTask = { id: 'new-task', title: 'New Task', status: 'pending', priority: 'medium', position: 0 };

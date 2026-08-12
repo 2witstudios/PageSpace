@@ -505,7 +505,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
     ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
-  const parsedDueDate = dueDate ? parseDatetimeInTimezone(String(dueDate), resolvedTimezone) : null;
+  // Only a string can be naive. Anything else — an epoch number, say — keeps the
+  // prior `new Date()` behaviour instead of being stringified into an Invalid
+  // Date; this route parses an unvalidated body, so that input is reachable.
+  const parsedDueDate = dueDate
+    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
+    : null;
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
