@@ -93,7 +93,13 @@ export const createWorkflow = defineOperation({
     instructionPageId: z.string().nullable().optional(),
     contextPageIds: z.array(z.string()).default([]),
     cronExpression: z.string().min(1),
-    timezone: z.string().default('UTC'),
+    /**
+     * IANA zone the cron expression is evaluated in. Omitting it is NOT the
+     * same as sending `"UTC"`: the server resolves an absent value against the
+     * caller's profile timezone and only then falls back to UTC. A default here
+     * would send `"UTC"` on the caller's behalf and take that choice away.
+     */
+    timezone: z.string().optional(),
     isEnabled: z.boolean().default(true),
   })
     .refine((data) => Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId), {

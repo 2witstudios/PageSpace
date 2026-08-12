@@ -1,16 +1,22 @@
 /**
- * #1846 Codex P2 (2nd round): GET /api/calendar/events (context=user) must
- * list back a personal (driveless) event that a scoped MCP token itself
- * created (the create fix in this same PR would otherwise produce a
- * permanently unlistable event), while still excluding a driveless event
- * created by a DIFFERENT user (identity-scoped condition + the
- * scoped-token cap filter must both allow the caller's own creation through).
+ * GET /api/calendar/events range bounds are absolute instants (#2404).
+ *
+ * `startDate`/`endDate` used to be plain `z.coerce.date()`, so a naive value
+ * went through `new Date("2026-02-19T19:00:00")` — which the spec parses in the
+ * *server process's* local zone. That is UTC in deployment but the developer's
+ * zone under `next dev`, so a range query silently meant different windows in
+ * different environments and boundary bugs would not reproduce locally.
+ *
+ * This file runs with TZ deliberately set away from UTC: under the old schema
+ * these assertions would read the bounds as Chicago wall-clock times.
  */
+process.env.TZ = 'America/Chicago';
+
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
-  return { ...actual, after: vi.fn((fn) => fn()) };
+  return { ...actual, after: vi.fn((fn: () => void) => fn()) };
 });
 
 vi.mock('@pagespace/db/operators', () => ({
@@ -36,6 +42,9 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id', driveId: 'driveId' } }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id' } }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', timezone: 'timezone' } }));
+vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: { userId: 'userId' } }));
+vi.mock('@pagespace/lib/memory/memory-pages', () => ({ readMemoryPages: vi.fn().mockResolvedValue({}) }));
 
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   upsertCalendarTriggerWorkflowInTx: vi.fn(),
@@ -46,7 +55,6 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 vi.mock('@/lib/websocket/calendar-events', () => ({ broadcastCalendarEvent: vi.fn() }));
 vi.mock('@/lib/integrations/google-calendar/push-service', () => ({ pushEventToGoogle: vi.fn() }));
-// timestamp-utils is pure; the real parser is used rather than a partial stub.
 vi.mock('@/lib/workflows/recurrence-utils', () => ({
   expandRecurringEvents: vi.fn((events: unknown[]) => events),
 }));
@@ -56,9 +64,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
-const CREATOR_ID = 'user-creator';
-const OUTSIDER_ID = 'user-outsider';
-
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
@@ -67,79 +72,55 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn().mockResolvedValue([]),
   canPrincipalViewPage: vi.fn(),
-  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
-    auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
+  isScopedMCPAuth: vi.fn(() => false),
 }));
-
-const PERSONAL_EVENT = {
-  id: 'evt-personal',
-  driveId: null,
-  createdById: CREATOR_ID,
-  visibility: 'PRIVATE',
-  isTrashed: false,
-  startAt: new Date('2026-07-04T10:00:00Z'),
-  endAt: new Date('2026-07-04T11:00:00Z'),
-  recurrenceRule: null,
-};
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    query: {
-      calendarEvents: { findMany: vi.fn() },
-    },
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue([]),
-      })),
-    })),
+    query: { calendarEvents: { findMany: vi.fn() } },
+    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
   },
 }));
 
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
+import { lte } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
-const mockScopedMcpAuth = (userId: string) => ({
-  userId,
-  tokenType: 'mcp' as const,
-  tokenId: 'mcp-token-1',
-  allowedDriveIds: ['some-other-drive'],
-});
-
-function makeGetRequest(): Request {
+function makeGetRequest(startDate: string, endDate: string): Request {
   const url = new URL('http://localhost:3000/api/calendar/events');
   url.searchParams.set('context', 'user');
-  url.searchParams.set('startDate', '2026-07-01T00:00:00Z');
-  url.searchParams.set('endDate', '2026-07-31T00:00:00Z');
+  url.searchParams.set('startDate', startDate);
+  url.searchParams.set('endDate', endDate);
   return new Request(url.toString(), { method: 'GET' });
 }
 
-describe('GET /api/calendar/events (context=user) — scoped token + personal events', () => {
+/** The upper bound the route compares startAt against. */
+function upperBound(): Date {
+  const call = (lte as Mock).mock.calls.find(([column]) => column === 'startAt');
+  return call?.[1] as Date;
+}
+
+describe('GET /api/calendar/events — range bounds are absolute instants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (db.query.calendarEvents.findMany as Mock).mockResolvedValue([PERSONAL_EVENT]);
+    (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: 'user-1', tokenType: 'session' });
+    (db.query.calendarEvents.findMany as Mock).mockResolvedValue([]);
   });
 
-  it('lists a personal event a scoped MCP token created itself', async () => {
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(CREATOR_ID));
+  it('reads a naive range bound as UTC, not as the server process local time', async () => {
+    const response = await GET(makeGetRequest('2026-02-19T00:00:00', '2026-02-19T19:00:00'));
 
-    const response = await GET(makeGetRequest());
     expect(response.status).toBe(200);
-    const body = await response.json();
-
-    expect(body.events.map((e: { id: string }) => e.id)).toContain('evt-personal');
+    // Under TZ=America/Chicago, an unpinned `new Date()` would make this
+    // 2026-02-20T01:00:00Z — a window six hours wider than the caller asked for.
+    expect(upperBound()).toEqual(new Date('2026-02-19T19:00:00Z'));
   });
 
-  it('does not leak a personal event created by a different user to a scoped MCP token', async () => {
-    // The event fixture is fixed to CREATOR_ID; a different caller querying
-    // under a scoped token must not see it even if it somehow surfaced
-    // (e.g. via the attendee branch) — the final cap filter must exclude it.
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(OUTSIDER_ID));
+  it('leaves a bound that already carries an offset alone', async () => {
+    const response = await GET(makeGetRequest('2026-02-19T00:00:00Z', '2026-02-19T19:00:00+09:00'));
 
-    const response = await GET(makeGetRequest());
     expect(response.status).toBe(200);
-    const body = await response.json();
-
-    expect(body.events.map((e: { id: string }) => e.id)).not.toContain('evt-personal');
+    expect(upperBound()).toEqual(new Date('2026-02-19T10:00:00Z'));
   });
 });

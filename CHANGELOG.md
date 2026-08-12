@@ -37,6 +37,28 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
+  ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
+  Creating a calendar event through an app or script without naming a timezone read it as UTC, so
+  "dinner at 7pm" was stored as 1pm for a US Central user, with no error and nothing to notice
+  until the reminder came at the wrong hour. Task due dates had the same gap in a different place:
+  the reminder timezone was resolved correctly but the due date itself was read in the server's
+  timezone, so a task and its own reminder could disagree — and because that server timezone
+  happens to match some of ours, it looked right in testing and drifted only in production. Cron
+  workflows created without a named timezone had it worst: "every day at 9am" meant 9am UTC, which
+  is 3am in Chicago.
+
+  All of these now follow one rule: a plain wall-clock time means whatever timezone the request
+  names, else the timezone on your profile, else UTC. Times that already carry a `Z` or an offset
+  are unaffected, as are dates with no time at all. Events and workflows remember the timezone they
+  were created in, so editing them later keeps the hour you meant, and asking an assistant to make
+  something now lands at the same instant as typing it in yourself.
+
+  Date *ranges* — the from/to on calendar views, activity history and exports — are unchanged in
+  what they return, but they no longer depend on where the server is running, so a boundary that
+  behaves one way in production behaves the same way on a developer's machine. Scheduled drive
+  backups deliberately keep their own timezone, which belongs to the drive rather than to whoever
+  last edited the setting.
 - **Your assistant's Conversation History is back to being just your assistant's, in the right
   order** — the sidebar's history had filled up with chats belonging to page agents, hundreds of
   them on a busy account, pushing the assistant's own threads down out of reach. The dates made no

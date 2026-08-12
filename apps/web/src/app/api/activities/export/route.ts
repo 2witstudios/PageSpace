@@ -8,6 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { format } from 'date-fns';
+import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -15,8 +16,9 @@ const querySchema = z.object({
   context: z.enum(['user', 'drive', 'page']),
   driveId: z.string().optional(),
   pageId: z.string().optional(),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),
@@ -50,6 +52,8 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+  // Kept raw: only exclusiveEndBound can tell a date-only bound from an instant.
+  const rawEndDate = searchParams.get('endDate');
 
   try {
     const parseResult = querySchema.safeParse({
@@ -172,9 +176,9 @@ export async function GET(request: Request) {
       filterConditions.push(gte(activityLogs.timestamp, params.startDate));
     }
     if (params.endDate) {
-      const endOfDay = new Date(params.endDate);
-      endOfDay.setDate(endOfDay.getDate() + 1);
-      filterConditions.push(lt(activityLogs.timestamp, endOfDay));
+      // A date-only bound covers the whole day; an explicit instant means that
+      // instant. See exclusiveEndBound.
+      filterConditions.push(lt(activityLogs.timestamp, exclusiveEndBound(rawEndDate, params.endDate)));
     }
     if (params.actorId && params.context !== 'user') {
       filterConditions.push(eq(activityLogs.userId, params.actorId));

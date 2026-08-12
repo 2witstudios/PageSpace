@@ -127,10 +127,9 @@ vi.mock('@/lib/integrations/google-calendar/push-service', () => ({
   pushEventToGoogle: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure and cheap; these cases all pass absolute (Z) datetimes,
+// so the real parser is used rather than a stub that would have to fake the
+// naive-datetime rule.
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 

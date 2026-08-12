@@ -18,7 +18,8 @@ import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
-import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
@@ -492,11 +493,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
   const primaryAgentId = assigneeAgentId || assigneeIds?.find((a: { type: string }) => a.type === 'agent')?.id || null;
 
-  // Resolve the trigger timezone once, up front: explicit body value wins, else
-  // the caller's profile timezone, else UTC — matching the internal create_task tool.
-  const resolvedTimezone = agentTrigger
-    ? (typeof timezone === 'string' && timezone.trim() ? timezone.trim() : (await getUserTimezone(userId)) || 'UTC')
+  // Resolve the timezone once, up front: explicit body value wins, else the
+  // caller's profile timezone, else UTC — matching the internal create_task tool.
+  //
+  // Needed for the trigger workflow AND for reading the due date: a naive
+  // "2026-02-19T19:00:00" is a wall-clock time that means nothing without a
+  // zone. Resolving only for the trigger would leave the due date itself read
+  // in the server's zone (#2404). An absolute due date needs no zone, so the
+  // profile lookup stays skipped in the common case.
+  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
+    ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
+  // Only a string can be naive. Anything else — an epoch number, say — keeps the
+  // prior `new Date()` behaviour instead of being stringified into an Invalid
+  // Date; this route parses an unvalidated body, so that input is reachable.
+  const parsedDueDate = dueDate
+    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
+    : null;
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
@@ -520,7 +534,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
-      dueDate: dueDate ? new Date(dueDate) : null,
+      dueDate: parsedDueDate,
       completedAt: initialCompletedAt,
       metadata: {
         createdAt: new Date().toISOString(),
@@ -564,7 +578,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         taskId: newTask.id,
         taskMetadata: newTask.metadata as Record<string, unknown> | null,
         agentTrigger,
-        dueDate: dueDate ? new Date(dueDate) : null,
+        dueDate: parsedDueDate,
         timezone: resolvedTimezone,
       });
     }

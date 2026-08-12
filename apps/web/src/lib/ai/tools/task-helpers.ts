@@ -15,6 +15,7 @@ import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -363,6 +364,12 @@ export async function createTask(
 ) {
   const { pageId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
 
+  // The caller's timezone, resolved upstream onto the execution context. A naive
+  // due date ("2026-02-19T19:00:00") is a wall-clock time and is read in it;
+  // absolute values are untouched (#2404).
+  const taskTimezone = context.timezone || 'UTC';
+  const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
+
   // Reject blank/whitespace titles, matching the update path and REST task route.
   const trimmedTitle = title.trim();
   if (!trimmedTitle) {
@@ -495,7 +502,7 @@ export async function createTask(
       priority: priority || 'medium',
       assigneeId: primaryUserId,
       assigneeAgentId: primaryAgentId,
-      dueDate: dueDate ? new Date(dueDate) : null,
+      dueDate: parsedDueDate,
       metadata: {
         createdAt: new Date().toISOString(),
         note,
@@ -529,8 +536,8 @@ export async function createTask(
         taskId: newTask.id,
         taskMetadata: newTask.metadata as Record<string, unknown> | null,
         agentTrigger,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        timezone: context.timezone || 'UTC',
+        dueDate: parsedDueDate,
+        timezone: taskTimezone,
       });
     }
 

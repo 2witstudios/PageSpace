@@ -9,7 +9,8 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
-import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import {
   removeCalendarTrigger,
   resyncCalendarTriggerTimings,
@@ -232,14 +233,23 @@ export async function PATCH(
 
     const data = parseResult.data;
 
-    // Apply timezone-aware parsing for naive ISO datetimes.
-    // Use the provided timezone, or fall back to the existing event's timezone.
-    const effectiveTimezone = data.timezone ?? event.timezone ?? 'UTC';
-    const adjustedStartAt = (data.startAt && typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
-      ? parseNaiveDatetimeInTimezone(body.startAt, effectiveTimezone)
+    // Apply timezone-aware parsing for naive ISO datetimes: the provided
+    // timezone, else the event's own stored timezone, else the caller's profile
+    // (resolveTimezone), else UTC.
+    //
+    // The stored column is NOT NULL, so the profile tier is a guard rather than
+    // a routine path — it costs no query when the event has a zone, and it keeps
+    // the fallback chain identical to create's (#2404) instead of stopping one
+    // tier short.
+    const effectiveTimezone = await resolveTimezone(
+      data.timezone?.trim() || event.timezone,
+      userId,
+    );
+    const adjustedStartAt = (data.startAt && typeof body.startAt === 'string')
+      ? parseDatetimeInTimezone(body.startAt, effectiveTimezone)
       : data.startAt;
-    const adjustedEndAt = (data.endAt && typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
-      ? parseNaiveDatetimeInTimezone(body.endAt, effectiveTimezone)
+    const adjustedEndAt = (data.endAt && typeof body.endAt === 'string')
+      ? parseDatetimeInTimezone(body.endAt, effectiveTimezone)
       : data.endAt;
 
     // Validate dates if both are provided
@@ -293,7 +303,12 @@ export async function PATCH(
           startAt: adjustedStartAt,
           endAt: adjustedEndAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          // Persist the CANONICAL zone the request resolved to, not the raw
+          // field. `" America/Chicago "` resolves and validates trimmed, and
+          // `" "` resolves to the event's existing zone — writing the raw string
+          // back would store a value nothing can schedule against. Absent stays
+          // undefined, which Drizzle reads as "no change".
+          timezone: data.timezone === undefined ? undefined : effectiveTimezone,
           recurrenceRule: data.recurrenceRule,
           visibility: data.visibility,
           color: data.color,
@@ -318,7 +333,7 @@ export async function PATCH(
           scheduledById: userId,
           calendarEventId: eventId,
           triggerAt: newStartAt,
-          timezone: data.timezone ?? event.timezone ?? 'UTC',
+          timezone: effectiveTimezone,
           agentTrigger: data.agentTrigger,
           recurrenceRule: effectiveRecurrenceRule,
           recurrenceExceptions: event.recurrenceExceptions ?? [],

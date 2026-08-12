@@ -124,6 +124,29 @@ export function parseNaiveDatetimeInTimezone(naiveDatetime: string, timezone: st
 }
 
 /**
+ * Turn a client-supplied ISO datetime string into an instant.
+ *
+ * Absolute values (carrying `Z` or an explicit offset) and date-only values
+ * already identify an instant and pass straight through `new Date`. Only a
+ * *naive* wall-clock datetime — the one form that means nothing without a zone
+ * — is read in `timezone`.
+ *
+ * This is the single definition of what a naive datetime means for every write
+ * that stores an instant (#2404). The alternative, a bare `new Date(value)`,
+ * reads it in the *server process's* local zone: UTC in deployment but the
+ * developer's zone under `next dev`, so the same request produces different
+ * instants in different environments and neither is the caller's intent.
+ *
+ * Callers resolve `timezone` first — `resolveTimezone` on a request path, the
+ * execution context's timezone on an AI tool path.
+ */
+export function parseDatetimeInTimezone(value: string, timezone: string): Date {
+  return isNaiveISODatetime(value)
+    ? parseNaiveDatetimeInTimezone(value, timezone)
+    : new Date(value);
+}
+
+/**
  * Get user's time-of-day based on their timezone
  * @param timezone - IANA timezone string (e.g., "America/New_York")
  * @param now - Instant (epoch ms) to evaluate; defaults to the current clock.

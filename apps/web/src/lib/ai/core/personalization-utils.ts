@@ -176,3 +176,32 @@ export async function getUserTimezone(
     return undefined;
   }
 }
+
+/**
+ * Resolve the timezone a request should be interpreted in: explicit value
+ * wins, else the caller's profile timezone, else UTC.
+ *
+ * This three-tier order is the API-wide convention for every route that turns
+ * a *naive* wall-clock datetime into an instant (tasks, task triggers,
+ * calendar events) — a task due "tomorrow at 7pm" and an event "tomorrow at
+ * 7pm" must land at the same instant for the same caller. Keep the resolution
+ * here rather than re-deriving it per route: an omitted `timezone` silently
+ * offsetting a stored instant is invisible at the call site, so each
+ * independent copy is a coin flip (#2404).
+ *
+ * A blank or whitespace-only explicit value counts as absent. Routes must
+ * therefore leave `timezone` OPTIONAL in their schema — a Zod
+ * `.default('UTC')` makes "absent" indistinguishable from "explicitly UTC"
+ * before this function ever sees it.
+ *
+ * The profile lookup only runs when there is no explicit value, so callers
+ * that always send one pay no query.
+ */
+export async function resolveTimezone(
+  explicit: string | null | undefined,
+  userId: string
+): Promise<string> {
+  const trimmed = explicit?.trim();
+  if (trimmed) return trimmed;
+  return (await getUserTimezone(userId)) || 'UTC';
+}
