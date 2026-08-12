@@ -20,7 +20,6 @@ import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools'
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
-import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
@@ -64,8 +63,7 @@ import {
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
@@ -111,6 +109,7 @@ import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
 import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
+  buildAgentSystemPrompt,
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
@@ -825,16 +824,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       });
     }
 
-    // Build system prompt. Note: "current page/drive" is turn-volatile — it's
-    // built separately as `locationPrompt` below and injected via
-    // buildVolatileTurnContext, NOT baked in here, so this string stays
-    // byte-identical across turns regardless of where the user navigates.
-    const baseSystemPrompt = buildSystemPrompt(
-      readOnlyMode,
-      personalization ?? undefined,
-      isCodeExecutionEnabled()
-    );
-
+    // The system prompt itself is assembled once, below, by
+    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+    // that "current page/drive" is turn-volatile: it is built separately as
+    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+    // into the system prompt, so that string stays byte-identical across turns
+    // regardless of where the user navigates.
     const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
     // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
     // ceiling is always empty here. Passed explicitly anyway so this stays correct
@@ -874,48 +869,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       }
     }
 
-    // Add global assistant specific instructions (including tool discovery — only this route has tool_search).
-    // Stable order: base → TOOL_DISCOVERY → global instructions → drivePrompt → agentAwareness → pageTree → nonCoreToolNames.
-    // Volatile sections (timestamp/location/mention/command) are NOT concatenated here; they are
-    // appended to the last user message at assembly time so the system prefix stays
-    // byte-identical across turns and provider prefix caches are not invalidated —
-    // including turns where only the user's current page/drive changed.
+    // The Global Assistant's own guidance — the exploration rules and the
+    // conversation-type report — now lives beside the page surface's assembly in
+    // `buildAgentSystemPrompt`, so the two can be read against each other.
     // Workspace knowledge (page types, tasks, agents, automation, search,
-    // mentions) comes from the SHARED inline-instructions sections appended
-    // at finalSystemPrompt assembly below — this route previously carried a
-    // bespoke copy that drifted (it claimed tasks create linked DOCUMENT
-    // pages; they create TASK_LIST children). Only genuinely
-    // global-assistant-specific guidance remains inline here.
-    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
-
-You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-SMART EXPLORATION RULES:
-1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
-   - ALWAYS use list_pages on the current drive when:
-     • User asks about the drive, its contents, or what's available
-     • User wants to create, write, or modify ANYTHING
-     • User mentions something that MAY exist in the drive
-     • User asks general questions about content or organization
-     • You need to understand the workspace structure
-   - Start with list_pages on the current drive BEFORE other actions
-2. Context-first approach:
-   - Default scope: current drive/location (see LOCATION context) is your primary workspace
-   - Only explore OTHER drives when explicitly mentioned
-   - When user says "here" or "this", they mean current context
-   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation — never fall back to the Home drive as a guess
-3. Efficient exploration pattern:
-   - FIRST: list_pages on the current drive — omit driveId and it uses the drive in your LOCATION context
-   - THEN: read specific pages as needed
-   - ONLY IF NEEDED: explore other drives/workspaces
-4. Proactive assistance:
-   - Don't ask "what's in your drive" - use list_pages to discover
-   - Suggest creating AI_CHAT and CHANNEL pages for organization
-   - Be autonomous within current context
-
-CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}` +
-      (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
-      drivePromptSection;
+    // mentions) comes from the SHARED inline-instructions sections: this route
+    // previously carried a bespoke copy that drifted (it claimed tasks create
+    // linked DOCUMENT pages; they create TASK_LIST children), which is the
+    // reason there is one assembly now rather than three.
 
     // The PAYER's sandbox eligibility for this Global Assistant turn —
     // derived from the conversation's BOUND SESSION, never the location
@@ -1022,13 +983,21 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     const activePlanPrompt = buildActivePlanPrompt(await getActivePlan(conversationId, userId));
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
-    const finalSystemPrompt = systemPrompt
-      + '\n' + buildGlobalAssistantInstructions(availableToolNames)
-      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
-      + pageTreePrompt
-      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
-      + skillCatalogPrompt
-      + activePlanPrompt;
+    const finalSystemPrompt = buildAgentSystemPrompt({
+      surface: 'global',
+      readOnly: readOnlyMode,
+      personalization,
+      allowedToolNames: availableToolNames,
+      skillCatalog: skillCatalogPrompt,
+      activePlan: activePlanPrompt,
+      pageTree: pageTreePrompt,
+      conversationType: conversation.type,
+      conversationContextId: conversation.contextId,
+      includeAskUser: canUseAskUser({ role: auth.role }),
+      drivePromptSection,
+      agentAwareness: agentAwarenessPrompt,
+      nonCoreToolNames: nonCoreToolNamesPrompt,
+    });
 
     let finalTools: ToolSet = {
       ...coreTools,

@@ -26,6 +26,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **The assistant on the call is the one you picked, with the instructions and the tools its owner
   gave it** — an agent you built to answer a particular way answers that way out loud too, and one
   whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **You can now delegate out loud, not just talk** — the assistant on a call now knows how to
+  operate your workspace the same way it does when you type at it: how tasks, agents, automations
+  and search work, which skills it can load, and the tools it does not list up front. Ask it about
+  your calendar, to file a task, or to set something running, and it goes and does it instead of
+  saying it cannot. It also stops asking permission first: say what you want and it acts, then tells
+  you what it did. Work that would take minutes gets handed to an agent or a task rather than
+  leaving you listening to silence, and it will say where it went. "This page" and "here" mean what
+  you are looking at, so it never asks you to read out an id.
 - **A call you cannot have does not start** — running out of credit, or already having as many calls
   open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
   talking to something nobody was counting.

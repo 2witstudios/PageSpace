@@ -5,13 +5,10 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from './system-prompt';
+import { buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from './system-prompt';
 import { filterToolsForReadOnly, isWriteTool } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
-import {
-  buildInlineInstructions,
-  buildGlobalAssistantInstructions,
-} from './inline-instructions';
+import { buildBuiltinSkillCatalog } from './skill-catalog';
 import {
   extractToolSchemas,
   type ToolDefinitionForExtraction,
@@ -23,7 +20,7 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { pageSpaceTools } from './ai-tools';
 import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
-import { buildVolatileTurnContext } from './prompt-assembly';
+import { buildAgentSystemPrompt, buildVolatileTurnContext } from './prompt-assembly';
 import { buildLocationTurnPrompt } from './location-prompt';
 
 export interface LocationContext {
@@ -115,15 +112,6 @@ export function buildCompleteRequest(
     includeExampleMessage = true,
   } = config;
 
-  // Build the base system prompt. Location is turn-volatile — it's built
-  // separately below as `locationPrompt` and injected via
-  // buildVolatileTurnContext, mirroring production routes exactly.
-  const baseSystemPrompt = buildSystemPrompt(
-    isReadOnly,
-    undefined,
-    isCodeExecutionEnabled()
-  );
-
   const locationPrompt = buildLocationTurnPrompt(
     locationContext
       ? {
@@ -134,12 +122,6 @@ export function buildCompleteRequest(
       : undefined
   );
 
-  // Build inline instructions based on context type
-  const inlineInstructions =
-    contextType === 'page' && locationContext?.currentPage
-      ? buildInlineInstructions()
-      : buildGlobalAssistantInstructions();
-
   // Apply read-only filtering (same logic as real Global Assistant)
   const allFilteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
 
@@ -148,18 +130,57 @@ export function buildCompleteRequest(
     Object.entries(allFilteredTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
   );
   const nonCoreToolNames = Object.keys(allFilteredTools).filter(n => !CORE_TOOL_NAMES.has(n));
-
-  // Append non-core tool names to system prompt (matches real Global Assistant behavior)
   const nonCoreNamesSection = buildNonCoreToolNamesPrompt(nonCoreToolNames);
 
-  // Stable system prompt: base → TOOL_DISCOVERY → global instructions → nonCoreToolNames.
-  // Volatile sections (timestamp/mention/command) are omitted here — they are
-  // appended to the last user message at assembly time in production routes.
+  // Captured BEFORE the exposure split, like the production routes: the
+  // capability sections are gated on these names, and the post-split set holds
+  // only core tools plus the scaffolding.
+  const allowedToolNames = Object.keys(allFilteredTools);
+
+  // THE WHOLE POINT OF THIS VIEWER IS THAT IT SHOWS THE REAL THING, so it calls
+  // the same assembly the routes call rather than describing it a second time.
+  // The hand-rolled version this replaces had already drifted: it omitted the
+  // Global Assistant's exploration guidance entirely, applied the capability
+  // sections with no tool gating at all, and put them in an order no route
+  // used — while the page it renders is titled "the exact context window".
+  //
+  // Blocks this viewer genuinely cannot know are empty, and are empty for a
+  // stated reason rather than by omission: it previews a surface with no
+  // conversation (so no plan pointer and no agent memory), no bound agent (so
+  // no custom prompt), and no drive membership loaded.
   const systemPrompt =
-    baseSystemPrompt +
-    '\n\n' + TOOL_DISCOVERY_PROMPT +
-    inlineInstructions +
-    (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : '');
+    contextType === 'page' && locationContext?.currentPage
+      ? buildAgentSystemPrompt({
+          surface: 'page',
+          readOnly: isReadOnly,
+          codeExecutionEnabled: isCodeExecutionEnabled(),
+          allowedToolNames,
+          skillCatalog: buildBuiltinSkillCatalog(allowedToolNames),
+          activePlan: '',
+          pageTree: '',
+          drivePromptPrefix: '',
+          memberDriveContextPrefix: '',
+          agentMemory: '',
+          toolDiscovery:
+            '\n\n' + TOOL_DISCOVERY_PROMPT +
+            (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : ''),
+        })
+      : buildAgentSystemPrompt({
+          surface: 'global',
+          readOnly: isReadOnly,
+          codeExecutionEnabled: isCodeExecutionEnabled(),
+          allowedToolNames,
+          skillCatalog: buildBuiltinSkillCatalog(allowedToolNames),
+          activePlan: '',
+          pageTree: '',
+          conversationType: 'global',
+          conversationContextId: null,
+          // The viewer has no authenticated principal to ask.
+          includeAskUser: false,
+          drivePromptSection: '',
+          agentAwareness: '',
+          nonCoreToolNames: nonCoreNamesSection,
+        });
 
   // Build core tool schemas
   const coreToolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
