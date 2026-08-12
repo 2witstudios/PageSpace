@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
 
+/** Shared by both bound schemas so they cannot drift on what "naive" means. */
+const pinNaiveToUtc = (value: unknown) =>
+  typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value;
+
 /**
  * A query-parameter date bound: an ABSOLUTE instant.
  *
@@ -20,9 +24,6 @@ import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
  * Values that already carry `Z` or an offset are untouched, as are date-only
  * values (`"2026-02-19"`), which ISO 8601 already defines as UTC.
  */
-const pinNaiveToUtc = (value: unknown) =>
-  typeof value === 'string' && isNaiveISODatetime(value) ? `${value.trim()}Z` : value;
-
 export const absoluteInstant = z.preprocess(pinNaiveToUtc, z.coerce.date());
 
 /** {@link absoluteInstant} for filters where the bound may be omitted. */
