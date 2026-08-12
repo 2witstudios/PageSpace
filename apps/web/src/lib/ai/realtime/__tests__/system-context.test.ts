@@ -371,6 +371,41 @@ describe('buildVoiceSystemContext — what it costs the session', () => {
       CEILING_CHARS,
     );
   });
+
+  it('should stay inside it in the WORST case, not just the empty one', async () => {
+    // The ceiling above is measured with nothing loaded, which is the case
+    // least likely to breach it. This is the real shape of a heavy call: a
+    // bound agent carrying a memory page at its own ~2k-token cap
+    // (`agent-memory.ts`), a plan pointer, and personalization the user wrote.
+    //
+    // The budget it has to fit inside: a 32k session, ~4k of which the seed
+    // reserves (`seed.ts`), and the rest shared with the audio for the whole
+    // length of the call.
+    const memory = 'Remembered: '.repeat(700); // ~8.4k chars, past the cap's own limit
+    const { deps: d } = deps({
+      buildTools: () => buildPageSpaceTools(),
+      loadAgentMemory: async () => memory,
+      loadActivePlan: async () =>
+        '\n\nACTIVE PLAN:\nThis conversation is working against the plan page "Q3 Migration".',
+      loadPersonalization: async () => ({
+        enabled: true,
+        bio: 'Runs release engineering.',
+        writingStyle: 'Terse, no hedging.',
+        rules: 'Never guess at version numbers.',
+      }),
+    });
+
+    const prompt = await promptOf(d, {
+      userId: 'u1',
+      conversationId: 'conv1',
+      agent: agent(),
+    });
+
+    expect(prompt).toContain('Remembered:');
+    expect(prompt.length, `worst-case prompt is ${prompt.length} characters`).toBeLessThan(
+      CEILING_CHARS + memory.length,
+    );
+  });
 });
 
 describe('buildVoiceSystemContext — no block is worth the call', () => {
