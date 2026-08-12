@@ -69,10 +69,19 @@ export type VoiceInstructionsInput = {
   readonly tools?: VoiceToolReach;
 };
 
-/** Where long work goes, each paired with the tool that has to be reachable to offer it. */
-const HAND_OFFS: readonly (readonly [string, string])[] = [
-  ['spawn_session', 'spawn_session for work an agent should carry out'],
-  ['create_task', 'create_task for work a person should'],
+/**
+ * Where long work goes, each paired with the tools that have to be reachable
+ * before it can be offered. Any one of them is enough — the phrase describes a
+ * destination, and a caller who can set a trigger but not a workflow can still
+ * be told work can happen later.
+ */
+const HAND_OFFS: readonly (readonly [readonly string[], string])[] = [
+  [['spawn_session'], 'spawn_session for work an agent should carry out'],
+  [['create_task'], 'create_task for work a person should'],
+  [
+    ['set_task_trigger', 'create_workflow'],
+    'a trigger or a workflow for work that should happen later',
+  ],
 ];
 
 /**
@@ -100,9 +109,9 @@ const voiceOverride = (title: string | undefined, tools: VoiceToolReach): string
   // Same rule for the hand-off targets: an agent whose owner granted neither
   // spawn_session nor create_task cannot delegate at all, and telling it to
   // would spend a turn on a call `execute_tool` rejects.
-  const handOffs = HAND_OFFS.filter(([name]) => tools.reachable.includes(name)).map(
-    ([, phrase]) => phrase,
-  );
+  const handOffs = HAND_OFFS.filter(([names]) =>
+    names.some((name) => tools.reachable.includes(name)),
+  ).map(([, phrase]) => phrase);
 
   const delegating =
     handOffs.length === 0

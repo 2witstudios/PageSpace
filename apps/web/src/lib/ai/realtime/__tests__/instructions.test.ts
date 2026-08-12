@@ -111,13 +111,27 @@ describe('buildVoiceInstructions', () => {
     expect(instructions).toContain('create_task');
   });
 
-  it('given only one hand-off tool, should name that one and not the other', () => {
+  it('given only one hand-off tool, should name that one and not the others', () => {
     const instructions = build({
       tools: { exposed: ['read_page', 'tool_search'], reachable: ['read_page', 'create_task'] },
     });
 
     expect(instructions).toContain('create_task');
     expect(instructions).not.toContain('spawn_session');
+    expect(instructions).not.toContain('a trigger or a workflow');
+  });
+
+  it('should offer deferred work when EITHER a trigger or a workflow is reachable', () => {
+    // One phrase covers two tools because it names a destination, not a call.
+    // An agent that can set a trigger but not build a workflow can still be told
+    // that work may happen later.
+    for (const name of ['set_task_trigger', 'create_workflow']) {
+      const instructions = build({
+        tools: { exposed: ['read_page', 'tool_search'], reachable: ['read_page', name] },
+      });
+
+      expect(instructions, name).toContain('a trigger or a workflow for work that should happen later');
+    }
   });
 
   it('given NO way to hand work off, should say to work through it instead of naming absent tools', () => {
