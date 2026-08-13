@@ -87,8 +87,6 @@ const mockConversation = (overrides: Partial<{
   createdAt: Date;
   updatedAt: Date;
   isActive: boolean;
-  workspaceId: string | null;
-  closedInWorkspaceAt: Date | null;
 }> = {}) => ({
   id: overrides.id ?? mockConversationId,
   userId: overrides.userId ?? mockUserId,
@@ -99,8 +97,6 @@ const mockConversation = (overrides: Partial<{
   createdAt: overrides.createdAt ?? new Date(),
   updatedAt: overrides.updatedAt ?? new Date(),
   isActive: overrides.isActive ?? true,
-  workspaceId: overrides.workspaceId ?? null,
-  closedInWorkspaceAt: overrides.closedInWorkspaceAt ?? null,
 });
 
 const createContext = (id: string) => ({

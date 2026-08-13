@@ -116,7 +116,7 @@ const mockAgent = () => ({
 });
 
 const mockConversationRow = (
-  overrides: Partial<{ userId: string; isShared: boolean; workspaceId: string | null; closedInWorkspaceAt: Date | null; isActive: boolean }> = {},
+  overrides: Partial<{ userId: string; isShared: boolean; isActive: boolean }> = {},
 ) => ({
   id: mockConversationId,
   userId: mockUserId,
@@ -125,8 +125,7 @@ const mockConversationRow = (
   title: null,
   isActive: true,
   isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
   lastMessageAt: null,
   createdAt: new Date('2025-01-01'),

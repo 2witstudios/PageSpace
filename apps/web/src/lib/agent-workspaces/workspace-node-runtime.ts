@@ -64,7 +64,6 @@ import {
 } from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
 import { removedChatTargets } from '@pagespace/lib/agent-workspaces/workspace-node-membership-diff';
 import {
-  awaitsBackfill,
   readChatTargetHolders,
   readConversationDirectoryRows,
   readDeletedChatTargets,
@@ -203,20 +202,12 @@ function announceClosedConversations(rows: readonly ConversationDirectoryRow[]):
  * on its way up. `bound_elsewhere` is the one code no layer can produce: it
  * comes from the table's global chat-target index, and only the database is in
  * a position to know.
- *
- * `awaiting_backfill` is the other code no layer below can produce, and it is
- * TEMPORARY BY CONSTRUCTION: it exists only while the old membership columns
- * are still in the schema, which is only until the follow-up migration drops
- * them. It refuses the first write to a workspace whose membership the backfill
- * has not moved yet — see `awaitsBackfill`, and the seed path in
- * `commitUnderLock` for why writing to such a workspace is unrecoverable.
  */
 export type NodeWriteRefusal =
   | MembershipCode
   | 'foreign_scope'
   | 'forbidden_target'
   | 'bound_elsewhere'
-  | 'awaiting_backfill'
   /** The write would show a conversation whose history has been deleted — see the liveness backstop in {@link commitUnderLock}. */
   | 'target_deleted'
   /** An end lost its race with an admission that reopened the session — see {@link destroyWorkspaceTree}'s `requireEnded`. */
@@ -398,40 +389,6 @@ async function commitUnderLock(input: {
     // ahead of the caller's nodes, so a pane parented to it is never
     // `dangling_parent`. Its id is derived from the workspace, so two clients
     // racing to seed produce the identical write and converge on the upsert.
-    /*
-     * THE UN-BACKFILLED REFUSAL, and it sits here because here is the only
-     * place the damage can happen.
-     *
-     * This release ships `0255` (the node tables) but NOT the drop of the old
-     * membership columns — those stage separately, after the backfill runs, and
-     * the reason is in the migration's own thread. In the window between the two
-     * a database can hold real membership that only the old model records.
-     *
-     * Reading such a workspace shows it empty, which is recoverable: the
-     * backfill fills it in. WRITING to it is not. The backfill skips any
-     * workspace that has already been through the node model — it reads the
-     * same `agent_workspace_node_revs` marker `awaitsBackfill` does, and this
-     * write would mint one — so the root this line is about to seed would strand
-     * that workspace's real membership permanently, and it would be counted
-     * `alreadyMigrated`, so the census gating the rollout would call the run
-     * clean. Silent, irreversible, and invisible to its own gate.
-     *
-     * So the seed refuses, loudly, instead. Only on the seed path: a workspace
-     * that already has a tree is either backfilled or was always node-native,
-     * and neither can be stranded by a further write.
-     */
-    if (seedIfMissing && rootOf(before.nodes) === undefined) {
-      if (await awaitsBackfill(tx, workspaceId)) {
-        return {
-          kind: 'refused' as const,
-          code: 'awaiting_backfill' as const,
-          detail:
-            'this workspace still holds membership that only the previous model records; ' +
-            'run scripts/backfill-agent-workspace-nodes.ts before writing to it',
-        };
-      }
-    }
-
     const { nodes: seatedNodes, seed } = seedIfMissing
       ? seedRoot(before.nodes, workspaceId)
       : { nodes: before.nodes, seed: null };

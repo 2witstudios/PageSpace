@@ -52,7 +52,8 @@
         "postcss",
         "tailwindcss",
         "tw-animate-css",
-        "@radix-ui/react-navigation-menu"
+        "@radix-ui/react-navigation-menu",
+        "@radix-ui/react-slider"
       ]
     },
     "apps/admin": {

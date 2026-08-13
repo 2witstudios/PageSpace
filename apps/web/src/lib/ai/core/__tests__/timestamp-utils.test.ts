@@ -9,6 +9,7 @@ import {
   isNaiveISODatetime,
   normalizeTimezone,
   parseNaiveDatetimeInTimezone,
+  parseDatetimeInTimezone,
   parseDateTime,
 } from '../timestamp-utils';
 import { OPENROUTER_CACHE_TTL_SECONDS, TIMESTAMP_BUCKET_MS } from '../ai-providers-config';
@@ -479,6 +480,58 @@ describe('timestamp-utils', () => {
       const result = parseDateTime('tomorrow at 9am', ref, 'UTC');
       expect(result.getUTCDate()).toBe(11);
       expect(result.getUTCHours()).toBe(9);
+    });
+  });
+
+  /**
+   * The single definition of what a client-supplied datetime means. Every write
+   * that stores an instant (calendar events, task due dates, triggers) goes
+   * through here, so the three input shapes must not drift apart (#2404).
+   */
+  describe('parseDatetimeInTimezone', () => {
+    it('reads a naive wall-clock datetime in the given zone', () => {
+      assert({
+        given: 'a naive "7pm" and America/Chicago',
+        should: 'return 7pm Central as an instant, not 7pm UTC',
+        actual: parseDatetimeInTimezone('2026-02-19T19:00:00', 'America/Chicago'),
+        expected: new Date('2026-02-20T01:00:00Z'),
+      });
+    });
+
+    it('leaves a Z-suffixed datetime alone', () => {
+      assert({
+        given: 'a datetime that already states UTC',
+        should: 'ignore the timezone argument entirely',
+        actual: parseDatetimeInTimezone('2026-02-19T19:00:00Z', 'America/Chicago'),
+        expected: new Date('2026-02-19T19:00:00Z'),
+      });
+    });
+
+    it('leaves an offset-bearing datetime alone', () => {
+      assert({
+        given: 'a datetime carrying its own +09:00 offset',
+        should: 'honour the stated offset over the caller zone',
+        actual: parseDatetimeInTimezone('2026-02-19T19:00:00+09:00', 'America/Chicago'),
+        expected: new Date('2026-02-19T10:00:00Z'),
+      });
+    });
+
+    it('leaves a date-only value as UTC midnight', () => {
+      assert({
+        given: 'a date with no time at all',
+        should: 'keep the ISO 8601 meaning (UTC midnight) rather than shifting it into the zone',
+        actual: parseDatetimeInTimezone('2026-02-19', 'America/Chicago'),
+        expected: new Date('2026-02-19T00:00:00Z'),
+      });
+    });
+
+    it('holds across a DST boundary', () => {
+      assert({
+        given: 'a naive time on the far side of a spring-forward transition',
+        should: 'use the offset in effect at the target instant (CDT, -05:00)',
+        actual: parseDatetimeInTimezone('2026-07-04T19:00:00', 'America/Chicago'),
+        expected: new Date('2026-07-05T00:00:00Z'),
+      });
     });
   });
 });

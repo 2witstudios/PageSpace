@@ -76,6 +76,13 @@ export async function spawnShell(input: {
   workspaceId: string;
   ownerId: string;
   name?: string;
+  /**
+   * The pane a human picked into — see `AdmitConversationInput.activeNodeId`.
+   * A terminal admits exactly the way a conversation does, so it places blind
+   * without one: with two empty panes the policy falls to the first that
+   * qualifies, and the shell opens somewhere the user did not point at.
+   */
+  activeNodeId?: string;
 }): Promise<SpawnSessionShellResult> {
   // The shell's id is minted HERE rather than by the column's default, because
   // the node that binds it is decided against the tree BEFORE the row exists —
@@ -93,6 +100,7 @@ export async function spawnShell(input: {
           target: { kind: 'terminal', id: shellId },
           newNodeId: createId(),
           newSplitId: createId(),
+          ...(input.activeNodeId === undefined ? {} : { activeNodeId: input.activeNodeId }),
         }),
       within: async (tx) => {
         const store = await createDbSessionShellStore(tx);

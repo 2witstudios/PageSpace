@@ -132,8 +132,7 @@ const existingConversation = {
   createdAt: new Date('2024-01-15T10:00:00.000Z'),
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
   lastMessageAt: null,
 };
@@ -389,6 +388,7 @@ describe('GET /api/v1/conversations/[id]', () => {
         editedAt: null,
         toolCalls: null,
         toolResults: null,
+        source: null,
         status: 'complete' as const,
       },
     ]);

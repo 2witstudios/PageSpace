@@ -144,7 +144,21 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  const spawned = await spawnShell({ workspaceId, ownerId: auth.userId, name: rawName });
+  // WHERE the caller wants it, when a human picked a pane. A preference only —
+  // the placement policy still refuses a pane it may not give up, and an id
+  // naming nothing in this tree loses to the default. Not validated beyond its
+  // type for that reason: it cannot address anything outside the workspace this
+  // write has already gated on above.
+  const rawActiveNodeId =
+    body !== null && typeof body === 'object' ? (body as { activeNodeId?: unknown }).activeNodeId : undefined;
+  const activeNodeId = typeof rawActiveNodeId === 'string' && rawActiveNodeId.length > 0 ? rawActiveNodeId : null;
+
+  const spawned = await spawnShell({
+    workspaceId,
+    ownerId: auth.userId,
+    name: rawName,
+    ...(activeNodeId === null ? {} : { activeNodeId }),
+  });
   if (!spawned.ok) {
     return NextResponse.json(
       {

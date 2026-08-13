@@ -45,6 +45,18 @@ export type UnifiedLegOutcome =
   /** The statement matched no row (a scoped upsert's conflict gate declined, or a CAS lost). */
   | 'no_match';
 
+/**
+ * The page upsert's outcome, plus the `source` the row ACTUALLY holds.
+ *
+ * Richer than `UnifiedLegOutcome` because this is the one write whose stored
+ * value can differ from what the caller passed: `source` is insert-only, so a
+ * second write to the same id keeps the original. The caller broadcasts what
+ * comes back here rather than its own argument.
+ */
+export type UnifiedPageMessageWrite =
+  | { readonly outcome: 'written'; readonly source: string | null }
+  | { readonly outcome: 'no_match' };
+
 export interface UnifiedPageMessageRow {
   messageId: string;
   conversationId: string;
@@ -57,6 +69,13 @@ export interface UnifiedPageMessageRow {
   toolResultsJson: string | null;
   sourceAgentId: string | null;
   status: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * The transport that authored the row — `MESSAGE_SOURCE_VOICE` for a spoken
+   * turn, null/omitted for a typed one. Set on INSERT only, never in the
+   * conflict action below: a message's transport is a fact about how it was
+   * made, and a later terminal write to the same id does not change that.
+   */
+  source?: string | null;
   /** Omit to let the column default to now(). */
   createdAt?: Date;
 }
@@ -77,7 +96,7 @@ export interface UnifiedPageMessageRow {
 export async function upsertUnifiedPageMessage(
   tx: DbExecutor,
   row: UnifiedPageMessageRow,
-): Promise<UnifiedLegOutcome> {
+): Promise<UnifiedPageMessageWrite> {
   const written = await tx
     .insert(messages)
     .values({
@@ -92,6 +111,7 @@ export async function upsertUnifiedPageMessage(
       isActive: true,
       status: row.status,
       sourceAgentId: row.sourceAgentId,
+      source: row.source ?? null,
     })
     .onConflictDoUpdate({
       target: messages.id,
@@ -106,13 +126,19 @@ export async function upsertUnifiedPageMessage(
       },
       where: and(eq(messages.conversationId, row.conversationId), eq(messages.role, row.role)),
     })
-    .returning({ id: messages.id });
+    // `source` comes back because it is the one column the conflict set
+    // deliberately does NOT write: the stored value survives a later terminal
+    // write, so what the caller passed in is not what the row holds. The
+    // broadcast has to carry the row's value or an open surface is told
+    // something the database disagrees with.
+    .returning({ id: messages.id, source: messages.source });
 
   // Reported, not logged: the caller has the page id and the surrounding
   // context, and it is the caller that turns this into a thrown
   // `MessageConversationConflictError`. Logging here too would double every
   // collision in the ai logs.
-  return written.length === 0 ? 'no_match' : 'written';
+  if (written.length === 0) return { outcome: 'no_match' };
+  return { outcome: 'written', source: written[0].source ?? null };
 }
 
 /**

@@ -634,8 +634,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: calls getMessagesForPage with pageId and conversationId', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
     ];
     vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
@@ -669,8 +669,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: DB history messages are prepended before the new user message', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
     ];
     vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
@@ -842,11 +842,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'client',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-other' }));
     assert({
@@ -885,11 +880,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
-        // Dead membership columns, present until the follow-up migration drops
-        // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-        // membership now.
-        workspaceId: null,
-        closedInWorkspaceAt: null,
       });
     const fullHistory = [
       { role: 'user', id: 'msg-0', content: 'First', parts: [{ type: 'text', text: 'First' }] },
@@ -938,11 +928,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const fullHistory = [
       { role: 'user', id: 'h-1', content: 'Turn 1', parts: [{ type: 'text', text: 'Turn 1' }] },
@@ -983,11 +968,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({
       ...validBody,
@@ -1016,11 +996,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({
       ...validBody,
@@ -1053,11 +1028,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
-        // Dead membership columns, present until the follow-up migration drops
-        // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-        // membership now.
-        workspaceId: null,
-        closedInWorkspaceAt: null,
       });
     const response = await POST(makeRequest({
       ...validBody,
@@ -1387,11 +1357,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-private' }));
     await response.text();
@@ -1420,11 +1385,6 @@ describe('POST /api/v1/chat/completions', () => {
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
-      // Dead membership columns, present until the follow-up migration drops
-      // them. Nothing writes them; a node in `agent_workspace_nodes` is the
-      // membership now.
-      workspaceId: null,
-      closedInWorkspaceAt: null,
     });
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-shared' }));
     await response.text();

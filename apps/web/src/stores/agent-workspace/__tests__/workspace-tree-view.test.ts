@@ -7,6 +7,7 @@ import type { PaneNode, WorkspaceNode } from '@pagespace/lib/agent-workspaces/wo
 import type { WorkspaceTree } from '../useAgentWorkspaceStore';
 import {
   artifactRowsOf,
+  conversationDirectoryOf,
   conversationPlacement,
   gridPanesOf,
   indexTargets,
@@ -30,8 +31,34 @@ function shell(id: string, parentId: string, position: number, shellId: string):
   return { nodeType: 'pane', id, parentId, position, target: { kind: 'terminal', id: shellId } };
 }
 
-function makeTree(nodes: WorkspaceNode[], targets: WorkspaceTree['targets'] = []): WorkspaceTree {
-  return { workspaceId: WS, rev: 1, nodes, targets, activeNodeId: null, pendingPickerNodeId: null };
+function makeTree(
+  nodes: WorkspaceNode[],
+  targets: WorkspaceTree['targets'] = [],
+  // Defaults to a SERVER-READ tree: every derivation below other than
+  // `conversationDirectoryOf` is about what a resolved tree looks like, and
+  // only that one distinguishes a locally-seeded tree from a read one.
+  hasServerSnapshot = true,
+): WorkspaceTree {
+  return {
+    workspaceId: WS,
+    rev: 1,
+    nodes,
+    targets,
+    hasServerSnapshot,
+    activeNodeId: null,
+    pendingPickerNodeId: null,
+  };
+}
+
+function chatTarget(
+  conversationId: string,
+  { agentPageId = null, lastMessageAt = null, title = 'Thread' }: Partial<{
+    agentPageId: string | null;
+    lastMessageAt: string | null;
+    title: string;
+  }> = {},
+): WorkspaceTree['targets'][number] {
+  return { id: conversationId, kind: 'chat', title, lastMessageAt, agentPageId };
 }
 
 describe('gridPanesOf', () => {
@@ -194,5 +221,70 @@ describe('nodeShowing / isOnGrid', () => {
     expect(isOnGrid(nodes, 'open')).toBe(true);
     expect(isOnGrid(nodes, 'deep')).toBe(true);
     expect(isOnGrid(nodes, 'ghost')).toBe(false);
+  });
+});
+
+describe('conversationDirectoryOf', () => {
+  it('given a tree never read from the server, should answer NOT RESOLVED rather than empty', () => {
+    // `runCommand` seeds a root client-side at rev 0, so nodes can exist having
+    // never been read. Answering `[]` here would let a close act on a listing
+    // nobody has confirmed.
+    const seeded = makeTree([root, chat('p1', WS, 0, 'c1')], [chatTarget('c1')], false);
+    expect(conversationDirectoryOf(seeded)).toBeNull();
+  });
+
+  it('given no tree at all, should answer NOT RESOLVED', () => {
+    expect(conversationDirectoryOf(undefined)).toBeNull();
+  });
+
+  it('should take MEMBERSHIP from the nodes, so a member whose facts have not arrived is still a member', () => {
+    // The case a structural broadcast produces: another member placed a thread,
+    // the nodes carry it, the per-viewer targets do not yet.
+    const tree = makeTree([root, chat('p1', WS, 0, 'c1'), chat('p2', WS, 1, 'c2')], [chatTarget('c1')]);
+    const directory = conversationDirectoryOf(tree);
+    expect([...(directory?.memberConversationIds ?? [])]).toEqual(['c1', 'c2']);
+  });
+
+  it('should keep an unresolved member OUT of the agent-keyed list, never defaulting it to the Assistant', () => {
+    // `agentPageId: null` is the Global Assistant, a real agent — a placeholder
+    // would make a switch to the Assistant focus a thread of unknown agent. The
+    // one resolved member here carries a REAL agent, so any null in `resolved`
+    // could only have come from the unresolved one being padded in.
+    const tree = makeTree(
+      [root, chat('p1', WS, 0, 'c1'), chat('p2', WS, 1, 'c2')],
+      [chatTarget('c1', { agentPageId: 'agent-1' })],
+    );
+    const directory = conversationDirectoryOf(tree);
+    expect(directory?.resolved.map((member) => member.conversationId)).toEqual(['c1']);
+    expect(directory?.resolved.some((member) => member.agentPageId === null)).toBe(false);
+  });
+
+  it('should report unresolved facts exactly when a chat node has no target entry', () => {
+    const complete = makeTree([root, chat('p1', WS, 0, 'c1')], [chatTarget('c1')]);
+    expect(conversationDirectoryOf(complete)?.hasUnresolved).toBe(false);
+
+    const partial = makeTree([root, chat('p1', WS, 0, 'c1'), chat('p2', WS, 1, 'c2')], [chatTarget('c1')]);
+    expect(conversationDirectoryOf(partial)?.hasUnresolved).toBe(true);
+  });
+
+  it('should carry the agent and activity a resolved member was read with', () => {
+    const tree = makeTree(
+      [root, chat('p1', WS, 0, 'c1')],
+      [chatTarget('c1', { agentPageId: 'agent-7', lastMessageAt: '2026-08-10T00:00:00.000Z' })],
+    );
+    expect(conversationDirectoryOf(tree)?.resolved).toEqual([
+      { conversationId: 'c1', agentPageId: 'agent-7', lastMessageAt: '2026-08-10T00:00:00.000Z' },
+    ]);
+  });
+
+  it('should ignore terminals, pages and unbound panes — only chats are conversations', () => {
+    const tree = makeTree(
+      [root, shell('t', WS, 0, 'sh-1'), page('g', WS, 1, 'page-1'), { nodeType: 'pane', id: 'empty', parentId: WS, position: 2, target: null }],
+      [{ id: 'sh-1', kind: 'terminal', title: 'Shell', lastMessageAt: null, agentPageId: null }],
+    );
+    const directory = conversationDirectoryOf(tree);
+    expect(directory?.memberConversationIds.size).toBe(0);
+    expect(directory?.resolved).toEqual([]);
+    expect(directory?.hasUnresolved).toBe(false);
   });
 });

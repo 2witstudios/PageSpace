@@ -48,7 +48,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'conversations.id', userId: 'conversations.userId', isActive: 'conversations.isActive',
     type: 'conversations.type', title: 'conversations.title', contextId: 'conversations.contextId',
     lastMessageAt: 'conversations.lastMessageAt', createdAt: 'conversations.createdAt',
-    workspaceId: 'conversations.workspaceId', closedInWorkspaceAt: 'conversations.closedInWorkspaceAt',
   },
   messages: { conversationId: 'messages.conversationId', isActive: 'messages.isActive' },
 }));
@@ -60,7 +59,8 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import * as dbModule from '@pagespace/db/db';
-import { listAllConversationsPaginated, encodeCursor, decodeCursor } from '../workspace-conversations-runtime';
+import { listAllConversationsPaginated } from '../workspace-conversations-runtime';
+import { encodeCursor, decodeCursor } from '@/lib/conversations/conversation-recency';
 
 // The real `@pagespace/db/db` module only exports `db`, typed as
 // `NodePgDatabase<...>` (no `.limit()` of its own — only through a real query
@@ -112,6 +112,12 @@ describe('listAllConversationsPaginated', () => {
       sessionName: null,
       sessionEndedAt: null,
       driveId: 'drive-1',
+      // Server-only, and carried DELIBERATELY: the route paginates a second
+      // time after permission filtering and mints its cursor from this, so it
+      // has to survive the mapping. `toWireRow` is what strips it before the
+      // response. Asserted with `toEqual` so a field added here has to be
+      // stated rather than arriving unnoticed.
+      sortKeyValue: PAGE_ROW.sortKeyValue,
     });
   });
 

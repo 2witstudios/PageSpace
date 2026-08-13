@@ -57,6 +57,7 @@ vi.mock('@/lib/agent-workspaces/workspace-conversations-runtime', () => ({
 
 import { GET } from '../route';
 import { resolveNavigationTarget } from '@/components/agents/resolveNavigationTarget';
+import type { toWireRow } from '@/lib/agent-workspaces/past-conversation-dto';
 import type {
   PastConversationDTO,
   PastConversationServerRow,
@@ -85,7 +86,13 @@ type Assignable<_A extends _B, _B> = true;
  * missing field, the other way catches an extra one).
  */
 type WireDTOWithRawType = Flatten<Omit<PastConversationDTO, 'type'> & { type: string }>;
-type SerializedServerRow = Flatten<Serialized<PastConversationServerRow>>;
+// What actually goes out is `toWireRow`'s OUTPUT, not the raw server row: the
+// row carries a server-only `sortKeyValue` (the ordering key the route mints
+// its cursor from) that the strip removes. Tying the contract to the function's
+// return type rather than re-stating the omission here means a field added to
+// the row and forgotten in the strip is still a compile error — and that the
+// strip itself cannot silently start dropping something the client needs.
+type SerializedServerRow = Flatten<Serialized<ReturnType<typeof toWireRow>>>;
 
 type _ServerRowFitsTheWireDTO = Assignable<SerializedServerRow, WireDTOWithRawType>;
 type _WireDTOFitsTheServerRow = Assignable<WireDTOWithRawType, SerializedServerRow>;
@@ -109,6 +116,7 @@ const BOUND_PAGE_ROW: PastConversationServerRow = {
   sessionName: 'Worker',
   sessionEndedAt: null,
   driveId: 'drive-1',
+  sortKeyValue: '2026-07-28 00:00:00.000000',
 };
 
 const UNBOUND_GLOBAL_ROW: PastConversationServerRow = {
@@ -123,6 +131,7 @@ const UNBOUND_GLOBAL_ROW: PastConversationServerRow = {
   sessionName: null,
   sessionEndedAt: null,
   driveId: null,
+  sortKeyValue: '2026-07-26 00:00:00.000000',
 };
 
 async function fetchRows(): Promise<PastConversationDTO[]> {

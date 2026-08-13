@@ -126,6 +126,37 @@ describe('admit — the membership chokepoint', () => {
     expect(seedRoot([], 'ws-a').seed?.id).not.toBe(seedRoot([], 'ws-b').seed?.id);
   });
 
+  it('fills the pane the caller POINTED AT, not merely the first one that qualifies', () => {
+    // Two empty panes. Without a preference the policy takes `panes.find(...)`
+    // — the first in grid order — so a human who picked the SECOND pane would
+    // watch their agent appear in the first and their own pane stay empty.
+    const before = [root(), unbound('p1', 'root-1', 0), unbound('p2', 'root-1', 1)];
+
+    const next = applied(
+      before,
+      admit(before, { ...ids, target: { kind: 'chat', id: 'conv-a' }, activeNodeId: 'p2' }),
+    );
+
+    expect(memberNode(next, { kind: 'chat', id: 'conv-a' })?.id).toBe('p2');
+    // And the pane nobody pointed at is left alone.
+    expect(next.find((node) => node.id === 'p1')).toMatchObject({ target: null });
+  });
+
+  it('ignores a preference naming a pane it may not take, rather than refusing the admission', () => {
+    // `preferSplit` means only an UNBOUND pane may be filled. A preference
+    // pointing at a bound one is not an error — it just does not qualify, and
+    // the policy carries on to a pane that does.
+    const before = [root(), chatPane('p1', 'root-1', 0, 'conv-existing'), unbound('p2', 'root-1', 1)];
+
+    const next = applied(
+      before,
+      admit(before, { ...ids, target: { kind: 'chat', id: 'conv-a' }, activeNodeId: 'p1' }),
+    );
+
+    expect(memberNode(next, { kind: 'chat', id: 'conv-a' })?.id).toBe('p2');
+    expect(memberNode(next, { kind: 'chat', id: 'conv-existing' })?.id).toBe('p1');
+  });
+
   it('PLACES every admission — there is no parked half-membership to choose', () => {
     // The `attach` flag is gone. It chose between a placed node and a parked
     // one, which was a choice between membership and a membership nothing could

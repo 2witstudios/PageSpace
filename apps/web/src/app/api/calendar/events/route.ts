@@ -14,19 +14,23 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
-import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
-// Query parameters for listing events
+// Query parameters for listing events. The range bounds are absolute instants,
+// not wall-clock times — see `absoluteInstant`; an event's own start/end is the
+// opposite case and gets read in the event's timezone below.
 const listQuerySchema = z.object({
   context: z.enum(['user', 'drive']).default('user'),
   driveId: z.string().optional(),
-  startDate: z.coerce.date(),
-  endDate: z.coerce.date(),
+  startDate: absoluteInstant,
+  endDate: absoluteInstant,
   includePersonal: z.coerce.boolean().default(true),
 });
 
@@ -40,7 +44,11 @@ const createEventSchema = z.object({
   startAt: z.coerce.date(),
   endAt: z.coerce.date(),
   allDay: z.boolean().default(false),
-  timezone: z.string().default('UTC'),
+  // Deliberately optional, NOT `.default('UTC')`: the route resolves an absent
+  // timezone against the caller's profile (resolveTimezone), and a default here
+  // would erase the difference between "omitted" and "explicitly UTC" before the
+  // handler could tell them apart.
+  timezone: z.string().optional(),
   recurrenceRule: z.object({
     frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']),
     interval: z.number().int().min(1).default(1),
@@ -524,14 +532,19 @@ export async function POST(request: Request) {
 
     const data = parseResult.data;
 
-    // Apply timezone-aware parsing for naive ISO datetimes.
-    // When a client sends "2026-02-19T19:00:00" with timezone "America/Chicago",
-    // the time should be interpreted as 7pm Central, not 7pm UTC.
-    const startAt = (typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
-      ? parseNaiveDatetimeInTimezone(body.startAt, data.timezone)
+    // Explicit body value wins, else the caller's profile timezone, else UTC —
+    // the same resolution the task and trigger routes use, so "tomorrow at 7pm"
+    // means one instant across the API rather than one per endpoint.
+    const timezone = await resolveTimezone(data.timezone, userId);
+
+    // Read the datetimes in the resolved timezone: "2026-02-19T19:00:00" with
+    // "America/Chicago" is 7pm Central, not 7pm UTC. Absolute values are
+    // unaffected — the zod-coerced value already agrees with them.
+    const startAt = typeof body.startAt === 'string'
+      ? parseDatetimeInTimezone(body.startAt, timezone)
       : data.startAt;
-    const endAt = (typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
-      ? parseNaiveDatetimeInTimezone(body.endAt, data.timezone)
+    const endAt = typeof body.endAt === 'string'
+      ? parseDatetimeInTimezone(body.endAt, timezone)
       : data.endAt;
 
     // Check MCP create scope (scoped tokens can only create in their allowed drives).
@@ -638,7 +651,11 @@ export async function POST(request: Request) {
           startAt,
           endAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          // Store the RESOLVED zone, not the raw body field: the column is the
+          // event's own timezone from here on (PATCH and rendering read it back),
+          // so letting it fall to the schema default would re-introduce the bug
+          // on the next edit.
+          timezone,
           recurrenceRule: data.recurrenceRule ?? null,
           visibility: data.visibility,
           color: data.color,
@@ -674,7 +691,7 @@ export async function POST(request: Request) {
           scheduledById: userId,
           calendarEventId: created.id,
           triggerAt: startAt,
-          timezone: data.timezone,
+          timezone,
           agentTrigger: {
             agentPageId,
             prompt: data.agentTrigger.prompt,

@@ -88,10 +88,7 @@ import {
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
-import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
@@ -115,6 +112,7 @@ import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
 import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
+  buildAgentSystemPrompt,
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
@@ -1507,36 +1505,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       });
     }
 
-    // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
-    // Note: "current page/drive" is turn-volatile — it's built separately as
-    // `locationPrompt` below and injected via buildVolatileTurnContext, NOT
-    // baked in here, so this string stays byte-identical across turns.
-    let systemPrompt: string;
-    if (customSystemPrompt) {
-      // Use custom system prompt with page context injected
-      // Prepend drive prompt if enabled and available
-      systemPrompt = drivePromptPrefix + customSystemPrompt;
-      // Add user personalization if enabled
-      const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
-      if (personalizationPrompt) {
-        systemPrompt += `\n\n${personalizationPrompt}`;
-      }
-      // Add read-only constraint if applicable
-      if (readOnlyMode) {
-        systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
-      }
-    } else {
-      // Fallback to default PageSpace system prompt with read-only mode and personalization
-      systemPrompt = buildSystemPrompt(
-        readOnlyMode,
-        personalization ?? undefined,
-        isCodeExecutionEnabled()
-      );
-
-      // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).
-      systemPrompt += buildInlineInstructions(allowedToolNames);
-    }
-
+    // The system prompt itself is assembled once, below, by
+    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+    // that "current page/drive" is turn-volatile: it is built separately as
+    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+    // into the system prompt, so that string stays byte-identical across turns.
     const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
     const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
 
@@ -1547,30 +1520,26 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       homeDriveId: locationHomeDriveId,
     } : { homeDriveId: locationHomeDriveId });
 
-    // Cross-drive membership context applies uniformly regardless of whether
-    // a custom system prompt is set (unlike drivePromptPrefix above, which is
-    // only prepended in the customSystemPrompt branch).
-    systemPrompt = memberDriveContextPrefix + systemPrompt;
-
-    // Skill catalog applies uniformly too — including custom-systemPrompt
+    // Skill catalog applies uniformly — including to custom-systemPrompt
     // agents, which opt out of buildInlineInstructions and would otherwise
     // carry load_skill with no idea what is loadable. It is capability
     // metadata (like toolDiscoveryPrompt), not behavioral instruction, and
     // varies only with the agent's tool configuration — stable per
-    // conversation, so it belongs in this cache-stable prompt, never the
+    // conversation, so it belongs in the cache-stable prompt, never the
     // volatile block.
-    systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
+    const skillCatalogPrompt = buildBuiltinSkillCatalog(allowedToolNames);
 
     // Active plan pointer. Same volatility class as the skill catalog above and
     // as Agent Memory: it changes only when the agent calls set_plan/clear_plan,
     // never on navigation, so it is cache-stable per conversation. It has to be
-    // here rather than in the volatile block — the compaction summary is lossy,
-    // and this pointer is precisely what the agent needs after a summary.
+    // in the stable prompt rather than the volatile block — the compaction
+    // summary is lossy, and this pointer is precisely what the agent needs
+    // after a summary.
     // Scoped MCP/OAuth tokens reach this turn too, and a plan can be bound to a
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    systemPrompt += buildActivePlanPrompt(
+    const activePlanPrompt = buildActivePlanPrompt(
       await getActivePlan(conversationId, userId, (pageId) =>
         canPrincipalViewPage(authResult, pageId),
       ),
@@ -1607,6 +1576,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       const memoryContent = await getAgentMemoryContext(chatId, userId);
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
+
+    // One assembly, shared with the Global Assistant and with voice — see
+    // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
+    // skips the default persona and the workspace-knowledge block, but not the
+    // capability metadata.
+    const systemPrompt = buildAgentSystemPrompt({
+      surface: 'page',
+      readOnly: readOnlyMode,
+      personalization,
+      allowedToolNames,
+      skillCatalog: skillCatalogPrompt,
+      activePlan: activePlanPrompt,
+      pageTree: pageTreePrompt,
+      customSystemPrompt,
+      drivePromptPrefix,
+      memberDriveContextPrefix,
+      agentMemory: agentMemoryPrompt,
+      toolDiscovery: toolDiscoveryPrompt,
+    });
 
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
@@ -1664,7 +1652,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       pageId,
       model: resolvedModelName ?? currentModel,
       provider: resolvedProvider ?? currentProvider,
-      systemPrompt: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+      systemPrompt: systemPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
     });
@@ -1824,7 +1812,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               model,
               // Stable system prompt — no volatile sections; stays byte-identical
               // across turns so provider prefix caches survive per request.
-              system: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+              system: systemPrompt,
               messages: cachedMessages,
               tools: filteredTools,
               // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no

@@ -471,6 +471,73 @@ describe('POST /api/workflows', () => {
     expect(response.status).toBe(201);
   });
 
+  /**
+   * A cron schedule is wall-clock by nature, so an omitted timezone is the
+   * caller's zone, not UTC. The schema used to declare `.default('UTC')`, which
+   * both made "omitted" indistinguishable from "explicitly UTC" and ran
+   * "0 9 * * *" at 9am UTC — 3am for a US Central scheduler (#2404).
+   *
+   * The profile read is the SECOND db.select in the POST path; the first
+   * validates the agent page.
+   */
+  describe('timezone resolution', () => {
+    const bodyWithoutTimezone = {
+      driveId: mockDriveId,
+      name: 'Daily Report',
+      agentPageId: 'page_1',
+      prompt: 'Generate report',
+      cronExpression: '0 9 * * *',
+      isEnabled: true,
+    };
+
+    const postWorkflow = async (body: Record<string, unknown>, profileTimezone: string | null) => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+      vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+      mockWhere
+        .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }])
+        .mockResolvedValueOnce([{ timezone: profileTimezone }]);
+
+      const request = new Request('https://example.com/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const response = await POST(request);
+      expect(response.status).toBe(201);
+    };
+
+    it("schedules an omitted timezone in the caller's profile zone", async () => {
+      await postWorkflow(bodyWithoutTimezone, 'America/Chicago');
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'America/Chicago');
+    });
+
+    it('stores the resolved zone, so later edits and runs inherit it', async () => {
+      await postWorkflow(bodyWithoutTimezone, 'America/Chicago');
+
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'America/Chicago' }));
+    });
+
+    it('lets an explicit body timezone win over the profile', async () => {
+      await postWorkflow({ ...bodyWithoutTimezone, timezone: 'Asia/Tokyo' }, 'America/Chicago');
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'Asia/Tokyo');
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Asia/Tokyo' }));
+    });
+
+    it('falls back to UTC when the profile has no timezone', async () => {
+      await postWorkflow(bodyWithoutTimezone, null);
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'UTC');
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }));
+    });
+  });
+
   // The DB column and internal create_workflow tool both support
   // instructionPageId as an alternative to prompt (agentTriggerBaseSchema).
   // The route's .strict() schema previously rejected it outright and

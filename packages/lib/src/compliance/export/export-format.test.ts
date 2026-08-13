@@ -41,6 +41,7 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     displayPreferences: [],
     settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
     personalization: null,
+    personalizationCandidates: [],
     agentWorkspaces: [],
     streamState: [],
     ...overrides,

@@ -139,6 +139,17 @@ vi.mock('@/services/api/page-cross-drive-move-service', () => ({
   movePagesToDrive: vi.fn(),
 }));
 
+// Keep the REAL refusal strings — the tests assert the agent is told the actual
+// user-facing reason, so a reworded constant must not silently keep passing.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return {
+    ...actual,
+    isProtectedMemoryPage: vi.fn().mockResolvedValue(false),
+    findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()),
+  };
+});
+
 vi.mock('@/lib/canvas/publish-page', () => ({
   syncPublishedHomeRoot: vi.fn(),
 }));
@@ -169,6 +180,11 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
+import {
+  isProtectedMemoryPage,
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { broadcastPageEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -186,6 +202,8 @@ const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 const mockValidatePageMove = vi.mocked(validatePageMove);
 const mockMovePagesToDrive = vi.mocked(movePagesToDrive);
 const mockBroadcastPageEvent = vi.mocked(broadcastPageEvent);
+const mockIsProtectedMemoryPage = vi.mocked(isProtectedMemoryPage);
+const mockFindProtectedMemoryPages = vi.mocked(findProtectedMemoryPages);
 
 const ownerAccess = { isOwner: true, isAdmin: true, isMember: true, drive: null };
 const adminAccess = { isOwner: false, isAdmin: true, isMember: true, drive: null };
@@ -216,6 +234,9 @@ describe('page-write-tools', () => {
     vi.clearAllMocks();
     // Default: pages have no direct children unless a test says otherwise.
     mockPageRepo.getDirectChildren.mockResolvedValue([]);
+    // Default: nothing is a memory page unless a test says otherwise.
+    mockIsProtectedMemoryPage.mockResolvedValue(false);
+    mockFindProtectedMemoryPages.mockResolvedValue(new Set<string>());
   });
 
   describe('replace_lines', () => {
@@ -1008,6 +1029,80 @@ describe('page-write-tools', () => {
       );
     });
 
+    // This branch walks descendants itself rather than going through
+    // pageService.recursivelyTrash, so it needs its own guard. The check at the
+    // top of the helper only sees the page the agent named — an agent told to
+    // "clean up this folder" would otherwise take a memory page down with it.
+    it('skips a protected memory page inside the cascade but still trashes its siblings', async () => {
+      mockPageRepo.findById.mockImplementation(async (id: string) => ({
+        id,
+        title: id,
+        type: 'DOCUMENT' as const,
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      }));
+      mockCanUserDeletePage.mockResolvedValue(true);
+      mockPageRepo.getChildIds.mockResolvedValue(['child-1', 'memory-bio', 'child-2']);
+      mockFindProtectedMemoryPages.mockResolvedValue(new Set(['memory-bio']));
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', withChildren: true },
+        context
+      ) as { success: boolean; childrenCount?: number };
+
+      expect(result.success).toBe(true);
+
+      const trashedIds = mockApplyPageMutation.mock.calls
+        .map(([arg]) => arg as { pageId: string; operation: string })
+        .filter((arg) => arg.operation === 'trash')
+        .map((arg) => arg.pageId);
+
+      // The unrelated children still go; the memory page does not.
+      expect(trashedIds).toContain('child-1');
+      expect(trashedIds).toContain('child-2');
+      expect(trashedIds).not.toContain('memory-bio');
+
+      // The count reported back to the model must describe what was actually
+      // trashed, or the agent tells the user it deleted something it did not.
+      expect(result.childrenCount).toBe(2);
+    });
+
+    it('checks delete permission before revealing that a page is a memory page', async () => {
+      // Same ordering as pageService.trashPage: authorization first, so a
+      // caller who cannot delete the page is not told what it holds.
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'memory-bio', title: 'About You', type: 'DOCUMENT',
+        content: '', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(false);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_page.execute!({ id: 'memory-bio', withChildren: false }, context)
+      ).rejects.toThrow('Insufficient permissions to trash this page');
+
+      expect(mockIsProtectedMemoryPage).not.toHaveBeenCalled();
+    });
+
     it('re-homes live children to the grandparent when withChildren is false', async () => {
       mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
@@ -1423,6 +1518,56 @@ describe('page-write-tools', () => {
     // Regression coverage for #1772: move_page only required per-page edit
     // permission, unlike /api/pages/reorder which requires drive owner/admin
     // for the same move+position operation. The bars must agree.
+    // Moving is what makes the cascade hole reachable: relocate a memory page
+    // under an ordinary page and that page's delete takes it too.
+    //
+    // Only the SAME-DRIVE move is refused here. The cross-drive path enforces
+    // it inside movePagesToDrive, because that service is shared with
+    // /api/pages/bulk-move — guarding it at this call site would leave the REST
+    // route open. See page-cross-drive-move-service.test.ts.
+    it('refuses a same-drive move of a memory page', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'memory-bio' }));
+      mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'About You', pageId: 'memory-bio', position: 1 },
+          context
+        )
+      ).rejects.toThrow(MEMORY_PAGE_MOVE_ERROR);
+
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('checks move permission before revealing that a page is a memory page', async () => {
+      // Refusing first would tell a caller who cannot move the page at all that
+      // it holds the user's profile. pageService.updatePage checks permission
+      // first; this path must agree.
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'memory-bio' }));
+      mockCheckDriveAccess.mockResolvedValue(deniedAccess);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'About You', pageId: 'memory-bio', position: 1 },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins can move pages');
+
+      expect(mockIsProtectedMemoryPage).not.toHaveBeenCalled();
+    });
+
     it('denies a member with page-edit access but no drive owner/admin role', async () => {
       mockPageRepo.findById.mockResolvedValue({
         id: 'page-1', title: 'Test Page', type: 'DOCUMENT',

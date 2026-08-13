@@ -129,6 +129,25 @@ describe('POST /api/agent-workspaces/[workspaceId]/shells', () => {
     expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: 'build' });
   });
 
+  it('given the pane the user picked into, should forward it as a placement preference', async () => {
+    // A terminal ADMITS the way a conversation does, so without this the policy
+    // takes the first pane that qualifies and the shell opens in a pane the
+    // user did not click.
+    await post({ activeNodeId: 'node-7' });
+    expect(mockSpawnShell).toHaveBeenCalledWith({
+      workspaceId: SESSION_ID,
+      ownerId: 'user-1',
+      name: undefined,
+      activeNodeId: 'node-7',
+    });
+  });
+
+  it('given a non-string pane preference, should spawn without one rather than refuse', async () => {
+    // A preference, not an instruction: an unusable one is dropped, never a 400.
+    await post({ activeNodeId: 42 });
+    expect(mockSpawnShell).toHaveBeenCalledWith({ workspaceId: SESSION_ID, ownerId: 'user-1', name: undefined });
+  });
+
   it('given no body at all, should still spawn with an auto-label', async () => {
     const response = await post();
     expect(response.status).toBe(201);

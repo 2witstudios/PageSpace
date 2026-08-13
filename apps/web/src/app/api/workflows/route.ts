@@ -11,6 +11,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -33,7 +34,10 @@ const createWorkflowSchema = z.object({
   instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).default([]),
   cronExpression: z.string().min(1),
-  timezone: z.string().default('UTC'),
+  // Optional, NOT `.default('UTC')`: the route resolves an absent timezone
+  // against the caller's profile, and a default here would erase the difference
+  // between "omitted" and "explicitly UTC" before the handler sees it (#2404).
+  timezone: z.string().optional(),
   isEnabled: z.boolean().default(true),
 }).strict().refine(
   // Step-based workflows carry their behavior in `steps`; legacy bodies keep
@@ -195,8 +199,14 @@ export async function POST(request: Request) {
     }
   }
 
+  // Explicit body value wins, else the caller's profile timezone, else UTC —
+  // the same resolution the create_workflow tool applies from its execution
+  // context. A cron schedule is wall-clock by nature: "0 9 * * *" resolved to
+  // UTC instead of the scheduler's own zone runs the workflow at 3am for them.
+  const timezone = await resolveTimezone(data.timezone, userId);
+
   // Validate timezone
-  const tzValidation = validateTimezone(data.timezone);
+  const tzValidation = validateTimezone(timezone);
   if (!tzValidation.valid) {
     return NextResponse.json({ error: tzValidation.error }, { status: 400 });
   }
@@ -207,7 +217,7 @@ export async function POST(request: Request) {
   if (!cronValidation.valid) {
     return NextResponse.json({ error: `Invalid cron expression: ${cronValidation.error}` }, { status: 400 });
   }
-  nextRunAt = data.isEnabled ? getNextRunDate(data.cronExpression, data.timezone) : null;
+  nextRunAt = data.isEnabled ? getNextRunDate(data.cronExpression, timezone) : null;
 
   const [workflow] = await db.insert(workflows).values({
     driveId: data.driveId,
@@ -221,7 +231,9 @@ export async function POST(request: Request) {
     contextPageIds: data.contextPageIds,
     triggerType: MANAGEABLE_TRIGGER_TYPE,
     cronExpression: data.cronExpression,
-    timezone: data.timezone,
+    // Store the RESOLVED zone: it is the workflow's own timezone from here on
+    // (PATCH and every future run read it back).
+    timezone,
     isEnabled: data.isEnabled,
     eventTriggers: null,
     watchedFolderIds: null,

@@ -124,6 +124,23 @@ export interface WorkspaceTree {
    * simply has no entry, which is deliberately indistinguishable.
    */
   targets: WorkspaceNodeTarget[];
+  /**
+   * Whether this workspace has been READ FROM THE SERVER at least once
+   * (`sync.base !== null`) — the honest answer to "is this tree the truth, or
+   * just what this browser has done so far".
+   *
+   * It exists because presence in `workspaces` cannot answer that. `runCommand`
+   * SEEDS a root locally, at rev 0, for a workspace no read has touched (see its
+   * own doc: the first click composes into one write instead of waiting a round
+   * trip), so an entry here is not evidence of a server read. Any consumer whose
+   * decision would be WRONG against a merely-local tree — the conversation
+   * directory's readiness, and anything downstream of it — has to ask this
+   * rather than `workspaces[id] !== undefined`.
+   *
+   * Surfaced on the tree instead of leaving callers to read `sync`, which stays
+   * component-invisible by design (see {@link WorkspaceSync}).
+   */
+  hasServerSnapshot: boolean;
   /** `null` on an empty grid — a legal resting state, not a missing value. */
   activeNodeId: string | null;
   pendingPickerNodeId: string | null;
@@ -457,9 +474,16 @@ function commit(workspaceId: string, sync: WorkspaceSync, intent: FocusIntent): 
     // Referential stability is load-bearing, not an optimisation: the sidebar
     // seats every listed workspace on every revalidation, and a fresh object
     // here re-renders every tree in the app on each of those.
+    // The first server read can land at the SAME rev the local seed already
+    // holds (a workspace seeded at rev 0 and then read at rev 0), so this has to
+    // be compared like every other field — without it that read would keep the
+    // previous object and the tree would stay "never read" forever.
+    const hasServerSnapshot = settled.base !== null;
+
     const unchanged =
       previous !== undefined &&
       previous.rev === settled.rev &&
+      previous.hasServerSnapshot === hasServerSnapshot &&
       previous.activeNodeId === activeNodeId &&
       previous.pendingPickerNodeId === pendingPickerNodeId &&
       sameNodeList(previous.nodes, rebased.nodes) &&
@@ -472,6 +496,7 @@ function commit(workspaceId: string, sync: WorkspaceSync, intent: FocusIntent): 
           rev: settled.rev,
           nodes: rebased.nodes,
           targets: settled.targets,
+          hasServerSnapshot,
           activeNodeId,
           pendingPickerNodeId,
         };

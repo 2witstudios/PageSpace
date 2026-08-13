@@ -135,20 +135,3 @@ describe('reopenConversationInSessionWith', () => {
     });
   });
 });
-
-describe('the workspace is waiting for the backfill', () => {
-  /**
-   * Same guarantee as the claim path, and for the same reason: an unrecoverable
-   * refusal must not arrive as `not_in_session`, which is the answer this module
-   * gives for "there is no such thread here" and invites no action at all.
-   */
-  it('keeps its name instead of becoming not_in_session', async () => {
-    const deps = makeDeps({ readmitConversation: vi.fn(async () => 'awaiting_backfill' as const) });
-    expect(await reopenConversationInSessionWith(deps, input)).toBe('awaiting_backfill');
-  });
-
-  it('is NOT confused with the generic refusal beside it', async () => {
-    const deps = makeDeps({ readmitConversation: vi.fn(async () => 'refused' as const) });
-    expect(await reopenConversationInSessionWith(deps, input)).toBe('not_in_session');
-  });
-});

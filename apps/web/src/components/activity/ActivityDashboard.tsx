@@ -13,6 +13,7 @@ import { ActivityTimeline } from './ActivityTimeline';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
+import { dayRangeParams, parseDayParam, formatDayParam } from './utils';
 import type { RollbackContext } from './ActivityItem';
 import type { ActivityActionResult } from '@/types/activity-actions';
 
@@ -37,12 +38,10 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   // Filter state from URL params
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
   const [filters, setFilters] = useState<ActivityFilters>(() => ({
-    startDate: searchParams.get('startDate')
-      ? new Date(searchParams.get('startDate') as string)
-      : undefined,
-    endDate: searchParams.get('endDate')
-      ? new Date(searchParams.get('endDate') as string)
-      : undefined,
+    // Date-only URL values are calendar days and must be read in the viewer's
+    // zone — see parseDayParam.
+    startDate: parseDayParam(searchParams.get('startDate')),
+    endDate: parseDayParam(searchParams.get('endDate')),
     actorId: searchParams.get('actorId') || undefined,
     operation: searchParams.get('operation') || undefined,
     resourceType: searchParams.get('resourceType') || undefined,
@@ -54,10 +53,10 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
     const params = new URLSearchParams();
 
     if (newFilters.startDate) {
-      params.set('startDate', newFilters.startDate.toISOString().split('T')[0]);
+      params.set('startDate', formatDayParam(newFilters.startDate));
     }
     if (newFilters.endDate) {
-      params.set('endDate', newFilters.endDate.toISOString().split('T')[0]);
+      params.set('endDate', formatDayParam(newFilters.endDate));
     }
     if (newFilters.actorId) {
       params.set('actorId', newFilters.actorId);
@@ -121,11 +120,9 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
         } else if (context === 'user' && filters.driveId) {
           params.set('driveId', filters.driveId);
         }
-        if (filters.startDate) {
-          params.set('startDate', filters.startDate.toISOString());
-        }
-        if (filters.endDate) {
-          params.set('endDate', filters.endDate.toISOString());
+        // The picker selects DAYS; the API takes instants and endDate is exclusive.
+        for (const [key, value] of Object.entries(dayRangeParams(filters.startDate, filters.endDate))) {
+          params.set(key, value);
         }
         if (filters.actorId) {
           params.set('actorId', filters.actorId);

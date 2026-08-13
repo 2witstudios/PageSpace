@@ -114,9 +114,9 @@ export function applyToolExposureMode(
   mode: ToolExposureMode,
   alwaysUpfront: ReadonlySet<string> = new Set(),
   searchableSkills: readonly SkillSearchEntry[] = [],
-): { tools: ToolSet; toolDiscoveryPrompt: string } {
+): { tools: ToolSet; toolDiscoveryPrompt: string; nonCoreToolNames: string } {
   if (mode !== 'search') {
-    return { tools, toolDiscoveryPrompt: '' };
+    return { tools, toolDiscoveryPrompt: '', nonCoreToolNames: '' };
   }
 
   // Tools forced upfront (e.g. the web_search runtime override) are excluded from
@@ -128,7 +128,7 @@ export function applyToolExposureMode(
   const { nonCoreTools } = splitToolsForExposure(tools, alwaysUpfront);
 
   if (Object.keys(nonCoreTools).length === 0) {
-    return { tools, toolDiscoveryPrompt: '' };
+    return { tools, toolDiscoveryPrompt: '', nonCoreToolNames: '' };
   }
 
   const upfrontOverrides = Object.fromEntries(
@@ -145,9 +145,14 @@ export function applyToolExposureMode(
     execute_tool: createExecuteTool(nonCoreTools),
   };
 
+  // Returned as one block AND as its two halves. Most callers want the block;
+  // the Global Assistant states TOOL_DISCOVERY_PROMPT early, beside the
+  // exploration rules that depend on it, and takes the catalog on its own
+  // later. Both come from this one computation so a caller assembling them
+  // separately still describes exactly the tools that were deferred here.
   const nonCoreNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
   const toolDiscoveryPrompt = '\n\n' + TOOL_DISCOVERY_PROMPT
     + (nonCoreNamesPrompt ? '\n\n' + nonCoreNamesPrompt : '');
 
-  return { tools: searchTools, toolDiscoveryPrompt };
+  return { tools: searchTools, toolDiscoveryPrompt, nonCoreToolNames: nonCoreNamesPrompt };
 }

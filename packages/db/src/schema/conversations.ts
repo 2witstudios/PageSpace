@@ -2,7 +2,6 @@ import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from '
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
-import { agentWorkspaces } from './agent-workspaces';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -15,22 +14,6 @@ export const conversations = pgTable('conversations', {
   title: text('title'), // Auto-generated from first message or user-defined
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
-  /*
-   * STILL HERE, AND DELIBERATELY. These two columns are the OTHER half of a
-   * workspace's membership — one saying which workspace held a thread, the
-   * other whether it was still in that workspace's listing — while the pane
-   * rows said where it was on screen. Two structures for one fact, which is
-   * what this epic deletes.
-   *
-   * Nothing writes them any more; membership is a node in
-   * `agent_workspace_nodes`. They are NOT dropped here because the drop is a
-   * separately deployable stage: `runMigrations` applies every pending
-   * migration in one invocation, so a drop registered beside 0255 would run
-   * before the backfill that gives those rows a second home could possibly be
-   * executed. They go in a follow-up, after the backfill has run.
-   */
-  workspaceId: text('workspaceId').references(() => agentWorkspaces.id, { onDelete: 'set null' }),
-  closedInWorkspaceAt: timestamp('closedInWorkspaceAt', { mode: 'date' }),
   /**
    * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
    * `POST /api/v1/conversations` mints for pagespace-cli and other
@@ -118,7 +101,6 @@ export const conversations = pgTable('conversations', {
   isActive: boolean('isActive').default(true).notNull(),
   isShared: boolean('isShared').default(false).notNull(),
 }, (table) => ({
-  workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
   userIdx: index('conversations_user_id_idx').on(table.userId),
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
@@ -197,6 +179,13 @@ export const conversations = pgTable('conversations', {
  * the backfill or forced us to invent attribution we do not have. The rule is
  * documented and tested, not enforced by the database.
  */
+/**
+ * The value `messages.source` carries for a turn spoken into a live voice call.
+ * Named once so the UI's glyph check, the realtime writer and the seed builder
+ * cannot drift onto three spellings of one string.
+ */
+export const MESSAGE_SOURCE_VOICE = 'voice';
+
 export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   conversationId: text('conversationId').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
@@ -230,6 +219,26 @@ export const messages = pgTable('messages', {
    * conversation's business (`derivedPageId()`).
    */
   sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
+  /**
+   * The TRANSPORT this row was authored over — `'voice'` for a turn spoken into
+   * a live realtime call, NULL for a typed one.
+   *
+   * A column and not a jsonb flag because it is a fact about the row that two
+   * unrelated readers need cheaply: the UI, to mark a spoken turn (the mic
+   * glyph) so a thread is honest about how it was made; and the realtime SEED
+   * builder, which replays prior turns into a new call and can only tell a
+   * spoken turn from a typed one if the row says so.
+   *
+   * NULLABLE, not `default 'text'`: purely widening, so every pre-existing row
+   * and every INSERT from old code during a rolling deploy stays valid, and
+   * "unknown/typed" needs no backfill to be correct. Read it through
+   * {@link MESSAGE_SOURCE_VOICE} rather than a string literal.
+   *
+   * NOT an enum column and NOT CHECK-constrained: a one-way CHECK on a table
+   * this size is a migration hazard for a value with exactly one non-null
+   * member today, and the write path is a single repository.
+   */
+  source: text('source'),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),

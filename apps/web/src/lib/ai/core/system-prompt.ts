@@ -73,7 +73,13 @@ export function buildNonCoreToolNamesPrompt(toolNames: string[]): string {
   return `NON-CORE TOOLS (use execute_tool to call; use tool_search("select:tool_name") for parameter schemas):\n${lines}`;
 }
 
-const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
+/**
+ * Exported because a custom-systemPrompt agent opts out of `buildSystemPrompt`
+ * entirely and still has to be told it is read-only. `prompt-assembly.ts`
+ * appends this one; before it was exported the page route carried a hand-typed
+ * copy of the same four lines.
+ */
+export const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 • You cannot modify, create, or delete any content
 • Focus on exploring, analyzing, and planning
 • Create actionable plans for the user to execute later`;

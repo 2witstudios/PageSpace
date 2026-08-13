@@ -14,6 +14,7 @@ import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
+import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 
 interface TextBlockProps {
@@ -31,6 +32,8 @@ interface TextBlockProps {
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** Turn was spoken into a live voice call, not typed. */
+  spoken?: boolean;
 }
 
 /**
@@ -49,7 +52,8 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  spoken = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -89,13 +93,14 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-2">
-            <div className="text-xs text-gray-500">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString()}
                   {editedAt && <span className="ml-2">(edited)</span>}
                 </>
               )}
+              {spoken && <SpokenTurnGlyph />}
             </div>
             {onEdit && onDelete && !isEditing && (
               <MessageActionButtons
@@ -267,6 +272,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                spoken={isSpokenTurn(message)}
               />
             );
           } else if (isFileGroupPart(group)) {

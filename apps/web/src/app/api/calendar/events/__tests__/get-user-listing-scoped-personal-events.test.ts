@@ -46,10 +46,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 vi.mock('@/lib/websocket/calendar-events', () => ({ broadcastCalendarEvent: vi.fn() }));
 vi.mock('@/lib/integrations/google-calendar/push-service', () => ({ pushEventToGoogle: vi.fn() }));
-vi.mock('@/lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure; the real parser is used rather than a partial stub.
 vi.mock('@/lib/workflows/recurrence-utils', () => ({
   expandRecurringEvents: vi.fn((events: unknown[]) => events),
 }));

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, memo, useCallback } from "react";
+import { useEffect, useRef, memo, useCallback } from "react";
 import { History, MessageSquare, Activity } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useSidebarAgentStore } from "@/hooks/page-agents";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
 import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents";
+import { useLayoutStore } from "@/stores/useLayoutStore";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useMobileKeyboard } from "@/hooks/useMobileKeyboard";
 
@@ -58,8 +59,13 @@ function RightPanel({ className, variant }: RightPanelProps) {
   // Chat tab is only shown when NOT on dashboard context
   const showChatTab = !isDashboardContext;
 
-  // Local tab state for page context (independent from dashboard)
-  const [localActiveTab, setLocalActiveTab] = useState<SidebarTab>(showChatTab ? "chat" : "history");
+  // Page-context tab state. In the layout store rather than local state (same
+  // default, same lifetime — it is not persisted) so that the nav-bar voice
+  // trigger can bring this tab to the front when it reveals a live call: a
+  // button in the header cannot reach a `useState` inside this panel, and the
+  // panel is unmounted entirely while the sidebar is collapsed.
+  const localActiveTab = useLayoutStore((state) => state.rightSidebarPageTab);
+  const setLocalActiveTab = useLayoutStore((state) => state.setRightSidebarPageTab);
 
   // Auto-switch to chat tab when navigating from dashboard to page context
   // This ensures streaming continues visibly in the sidebar

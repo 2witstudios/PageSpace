@@ -76,6 +76,7 @@ Agent sessions, panes, and code-executing Workflows are open to everyone today. 
     readTime: "7 min read",
     category: "Product",
     featured: true,
+    image: "/blog/agents-get-a-computer.png",
   },
   "build-a-chat-app-on-pagespace": {
     slug: "build-a-chat-app-on-pagespace",

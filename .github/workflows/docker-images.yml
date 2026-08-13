@@ -9,6 +9,28 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'docker/**'
+      # A BUILD INPUT THAT WAS NOT A TRIGGER, and the asymmetry was silent.
+      # `apps/web/Dockerfile.migrate` does `COPY scripts ./scripts` — one-off
+      # scripts are meant to run on the migrate image, and its own comments say
+      # so — but a script-only change matched none of the paths above, so this
+      # workflow never ran for it, the image was never rebuilt, and the
+      # published tag never gained the file.
+      #
+      # Proved on 2026-08-10: `registry.fly.io/pagespace-web:migrate` did not
+      # contain `scripts/backfill-agent-workspace-nodes.ts` at all. An absolute
+      # path failed identically, which rules out a working-directory
+      # explanation — the file was simply absent.
+      #
+      # The consequence was not theoretical. The node-tree epic's rollout says
+      # to run its backfill "as a one-off machine on the migrate image", and the
+      # drop that follows (`0256`) is gated on that run exiting 0. With the
+      # script absent, that gate could not be executed at all — the one check
+      # between the drop and a workspace whose membership lives only in the
+      # columns being dropped.
+      #
+      # This is a class of bug rather than one missing file: every future
+      # script-only change would go the same way, invisibly, with CI green.
+      - 'scripts/**'
       - 'bun.lock'
       - '.github/workflows/docker-images.yml'
 
