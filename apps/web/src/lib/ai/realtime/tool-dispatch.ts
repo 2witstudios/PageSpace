@@ -198,10 +198,13 @@ export const formatToolResult = (value: unknown): string => {
   const lastSpace = window.lastIndexOf(' ');
   const head = (lastSpace > 0 ? window.slice(0, lastSpace) : window).trimEnd();
   // The hint is for the MODEL. Without it a cut result reads as a complete one,
-  // and the model reports the content ended where the ceiling did. It names the
-  // two ways to ask again because they are the two shapes that get cut: a
-  // search that matched too much, and a page too long to read at once.
-  return `${head}…\n\n[${trimmed.length - head.length} characters were not returned. Ask again more narrowly — tool_search("select:exact_name") for one tool's schema, or read_page with lineStart/lineEnd for the rest of a page.]`;
+  // and the model reports that the content ended where the ceiling did.
+  //
+  // It leads with the general instruction because the general case is what
+  // usually gets cut — a listing or a search that matched too much — and then
+  // names the two specific escapes, which only help if the cut result was one
+  // of those. Advice that assumes the wrong tool is worse than none.
+  return `${head}…\n\n[${trimmed.length - head.length} characters were not returned. Ask again for less: a narrower query or filter, an exact name via tool_search("select:name"), or a line range via read_page's lineStart/lineEnd.]`;
 };
 
 /**

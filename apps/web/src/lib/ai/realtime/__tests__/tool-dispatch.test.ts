@@ -142,8 +142,10 @@ describe('formatToolResult', () => {
 
     expect(spoken.length).toBeLessThan(MAX_RESULT_CHARS + 400);
     expect(spoken).toContain('characters were not returned');
-    // Named because they are the two shapes that actually get cut.
-    expect(spoken).toContain('tool_search("select:exact_name")');
+    // Leads with the general instruction, because a truncated listing or
+    // search is the common case and neither specific escape fits it.
+    expect(spoken).toContain('Ask again for less');
+    expect(spoken).toContain('tool_search("select:name")');
     expect(spoken).toContain('lineStart/lineEnd');
   });
 
@@ -204,7 +206,7 @@ describe('formatToolResult', () => {
 
     expect(JSON.stringify(raw).length).toBeGreaterThan(50_000);
     expect(spoken.length).toBeLessThan(MAX_RESULT_CHARS + 400);
-    expect(spoken).toContain('tool_search("select:exact_name")');
+    expect(spoken).toContain('Ask again for less');
   });
 });
 
