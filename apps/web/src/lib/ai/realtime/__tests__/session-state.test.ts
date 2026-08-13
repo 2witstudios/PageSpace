@@ -11,6 +11,19 @@ const after = (
   from: SessionState = initialSessionState,
 ): SessionState => actions.reduce(sessionReducer, from);
 
+/** A `response.done` announcing one tool call, as OpenAI shapes it. */
+const toolCall = (name: string, args: Record<string, unknown>): SessionAction => ({
+  type: 'event',
+  event: {
+    type: 'response.done',
+    response: {
+      output: [
+        { type: 'function_call', call_id: 'c1', name, arguments: JSON.stringify(args) },
+      ],
+    },
+  },
+});
+
 const said = (type: string, transcript: string): SessionAction => ({
   type: 'event',
   event: { type, transcript },
@@ -32,7 +45,7 @@ describe('initialSessionState', () => {
       error: undefined,
       userSpeaking: false,
       transcript: [],
-      tools: [],
+      activeTools: [],
     });
   });
 });
@@ -79,12 +92,19 @@ describe('connection lifecycle', () => {
     ]);
   });
 
-  it('given a failure after a tool ran, should keep the tool record too', () => {
-    const state = after([
-      { type: 'tool', name: 'read_page', speech: 'Notes: hi' },
+  it('given a call that ends or restarts, should stop claiming a tool is running', () => {
+    // A dropped call is not still reading a page. Left alone, the next call
+    // would open showing the previous call's tool as live for its whole first
+    // silent turn.
+    for (const ending of [
       { type: 'failed', message: 'dropped' },
-    ]);
-    expect(state.tools).toHaveLength(1);
+      { type: 'disconnected' },
+      { type: 'connecting' },
+      { type: 'connected' },
+    ] as SessionAction[]) {
+      const state = after([toolCall('read_page', { title: 'Notes' }), ending]);
+      expect(state.activeTools, `${ending.type} left a stale tool`).toEqual([]);
+    }
   });
 
   it('given a disconnect, should return to idle and stop listening', () => {
@@ -157,15 +177,106 @@ describe('transcript', () => {
   });
 });
 
-describe('tool activity', () => {
-  it('given tools ran, should record what they were and what they said, in order', () => {
+describe('tool activity — what fills the silence', () => {
+  it('given a response announcing a tool call, should say what is running', () => {
+    // This is the whole point: between "let me check that" and the answer, the
+    // model is silent and the bar used to show nothing.
+    const state = after([toolCall('read_page', { title: 'Roadmap' })]);
+
+    expect(state.activeTools).toEqual([{ name: 'read_page', speech: 'Read Page: Roadmap' }]);
+  });
+
+  it('given several calls in one response, should show them all', () => {
     const state = after([
-      { type: 'tool', name: 'read_page', speech: 'Notes: hi' },
-      { type: 'tool', name: 'list_pages', speech: 'You have 1 page' },
+      {
+        type: 'event',
+        event: {
+          type: 'response.done',
+          response: {
+            output: [
+              { type: 'function_call', call_id: 'c1', name: 'read_page', arguments: '{}' },
+              { type: 'function_call', call_id: 'c2', name: 'list_pages', arguments: '{}' },
+            ],
+          },
+        },
+      },
     ]);
-    expect(state.tools).toEqual([
-      { name: 'read_page', speech: 'Notes: hi' },
-      { name: 'list_pages', speech: 'You have 1 page' },
+
+    expect(state.activeTools.map((t) => t.name)).toEqual(['read_page', 'list_pages']);
+  });
+
+  it('should clear when the model speaks again — the silence is over', () => {
+    const state = after([
+      toolCall('read_page', { title: 'Roadmap' }),
+      {
+        type: 'event',
+        event: {
+          type: 'response.output_audio_transcript.done',
+          transcript: "It's in your Inbox.",
+        },
+      },
     ]);
+
+    expect(state.activeTools).toEqual([]);
+    expect(state.transcript).toHaveLength(1);
+  });
+
+  it('should KEEP showing the tool while the caller talks over it', () => {
+    // `extractTranscript` returns the caller's transcripts too. Someone
+    // speaking during a slow tool is the person waiting on it — clearing then
+    // would drop the explanation for the silence exactly when it is needed.
+    const state = after([
+      toolCall('read_page', { title: 'Roadmap' }),
+      {
+        type: 'event',
+        event: {
+          type: 'conversation.item.input_audio_transcription.completed',
+          transcript: 'are you still there?',
+        },
+      },
+    ]);
+
+    expect(state.activeTools).toHaveLength(1);
+    expect(state.transcript).toHaveLength(1);
+  });
+
+  it('should clear when a response finishes without calling anything', () => {
+    const state = after([
+      toolCall('read_page', { title: 'Roadmap' }),
+      { type: 'event', event: { type: 'response.done', response: { output: [] } } },
+    ]);
+
+    expect(state.activeTools).toEqual([]);
+  });
+
+  it('given unparseable arguments, should still name the tool', () => {
+    // Arguments are assembled from streamed deltas. A label is never worth
+    // throwing over inside a reducer.
+    const state = after([
+      {
+        type: 'event',
+        event: {
+          type: 'response.done',
+          response: {
+            output: [
+              { type: 'function_call', call_id: 'c1', name: 'read_page', arguments: '{"title":' },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(state.activeTools).toEqual([{ name: 'read_page', speech: 'Read Page' }]);
+  });
+
+  it('should not churn identity on an unrelated event', () => {
+    // A re-render per housekeeping frame is a waveform that stutters.
+    const base = after([{ type: 'connected' }]);
+    const next = sessionReducer(base, {
+      type: 'event',
+      event: { type: 'rate_limits.updated' },
+    });
+
+    expect(next).toBe(base);
   });
 });

@@ -74,6 +74,12 @@ describe('buildVoiceInstructions', () => {
     expect(instructions).toMatch(/interrupt/i);
   });
 
+  it('should ask it to speak before EVERY tool call, not just the first', () => {
+    // The dead air people actually hear is the second hop: a tool result sends
+    // the model looking again, and it goes quiet for the whole round trip.
+    expect(build()).toContain('BEFORE EVERY TOOL CALL, not just the first');
+  });
+
   it('should tell it to ACT rather than ask permission', () => {
     // The model's default posture is to confirm before calling a tool, which on
     // a call reads as an assistant that will not do anything.

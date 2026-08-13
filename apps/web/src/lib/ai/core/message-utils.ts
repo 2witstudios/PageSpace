@@ -350,6 +350,37 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 }
 
 /** Parse persisted structured content, returning null for plain-text (legacy) content. */
+/**
+ * The plain text of a stored message, whatever shape the column is in.
+ *
+ * `messages.content` does not hold prose. Any row saved with parts — which is
+ * every typed assistant turn — stores a JSON envelope there
+ * (`extractStructuredContentFromParts`), and a plain `select` returns the
+ * envelope. Anything that wants the words and reads the column directly gets
+ * `{"textParts":["Here they are."],…}` and treats it as something someone said.
+ * The voice seed did exactly that, and replayed it at the model.
+ *
+ * A row with no text — a tool call, which renders from its parts — yields an
+ * empty string, which is the honest answer: nothing was said.
+ *
+ * This is the ONE reader. `v1-conversations.ts` had a private copy of it, and
+ * two functions that decode the same envelope are two that can disagree about
+ * what a message says.
+ */
+export function readMessageText(content: string | null | undefined): string {
+  if (!content) return '';
+  // `parseStructuredContent` is the existing definition of "this is one of our
+  // envelopes" — it requires BOTH `textParts` and `partsOrder`. Reusing it
+  // rather than sniffing for a field means a message whose body happens to be
+  // `{"textParts":["value"]}`, which someone can simply type, is treated as the
+  // text it is instead of being decoded into `value`.
+  const envelope = parseStructuredContent(content);
+  if (!envelope) return content;
+
+  if (typeof envelope.originalContent === 'string') return envelope.originalContent;
+  return envelope.textParts.filter((part): part is string => typeof part === 'string').join('');
+}
+
 function parseStructuredContent(content: string | null | undefined): StructuredContentData | null {
   if (!content) return null;
   try {
