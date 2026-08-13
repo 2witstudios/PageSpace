@@ -25,7 +25,6 @@ import {
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
 import { claimBootstrapConsumer, releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
-import { appendPart as appendPartPure } from '@/lib/ai/streams/appendPart';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -348,17 +347,122 @@ export function useChannelStreamSocket(
       // permanent gap. Neither was detectable from either side.
       let deliveredSeq = 0;
 
+      /**
+       * The live channel cannot serve this client, but the generation is still running.
+       *
+       * TWO WAYS TO GET HERE, and they are the same situation from the client's side:
+       *
+       *   - the join 404s — the common, benign cross-instance case, where the stream is owned
+       *     by another web instance whose in-process channel registry this one cannot see;
+       *   - the join resolves with a `resumeFromSeq` — the cursor names a frame the server's
+       *     memory ring has already evicted, so it answered with the oldest seq it CAN serve
+       *     rather than quietly handing over a later prefix.
+       *
+       * Neither is a completion, and neither is a failure of the generation. So this must not
+       * `fireComplete`: the stream has not finished, and firing would tell every consumer it
+       * had. What it does instead is mark the join failed — so the eventual
+       * `chat:stream_complete` takes its reload-from-DB branch — and, when the situation is
+       * one polling can help with, fall back to the channel's periodic DB checkpoint (~1s,
+       * matching the server's own cadence) for a near-live view.
+       *
+       * `canPoll` is false for a join that failed for a reason polling cannot survive — a 403
+       * or a 500 is not a liveness gap, and polling through one would retry a denial every
+       * second for the life of the generation. Returns whether polling actually started, which
+       * is what tells the caller there is something left on screen to preserve.
+       */
+      const fallBackToDatabase = ({ canPoll }: { canPoll: boolean }): boolean => {
+        // Deliberately NOT processed.add(messageId) here. A failed join does not mean the
+        // stream failed. Suppressing chat:stream_complete (which is what processed.add did)
+        // left the finished assistant message unloaded: the ghost vanished and nothing
+        // replaced it. Marking the join as failed instead lets handleStreamComplete reload
+        // the persisted message from the DB.
+        //
+        // Unless completion already happened: a join commonly 404s *because* the stream just
+        // ended and the registry entry was deleted, in which case chat:stream_complete can
+        // land before this settles. It has already finalized the stream, so there is nothing
+        // left to mark — and adding the id here would leave an entry no later event clears.
+        const alreadyProcessed = processed.has(messageId);
+        if (!alreadyProcessed) joinFailed.add(messageId);
+
+        // Nothing left to poll for once the SSE controller is aborted (unmount/teardown).
+        if (!canPoll || alreadyProcessed || controller.signal.aborted) return false;
+
+        // Defensive: a stale poll fallback for this messageId (e.g. a re-entrant
+        // chat:stream_start on an id that already had one running) must not be
+        // orphaned — an overwritten map entry would leak its interval forever.
+        pollControllers.get(messageId)?.abort();
+        const pollController = new AbortController();
+        pollControllers.set(messageId, pollController);
+        startStreamJoinPollFallback(
+          channelId,
+          messageId,
+          pollController.signal,
+          (parts) => {
+            const nextSeq = (pollSeqByMessageId.get(messageId) ?? 0) + 1;
+            pollSeqByMessageId.set(messageId, nextSeq);
+            setStreamParts(messageId, parts, nextSeq);
+          },
+          () => {
+            // The row is gone from active-streams — the stream finished, or this 404 was
+            // never a liveness gap to begin with (e.g. a private conversation). Either way
+            // polling further is useless.
+            //
+            // Review finding: this must fire the SAME reload-from-DB signal
+            // chat:stream_complete does, not just drop the store entry. broadcastAiStreamComplete
+            // is itself best-effort (fire-and-forget HTTP POST, `.catch(() => {})` in
+            // socket-utils.ts) — if that socket event never arrives, this poll noticing the row
+            // disappeared is the ONLY remaining signal. Without fireComplete here, a consumer
+            // never learns to reload the persisted message: the synthesized bubble would vanish
+            // with nothing replacing it, worse than the pre-poll-fallback behavior (a frozen but
+            // still-visible stale snapshot). fireComplete's own processed-guard makes this safe
+            // to call even if chat:stream_complete ALSO eventually arrives — the later call
+            // no-ops.
+            pollControllers.delete(messageId);
+            pollSeqByMessageId.delete(messageId);
+            joinFailed.delete(messageId);
+            removeStream(messageId);
+            try {
+              fireComplete(messageId, conversationId, { joinFailed: true });
+            } finally {
+              fireOwnFinalize(messageId);
+            }
+          },
+        );
+        return true;
+      };
+
       consumeStreamJoin(messageId, controller.signal, (parts, seq) => {
         joinDelivered.add(messageId);
         deliveredSeq = seq + 1;
         setStreamParts(messageId, parts, seq + 1);
       }, 0)
-        .then(() => {
+        .then((result) => {
           // Cleanup runs synchronously on unmount but the SSE promise resolves
           // asynchronously after controller.abort(); skip post-teardown effects.
           if (cancelled) return;
           controllers.delete(messageId);
           releaseBootstrapConsumer(messageId);
+
+          if (result.resumeFromSeq !== undefined) {
+            // The cursor aged out of the memory ring. This is a RESOLUTION, not a rejection,
+            // so it used to land in the completion branch below — reporting a finished stream
+            // to every consumer and dropping the store entry while the server was still
+            // generating, which made the reply's bubble vanish until something else reloaded
+            // it (review finding — coderabbitai, PR #2408).
+            //
+            // Deliberately NOT re-joining from `resumeFromSeq`, tempting as the name is. The
+            // frames before it are gone, and a fold starting mid-stream renders a reply
+            // missing its beginning — the "plausible-looking gap" the channel's own invariant
+            // exists to refuse. The server can only answer that cursor honestly once the
+            // durable frame log backs it; until then the DB checkpoint is the complete view
+            // and the live channel is not.
+            if (!fallBackToDatabase({ canPoll: true }) && !hadSeededSnapshot) {
+              removeStream(messageId);
+            }
+            fireOwnFinalize(messageId);
+            return;
+          }
+
           try {
             fireComplete(messageId, conversationId, { joinFailed: false });
           } finally {
@@ -370,81 +474,16 @@ export function useChannelStreamSocket(
           if (cancelled) return;
           controllers.delete(messageId);
           releaseBootstrapConsumer(messageId);
-          // Deliberately NOT processed.add(messageId) here. A failed join does not
-          // mean the stream failed — the usual cause is that it lives on another web
-          // instance, where the per-process multicast registry can't see it. It is
-          // still generating, and it will still broadcast chat:stream_complete when
-          // it finishes. Suppressing that event (which is what processed.add did)
-          // left the finished assistant message unloaded: the ghost vanished and
-          // nothing replaced it. Marking the join as failed instead lets
-          // handleStreamComplete reload the persisted message from the DB.
-          //
-          // Unless completion already happened: a join commonly 404s *because* the
-          // stream just ended and the registry entry was deleted, in which case
-          // chat:stream_complete can land before this rejection settles. It has
-          // already finalized the stream, so there is nothing left to mark — and
-          // adding the id here would leave an entry no later event ever clears.
-          const alreadyProcessed = processed.has(messageId);
-          if (!alreadyProcessed) {
-            joinFailed.add(messageId);
-          }
-          // Leaf 5.4: a 404 is the common, benign cross-instance case — start polling the
-          // channel's periodic DB checkpoint (~1s, matching the server's own cadence) for a
-          // near-live view instead of freezing until chat:stream_complete finally arrives.
-          // Gated on `!alreadyProcessed` for the same race as joinFailed above (completion
-          // may have already landed) and on the SSE controller not already being aborted
-          // (unmount/teardown — nothing left to poll for).
-          const shouldPollFallback =
-            err instanceof StreamJoinError && err.status === 404 && !alreadyProcessed && !controller.signal.aborted;
-          if (shouldPollFallback) {
-            // Defensive: a stale poll fallback for this messageId (e.g. a re-entrant
-            // chat:stream_start on an id that already had one running) must not be
-            // orphaned — an overwritten map entry would leak its interval forever.
-            pollControllers.get(messageId)?.abort();
-            const pollController = new AbortController();
-            pollControllers.set(messageId, pollController);
-            startStreamJoinPollFallback(
-              channelId,
-              messageId,
-              pollController.signal,
-              (parts) => {
-                const nextSeq = (pollSeqByMessageId.get(messageId) ?? 0) + 1;
-                pollSeqByMessageId.set(messageId, nextSeq);
-                setStreamParts(messageId, parts, nextSeq);
-              },
-              () => {
-                // The row is gone from active-streams — the stream finished, or this 404 was
-                // never a liveness gap to begin with (e.g. a private conversation). Either way
-                // polling further is useless.
-                //
-                // Review finding: this must fire the SAME reload-from-DB signal
-                // chat:stream_complete does, not just drop the store entry. broadcastAiStreamComplete
-                // is itself best-effort (fire-and-forget HTTP POST, `.catch(() => {})` in
-                // socket-utils.ts) — if that socket event never arrives, this poll noticing the row
-                // disappeared is the ONLY remaining signal. Without fireComplete here, a consumer
-                // never learns to reload the persisted message: the synthesized bubble would vanish
-                // with nothing replacing it, worse than the pre-poll-fallback behavior (a frozen but
-                // still-visible stale snapshot). fireComplete's own processed-guard makes this safe
-                // to call even if chat:stream_complete ALSO eventually arrives — the later call
-                // no-ops.
-                pollControllers.delete(messageId);
-                pollSeqByMessageId.delete(messageId);
-                joinFailed.delete(messageId);
-                removeStream(messageId);
-                try {
-                  fireComplete(messageId, conversationId, { joinFailed: true });
-                } finally {
-                  fireOwnFinalize(messageId);
-                }
-              },
-            );
-          } else if (!hadSeededSnapshot && deliveredSeq === 0) {
-            // When the store was seeded from a persisted snapshot (skipReplayCount > 0), a
-            // failed join usually means the originator's process died — its in-memory
-            // registry is gone and the join 404s. That snapshot is the only surviving copy
-            // of the partial content, so keep it rendered; removing it here would undo the
-            // restore that just happened. Streams with no seeded snapshot AND no poll
-            // fallback starting have nothing to preserve and are removed as before.
+          const polling = fallBackToDatabase({
+            canPoll: err instanceof StreamJoinError && err.status === 404,
+          });
+          if (!polling && !hadSeededSnapshot && deliveredSeq === 0) {
+            // When the store was seeded from a persisted snapshot, a failed join usually
+            // means the originator's process died — its in-memory registry is gone and the
+            // join 404s. That snapshot is the only surviving copy of the partial content, so
+            // keep it rendered; removing it here would undo the restore that just happened.
+            // Streams with no seeded snapshot AND no poll fallback starting have nothing to
+            // preserve and are removed as before.
             removeStream(messageId);
           }
           fireOwnFinalize(messageId);
@@ -495,21 +534,28 @@ export function useChannelStreamSocket(
           // the originator's process has died. Seeding through addStream
           // (a no-op when the entry exists) keeps a co-mounted surface that
           // bootstrapped the same channel from appending the snapshot twice.
-          // isValidPartFrame applies the same wire-trust gate the live path
-          // applies in consumeStreamJoin; appendPartPure then folds the
-          // (already server-merged) sequence the way the store's own
-          // appendPart does for every live chunk, so a restored snapshot
-          // renders identically to a live one (merged text, tool parts
-          // converged to their latest state).
+          // isValidPartFrame applies the same wire-trust gate the live path applies in
+          // consumeStreamJoin. Nothing else: the snapshot is ALREADY the finished
+          // reduction — the server writes `foldChunksToParts(frames)` — so it is seeded
+          // verbatim.
+          //
+          // It used to be re-reduced through `appendPart`, which is a fold over CHUNKS and
+          // not over parts, and the two disagree on exactly one thing: `mergeTextDeltas`
+          // concatenates a text part onto a preceding text part, while the fold gives every
+          // `text-start` its own. So a reply the server folded to
+          // `[text("first"), text("second")]` was re-seeded as `[text("firstsecond")]` —
+          // two paragraphs run together, and the first part's `state` kept for both. Reached
+          // by any turn with two text blocks, including every text→step-boundary→text run,
+          // since `finish-step` closes the open text ids without emitting a part of its own
+          // (review finding — coderabbitai, PR #2408).
           const persistedParts = (stream.parts ?? []).filter(isValidPartFrame);
-          const foldedParts = persistedParts.reduce(appendPartPure, [] as UIMessagePart[]);
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
             isOwn,
-            parts: foldedParts,
+            parts: persistedParts,
             startedAt: stream.startedAt,
           });
           if (isOwn) {
@@ -525,7 +571,7 @@ export function useChannelStreamSocket(
           // (What stood here was the rawPartsCount/`||`-not-`??` arithmetic that reconciled a
           // merged snapshot against a raw replay. There is no second representation to
           // reconcile any more, so there is nothing left to get wrong.)
-          startConsume(stream.messageId, stream.conversationId, foldedParts.length > 0);
+          startConsume(stream.messageId, stream.conversationId, persistedParts.length > 0);
         }
 
         // The server's word on what is still running. Consumers reconcile any ownership

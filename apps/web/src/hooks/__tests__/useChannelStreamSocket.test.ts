@@ -325,6 +325,83 @@ describe('useChannelStreamSocket', () => {
     });
   });
 
+  // An evicted cursor is a RESOLUTION, not a rejection: the server answers
+  // `{ done: true, resumeFromSeq }` when the requested seq has aged out of the memory ring.
+  // It used to land in the completion branch, reporting a finished stream to every consumer
+  // while the server was still generating.
+  describe('evicted cursor (join resolves with resumeFromSeq)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should NOT report completion while the stream is still listed as running', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      // The generation is still live — active-streams keeps listing it, so the fallback
+      // keeps polling and nothing has finished.
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'still going' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(
+        onStreamComplete,
+        'an evicted cursor was reported to consumers as a completed stream',
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to checkpoint polling, the same as a cross-instance 404', async () => {
+      // The frames before `resumeFromSeq` are gone, so re-joining from it would render a
+      // reply missing its beginning. The DB checkpoint is the complete view; the live
+      // channel is not.
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'polled' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(mockRemoveStream).not.toHaveBeenCalled();
+      expect(mockSetStreamParts).toHaveBeenCalledWith('msg-1', [{ type: 'text', text: 'polled' }], 1);
+    });
+
+    it('should mark the join failed so chat:stream_complete reloads from the DB', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => {
+        mockSocket._trigger('chat:stream_complete', {
+          messageId: 'msg-1', pageId: 'page-a', conversationId: 'conv-1', aborted: false,
+        });
+      });
+
+      // joinFailed: true is what makes a consumer fetch the persisted message rather than
+      // synthesize a bubble from a snapshot that is missing the stream's beginning.
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, false);
+    });
+  });
+
   describe('SSE join error', () => {
     it('given consumeStreamJoin rejects, should call removeStream to prevent stale store entry', async () => {
       mockConsumeStreamJoin.mockRejectedValue(new Error('network error'));
@@ -1542,10 +1619,19 @@ describe('useChannelStreamSocket', () => {
       );
     });
 
-    it('given a bootstrapped stream carries persisted raw text-delta parts, should fold them into addStream initial parts the same way live appendPart would', async () => {
-      // The persisted snapshot is the raw registry buffer — one entry per
-      // pushed text delta — not a pre-folded array.
-      const persistedParts = [{ type: 'text', text: 'partial' }, { type: 'text', text: ' content' }];
+    it('given a snapshot with ADJACENT TEXT PARTS, should seed them separately rather than concatenating', async () => {
+      // The snapshot is the server's finished reduction — `foldChunksToParts(frames)` — and
+      // that fold gives every `text-start` its own part. Re-reducing it client-side through
+      // `appendPart` (a fold over CHUNKS, not parts) ran them together, because
+      // `mergeTextDeltas` concatenates a text part onto a preceding text part. A two-block
+      // reply came back as one, and the first part's `state` was kept for both.
+      //
+      // Reached by any turn with two text blocks, including every text→step-boundary→text
+      // run: `finish-step` closes the open text ids without emitting a part of its own.
+      const persistedParts = [
+        { type: 'text', text: 'first block', state: 'done' },
+        { type: 'text', text: 'second block', state: 'streaming' },
+      ];
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -1564,9 +1650,7 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-bootstrap',
-        // Folded to one merged text part, matching what two live appendPart
-        // calls with the same deltas would have produced in the store.
-        parts: [{ type: 'text', text: 'partial content' }],
+        parts: persistedParts,
       }));
       // Seeding must NOT go through the store's appendPart action — addStream
       // no-ops when the entry already exists, which is what makes a second
@@ -1574,9 +1658,13 @@ describe('useChannelStreamSocket', () => {
       expect(mockAppendPart).not.toHaveBeenCalled();
     });
 
-    it('given a bootstrapped stream carries a completed tool call as two raw frames, should fold to a single converged tool part', async () => {
+    it('given a snapshot carrying a converged tool part, should seed it verbatim', async () => {
+      // The tool call's state transitions were converged by the SERVER's fold before the
+      // checkpoint was written (and were converged by master's `convergeRawPartsWithOrigins`
+      // before that) — so the snapshot holds one part per toolCallId already, and there is
+      // nothing left for the client to dedup.
       const persistedParts = [
-        { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'input-available', input: { q: 'x' } },
+        { type: 'text', text: 'searching', state: 'done' },
         { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'output-available', input: { q: 'x' }, output: { results: [] } },
       ];
       mockFetchWithAuth.mockResolvedValueOnce({
@@ -1597,10 +1685,7 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-tool',
-        // Without folding, both raw frames would render as separate tool
-        // parts sharing one toolCallId — a duplicate "still running" entry
-        // beside the completed one instead of a single converged part.
-        parts: [persistedParts[1]],
+        parts: persistedParts,
       }));
     });
 
