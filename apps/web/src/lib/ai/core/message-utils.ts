@@ -350,6 +350,24 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 }
 
 /** Parse persisted structured content, returning null for plain-text (legacy) content. */
+/**
+ * The plain text of a stored message, whatever shape the column is in.
+ *
+ * `messages.content` holds STRUCTURED JSON for any row saved with parts — the
+ * text, the file/data parts and a `partsOrder` — and the raw column is what a
+ * plain `select` returns. Anything wanting the words has to come through here,
+ * or it gets `{"textParts":["Here they are."],…}` and treats it as prose.
+ *
+ * A row with no text parts (a tool call, which renders from its parts) yields
+ * an empty string, which is the honest answer: nothing was said.
+ */
+export function readMessageText(content: string | null | undefined): string {
+  const structured = parseStructuredContent(content);
+  if (!structured) return content ?? '';
+  const text = structured.textParts.join('').trim();
+  return text.length > 0 ? text : (structured.originalContent ?? '').trim();
+}
+
 function parseStructuredContent(content: string | null | undefined): StructuredContentData | null {
   if (!content) return null;
   try {

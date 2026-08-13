@@ -31,6 +31,7 @@ import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
+import { readMessageText } from '@/lib/ai/core/message-utils';
 import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
 import { buildVoiceCallContext, type VoiceSystemContextDeps } from './system-context';
@@ -154,8 +155,20 @@ export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   canAccess: (userId, conversation) => canAccessConversation(userId, conversation),
   // Streaming placeholders stay excluded (the default): an empty mid-flight row
   // is not a turn, and `buildRealtimeSeed` would drop it anyway.
-  loadMessages: (conversationId) =>
-    messageRepository.getMessagesByConversationId(conversationId),
+  //
+  // THE TEXT IS READ OUT OF THE COLUMN, NOT TAKEN FROM IT. `messages.content`
+  // holds structured JSON for any row saved with parts — which is every typed
+  // assistant turn — so handing the raw column to the seed replays
+  // `{"textParts":["Here they are."],…}` at the model as though someone had
+  // said it, and spends a 4k-token seed budget doing so. `readMessageText`
+  // returns the words. A row with no text parts (a voice tool call, which
+  // renders from its parts) yields '', and the seed drops it — correctly, since
+  // nothing was said.
+  loadMessages: async (conversationId) =>
+    (await messageRepository.getMessagesByConversationId(conversationId)).map((row) => ({
+      ...row,
+      content: readMessageText(row.content),
+    })),
   loadAgentPage,
   buildCallContext: (request) =>
     buildVoiceCallContext(voiceSystemContextDeps(auth), request),
