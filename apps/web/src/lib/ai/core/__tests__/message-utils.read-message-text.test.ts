@@ -75,6 +75,18 @@ describe('readMessageText', () => {
     expect(readMessageText('{"hello":"world"}')).toBe('{"hello":"world"}');
   });
 
+  it('given JSON that only LOOKS like an envelope, should not decode it', () => {
+    // Someone can type this. Without the `partsOrder` discriminator — which
+    // `StructuredContentData` requires and every real write includes — the body
+    // `{"textParts":["value"]}` would be served back as `value`, and a message
+    // would be reported as saying something its author never wrote.
+    const lookalike = '{"textParts":["value"]}';
+    expect(readMessageText(lookalike)).toBe(lookalike);
+
+    const withOriginal = '{"originalContent":"value"}';
+    expect(readMessageText(withOriginal)).toBe(withOriginal);
+  });
+
   it('given nothing, should return nothing rather than throw', () => {
     expect(readMessageText(null)).toBe('');
     expect(readMessageText(undefined)).toBe('');

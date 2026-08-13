@@ -369,19 +369,16 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
  */
 export function readMessageText(content: string | null | undefined): string {
   if (!content) return '';
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      const envelope = parsed as { originalContent?: unknown; textParts?: unknown };
-      if (typeof envelope.originalContent === 'string') return envelope.originalContent;
-      if (Array.isArray(envelope.textParts)) {
-        return envelope.textParts.filter((t): t is string => typeof t === 'string').join('');
-      }
-    }
-  } catch {
-    // Not JSON, so it is what it looks like: the message.
-  }
-  return content;
+  // `parseStructuredContent` is the existing definition of "this is one of our
+  // envelopes" — it requires BOTH `textParts` and `partsOrder`. Reusing it
+  // rather than sniffing for a field means a message whose body happens to be
+  // `{"textParts":["value"]}`, which someone can simply type, is treated as the
+  // text it is instead of being decoded into `value`.
+  const envelope = parseStructuredContent(content);
+  if (!envelope) return content;
+
+  if (typeof envelope.originalContent === 'string') return envelope.originalContent;
+  return envelope.textParts.filter((part): part is string => typeof part === 'string').join('');
 }
 
 function parseStructuredContent(content: string | null | undefined): StructuredContentData | null {
