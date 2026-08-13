@@ -27,7 +27,6 @@
 import type { UIMessage } from 'ai';
 import { buildAssistantPersistencePayload } from '../core/persistAssistantParts';
 import type { UIMessagePart } from '../core/stream-multicast-registry';
-import { describeToolCall } from '../tools/tool-labels';
 import {
   persistVoiceTranscript,
   type TranscriptPersistenceDeps,
@@ -99,10 +98,17 @@ const toolPart = (request: ToolActivityRequest, input: unknown): UIMessagePart =
  * security-relevant and there must not be a second copy of them that a spoken
  * tool call takes instead.
  *
- * `content` is the human label rather than the tool's output. It is what a
- * surface that cannot render parts falls back to, and what a notification would
- * quote — "Read Page: Roadmap" is a description of the turn; four kilobytes of
- * JSON is not.
+ * THE ROW HAS NO TEXT, and that is load-bearing rather than an omission.
+ * Nothing was SAID here — the model spoke separately, and that turn is its own
+ * transcript row. Two things depend on this being empty:
+ *   - `buildRealtimeSeed` replays a message's `content` as an utterance, so a
+ *     label here would seed the NEXT call with "Read Page: Roadmap" as though
+ *     the assistant had said it, and spend the seed's turn budget on things
+ *     nobody said;
+ *   - `MessageRenderer` builds its text from PARTS, so a tool row already
+ *     renders correctly with none — it is the tool card, not a sentence.
+ * It is also simply what `buildAssistantPersistencePayload` computes for a
+ * parts array holding one tool part.
  */
 export const persistVoiceToolActivity = async (
   deps: TranscriptPersistenceDeps,
@@ -120,9 +126,7 @@ export const persistVoiceToolActivity = async (
       userId: request.userId,
       conversationId: request.conversationId,
       role: 'assistant',
-      // Never blank: a blank body is the one thing the transcript writer
-      // refuses, and a tool row must not be silently dropped by that guard.
-      text: describeToolCall(request.name, input),
+      text: payload.content,
     },
     {
       messageId,

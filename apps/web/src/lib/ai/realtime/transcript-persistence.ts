@@ -151,10 +151,14 @@ export const persistVoiceTranscript = async (
   structured?: StructuredPayload,
 ): Promise<TranscriptWriteResult> => {
   const content = request.text.trim();
-  if (content.length === 0) {
+  if (content.length === 0 && structured === undefined) {
     // A blank transcript is a real event — the model heard breath, or the
     // transcriber returned nothing — and an empty message row is worse than
     // no row: it renders as a turn that said nothing.
+    //
+    // A STRUCTURED row is exempt, because that reasoning does not reach it: a
+    // tool row renders from its parts and has no text by design (nothing was
+    // said). Refusing it here would drop the record of a tool call that ran.
     return { ...NOTHING, skipped: 'blank' };
   }
 

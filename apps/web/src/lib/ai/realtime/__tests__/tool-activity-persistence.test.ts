@@ -84,17 +84,30 @@ describe('persistVoiceToolActivity — the running row', () => {
     expect(result).toMatchObject({ saved: true, messageId: 'minted1', rev: 7 });
   });
 
-  it('should carry a readable body, not the raw output', async () => {
-    // The body is what a surface that cannot render parts shows, and what a
-    // notification would quote.
+  it('should write NO text, because nothing was said', async () => {
+    // Load-bearing, not an omission. `buildRealtimeSeed` replays a message's
+    // `content` as an utterance, so a label here would seed the next call with
+    // "Read Page: Roadmap" as though the assistant had said it — and spend the
+    // seed's turn budget on things nobody said. The renderer builds its text
+    // from parts, so the row still shows as a tool card.
     const { deps: d, global } = deps();
 
     await persistVoiceToolActivity(d, running);
 
-    expect(global[0]).toMatchObject({
-      content: 'Read Page: Roadmap',
-      role: 'assistant',
-    });
+    expect(global[0]).toMatchObject({ content: '', role: 'assistant' });
+  });
+
+  it('should be written even though it has no text', async () => {
+    // The transcript writer refuses a blank body — a spoken turn that said
+    // nothing is worse than no row. That reasoning does not reach a row which
+    // renders from its parts, and applying it here would drop the record of a
+    // tool call that actually ran.
+    const { deps: d, global } = deps();
+
+    const result = await persistVoiceToolActivity(d, running);
+
+    expect(result.saved).toBe(true);
+    expect(global).toHaveLength(1);
   });
 
   it('should mark the row as spoken, so the thread shows the mic glyph', async () => {
