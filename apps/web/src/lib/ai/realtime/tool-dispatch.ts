@@ -28,16 +28,27 @@
  *   - `function_call_output.output` must be a STRING — so everything below
  *     returns one, including every failure.
  *
- * WHY RESULTS ARE TRUNCATED. A spoken answer cannot be skimmed. A full page
- * read is a two-minute monologue that the user cannot scan, interrupt usefully,
- * or remember — and in a live turn latency wins, with completeness happening in
- * the thread afterwards. The reference prototype
- * (`~/production/pagespace-voice/src/core/present.ts`) solves this with a
- * hand-written presenter per tool; that does not scale to PageSpace's registry
- * of dozens, and a curated presenter list would be a second tool surface that
- * drifts every time a tool is added. So the cap is generic and structural: cut
- * at a word boundary, say how much was left out, and tell the model how to get
- * the rest — the same contract `truncateForSpeech` offers, applied uniformly.
+ * RESULTS ARE NOT TRUNCATED, AND THE CAP THAT USED TO DO IT WAS A BUG. Every
+ * result was cut to 700 characters here on the reasoning that a spoken answer
+ * cannot be skimmed — which is true, and is a fact about what the model SAYS.
+ * This is what the model KNOWS, and starving that is what made a call unable to
+ * do its job:
+ *   - `tool_search` returns JSON Schemas. Sliced at 700 characters it hands back
+ *     one schema cut mid-object, so the model cannot build the `execute_tool`
+ *     call it went looking for — it guesses parameters, fails, and tries again.
+ *   - `read_page` returned the first 700 characters of a document, which is
+ *     neither a summary nor enough to edit from: `replace_lines` needs line
+ *     numbers off a full read.
+ *   - `list_pages` was cut off, so "find my document" failed whenever the
+ *     document sorted late.
+ * The typed surface caps tool results nowhere, and this is the same agent. Where
+ * a result really is too large to want whole, the TOOL says so — `read_page`
+ * takes `lineStart`/`lineEnd` — which is a decision the model can make with the
+ * page in front of it, and a blanket cap here never could.
+ *
+ * Brevity is still required; it is just enforced where it belongs. The spoken
+ * override in `instructions.ts` asks for two or three sentences a turn, and the
+ * model summarises the result rather than reciting it.
  */
 
 import type { Tool, ToolSet } from 'ai';
@@ -47,13 +58,6 @@ import type {
   VoiceAssistant,
   VoiceLocationContext,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
-
-/**
- * How much of a tool result is worth reading aloud. 700 characters is roughly
- * 45 seconds of speech — already long for a spoken answer, and past the point
- * where a listener retains the beginning.
- */
-export const MAX_SPOKEN_RESULT_CHARS = 700;
 
 /** Parsed arguments, or the sentence to say instead. */
 type ParsedArguments =
@@ -148,29 +152,20 @@ const firstBalancedObject = (text: string): string | undefined => {
 };
 
 /**
- * A tool's return value as one speakable string, capped.
+ * A tool's return value as the one string `function_call_output.output` accepts.
  *
- * A string result is spoken as-is; anything else is serialized, because the
- * model reads JSON perfectly well and inventing prose for an arbitrary shape
+ * A string result passes through untouched; anything else is serialized, because
+ * the model reads JSON perfectly well and inventing prose for an arbitrary shape
  * would mean guessing at a schema this module does not know.
+ *
+ * `'Done.'` for an empty result is not cosmetic: a tool that returns nothing has
+ * still succeeded, and an empty `output` reads to the model as a call that
+ * produced no answer.
  */
-export const formatToolResult = (
-  value: unknown,
-  maxChars: number = MAX_SPOKEN_RESULT_CHARS,
-): string => {
+export const formatToolResult = (value: unknown): string => {
   const text = typeof value === 'string' ? value : safeStringify(value);
   const trimmed = text.trim();
-  if (trimmed.length === 0) return 'Done.';
-  if (trimmed.length <= maxChars) return trimmed;
-
-  const window = trimmed.slice(0, maxChars);
-  const lastSpace = window.lastIndexOf(' ');
-  const head = (lastSpace > 0 ? window.slice(0, lastSpace) : window).trimEnd();
-  const omitted = trimmed.length - head.length;
-  // The continuation hint is for the MODEL, not the user: it is what turns a
-  // cut-off result into "I can read you the rest if you want" instead of the
-  // model asserting the content ended there.
-  return `${head}… (${omitted} more characters were not read out; call the tool again for a specific part if the user asks for more.)`;
+  return trimmed.length === 0 ? 'Done.' : trimmed;
 };
 
 /**
@@ -210,7 +205,6 @@ export type RealtimeToolDispatchDeps = {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
     readonly error: (message: string, error: Error, meta?: Record<string, unknown>) => void;
   };
-  readonly maxChars?: number;
 };
 
 /**
@@ -315,7 +309,7 @@ export const dispatchRealtimeToolCall = async (
       // that grows a use for them should not break on voice.
       { experimental_context: context, toolCallId: request.callId, messages: [] },
     );
-    return formatToolResult(result, deps.maxChars);
+    return formatToolResult(result);
   } catch (error) {
     // A throwing tool is a normal outcome (permission denied, missing page),
     // and the model has to be able to say something about it. The message is
@@ -326,6 +320,6 @@ export const dispatchRealtimeToolCall = async (
       { callId: request.callId, userId: request.userId, tool: request.name },
     );
     const message = error instanceof Error ? error.message : String(error);
-    return formatToolResult(`That didn't work: ${message}`, deps.maxChars);
+    return formatToolResult(`That didn't work: ${message}`);
   }
 };

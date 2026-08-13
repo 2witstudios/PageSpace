@@ -1,4 +1,9 @@
-import { extractTranscript, type TranscriptEntry } from '@pagespace/lib/realtime/voice-events';
+import {
+  extractFunctionCalls,
+  extractTranscript,
+  type TranscriptEntry,
+} from '@pagespace/lib/realtime/voice-events';
+import { describeToolCall } from '../tools/tool-labels';
 // Type-only, so no runtime edge is created from this pure module to the
 // browser-side connector: the union is DEFINED there because that is where the
 // failures are classified, and restating it here would be a second copy free to
@@ -13,6 +18,7 @@ import type { VoiceConnectFailure } from './connect';
  * Pure: no I/O, no clock, no randomness, no module-level mutable state.
  */
 
+/** One tool the model is off running right now, as the call bar says it. */
 export type ToolActivity = {
   readonly name: string;
   readonly speech: string;
@@ -37,7 +43,16 @@ export type SessionState = {
   /** Whether the user is mid-utterance — distinct from being connected. */
   readonly userSpeaking: boolean;
   readonly transcript: readonly TranscriptEntry[];
-  readonly tools: readonly ToolActivity[];
+  /**
+   * What the model is doing WHILE IT IS NOT TALKING — the dead air after "let
+   * me check that", which was previously shown as nothing at all.
+   *
+   * Deliberately the tools running NOW rather than a log of every tool the call
+   * has used. A growing list would pin the call bar's status line on the first
+   * tool that ever ran, because that line prefers a tool over everything else;
+   * and the history of the call belongs in the thread, which records it.
+   */
+  readonly activeTools: readonly ToolActivity[];
 };
 
 export const initialSessionState: SessionState = {
@@ -46,7 +61,7 @@ export const initialSessionState: SessionState = {
   failure: undefined,
   userSpeaking: false,
   transcript: [],
-  tools: [],
+  activeTools: [],
 };
 
 export type SessionAction =
@@ -59,11 +74,27 @@ export type SessionAction =
       readonly failure?: VoiceConnectFailure;
     }
   | { readonly type: 'disconnected' }
-  | { readonly type: 'event'; readonly event: unknown }
-  | { readonly type: 'tool'; readonly name: string; readonly speech: string };
+  | { readonly type: 'event'; readonly event: unknown };
 
 const SPEECH_STARTED = 'input_audio_buffer.speech_started';
 const SPEECH_STOPPED = 'input_audio_buffer.speech_stopped';
+const RESPONSE_DONE = 'response.done';
+
+/**
+ * A tool call's arguments, for labelling only.
+ *
+ * The string is assembled from streamed deltas and is not guaranteed to parse.
+ * A label is never worth throwing over inside a reducer, so a bad payload
+ * simply costs the subject, not the label — `tool-dispatch.ts` owns the
+ * recovery that matters, on the copy the tool actually runs against.
+ */
+const parseArguments = (argumentsJson: string): unknown => {
+  try {
+    return JSON.parse(argumentsJson);
+  } catch {
+    return undefined;
+  }
+};
 
 const eventType = (event: unknown): string | undefined => {
   if (typeof event !== 'object' || event === null) {
@@ -97,12 +128,6 @@ export const sessionReducer = (
     case 'disconnected':
       return { ...state, status: 'idle', userSpeaking: false, failure: undefined };
 
-    case 'tool':
-      return {
-        ...state,
-        tools: [...state.tools, { name: action.name, speech: action.speech }],
-      };
-
     case 'event': {
       const type = eventType(action.event);
       if (type === SPEECH_STARTED) {
@@ -111,12 +136,33 @@ export const sessionReducer = (
       if (type === SPEECH_STOPPED) {
         return { ...state, userSpeaking: false };
       }
+
+      // A completed response is where a tool call is announced, and it is also
+      // the moment the model stops talking — so it both starts the activity and
+      // is the only place that can report there is none.
+      if (type === RESPONSE_DONE) {
+        const calls = extractFunctionCalls(action.event);
+        const activeTools = calls.map((call) => ({
+          name: call.name,
+          speech: describeToolCall(call.name, parseArguments(call.argumentsJson)),
+        }));
+        // Cleared, not left alone, when a response carried no calls: that is the
+        // model having finished a turn on its own.
+        if (activeTools.length === 0 && state.activeTools.length === 0) return state;
+        return { ...state, activeTools };
+      }
+
       const entry = extractTranscript(action.event);
       // Same object back when nothing changed — an unrelated event must not
       // churn identity and re-render the UI.
-      return entry
-        ? { ...state, transcript: [...state.transcript, entry] }
-        : state;
+      if (!entry) return state;
+      return {
+        ...state,
+        transcript: [...state.transcript, entry],
+        // The model is speaking again, so whatever it went away to do is done.
+        // This is what bounds the status line to exactly the silent window.
+        activeTools: state.activeTools.length === 0 ? state.activeTools : [],
+      };
     }
   }
 };

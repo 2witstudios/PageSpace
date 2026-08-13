@@ -44,7 +44,7 @@ const METER_BARS = 5;
  * nowhere else.
  */
 export function VoiceCallBar({ assistantName, className }: VoiceCallBarProps) {
-  const { status, error, failure, attached, target, userSpeaking, transcript, tools, localStream, muted } =
+  const { status, error, failure, attached, target, userSpeaking, transcript, activeTools, localStream, muted } =
     useVoiceSession();
   const { stop, setMuted } = useVoiceSessionControls();
 
@@ -58,12 +58,15 @@ export function VoiceCallBar({ assistantName, className }: VoiceCallBarProps) {
   const level = useAudioLevel(localStream, live && !muted);
 
   const latest = transcript.length > 0 ? transcript[transcript.length - 1] : undefined;
-  const latestTool = tools.length > 0 ? tools[tools.length - 1] : undefined;
+  const runningTool = activeTools.length > 0 ? activeTools[activeTools.length - 1] : undefined;
 
   const statusLine = (() => {
     if (chrome.state === 'connecting') return 'Connecting…';
     if (muted) return 'Muted';
-    if (latestTool) return latestTool.speech;
+    // Ahead of "Listening…" on purpose: while a tool runs the model is silent,
+    // and naming the work is the difference between a pause and a dropped call.
+    // Safe to prefer only because `activeTools` empties when it speaks again.
+    if (runningTool) return runningTool.speech;
     if (userSpeaking) return 'Listening…';
     return `Talking to ${assistantName}`;
   })();

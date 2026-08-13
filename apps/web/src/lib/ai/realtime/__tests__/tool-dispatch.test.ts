@@ -5,12 +5,13 @@ import {
   buildVoiceToolContext,
   dispatchRealtimeToolCall,
   formatToolResult,
-  MAX_SPOKEN_RESULT_CHARS,
   parseToolArguments,
   type RealtimeToolDispatchDeps,
   type RealtimeToolDispatchRequest,
 } from '../tool-dispatch';
 import type { ToolExecutionContext } from '../../core/types';
+import { buildRealtimeToolExposure } from '../tools';
+import { buildPageSpaceTools } from '../../core/ai-tools';
 
 const logger = () => ({ warn: vi.fn(), error: vi.fn() });
 
@@ -115,24 +116,19 @@ describe('formatToolResult', () => {
     expect(formatToolResult(null)).toBe('Done.');
   });
 
-  it('given a long result, should cut at a word boundary and say how much was left', () => {
+  it('given a LONG result, should hand the model all of it', () => {
+    // This used to be cut at 700 characters on the reasoning that a spoken
+    // answer cannot be skimmed — which is a rule about what the model says, not
+    // about what it is allowed to know. The typed surface caps nothing, and
+    // this is the same agent.
     const long = 'alpha beta '.repeat(500);
-    const spoken = formatToolResult(long);
 
-    expect(spoken.length).toBeLessThan(long.length);
-    expect(spoken).toContain('more characters were not read out');
-    // Never a severed word.
-    expect(spoken.split('…')[0].endsWith('beta') || spoken.split('…')[0].endsWith('alpha')).toBe(true);
+    expect(formatToolResult(long)).toBe(long.trim());
   });
 
-  it('given a long result with no spaces, should still cut it', () => {
-    const spoken = formatToolResult('x'.repeat(5000));
-    expect(spoken.length).toBeLessThan(5000);
-  });
-
-  it('given a result exactly at the cap, should not truncate', () => {
-    const exact = 'y'.repeat(MAX_SPOKEN_RESULT_CHARS);
-    expect(formatToolResult(exact)).toBe(exact);
+  it('should never invent a continuation hint about content it did not drop', () => {
+    expect(formatToolResult('x'.repeat(5000))).toBe('x'.repeat(5000));
+    expect(formatToolResult('alpha beta '.repeat(500))).not.toContain('were not read out');
   });
 
   it('given a circular structure, should not throw', () => {
@@ -143,6 +139,31 @@ describe('formatToolResult', () => {
 
   it('given a value JSON.stringify drops, should fall back to a string', () => {
     expect(formatToolResult(() => 1)).not.toBe('');
+  });
+
+  it('should hand back a tool_search result the model can actually parse', async () => {
+    // THE FAILURE THIS EXISTS FOR. `tool_search` answers with JSON Schemas, and
+    // a keyword like "calendar" matches enough tools to run to several thousand
+    // characters. Cut to 700 it arrived sliced mid-object, so the model could
+    // not build the `execute_tool` call it went looking for — it guessed
+    // parameters, failed validation, and tried again. That loop is what "it
+    // doesn't navigate tool calls" looked like from the outside.
+    const search = buildRealtimeToolExposure(buildPageSpaceTools()).tools.tool_search;
+    const raw = await (search.execute as (a: unknown, o: unknown) => unknown)(
+      { query: 'calendar' },
+      { experimental_context: {}, toolCallId: 't1', messages: [] },
+    );
+
+    const spoken = formatToolResult(raw);
+
+    expect(spoken.length).toBeGreaterThan(2000);
+    const parsed = JSON.parse(spoken) as { tools: { name: string; inputSchema: unknown }[] };
+    expect(parsed.tools.length).toBeGreaterThan(1);
+    // A schema is only useful whole: every matched tool has to arrive with the
+    // parameters the model is about to fill in.
+    for (const tool of parsed.tools) {
+      expect(tool.inputSchema, `${tool.name} arrived without its schema`).toBeTruthy();
+    }
   });
 });
 
@@ -376,15 +397,18 @@ describe('dispatchRealtimeToolCall', () => {
     expect(output).toContain('nope');
   });
 
-  it('given a huge tool result, should truncate before returning it', async () => {
+  it('given a huge tool result, should return the whole thing', async () => {
+    // A page read is the case that matters: 700 characters of a document is
+    // neither a summary the model can give nor enough to edit from, because
+    // `replace_lines` works off line numbers in a full read.
+    const page = 'word '.repeat(5000);
     const output = await dispatchRealtimeToolCall(
-      deps({ read_page: spyTool(() => 'word '.repeat(5000)) }),
+      deps({ read_page: spyTool(() => page) }),
       request(),
       'gpt-realtime-2.1',
     );
 
-    expect(output.length).toBeLessThan(1000);
-    expect(output).toContain('were not read out');
+    expect(output).toBe(page.trim());
   });
 
   it('should ALWAYS return a string — function_call_output cannot carry anything else', async () => {
