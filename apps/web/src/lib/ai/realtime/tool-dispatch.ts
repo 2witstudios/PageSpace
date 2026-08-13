@@ -188,16 +188,13 @@ const firstBalancedObject = (text: string): string | undefined => {
  * still succeeded, and an empty `output` reads to the model as a call that
  * produced no answer.
  */
-export const formatToolResult = (
-  value: unknown,
-  maxChars: number = MAX_RESULT_CHARS,
-): string => {
+export const formatToolResult = (value: unknown): string => {
   const text = typeof value === 'string' ? value : safeStringify(value);
   const trimmed = text.trim();
   if (trimmed.length === 0) return 'Done.';
-  if (trimmed.length <= maxChars) return trimmed;
+  if (trimmed.length <= MAX_RESULT_CHARS) return trimmed;
 
-  const window = trimmed.slice(0, maxChars);
+  const window = trimmed.slice(0, MAX_RESULT_CHARS);
   const lastSpace = window.lastIndexOf(' ');
   const head = (lastSpace > 0 ? window.slice(0, lastSpace) : window).trimEnd();
   // The hint is for the MODEL. Without it a cut result reads as a complete one,
