@@ -119,6 +119,21 @@ const HEARTBEAT_INTERVAL_MS = 20 * 1000;
  */
 const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
 
+/**
+ * The tool-family chunk types that are durability boundaries — every one except
+ * `tool-input-delta`. See `isDurabilityBoundary` for why this is enumerated rather than
+ * prefix-matched.
+ */
+const TOOL_BOUNDARY_CHUNK_TYPES: ReadonlySet<string> = new Set([
+  'tool-input-start',
+  'tool-input-available',
+  'tool-input-error',
+  'tool-output-available',
+  'tool-output-error',
+  'tool-output-denied',
+  'tool-approval-request',
+]);
+
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
@@ -499,9 +514,21 @@ export const createStreamLifecycle = async (
    * reasoning streams token-by-token exactly like text, so a negative check would bypass the
    * throttle on every reasoning frame of a long chain-of-thought and turn the checkpoint back
    * into a per-token write.
+   *
+   * WHICH IS WHY THE TOOL FAMILY IS ENUMERATED AND NOT PREFIX-MATCHED. `tool-input-delta`
+   * carries the model's tool ARGUMENTS token by token — the same shape as a text or reasoning
+   * delta, and just as numerous for a tool call with a large input. A `startsWith('tool-')`
+   * check therefore made every one of those frames a boundary, which is the exact per-token
+   * write the paragraph above rejects: `persistInFlight` serializes those writes but does not
+   * throttle them, so the checkpoint would rewrite the whole parts array back-to-back for the
+   * length of the argument stream (review finding — coderabbitai, PR #2408).
+   *
+   * `data-` stays a prefix: those types are open-ended by construction (`data-${string}`), so
+   * there is no set to enumerate, and they are route-written and discrete rather than
+   * streamed per token.
    */
   const isDurabilityBoundary = (chunk: UIMessageChunk): boolean =>
-    chunk.type.startsWith('tool-') ||
+    TOOL_BOUNDARY_CHUNK_TYPES.has(chunk.type) ||
     chunk.type.startsWith('data-') ||
     chunk.type === 'start-step' ||
     chunk.type === 'finish-step' ||

@@ -413,6 +413,34 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
+    it('given tool-input-delta frames, should NOT bypass the throttle — they stream token-by-token too', async () => {
+      // `tool-input-delta` carries the model's tool ARGUMENTS one token at a time, so it is a
+      // text delta wearing the tool family's prefix. A `startsWith('tool-')` bypass made every
+      // one of them a boundary and rewrote the whole parts array per token for the length of
+      // the argument stream. `persistInFlight` serializes those writes; it does not throttle
+      // them (review finding — coderabbitai, PR #2408).
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      lifecycle.channel.append(chunk({
+        type: 'tool-input-start', toolCallId: 'tc9', toolName: 'create_page',
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      // The START is a boundary — a rejoining client must see the call began.
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+      mockUpdateSet.mockClear();
+
+      for (const inputTextDelta of ['{"tit', 'le":"', 'Hello', '"}']) {
+        lifecycle.channel.append(chunk({ type: 'tool-input-delta', toolCallId: 'tc9', inputTextDelta }));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        mockUpdateSet,
+        'every argument token forced its own checkpoint write',
+      ).not.toHaveBeenCalled();
+    });
+
     it('given a tool-boundary flush just landed, should still throttle the very next text frame for 1s', async () => {
       const lifecycle = await createStreamLifecycle(params());
 

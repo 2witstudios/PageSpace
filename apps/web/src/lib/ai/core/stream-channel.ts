@@ -334,6 +334,13 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
     const pending: UIMessageChunk[] = [];
     let pendingBytes = 0;
     let ended: ChannelEnd | null = null;
+    /**
+     * The consumer cancelled this stream. Distinct from `ended`, which records why the
+     * SUBSCRIPTION ended — a cancel is the other direction, and the difference matters to
+     * `pull`: on an `ended` wake it still has to drain and close the controller, whereas on a
+     * cancel the controller is no longer closeable and there is nobody left to drain for.
+     */
+    let cancelled = false;
     let wake: (() => void) | null = null;
     let unsubscribe: () => void = () => {};
     let onAbort: (() => void) | null = null;
@@ -387,14 +394,27 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
         }
       },
       async pull(controller) {
-        // Park until there is something to emit or the subscription has ended. `wake` is
-        // single-slot, which is safe because the streams spec never runs two `pull`s
-        // concurrently on one stream.
-        while (pending.length === 0 && ended === null) {
+        // Park until there is something to emit, the subscription has ended, or the consumer
+        // cancelled. `wake` is single-slot, which is safe because the streams spec never runs
+        // two `pull`s concurrently on one stream.
+        //
+        // `cancelled` is in the condition, not merely checked after: `cancel()` clears
+        // `pending` and wakes this loop, so without it the loop finds nothing to emit and no
+        // end reason and parks again on a FRESH promise — and no later `signalReady` can
+        // arrive, because the subscription is already detached. The stream is closed either
+        // way, so nothing observable breaks; the leak is that the never-settling promise keeps
+        // this closure and its buffers reachable for the life of the process (review finding —
+        // coderabbitai, PR #2408).
+        while (pending.length === 0 && ended === null && !cancelled) {
           await new Promise<void>((resolve) => {
             wake = resolve;
           });
         }
+
+        // Return WITHOUT touching the controller. A cancelled stream is no longer in a
+        // closeable state, so calling `close()` here would throw a TypeError into the pull
+        // promise — swapping a silent leak for a spurious rejection.
+        if (cancelled) return;
 
         const chunk = pending.shift();
         if (chunk !== undefined) {
@@ -413,6 +433,13 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
       cancel() {
         // The consumer is gone (an HTTP client disconnecting, say). Drop the subscription
         // only — the generation is server-owned and keeps running.
+        //
+        // Setting `cancelled` BEFORE waking is what releases a parked `pull` — see the loop
+        // condition there for the leak this closes. Deliberately a separate flag rather than
+        // an `ended` reason: `ended` is the subscription's own terminal state and `pull`
+        // still drains and closes the controller on it, which is exactly what must not
+        // happen for a stream whose consumer has already gone.
+        cancelled = true;
         detach();
         pending.length = 0;
         pendingBytes = 0;
