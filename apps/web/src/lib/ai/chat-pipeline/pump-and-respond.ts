@@ -1,7 +1,7 @@
 import { createUIMessageStreamResponse, type UIMessageChunk } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pumpSdkStreamToChannel } from '@/lib/ai/core/pump-sdk-stream';
-import { STREAM_ID_HEADER } from '@/lib/ai/core/stream-abort-registry';
+import { STREAM_ID_HEADER, removeStream } from '@/lib/ai/core/stream-abort-registry';
 import type { StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 
 /**
@@ -42,6 +42,8 @@ const RESPONSE_MAX_PENDING_BYTES = 64 * 1024 * 1024;
  *     source-level tripwire forbidding the generation path from naming it, and it is redundant
  *     anyway: cancelling the response `ReadableStream` already detaches this subscriber. See
  *     `SubscribeReadableOptions` in stream-channel.ts.
+ *
+ * NOT AWAITED IS NOT THE SAME AS NOT OBSERVED — see `terminalizeOnPumpFailure`.
  */
 export const pumpAndRespond = ({
   sdkStream,
@@ -52,7 +54,11 @@ export const pumpAndRespond = ({
   lifecycle: StreamLifecycleHandle;
   streamId: string;
 }): Response => {
-  void pumpSdkStreamToChannel(sdkStream, lifecycle.channel, loggers.ai);
+  terminalizeOnPumpFailure({
+    pump: pumpSdkStreamToChannel(sdkStream, lifecycle.channel, loggers.ai),
+    lifecycle,
+    streamId,
+  });
 
   return createUIMessageStreamResponse({
     stream: lifecycle.channel.subscribeReadable({
@@ -62,4 +68,69 @@ export const pumpAndRespond = ({
     }),
     headers: { [STREAM_ID_HEADER]: streamId },
   });
+};
+
+/**
+ * Watch the un-awaited pump and run the terminal block itself when it fails.
+ *
+ * WHO NORMALLY FINISHES A STREAM. `createUIMessageStream`'s `onFinish` — it calls
+ * `removeStream`, settles the credit hold via `trackUsage`, and ends with
+ * `lifecycle.finish`. It fires from the SDK's final transform's `flush()`.
+ *
+ * A REJECTED `read()` NEVER REACHES `flush()`. When the SDK's own reduction throws — the
+ * documented malformed tool-frame sequence, or a provider stream failing outright — the
+ * stream ERRORS instead of completing, so no flush runs and `onFinish` never fires. The
+ * pump folds that into a synthetic error frame and resolves with `{ error }` rather than
+ * rejecting, which is correct for the durable record and useless if nobody reads it: with
+ * the result discarded, NOTHING terminalized the stream. The channel stayed open, so the
+ * HTTP response body and every SSE joiner parked forever on a generation that had already
+ * failed; the session row stayed `'streaming'`, so it kept being served as live, blocked
+ * the next send's takeover, and left the abort-registry entry standing.
+ *
+ * So the failure path runs the two halves of that block this module can reach.
+ * `lifecycle.finish(false)` is the one that matters: it closes the channel (ending every
+ * subscriber at a known point, with the error frame already in the record they read),
+ * drives the row terminal, and broadcasts `chat:stream_complete`. `false` because this is
+ * a failure, not a user stop — the same value the ordinary error path produces, where an
+ * exception inside `execute` becomes an error chunk and `onFinish` still computes
+ * `aborted === false`.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: settle the credit hold. That needs the turn's usage
+ * accounting — `holdId`, accumulated tokens, the provider's cost — none of which exists at
+ * this seam, and inventing a zero-usage settle here would bill the turn wrongly rather than
+ * leave it to the sweep that already covers an unreleased hold. Named so the omission is a
+ * decision rather than an oversight.
+ *
+ * Both calls are idempotent (`finish` returns early once finished; `removeStream` is a
+ * delete), so this is harmless in the race where `onFinish` did fire after all.
+ */
+const terminalizeOnPumpFailure = ({
+  pump,
+  lifecycle,
+  streamId,
+}: {
+  pump: ReturnType<typeof pumpSdkStreamToChannel>;
+  lifecycle: StreamLifecycleHandle;
+  streamId: string;
+}): void => {
+  const terminalize = (error: unknown): void => {
+    loggers.ai.error(
+      'pumpAndRespond: SDK pump failed — finishing the lifecycle the SDK never will',
+      error instanceof Error ? error : new Error(String(error)),
+      { messageId: lifecycle.channel.messageId, streamId },
+    );
+    removeStream({ streamId });
+    lifecycle.finish(false);
+  };
+
+  // Two-argument `then` rather than `.then().catch()`: the rejection handler must cover the
+  // PUMP rejecting, not a throw from the resolution handler above it. The pump documents
+  // that it never rejects; this is the belt to that braces, because the failure a broken
+  // promise contract would produce here is precisely the indefinite hang above.
+  void pump.then(
+    (result) => {
+      if (result.error !== undefined) terminalize(result.error);
+    },
+    (error: unknown) => terminalize(error),
+  );
 };
