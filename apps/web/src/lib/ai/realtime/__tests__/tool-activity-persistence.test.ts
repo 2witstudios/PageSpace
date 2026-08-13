@@ -10,6 +10,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { persistVoiceToolActivity } from '../tool-activity-persistence';
 import type { TranscriptPersistenceDeps } from '../transcript-persistence';
+import type { UIMessage } from 'ai';
+import {
+  convertGlobalAssistantMessageToUIMessage,
+  extractStructuredContentFromParts,
+  readMessageText,
+} from '../../core/message-utils';
 
 const conversation = (over: Record<string, unknown> = {}) => ({
   id: 'conv1',
@@ -24,6 +30,23 @@ const conversation = (over: Record<string, unknown> = {}) => ({
 /** Whatever reached the repository, in the order it got there. */
 type SavedRow = Record<string, unknown>;
 
+/**
+ * The repository does NOT store what it is handed: when a save carries parts it
+ * rewrites `content` into the structured envelope
+ * (`message-repository.ts` → `extractStructuredContentFromParts`). A fake that
+ * records the arguments verbatim therefore tests a row shape that never reaches
+ * the database — and every assertion about what is stored would be about
+ * something imaginary. This mirrors that rewrite.
+ */
+const asStored = async (args: Record<string, unknown>): Promise<SavedRow> => {
+  const uiMessage = args.uiMessage as { parts?: UIMessage['parts'] } | undefined;
+  if (!uiMessage?.parts?.length) return args as SavedRow;
+  return {
+    ...args,
+    content: await extractStructuredContentFromParts(uiMessage.parts, args.content as string),
+  };
+};
+
 function deps(over: Partial<TranscriptPersistenceDeps> = {}) {
   const global: SavedRow[] = [];
   const page: SavedRow[] = [];
@@ -32,11 +55,11 @@ function deps(over: Partial<TranscriptPersistenceDeps> = {}) {
     createConversation: vi.fn(async () => conversation()),
     canAccess: vi.fn(async () => true),
     saveGlobalMessage: async (args) => {
-      global.push(args as SavedRow);
+      global.push(await asStored(args as Record<string, unknown>));
       return { saved: true, rev: 7 };
     },
     savePageMessage: async (args) => {
-      page.push(args as SavedRow);
+      page.push(await asStored(args as Record<string, unknown>));
       return { saved: true, rev: 7 };
     },
     newMessageId: vi.fn(() => 'minted1'),
@@ -84,17 +107,18 @@ describe('persistVoiceToolActivity — the running row', () => {
     expect(result).toMatchObject({ saved: true, messageId: 'minted1', rev: 7 });
   });
 
-  it('should write NO text, because nothing was said', async () => {
-    // Load-bearing, not an omission. `buildRealtimeSeed` replays a message's
-    // `content` as an utterance, so a label here would seed the next call with
+  it('should store NO text, because nothing was said', async () => {
+    // Load-bearing, not an omission. The seed replays a message's words as an
+    // utterance, so a label here would seed the next call with
     // "Read Page: Roadmap" as though the assistant had said it — and spend the
-    // seed's turn budget on things nobody said. The renderer builds its text
-    // from parts, so the row still shows as a tool card.
+    // seed's turn budget on things nobody said. Asserted through the reader the
+    // seed actually uses, because the stored column is an envelope, not text.
     const { deps: d, global } = deps();
 
     await persistVoiceToolActivity(d, running);
 
-    expect(global[0]).toMatchObject({ content: '', role: 'assistant' });
+    expect(global[0].role).toBe('assistant');
+    expect(readMessageText(global[0].content as string)).toBe('');
   });
 
   it('should be written even though it has no text', async () => {
@@ -232,5 +256,76 @@ describe('persistVoiceToolActivity — it takes the same guarded path a transcri
 
     expect(global).toEqual([]);
     expect(result.skipped).toBe('history_deleted');
+  });
+});
+
+/**
+ * The claim being tested is "it is still there when you come back to the
+ * thread". Live delivery rides `uiMessage` on the socket event; a RELOAD
+ * rebuilds the parts from the stored columns instead, so the two can disagree
+ * — and a row that renders once and then vanishes on refresh is worse than one
+ * that never rendered.
+ *
+ * This drives the real reconstruction the thread uses, over exactly what the
+ * writer produced, with no database in between.
+ */
+describe('persistVoiceToolActivity — what comes back after a reload', () => {
+  const reload = async (row: SavedRow) =>
+    convertGlobalAssistantMessageToUIMessage({
+      id: row.messageId as string,
+      conversationId: 'conv1',
+      userId: null,
+      role: 'assistant',
+      content: row.content as string,
+      toolCalls: row.toolCalls ?? null,
+      toolResults: row.toolResults ?? null,
+      createdAt: new Date(0),
+    } as Parameters<typeof convertGlobalAssistantMessageToUIMessage>[0]);
+
+  it('should come back as the same tool part it was written as', async () => {
+    const { deps: d, global } = deps();
+
+    await persistVoiceToolActivity(d, {
+      ...running,
+      messageId: 'm1',
+      output: 'Line 1\nLine 2',
+    });
+    const message = await reload(global[0]);
+
+    expect(message.parts).toHaveLength(1);
+    expect(message.parts[0]).toMatchObject({
+      type: 'tool-read_page',
+      toolCallId: 'call_1',
+      state: 'output-available',
+      output: 'Line 1\nLine 2',
+    });
+  });
+
+  it('given a failed tool, should still come back as an error', async () => {
+    const { deps: d, global } = deps();
+
+    await persistVoiceToolActivity(d, {
+      ...running,
+      messageId: 'm1',
+      output: 'ignored',
+      errorText: "That didn't work: permission denied",
+    });
+    const message = await reload(global[0]);
+
+    expect(message.parts[0]).toMatchObject({
+      state: 'output-error',
+      errorText: "That didn't work: permission denied",
+    });
+  });
+
+  it('should not reappear as a spoken turn — it never said anything', async () => {
+    // The row carries no text, so a reload must not invent an empty utterance
+    // above the tool card.
+    const { deps: d, global } = deps();
+
+    await persistVoiceToolActivity(d, { ...running, messageId: 'm1', output: 'ok' });
+    const message = await reload(global[0]);
+
+    expect(message.parts.filter((part) => part.type === 'text')).toEqual([]);
   });
 });
