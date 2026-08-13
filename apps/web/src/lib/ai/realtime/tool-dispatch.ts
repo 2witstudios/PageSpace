@@ -28,41 +28,37 @@
  *   - `function_call_output.output` must be a STRING — so everything below
  *     returns one, including every failure.
  *
- * RESULTS ARE NOT TRUNCATED, AND THE CAP THAT USED TO DO IT WAS A BUG. Every
- * result was cut to 700 characters here on the reasoning that a spoken answer
- * cannot be skimmed — which is true, and is a fact about what the model SAYS.
- * This is what the model KNOWS, and starving that is what made a call unable to
- * do its job:
- *   - `tool_search` returns JSON Schemas. Sliced at 700 characters it hands back
- *     one schema cut mid-object, so the model cannot build the `execute_tool`
- *     call it went looking for — it guesses parameters, fails, and tries again.
+ * THE OLD 700-CHARACTER CAP WAS MEASURING THE WRONG THING. Every result was cut
+ * to 700 characters here on the reasoning that a spoken answer cannot be
+ * skimmed — which is true, and is a fact about what the model SAYS. This is
+ * what the model KNOWS, and starving that is what made a call unable to do its
+ * job:
+ *   - `tool_search` returns JSON Schemas. Sliced at 700 characters it handed
+ *     back one schema cut mid-object, so the model could not build the
+ *     `execute_tool` call it went looking for — it guessed parameters, failed,
+ *     and tried again.
  *   - `read_page` returned the first 700 characters of a document, which is
  *     neither a summary nor enough to edit from: `replace_lines` needs line
  *     numbers off a full read.
  *   - `list_pages` was cut off, so "find my document" failed whenever the
  *     document sorted late.
- * The typed surface caps tool results nowhere, and this is the same agent. Where
- * a result really is too large to want whole, the TOOL says so — `read_page`
- * takes `lineStart`/`lineEnd` — which is a decision the model can make with the
- * page in front of it, and a blanket cap here never could.
  *
- * Brevity is still required; it is just enforced where it belongs. The spoken
+ * Brevity is still required; it is enforced where it belongs. The spoken
  * override in `instructions.ts` asks for two or three sentences a turn, and the
  * model summarises the result rather than reciting it.
  *
- * THERE IS STILL A CEILING, AND IT IS ABOUT THE SESSION, NOT ABOUT SPEECH. A
- * realtime session has 32k tokens, shared with the seed, the instructions and
- * the audio for the whole call, and a `function_call_output` stays in it. One
- * result can therefore end a call outright — measured, not theorised:
- * `tool_search` for a broad keyword returns 21k characters, and for a
- * single-letter query 89k, which is ~22k tokens on its own.
+ * THERE IS STILL A CEILING, AND IT IS ABOUT THE SESSION. A realtime session has
+ * 32k tokens, shared with the seed, the instructions and the audio for the whole
+ * call, and a `function_call_output` stays in it — so one result can end a call
+ * outright. Measured, not theorised: `tool_search` returns 21k characters for a
+ * broad keyword and 89k for a single letter, which is ~22k tokens on its own.
  *
- * The ceiling is set so the path the model is actually TOLD to take survives
- * whole. `TOOL_DISCOVERY_PROMPT` instructs `tool_search("select:name")` to get
- * a schema before calling a tool; two tools that way is ~7k characters, and an
- * ordinary page read is far less. What gets cut is the pathological case — a
- * broad keyword dump the model did not need in full — and it is told how to ask
- * again more narrowly.
+ * `MAX_RESULT_CHARS` is therefore set so the path the model is actually TOLD to
+ * take survives whole. `TOOL_DISCOVERY_PROMPT` instructs
+ * `tool_search("select:name")` to get a schema before calling a tool; two tools
+ * that way is ~7k characters, and an ordinary page read is far less. What gets
+ * cut is the case nobody wanted whole — a broad dump — and the model is told how
+ * to ask again for less.
  */
 
 import type { Tool, ToolSet } from 'ai';
