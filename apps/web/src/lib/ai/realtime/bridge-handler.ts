@@ -80,7 +80,7 @@ export const handleVoiceBridgeRequest = async (
     // resolve a name in, and the `enabledTools` that `execute_tool` re-checks
     // off the execution context. An agent with no allowlist configured is
     // `null` — unrestricted — and the Global Assistant has no agent at all.
-    const output = await dispatchRealtimeToolCall(
+    const outcome = await dispatchRealtimeToolCall(
       deps.toolDeps(request.assistant?.enabledTools ?? null),
       {
         name: request.name,
@@ -98,7 +98,10 @@ export const handleVoiceBridgeRequest = async (
       },
       deps.model,
     );
-    return { status: 200, body: { ok: true, kind: 'tool', output } };
+    return {
+      status: 200,
+      body: { ok: true, kind: 'tool', output: outcome.output, failed: outcome.failed },
+    };
   }
 
   if (request.kind === 'tool_started' || request.kind === 'tool_finished') {

@@ -104,12 +104,20 @@ export function VoiceCallBar({ assistantName, className }: VoiceCallBarProps) {
         </div>
 
         <div className="min-w-0 flex-1">
-          {latest ? (
+          {/*
+            The status line WINS over the last thing said while a tool is
+            running. Quoting the previous utterance there is the one moment it
+            is actively wrong: the model has stopped talking to go and do
+            something, and the whole point of naming the work is that the
+            silence is explained. Without this the tool status was unreachable
+            after the first spoken turn.
+          */}
+          {runningTool || !latest ? (
+            <p className="truncate text-xs text-muted-foreground">{statusLine}</p>
+          ) : (
             <p className="truncate text-xs italic text-muted-foreground">
               &ldquo;{latest.text}&rdquo;
             </p>
-          ) : (
-            <p className="truncate text-xs text-muted-foreground">{statusLine}</p>
           )}
         </div>
 

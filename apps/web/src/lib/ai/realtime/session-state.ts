@@ -109,11 +109,27 @@ export const sessionReducer = (
   action: SessionAction,
 ): SessionState => {
   switch (action.type) {
+    // `activeTools` is cleared on every lifecycle edge below: a call that is
+    // starting, has just started, has failed or has ended is not running a
+    // tool. Left alone, the bar would show the PREVIOUS call's tool as live
+    // for the whole first silent turn of the next one.
     case 'connecting':
-      return { ...state, status: 'connecting', error: undefined, failure: undefined };
+      return {
+        ...state,
+        status: 'connecting',
+        error: undefined,
+        failure: undefined,
+        activeTools: [],
+      };
 
     case 'connected':
-      return { ...state, status: 'connected', error: undefined, failure: undefined };
+      return {
+        ...state,
+        status: 'connected',
+        error: undefined,
+        failure: undefined,
+        activeTools: [],
+      };
 
     case 'failed':
       // Keep the transcript: a drop mid-conversation must not erase the record.
@@ -123,10 +139,17 @@ export const sessionReducer = (
         error: action.message,
         failure: action.failure,
         userSpeaking: false,
+        activeTools: [],
       };
 
     case 'disconnected':
-      return { ...state, status: 'idle', userSpeaking: false, failure: undefined };
+      return {
+        ...state,
+        status: 'idle',
+        userSpeaking: false,
+        failure: undefined,
+        activeTools: [],
+      };
 
     case 'event': {
       const type = eventType(action.event);
@@ -159,9 +182,12 @@ export const sessionReducer = (
       return {
         ...state,
         transcript: [...state.transcript, entry],
-        // The model is speaking again, so whatever it went away to do is done.
-        // This is what bounds the status line to exactly the silent window.
-        activeTools: state.activeTools.length === 0 ? state.activeTools : [],
+        // ONLY the assistant speaking ends the tool window. `extractTranscript`
+        // also returns the CALLER's transcripts, and someone talking over a
+        // running tool must not make the bar claim the work has finished — they
+        // are the one waiting on it.
+        activeTools:
+          entry.role === 'assistant' && state.activeTools.length > 0 ? [] : state.activeTools,
       };
     }
   }

@@ -55,15 +55,27 @@ export type ToolActivityRequest = {
  * object. A payload that will not parse still shows the call: the raw string is
  * more useful on screen than an empty card, and this is a record, not a
  * dispatch. The copy that has to be right is parsed in `tool-dispatch.ts`.
+ *
+ * ALWAYS A RECORD. `JSON.parse` happily returns `null`, an array or a bare
+ * number, none of which is an argument bag — and each would reach the renderer
+ * and the persisted `toolCalls` column as a tool input that the typed surface
+ * can never produce. They are kept, under `raw`, rather than discarded: a call
+ * did happen, and the arguments it was made with are what a reader needs.
  */
-const inputFor = (argumentsJson: string): unknown => {
+const inputFor = (argumentsJson: string): Record<string, unknown> => {
   const trimmed = argumentsJson.trim();
   if (trimmed.length === 0) return {};
+
+  let parsed: unknown;
   try {
-    return JSON.parse(trimmed);
+    parsed = JSON.parse(trimmed);
   } catch {
     return { raw: trimmed };
   }
+
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : { raw: parsed };
 };
 
 /**
@@ -73,7 +85,10 @@ const inputFor = (argumentsJson: string): unknown => {
  * reload path are all keyed to this shape, so a voice tool call gets all of
  * them for free.
  */
-const toolPart = (request: ToolActivityRequest, input: unknown): UIMessagePart => {
+const toolPart = (
+  request: ToolActivityRequest,
+  input: Record<string, unknown>,
+): UIMessagePart => {
   const base = {
     type: `tool-${request.name}`,
     toolCallId: request.toolCallId,

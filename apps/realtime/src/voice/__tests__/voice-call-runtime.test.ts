@@ -77,7 +77,7 @@ const defaultRespond = (
 ): Awaited<ReturnType<VoiceBridgeClient['send']>> =>
   request.kind === 'tool_started' || request.kind === 'tool_finished'
     ? { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 }
-    : { ok: true, kind: 'tool', output: 'Two pages.' };
+    : { ok: true, kind: 'tool', output: 'Two pages.', failed: false };
 
 function fakeBridge(
   respond: (request: VoiceBridgeRequest) => Awaited<ReturnType<VoiceBridgeClient['send']>> = defaultRespond,
@@ -222,7 +222,7 @@ describe('startVoiceCallRuntime — showing the work in the thread', () => {
     releaseRecord();
   });
 
-  it('given a tool that could not be dispatched, should record it as an error', async () => {
+  it('given the hop itself failed, should record the call as an error', async () => {
     const session = fakeSession();
     const bridge = fakeBridge((request) =>
       request.kind === 'tool'
@@ -240,9 +240,58 @@ describe('startVoiceCallRuntime — showing the work in the thread', () => {
     session.emit(responseDone({ output: [toolCall()] }));
     await flush();
 
-    expect(bridge.ofKind('tool_finished')[0]).toMatchObject({
-      errorText: 'The tool could not be reached.',
+    const [finished] = bridge.ofKind('tool_finished') as { errorText?: string }[];
+    expect(finished.errorText).toContain("couldn't run that");
+  });
+
+  it('given a tool that RAN and failed, should record an error rather than a result', async () => {
+    // The sharp case. A tool that threw, was refused, or was called with bad
+    // parameters still comes back over a perfectly healthy hop carrying a
+    // speakable sentence — the model is blocked until it gets one. Reading
+    // `ok` alone would file a permission error in the thread as a completed
+    // call, rendered green.
+    const session = fakeSession();
+    const bridge = fakeBridge((request) =>
+      request.kind === 'tool'
+        ? { ok: true, kind: 'tool', output: "That didn't work: permission denied", failed: true }
+        : { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 },
+    );
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
     });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.ofKind('tool_finished')[0]).toMatchObject({
+      errorText: "That didn't work: permission denied",
+    });
+    // The model still gets its answer — it is blocked until it does.
+    expect(session.sent[0]).toMatchObject({
+      item: { output: "That didn't work: permission denied" },
+    });
+  });
+
+  it('given a tool that succeeded, should record a result and no error', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    const [finished] = bridge.ofKind('tool_finished') as { errorText?: string }[];
+    expect(finished.errorText).toBeUndefined();
   });
 
   it('given an UNBOUND call, should run the tool and record nothing', async () => {
@@ -272,7 +321,7 @@ describe('startVoiceCallRuntime — showing the work in the thread', () => {
         ? { ok: false, error: 'nope' }
         : request.kind === 'tool_finished'
           ? { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 }
-          : { ok: true, kind: 'tool', output: 'Two pages.' },
+          : { ok: true, kind: 'tool', output: 'Two pages.', failed: false },
     );
     startVoiceCallRuntime({
       session,
@@ -466,7 +515,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     const bridge = fakeBridge(() => {
       // The call ends mid-dispatch — the caller hung up while a tool was running.
       (session as { ended: boolean }).ended = true;
-      return { ok: true, kind: 'tool', output: 'Two pages.' };
+      return { ok: true, kind: 'tool', output: 'Two pages.', failed: false };
     });
     startVoiceCallRuntime({
       session,
@@ -487,7 +536,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     const bridge = fakeBridge((request) =>
       request.kind === 'transcript'
         ? { ok: false, error: 'Voice bridge is unreachable' }
-        : { ok: true, kind: 'tool', output: 'ok' },
+        : { ok: true, kind: 'tool', output: 'ok', failed: false },
     );
     startVoiceCallRuntime({
       session,
@@ -515,7 +564,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     const session = fakeSession();
     const bridge = fakeBridge((request) => {
       if (request.kind === 'transcript') throw 'bridge string blip';
-      return { ok: true, kind: 'tool', output: 'ok' };
+      return { ok: true, kind: 'tool', output: 'ok', failed: false };
     });
     startVoiceCallRuntime({
       session,
@@ -544,7 +593,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     const session = fakeSession();
     const bridge = fakeBridge((request) => {
       if (request.kind === 'transcript') throw new Error('bridge exploded');
-      return { ok: true, kind: 'tool', output: 'ok' };
+      return { ok: true, kind: 'tool', output: 'ok', failed: false };
     });
     startVoiceCallRuntime({
       session,

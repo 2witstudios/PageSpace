@@ -92,11 +92,19 @@ describe('connection lifecycle', () => {
     ]);
   });
 
-  it('given a failure while a tool was running, should keep showing what it was', () => {
-    // The call dropped mid-tool; erasing what it was doing would leave the bar
-    // claiming nothing was happening when something was.
-    const state = after([toolCall('read_page', { title: 'Notes' }), { type: 'failed', message: 'dropped' }]);
-    expect(state.activeTools).toHaveLength(1);
+  it('given a call that ends or restarts, should stop claiming a tool is running', () => {
+    // A dropped call is not still reading a page. Left alone, the next call
+    // would open showing the previous call's tool as live for its whole first
+    // silent turn.
+    for (const ending of [
+      { type: 'failed', message: 'dropped' },
+      { type: 'disconnected' },
+      { type: 'connecting' },
+      { type: 'connected' },
+    ] as SessionAction[]) {
+      const state = after([toolCall('read_page', { title: 'Notes' }), ending]);
+      expect(state.activeTools, `${ending.type} left a stale tool`).toEqual([]);
+    }
   });
 
   it('given a disconnect, should return to idle and stop listening', () => {
@@ -210,6 +218,25 @@ describe('tool activity — what fills the silence', () => {
     ]);
 
     expect(state.activeTools).toEqual([]);
+    expect(state.transcript).toHaveLength(1);
+  });
+
+  it('should KEEP showing the tool while the caller talks over it', () => {
+    // `extractTranscript` returns the caller's transcripts too. Someone
+    // speaking during a slow tool is the person waiting on it — clearing then
+    // would drop the explanation for the silence exactly when it is needed.
+    const state = after([
+      toolCall('read_page', { title: 'Roadmap' }),
+      {
+        type: 'event',
+        event: {
+          type: 'conversation.item.input_audio_transcription.completed',
+          transcript: 'are you still there?',
+        },
+      },
+    ]);
+
+    expect(state.activeTools).toHaveLength(1);
     expect(state.transcript).toHaveLength(1);
   });
 

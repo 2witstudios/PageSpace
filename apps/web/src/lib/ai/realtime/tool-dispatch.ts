@@ -49,6 +49,20 @@
  * Brevity is still required; it is just enforced where it belongs. The spoken
  * override in `instructions.ts` asks for two or three sentences a turn, and the
  * model summarises the result rather than reciting it.
+ *
+ * THERE IS STILL A CEILING, AND IT IS ABOUT THE SESSION, NOT ABOUT SPEECH. A
+ * realtime session has 32k tokens, shared with the seed, the instructions and
+ * the audio for the whole call, and a `function_call_output` stays in it. One
+ * result can therefore end a call outright — measured, not theorised:
+ * `tool_search` for a broad keyword returns 21k characters, and for a
+ * single-letter query 89k, which is ~22k tokens on its own.
+ *
+ * The ceiling is set so the path the model is actually TOLD to take survives
+ * whole. `TOOL_DISCOVERY_PROMPT` instructs `tool_search("select:name")` to get
+ * a schema before calling a tool; two tools that way is ~7k characters, and an
+ * ordinary page read is far less. What gets cut is the pathological case — a
+ * broad keyword dump the model did not need in full — and it is told how to ask
+ * again more narrowly.
  */
 
 import type { Tool, ToolSet } from 'ai';
@@ -58,6 +72,18 @@ import type {
   VoiceAssistant,
   VoiceLocationContext,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
+
+/**
+ * How much of one tool result a call can afford to keep.
+ *
+ * ~3k tokens. Sized against the 32k session rather than against a listener's
+ * patience — the model summarises for the listener, and the prompt is what
+ * makes it brief. Above `tool_search("select:…")` (~7k characters for two
+ * tools, the schema lookup the discovery prompt instructs) and above an
+ * ordinary page read; below the point where a single result crowds out the
+ * conversation it belongs to.
+ */
+export const MAX_RESULT_CHARS = 12_000;
 
 /** Parsed arguments, or the sentence to say instead. */
 type ParsedArguments =
@@ -162,10 +188,23 @@ const firstBalancedObject = (text: string): string | undefined => {
  * still succeeded, and an empty `output` reads to the model as a call that
  * produced no answer.
  */
-export const formatToolResult = (value: unknown): string => {
+export const formatToolResult = (
+  value: unknown,
+  maxChars: number = MAX_RESULT_CHARS,
+): string => {
   const text = typeof value === 'string' ? value : safeStringify(value);
   const trimmed = text.trim();
-  return trimmed.length === 0 ? 'Done.' : trimmed;
+  if (trimmed.length === 0) return 'Done.';
+  if (trimmed.length <= maxChars) return trimmed;
+
+  const window = trimmed.slice(0, maxChars);
+  const lastSpace = window.lastIndexOf(' ');
+  const head = (lastSpace > 0 ? window.slice(0, lastSpace) : window).trimEnd();
+  // The hint is for the MODEL. Without it a cut result reads as a complete one,
+  // and the model reports the content ended where the ceiling did. It names the
+  // two ways to ask again because they are the two shapes that get cut: a
+  // search that matched too much, and a page too long to read at once.
+  return `${head}…\n\n[${trimmed.length - head.length} characters were not returned. Ask again more narrowly — tool_search("select:exact_name") for one tool's schema, or read_page with lineStart/lineEnd for the rest of a page.]`;
 };
 
 /**
@@ -196,6 +235,23 @@ export type RealtimeToolDispatchRequest = {
    * and for an unbound call, which act as the user.
    */
   readonly assistant?: VoiceAssistant;
+};
+
+/**
+ * What a dispatch produced: the sentence the model gets, and whether the tool
+ * actually WORKED.
+ *
+ * The two are deliberately different questions. Every failure below still
+ * yields a speakable `output` — the model is blocked on `function_call_output`
+ * and must be unblocked whatever happened — so "the call returned" is not
+ * evidence the tool succeeded. Anything recording the call for a human needs
+ * the other answer: without it, a permission error is written into the thread
+ * as a completed tool call with a sentence about failure inside it, rendered
+ * green.
+ */
+export type RealtimeToolOutcome = {
+  readonly output: string;
+  readonly failed: boolean;
 };
 
 export type RealtimeToolDispatchDeps = {
@@ -269,7 +325,9 @@ export const dispatchRealtimeToolCall = async (
   deps: RealtimeToolDispatchDeps,
   request: RealtimeToolDispatchRequest,
   model: string,
-): Promise<string> => {
+): Promise<RealtimeToolOutcome> => {
+  const failure = (output: string): RealtimeToolOutcome => ({ output, failed: true });
+
   const tool: Tool | undefined = deps.tools[request.name];
   if (!tool) {
     deps.logger.warn('Realtime voice tool call named an unadvertised tool', {
@@ -277,10 +335,12 @@ export const dispatchRealtimeToolCall = async (
       userId: request.userId,
       tool: request.name,
     });
-    return `There is no tool called "${request.name}". Use tool_search to find the right one.`;
+    return failure(
+      `There is no tool called "${request.name}". Use tool_search to find the right one.`,
+    );
   }
   if (!tool.execute) {
-    return `The tool "${request.name}" cannot be run.`;
+    return failure(`The tool "${request.name}" cannot be run.`);
   }
 
   const parsed = parseToolArguments(request.argumentsJson);
@@ -290,12 +350,14 @@ export const dispatchRealtimeToolCall = async (
       userId: request.userId,
       tool: request.name,
     });
-    return parsed.message;
+    return failure(parsed.message);
   }
 
   const validated = (tool.inputSchema as z.ZodType).safeParse(parsed.args);
   if (!validated.success) {
-    return `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`;
+    return failure(
+      `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`,
+    );
   }
 
   const context = buildVoiceToolContext(request, model);
@@ -309,7 +371,7 @@ export const dispatchRealtimeToolCall = async (
       // that grows a use for them should not break on voice.
       { experimental_context: context, toolCallId: request.callId, messages: [] },
     );
-    return formatToolResult(result);
+    return { output: formatToolResult(result), failed: false };
   } catch (error) {
     // A throwing tool is a normal outcome (permission denied, missing page),
     // and the model has to be able to say something about it. The message is
@@ -320,6 +382,6 @@ export const dispatchRealtimeToolCall = async (
       { callId: request.callId, userId: request.userId, tool: request.name },
     );
     const message = error instanceof Error ? error.message : String(error);
-    return formatToolResult(`That didn't work: ${message}`);
+    return failure(formatToolResult(`That didn't work: ${message}`));
   }
 };

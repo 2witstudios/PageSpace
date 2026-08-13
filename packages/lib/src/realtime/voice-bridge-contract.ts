@@ -380,7 +380,19 @@ export type VoiceBridgeRequest = z.infer<typeof voiceBridgeRequestSchema>;
  * socket something the model rejects.
  */
 export type VoiceBridgeResponse =
-  | { readonly ok: true; readonly kind: 'tool'; readonly output: string }
+  | {
+      readonly ok: true;
+      readonly kind: 'tool';
+      readonly output: string;
+      /**
+       * Whether the TOOL failed, as distinct from `ok`, which says the hop
+       * worked. Every tool failure still returns a speakable `output` because
+       * the model is blocked until one arrives — so without this flag a
+       * permission error is indistinguishable from a result, and gets recorded
+       * in the thread as a completed call.
+       */
+      readonly failed: boolean;
+    }
   | {
       readonly ok: true;
       readonly kind: 'transcript';

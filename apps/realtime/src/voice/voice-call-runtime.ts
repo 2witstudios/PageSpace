@@ -210,6 +210,13 @@ export const startVoiceCallRuntime = (
       ? response.output
       : "I couldn't run that just now. Ask me again in a moment.";
 
+    // TWO DIFFERENT FAILURES, and the thread has to tell them apart from a
+    // result. The hop can fail (no response at all), or the hop can succeed
+    // carrying a tool that refused, threw or was called with bad parameters —
+    // which still returns a speakable sentence, because the model is blocked
+    // until it gets one. Neither is a completed tool call.
+    const failed = !dispatched || (response.ok && response.kind === 'tool' && response.failed);
+
     if (!response.ok) {
       loggers.realtime.warn('Realtime voice tool call could not be dispatched', {
         callId,
@@ -227,12 +234,7 @@ export const startVoiceCallRuntime = (
       .then((messageId) =>
         messageId === undefined
           ? undefined
-          : reportToolFinished(
-              call,
-              messageId,
-              output,
-              dispatched ? undefined : 'The tool could not be reached.',
-            ),
+          : reportToolFinished(call, messageId, output, failed ? output : undefined),
       )
       .catch((error: unknown) => {
         loggers.realtime.error(

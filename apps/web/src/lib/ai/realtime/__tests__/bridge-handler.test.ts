@@ -99,7 +99,12 @@ describe('handleVoiceBridgeRequest — tool dispatch', () => {
     const result = await handleVoiceBridgeRequest(deps(), toolBody());
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ ok: true, kind: 'tool', output: '{"title":"Notes"}' });
+    expect(result.body).toEqual({
+      ok: true,
+      kind: 'tool',
+      output: '{"title":"Notes"}',
+      failed: false,
+    });
   });
 
   it('given a tool that fails, should still answer 200 — the model is blocked until it does', async () => {
@@ -108,7 +113,9 @@ describe('handleVoiceBridgeRequest — tool dispatch', () => {
     const result = await handleVoiceBridgeRequest(deps(), toolBody({ name: 'nonexistent' }));
 
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ ok: true, kind: 'tool' });
+    // 200 with `failed: true`: the hop worked, the tool did not. Anything
+    // recording the call for a human needs to tell those apart.
+    expect(result.body).toMatchObject({ ok: true, kind: 'tool', failed: true });
     expect((result.body as { output: string }).output).toContain('no tool called');
   });
 
