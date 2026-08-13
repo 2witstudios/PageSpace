@@ -71,16 +71,23 @@ function fakeMeter() {
   } satisfies CallMeter;
 }
 
+/** Answers each hop as the web tier would: a tool result, or a recorded row. */
+const defaultRespond = (
+  request: VoiceBridgeRequest,
+): Awaited<ReturnType<VoiceBridgeClient['send']>> =>
+  request.kind === 'tool_started' || request.kind === 'tool_finished'
+    ? { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 }
+    : { ok: true, kind: 'tool', output: 'Two pages.' };
+
 function fakeBridge(
-  respond: (request: VoiceBridgeRequest) => Awaited<ReturnType<VoiceBridgeClient['send']>> = () => ({
-    ok: true,
-    kind: 'tool',
-    output: 'Two pages.',
-  }),
+  respond: (request: VoiceBridgeRequest) => Awaited<ReturnType<VoiceBridgeClient['send']>> = defaultRespond,
 ) {
   const requests: VoiceBridgeRequest[] = [];
   return {
     requests,
+    /** The dispatch hop, found by kind — the thread record also uses this bridge. */
+    dispatch: () => requests.find((r) => r.kind === 'tool'),
+    ofKind: (kind: VoiceBridgeRequest['kind']) => requests.filter((r) => r.kind === kind),
     client: {
       send: vi.fn(async (request: VoiceBridgeRequest) => {
         requests.push(request);
@@ -136,6 +143,154 @@ describe('startVoiceCallRuntime — seeding', () => {
   });
 });
 
+describe('startVoiceCallRuntime — showing the work in the thread', () => {
+  it('should record the call as running BEFORE the tool answers, then as done', async () => {
+    // The order is the feature: a row that only appears once the tool has
+    // finished is a result, not a spinner, and the whole point is filling the
+    // wait.
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    const kinds = bridge.requests.map((r) => r.kind);
+    expect(kinds.indexOf('tool_started')).toBeLessThan(kinds.indexOf('tool'));
+    expect(kinds.indexOf('tool')).toBeLessThan(kinds.indexOf('tool_finished'));
+  });
+
+  it('should name the SAME row in both phases, so it converges instead of doubling', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    const [finished] = bridge.ofKind('tool_finished');
+    expect(finished).toMatchObject({
+      messageId: 'm1',
+      toolCallId: 'call_1',
+      output: 'Two pages.',
+    });
+  });
+
+  it('should not delay the model behind the thread record', async () => {
+    // The caller is already sitting through the tool. A row nobody is waiting
+    // for must not be added to that wait.
+    const session = fakeSession();
+    let releaseRecord: () => void = () => {};
+    const bridge = fakeBridge();
+    const slow = new Promise<void>((resolve) => {
+      releaseRecord = resolve;
+    });
+    const original = bridge.client.send;
+    bridge.client.send = (async (request: VoiceBridgeRequest) => {
+      if (request.kind === 'tool_started') await slow;
+      return original(request);
+    }) as VoiceBridgeClient['send'];
+
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    // The model already has its answer while the record is still blocked.
+    expect(session.sent[0]).toMatchObject({
+      item: { type: 'function_call_output', output: 'Two pages.' },
+    });
+    expect(session.sent[1]).toEqual({ type: 'response.create' });
+    releaseRecord();
+  });
+
+  it('given a tool that could not be dispatched, should record it as an error', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge((request) =>
+      request.kind === 'tool'
+        ? { ok: false, error: 'Voice bridge is unreachable' }
+        : { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 },
+    );
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.ofKind('tool_finished')[0]).toMatchObject({
+      errorText: 'The tool could not be reached.',
+    });
+  });
+
+  it('given an UNBOUND call, should run the tool and record nothing', async () => {
+    // No conversation means no thread to write into — a real, supported state.
+    const session = fakeSession({ conversationId: undefined });
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.ofKind('tool_started')).toEqual([]);
+    expect(bridge.ofKind('tool_finished')).toEqual([]);
+    expect(bridge.dispatch()).toBeDefined();
+  });
+
+  it('given the row could not be created, should not try to update one', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge((request) =>
+      request.kind === 'tool_started'
+        ? { ok: false, error: 'nope' }
+        : request.kind === 'tool_finished'
+          ? { ok: true, kind: 'tool_activity', saved: true, messageId: 'm1', rev: 1 }
+          : { ok: true, kind: 'tool', output: 'Two pages.' },
+    );
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: fakeMeter(),
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.ofKind('tool_finished')).toEqual([]);
+    // And the turn is unharmed.
+    expect(session.sent[1]).toEqual({ type: 'response.create' });
+  });
+});
+
 describe('startVoiceCallRuntime — tool dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -153,7 +308,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     session.emit(responseDone({ output: [toolCall()] }));
     await flush();
 
-    expect(bridge.requests[0]).toMatchObject({
+    expect(bridge.dispatch()).toMatchObject({
       kind: 'tool',
       name: 'list_pages',
       argumentsJson: '{\n  "driveId": "d1"\n}',
@@ -185,7 +340,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     session.emit(responseDone({ output: [toolCall()] }));
     await flush();
 
-    expect(bridge.requests[0]).toMatchObject({
+    expect(bridge.dispatch()).toMatchObject({
       timezone: 'America/New_York',
       locationContext: { currentPage: { id: 'p1' } },
     });
@@ -279,7 +434,7 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     session.emit(responseDone({ output: [toolCall()] }));
     await flush();
 
-    expect(bridge.requests[0]).not.toHaveProperty('conversationId');
+    expect(bridge.dispatch()).not.toHaveProperty('conversationId');
     expect(session.sent[1]).toEqual({ type: 'response.create' });
   });
 

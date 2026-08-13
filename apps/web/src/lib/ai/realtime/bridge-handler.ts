@@ -21,6 +21,7 @@ import {
   persistVoiceTranscript,
   type TranscriptPersistenceDeps,
 } from './transcript-persistence';
+import { persistVoiceToolActivity } from './tool-activity-persistence';
 
 export type VoiceBridgeDeps = {
   /**
@@ -98,6 +99,46 @@ export const handleVoiceBridgeRequest = async (
       deps.model,
     );
     return { status: 200, body: { ok: true, kind: 'tool', output } };
+  }
+
+  if (request.kind === 'tool_started' || request.kind === 'tool_finished') {
+    // A record, not a dispatch: nothing is waiting on it, and it answers with
+    // the row's id so the second phase can update that same row.
+    const activity = await persistVoiceToolActivity(deps.transcriptDeps, {
+      callId: request.callId,
+      userId: request.userId,
+      conversationId: request.conversationId,
+      toolCallId: request.toolCallId,
+      name: request.name,
+      argumentsJson: request.argumentsJson,
+      ...(request.kind === 'tool_finished'
+        ? {
+            messageId: request.messageId,
+            output: request.output,
+            ...(request.errorText === undefined ? {} : { errorText: request.errorText }),
+          }
+        : {}),
+    });
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        kind: 'tool_activity',
+        saved: activity.saved,
+        messageId: activity.messageId,
+        rev: activity.rev,
+      },
+    };
+  }
+
+  if (request.kind !== 'transcript') {
+    // Exhaustiveness, and it is load-bearing. This used to fall through to the
+    // transcript write, so a kind added to the schema would have been silently
+    // persisted as a spoken turn — a wrong row, written confidently, with no
+    // error anywhere.
+    const unreachable: never = request;
+    throw new Error(`Unhandled voice bridge request kind: ${JSON.stringify(unreachable)}`);
   }
 
   const result = await persistVoiceTranscript(deps.transcriptDeps, {

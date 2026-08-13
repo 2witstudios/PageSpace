@@ -27,6 +27,8 @@
  * exercisable without a database.
  */
 
+import type { UIMessage } from 'ai';
+import type { ToolCall, ToolResult } from '../core/message-utils';
 import { MESSAGE_SOURCE_VOICE } from '@pagespace/db/schema/conversations';
 
 /** The conversation facts this module needs. A `conversations` row satisfies it. */
@@ -45,6 +47,23 @@ export type TranscriptRequest = {
   readonly conversationId: string;
   readonly role: 'user' | 'assistant';
   readonly text: string;
+};
+
+/**
+ * The structured half of a row, when there is one.
+ *
+ * A spoken turn is only text, so it passes none of this. A tool row passes all
+ * of it: `uiMessage` is what `buildEventMessage` puts on the socket event
+ * verbatim, and `toolCalls`/`toolResults` are the columns a reload rebuilds the
+ * parts from. Without both, a tool call would render live and then vanish on
+ * refresh — or the reverse.
+ */
+export type StructuredPayload = {
+  /** Reused across both phases so the second write UPDATES the row, not adds one. */
+  readonly messageId: string;
+  readonly uiMessage: UIMessage;
+  readonly toolCalls?: ToolCall[];
+  readonly toolResults?: ToolResult[];
 };
 
 export type TranscriptWriteResult = {
@@ -66,6 +85,13 @@ type SaveArgs = {
   readonly role: 'user' | 'assistant';
   readonly content: string;
   readonly source: string;
+  /**
+   * The repository has accepted these all along; only this module never sent
+   * them, which is why a voice turn could never be anything but one text part.
+   */
+  readonly uiMessage?: UIMessage;
+  readonly toolCalls?: ToolCall[];
+  readonly toolResults?: ToolResult[];
 };
 
 export type TranscriptPersistenceDeps = {
@@ -122,6 +148,7 @@ const NOTHING: TranscriptWriteResult = { saved: false, messageId: null, rev: 0 }
 export const persistVoiceTranscript = async (
   deps: TranscriptPersistenceDeps,
   request: TranscriptRequest,
+  structured?: StructuredPayload,
 ): Promise<TranscriptWriteResult> => {
   const content = request.text.trim();
   if (content.length === 0) {
@@ -143,7 +170,7 @@ export const persistVoiceTranscript = async (
       });
       return { ...NOTHING, skipped: 'create_failed' };
     }
-    return writeGlobal(deps, request, created, content);
+    return writeGlobal(deps, request, created, content, structured);
   }
 
   if (!existing.isActive) {
@@ -167,17 +194,18 @@ export const persistVoiceTranscript = async (
   }
 
   if (existing.type === 'global') {
-    return writeGlobal(deps, request, existing, content);
+    return writeGlobal(deps, request, existing, content, structured);
   }
 
   if (existing.type === 'page' && existing.contextId) {
-    const messageId = deps.newMessageId();
+    const messageId = structured?.messageId ?? deps.newMessageId();
     const result = await deps.savePageMessage({
       messageId,
       conversationId: request.conversationId,
       role: request.role,
       content,
       source: MESSAGE_SOURCE_VOICE,
+      ...structuredColumns(structured),
       pageId: existing.contextId,
       // The attribution rule: a human author, or NULL for an agent-authored row.
       userId: request.role === 'user' ? request.userId : null,
@@ -194,19 +222,38 @@ export const persistVoiceTranscript = async (
   return { ...NOTHING, skipped: 'unsupported_conversation_type' };
 };
 
+/**
+ * The structured columns, present only for a row that has them.
+ *
+ * Spread rather than passed as `undefined`: the repository distinguishes an
+ * absent `uiMessage` (broadcast a plain text part) from one that is present,
+ * and handing it an explicit undefined would be the same thing said less
+ * clearly.
+ */
+const structuredColumns = (structured: StructuredPayload | undefined) =>
+  structured === undefined
+    ? {}
+    : {
+        uiMessage: structured.uiMessage,
+        ...(structured.toolCalls === undefined ? {} : { toolCalls: structured.toolCalls }),
+        ...(structured.toolResults === undefined ? {} : { toolResults: structured.toolResults }),
+      };
+
 const writeGlobal = async (
   deps: TranscriptPersistenceDeps,
   request: TranscriptRequest,
   conversation: TranscriptConversation,
   content: string,
+  structured?: StructuredPayload,
 ): Promise<TranscriptWriteResult> => {
-  const messageId = deps.newMessageId();
+  const messageId = structured?.messageId ?? deps.newMessageId();
   const result = await deps.saveGlobalMessage({
     messageId,
     conversationId: request.conversationId,
     role: request.role,
     content,
     source: MESSAGE_SOURCE_VOICE,
+    ...structuredColumns(structured),
     // The conversation's OWNER, not the speaker: they are the same person on
     // every path that reaches here (a global thread is owner-only), and taking
     // it off the row keeps this consistent with every other global write.
