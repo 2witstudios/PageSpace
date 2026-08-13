@@ -5,12 +5,14 @@ import {
   buildVoiceToolContext,
   dispatchRealtimeToolCall,
   formatToolResult,
-  MAX_SPOKEN_RESULT_CHARS,
+  MAX_RESULT_CHARS,
   parseToolArguments,
   type RealtimeToolDispatchDeps,
   type RealtimeToolDispatchRequest,
 } from '../tool-dispatch';
 import type { ToolExecutionContext } from '../../core/types';
+import { buildRealtimeToolExposure } from '../tools';
+import { buildPageSpaceTools } from '../../core/ai-tools';
 
 const logger = () => ({ warn: vi.fn(), error: vi.fn() });
 
@@ -115,24 +117,41 @@ describe('formatToolResult', () => {
     expect(formatToolResult(null)).toBe('Done.');
   });
 
-  it('given a long result, should cut at a word boundary and say how much was left', () => {
+  it('given a LONG result, should hand the model all of it', () => {
+    // This used to be cut at 700 characters on the reasoning that a spoken
+    // answer cannot be skimmed — which is a rule about what the model says, not
+    // about what it is allowed to know. 5,500 characters is far past the old
+    // ceiling and nowhere near the session's.
     const long = 'alpha beta '.repeat(500);
-    const spoken = formatToolResult(long);
 
-    expect(spoken.length).toBeLessThan(long.length);
-    expect(spoken).toContain('more characters were not read out');
-    // Never a severed word.
-    expect(spoken.split('…')[0].endsWith('beta') || spoken.split('…')[0].endsWith('alpha')).toBe(true);
+    expect(formatToolResult(long)).toBe(long.trim());
   });
 
-  it('given a long result with no spaces, should still cut it', () => {
-    const spoken = formatToolResult('x'.repeat(5000));
-    expect(spoken.length).toBeLessThan(5000);
+  it('should never invent a continuation hint about content it did not drop', () => {
+    expect(formatToolResult('x'.repeat(5000))).toBe('x'.repeat(5000));
+    expect(formatToolResult('alpha beta '.repeat(500))).not.toContain('were not returned');
   });
 
-  it('given a result exactly at the cap, should not truncate', () => {
-    const exact = 'y'.repeat(MAX_SPOKEN_RESULT_CHARS);
-    expect(formatToolResult(exact)).toBe(exact);
+  it('given a result that would not FIT in the session, should cut it and say how to ask again', () => {
+    // A realtime session is 32k tokens shared with the audio, and a
+    // `function_call_output` stays in it — so one result can end a call. Not a
+    // speech rule: the model summarises for the listener either way.
+    const huge = 'word '.repeat(6000);
+
+    const spoken = formatToolResult(huge);
+
+    expect(spoken.length).toBeLessThan(MAX_RESULT_CHARS + 400);
+    expect(spoken).toContain('characters were not returned');
+    // Leads with the general instruction, because a truncated listing or
+    // search is the common case and neither specific escape fits it.
+    expect(spoken).toContain('Ask again for less');
+    expect(spoken).toContain('tool_search("select:name")');
+    expect(spoken).toContain('lineStart/lineEnd');
+  });
+
+  it('should cut at a word boundary rather than mid-token', () => {
+    const spoken = formatToolResult('alpha beta '.repeat(3000));
+    expect(spoken.split('…')[0].endsWith('alpha') || spoken.split('…')[0].endsWith('beta')).toBe(true);
   });
 
   it('given a circular structure, should not throw', () => {
@@ -143,6 +162,51 @@ describe('formatToolResult', () => {
 
   it('given a value JSON.stringify drops, should fall back to a string', () => {
     expect(formatToolResult(() => 1)).not.toBe('');
+  });
+
+  it('should hand back a schema lookup the model can actually parse', async () => {
+    // THE FAILURE THIS EXISTS FOR. `tool_search` answers with JSON Schemas, and
+    // at 700 characters they arrived sliced mid-object — so the model could not
+    // build the `execute_tool` call it went looking for. It guessed parameters,
+    // failed validation, and tried again. That loop is what "it doesn't
+    // navigate tool calls" looked like from the outside.
+    //
+    // `select:` is the lookup `TOOL_DISCOVERY_PROMPT` actually instructs before
+    // calling a tool, so it is the path that has to survive whole. Measured at
+    // ~7k characters for two tools, comfortably inside the ceiling.
+    const search = buildRealtimeToolExposure(buildPageSpaceTools()).tools.tool_search;
+    const raw = await (search.execute as (a: unknown, o: unknown) => unknown)(
+      { query: 'select:create_task,update_task' },
+      { experimental_context: {}, toolCallId: 't1', messages: [] },
+    );
+
+    const spoken = formatToolResult(raw);
+
+    expect(spoken).not.toContain('were not returned');
+    const parsed = JSON.parse(spoken) as { tools: { name: string; inputSchema: unknown }[] };
+    expect(parsed.tools).toHaveLength(2);
+    // A schema is only useful whole: every matched tool has to arrive with the
+    // parameters the model is about to fill in.
+    for (const tool of parsed.tools) {
+      expect(tool.inputSchema, `${tool.name} arrived without its schema`).toBeTruthy();
+    }
+  });
+
+  it('given a BROAD search, should cut it rather than let it end the call', async () => {
+    // Measured: a one-letter query returns ~89k characters, which is ~22k
+    // tokens — most of the session, spent on a dump the model did not need in
+    // full. It is told to ask again by name.
+    const search = buildRealtimeToolExposure(buildPageSpaceTools()).tools.tool_search;
+    const raw = await (search.execute as (a: unknown, o: unknown) => unknown)(
+      { query: 'a' },
+      { experimental_context: {}, toolCallId: 't1', messages: [] },
+    );
+
+    const spoken = formatToolResult(raw);
+
+    expect(JSON.stringify(raw).length).toBeGreaterThan(50_000);
+    expect(spoken.length).toBeLessThan(MAX_RESULT_CHARS + 400);
+    expect(spoken).toContain('Ask again for less');
   });
 });
 
@@ -238,7 +302,7 @@ describe('buildVoiceToolContext', () => {
 describe('dispatchRealtimeToolCall', () => {
   it('given a real tool, should run it and return its formatted result', async () => {
     const execute = vi.fn(async () => ({ title: 'Notes' }));
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({ read_page: spyTool(execute) }),
       request(),
       'gpt-realtime-2.1',
@@ -285,7 +349,7 @@ describe('dispatchRealtimeToolCall', () => {
   });
 
   it('given a tool name that was never advertised, should tell the model how to recover', async () => {
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({ read_page: spyTool(() => 'ok') }),
       request({ name: 'delete_everything' }),
       'gpt-realtime-2.1',
@@ -296,7 +360,7 @@ describe('dispatchRealtimeToolCall', () => {
   });
 
   it('given a tool with no implementation, should say so rather than hang', async () => {
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({
         read_page: { description: 'x', inputSchema: z.object({}) } as unknown as Tool,
       }),
@@ -309,7 +373,7 @@ describe('dispatchRealtimeToolCall', () => {
 
   it('given unreadable arguments, should answer with a sentence rather than run the tool', async () => {
     const execute = vi.fn();
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({ read_page: spyTool(execute) }),
       request({ argumentsJson: '{"pageId": ' }),
       'gpt-realtime-2.1',
@@ -321,7 +385,7 @@ describe('dispatchRealtimeToolCall', () => {
 
   it('given arguments the tool schema rejects, should report the schema, not run the tool', async () => {
     const execute = vi.fn();
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({ read_page: spyTool(execute) }),
       request({ argumentsJson: '{"pageId": 42}' }),
       'gpt-realtime-2.1',
@@ -349,7 +413,7 @@ describe('dispatchRealtimeToolCall', () => {
   });
 
   it('given a throwing tool (a permission refusal), should turn it into something speakable', async () => {
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({
         read_page: spyTool(() => {
           throw new Error("You don't have access to that page");
@@ -363,7 +427,7 @@ describe('dispatchRealtimeToolCall', () => {
   });
 
   it('given a tool that throws a non-Error, should still answer', async () => {
-    const output = await dispatchRealtimeToolCall(
+    const { output } = await dispatchRealtimeToolCall(
       deps({
         read_page: spyTool(() => {
           throw 'nope';
@@ -374,17 +438,6 @@ describe('dispatchRealtimeToolCall', () => {
     );
 
     expect(output).toContain('nope');
-  });
-
-  it('given a huge tool result, should truncate before returning it', async () => {
-    const output = await dispatchRealtimeToolCall(
-      deps({ read_page: spyTool(() => 'word '.repeat(5000)) }),
-      request(),
-      'gpt-realtime-2.1',
-    );
-
-    expect(output.length).toBeLessThan(1000);
-    expect(output).toContain('were not read out');
   });
 
   it('should ALWAYS return a string — function_call_output cannot carry anything else', async () => {
@@ -402,8 +455,60 @@ describe('dispatchRealtimeToolCall', () => {
       ),
     ];
 
-    for (const output of await Promise.all(cases)) {
+    for (const { output } of await Promise.all(cases)) {
       expect(typeof output).toBe('string');
     }
+  });
+
+  it('should say whether the TOOL failed, not just whether the hop did', async () => {
+    // Every failure below still returns a speakable sentence, because the model
+    // is blocked on `function_call_output` until it gets one. That is exactly
+    // why a second answer is needed: without it, a permission error is written
+    // into the thread as a completed tool call, rendered green.
+    const failing = [
+      // Unadvertised tool.
+      dispatchRealtimeToolCall(deps({}), request(), 'gpt-realtime-2.1'),
+      // No implementation.
+      dispatchRealtimeToolCall(
+        deps({ read_page: { description: 'x', inputSchema: z.object({}) } as Tool }),
+        request(),
+        'gpt-realtime-2.1',
+      ),
+      // Unreadable arguments.
+      dispatchRealtimeToolCall(
+        deps({ read_page: spyTool(() => 'ok') }),
+        request({ argumentsJson: 'not json' }),
+        'gpt-realtime-2.1',
+      ),
+      // Arguments the schema refuses.
+      dispatchRealtimeToolCall(
+        deps({ read_page: spyTool(() => 'ok') }),
+        request({ argumentsJson: '{"pageId":42}' }),
+        'gpt-realtime-2.1',
+      ),
+      // A tool that threw.
+      dispatchRealtimeToolCall(
+        deps({
+          read_page: spyTool(() => {
+            throw new Error('permission denied');
+          }),
+        }),
+        request(),
+        'gpt-realtime-2.1',
+      ),
+    ];
+
+    for (const outcome of await Promise.all(failing)) {
+      expect(outcome.failed, outcome.output).toBe(true);
+      // Still speakable: the model must never be left waiting.
+      expect(outcome.output.length).toBeGreaterThan(0);
+    }
+
+    const worked = await dispatchRealtimeToolCall(
+      deps({ read_page: spyTool(() => 'Two pages.') }),
+      request(),
+      'gpt-realtime-2.1',
+    );
+    expect(worked).toEqual({ output: 'Two pages.', failed: false });
   });
 });

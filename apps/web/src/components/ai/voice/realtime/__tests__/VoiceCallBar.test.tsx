@@ -155,6 +155,73 @@ describe('VoiceCallBar — the current utterance, and nothing more', () => {
     expect(screen.getByTestId('voice-call-bar').textContent).toContain('what is on this page');
   });
 
+  it('should name the running tool INSTEAD of the last thing said', async () => {
+    // The bug this exists for: the bar rendered the last transcript whenever
+    // one existed, so the tool status was unreachable after the first spoken
+    // turn — which is every real call. The silence the status explains always
+    // follows something being said.
+    const h = harness();
+    renderBar(h.deps);
+    await startCall();
+
+    await act(async () => {
+      h.peers[0].events.deliver(
+        JSON.stringify({
+          type: 'response.output_audio_transcript.done',
+          transcript: 'Let me check that.',
+        }),
+      );
+      h.peers[0].events.deliver(
+        JSON.stringify({
+          type: 'response.done',
+          response: {
+            output: [
+              {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'read_page',
+                arguments: JSON.stringify({ title: 'Roadmap' }),
+              },
+            ],
+          },
+        }),
+      );
+    });
+
+    const bar = screen.getByTestId('voice-call-bar').textContent ?? '';
+    expect(bar).toContain('Read Page: Roadmap');
+    expect(bar).not.toContain('Let me check that.');
+  });
+
+  it('should go back to the last thing said once the model speaks again', async () => {
+    const h = harness();
+    renderBar(h.deps);
+    await startCall();
+
+    await act(async () => {
+      h.peers[0].events.deliver(
+        JSON.stringify({
+          type: 'response.done',
+          response: {
+            output: [
+              { type: 'function_call', call_id: 'call_1', name: 'read_page', arguments: '{}' },
+            ],
+          },
+        }),
+      );
+      h.peers[0].events.deliver(
+        JSON.stringify({
+          type: 'response.output_audio_transcript.done',
+          transcript: 'It is in your Inbox.',
+        }),
+      );
+    });
+
+    const bar = screen.getByTestId('voice-call-bar').textContent ?? '';
+    expect(bar).toContain('It is in your Inbox.');
+    expect(bar).not.toContain('Read Page');
+  });
+
   it('should render NO transcript history — that is the message list\'s job', async () => {
     // Spoken turns are written into the conversation and arrive on the ordinary
     // `conversation:*` events. A second copy here would be a second history,

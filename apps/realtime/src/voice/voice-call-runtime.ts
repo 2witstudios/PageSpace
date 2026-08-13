@@ -119,7 +119,80 @@ export const startVoiceCallRuntime = (
    * sentence about that rather than silence, because the one unrecoverable
    * outcome is a tool call the model never gets an answer to.
    */
+  /**
+   * Record the tool call in the thread, so a spoken turn shows its work.
+   *
+   * NEVER ON THE MODEL'S PATH. The row is written alongside the dispatch, not
+   * before it: the caller is sitting through the tool's latency already, and a
+   * database write added to it would be latency spent on something nobody is
+   * waiting for. A failure here costs the row and nothing else — hence the same
+   * `void`-and-catch shape `persistTranscript` uses below.
+   *
+   * The started write's promise is returned rather than awaited so the finish
+   * can chain on it. That ordering is the one thing that matters: both writes
+   * name the same row, and a finish that landed first would create the row as a
+   * result and then be overwritten back into a spinner.
+   */
+  const reportToolStarted = (call: FunctionCall): Promise<string | undefined> => {
+    if (!conversationId) return Promise.resolve(undefined);
+    return bridge
+      .send({
+        kind: 'tool_started',
+        callId,
+        userId,
+        conversationId,
+        toolCallId: call.callId,
+        name: call.name,
+        argumentsJson: call.argumentsJson,
+        ...(assistant === undefined ? {} : { assistant }),
+      })
+      .then((response) => {
+        if (response.ok && response.kind === 'tool_activity') {
+          return response.messageId ?? undefined;
+        }
+        loggers.realtime.warn('Realtime voice tool call was not recorded in the thread', {
+          callId,
+          tool: call.name,
+          error: response.ok ? undefined : response.error,
+        });
+        return undefined;
+      });
+  };
+
+  const reportToolFinished = async (
+    call: FunctionCall,
+    messageId: string,
+    output: string,
+    errorText?: string,
+  ): Promise<void> => {
+    if (!conversationId) return;
+    const response = await bridge.send({
+      kind: 'tool_finished',
+      callId,
+      userId,
+      conversationId,
+      messageId,
+      toolCallId: call.callId,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+      output,
+      ...(errorText === undefined ? {} : { errorText }),
+      ...(assistant === undefined ? {} : { assistant }),
+    });
+    if (!response.ok) {
+      loggers.realtime.warn('Realtime voice tool result was not recorded in the thread', {
+        callId,
+        tool: call.name,
+        error: response.error,
+      });
+    }
+  };
+
   const answerToolCall = async (call: FunctionCall): Promise<void> => {
+    // Started FIRST and unawaited, so the row appears while the tool runs
+    // rather than after it — the spinner is the point.
+    const started = reportToolStarted(call);
+
     const response = await bridge.send({
       kind: 'tool',
       callId,
@@ -132,10 +205,17 @@ export const startVoiceCallRuntime = (
       ...(assistant === undefined ? {} : { assistant }),
     });
 
-    const output =
-      response.ok && response.kind === 'tool'
-        ? response.output
-        : "I couldn't run that just now. Ask me again in a moment.";
+    const dispatched = response.ok && response.kind === 'tool';
+    const output = dispatched
+      ? response.output
+      : "I couldn't run that just now. Ask me again in a moment.";
+
+    // TWO DIFFERENT FAILURES, and the thread has to tell them apart from a
+    // result. The hop can fail (no response at all), or the hop can succeed
+    // carrying a tool that refused, threw or was called with bad parameters —
+    // which still returns a speakable sentence, because the model is blocked
+    // until it gets one. Neither is a completed tool call.
+    const failed = !dispatched || (response.ok && response.kind === 'tool' && response.failed);
 
     if (!response.ok) {
       loggers.realtime.warn('Realtime voice tool call could not be dispatched', {
@@ -146,7 +226,23 @@ export const startVoiceCallRuntime = (
       });
     }
 
+    // The model's answer goes out now, before the thread record settles. The
+    // record is chained onto the started write purely for ordering.
     session.send(buildFunctionOutput(call.callId, output));
+
+    void started
+      .then((messageId) =>
+        messageId === undefined
+          ? undefined
+          : reportToolFinished(call, messageId, output, failed ? output : undefined),
+      )
+      .catch((error: unknown) => {
+        loggers.realtime.error(
+          'Realtime voice tool activity record threw',
+          error instanceof Error ? error : new Error(String(error)),
+          { callId, tool: call.name },
+        );
+      });
   };
 
   const handleToolCalls = async (calls: readonly FunctionCall[]): Promise<void> => {

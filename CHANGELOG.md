@@ -34,6 +34,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   you what it did. Work that would take minutes gets handed to an agent or a task rather than
   leaving you listening to silence, and it will say where it went. "This page" and "here" mean what
   you are looking at, so it never asks you to read out an id.
+- **The assistant on a call can see whole answers, and you can see it working** — it was being handed
+  only the first 700 characters of everything it looked up, which is why it lost track of documents,
+  misread pages and fumbled edits: it was reading through a keyhole. It now gets what you get when
+  you type. And the work is no longer invisible — the call bar names what it is doing while it does
+  it ("Read Page: Roadmap") instead of going silent, and each tool call appears in the conversation
+  as it happens, spinner and all, exactly the way it does when you type. It is still there when you
+  come back to the thread later.
 - **A call you cannot have does not start** — running out of credit, or already having as many calls
   open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
   talking to something nobody was counting.

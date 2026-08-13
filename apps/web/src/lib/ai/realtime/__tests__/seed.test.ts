@@ -303,3 +303,23 @@ describe('buildRealtimeSeed', () => {
     });
   });
 });
+
+describe('buildRealtimeSeed — what a call is NOT reminded of', () => {
+  it('should not replay a tool row as something the assistant said', () => {
+    // A voice tool call is persisted as its own row with no text: it renders
+    // from its parts, and nothing was spoken. Replaying it would put
+    // "Read Page: Roadmap" in the next call's history as an utterance, and
+    // spend the seed's budget on turns nobody took.
+    const seed = buildRealtimeSeed([
+      { role: 'user', content: 'where are my notes?', createdAt: new Date(1) },
+      { role: 'assistant', content: '', createdAt: new Date(2) },
+      { role: 'assistant', content: 'In your Inbox.', createdAt: new Date(3) },
+    ]);
+
+    expect(seed).toHaveLength(2);
+    expect(seed.map((event) => event.item.content[0].text)).toEqual([
+      'where are my notes?',
+      'In your Inbox.',
+    ]);
+  });
+});

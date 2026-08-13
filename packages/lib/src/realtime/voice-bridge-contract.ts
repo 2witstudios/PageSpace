@@ -310,9 +310,58 @@ export const voiceTranscriptSchema = z.object({
   text: z.string().min(1),
 });
 
+/**
+ * Record a tool call in the bound conversation, so a spoken turn shows its work
+ * the way a typed one does.
+ *
+ * SEPARATE FROM THE `tool` HOP, which runs the tool and answers the model. This
+ * one writes a row and answers nobody: the model is never waiting on it, and it
+ * must never be able to delay a spoken turn. Folding the two together would put
+ * a database write inside the latency the caller is sitting through.
+ *
+ * TWO PHASES, ONE ROW. `running` creates it and answers with the `messageId`;
+ * `done` carries that id back and updates the same row, which is what turns a
+ * spinner into a result rather than adding a second entry. The id is minted on
+ * the web side because that is where message ids are minted — `apps/realtime`
+ * has no id generator and should not grow one to serve this.
+ *
+ * `output` is the string the model was given, so the thread shows what the
+ * model actually saw. `errorText` marks a tool that failed, which the renderer
+ * already distinguishes.
+ */
+const toolActivityCore = {
+  callId: realtimeCallIdSchema,
+  userId: z.string().min(1),
+  conversationId: z.string().min(1),
+  /** OpenAI's `function_call.call_id` — what the two phases agree on. */
+  toolCallId: z.string().min(1),
+  name: z.string().min(1),
+  argumentsJson: z.string(),
+  assistant: voiceAssistantSchema.optional(),
+};
+
+/** Phase one: the row appears, spinning. Answers with the id phase two needs. */
+export const voiceToolStartedSchema = z.object({
+  kind: z.literal('tool_started'),
+  ...toolActivityCore,
+});
+
+/** Phase two: the same row becomes a result, or an error. */
+export const voiceToolFinishedSchema = z.object({
+  kind: z.literal('tool_finished'),
+  ...toolActivityCore,
+  messageId: z.string().min(1),
+  /** The string the model was given, so the thread shows what the model saw. */
+  output: z.string(),
+  /** Present when the tool failed; the row renders as an error, not a result. */
+  errorText: z.string().optional(),
+});
+
 export const voiceBridgeRequestSchema = z.discriminatedUnion('kind', [
   voiceToolDispatchSchema,
   voiceTranscriptSchema,
+  voiceToolStartedSchema,
+  voiceToolFinishedSchema,
 ]);
 
 /**
@@ -331,11 +380,35 @@ export type VoiceBridgeRequest = z.infer<typeof voiceBridgeRequestSchema>;
  * socket something the model rejects.
  */
 export type VoiceBridgeResponse =
-  | { readonly ok: true; readonly kind: 'tool'; readonly output: string }
+  | {
+      readonly ok: true;
+      readonly kind: 'tool';
+      readonly output: string;
+      /**
+       * Whether the TOOL failed, as distinct from `ok`, which says the hop
+       * worked. Every tool failure still returns a speakable `output` because
+       * the model is blocked until one arrives — so without this flag a
+       * permission error is indistinguishable from a result, and gets recorded
+       * in the thread as a completed call.
+       */
+      readonly failed: boolean;
+    }
   | {
       readonly ok: true;
       readonly kind: 'transcript';
       readonly saved: boolean;
+      readonly messageId: string | null;
+      readonly rev: number;
+    }
+  | {
+      readonly ok: true;
+      readonly kind: 'tool_activity';
+      readonly saved: boolean;
+      /**
+       * The row's id. The `tool_started` answer carries it so `tool_finished`
+       * can name the same row; without it the second write would add a second
+       * entry instead of turning the spinner into a result.
+       */
       readonly messageId: string | null;
       readonly rev: number;
     }
