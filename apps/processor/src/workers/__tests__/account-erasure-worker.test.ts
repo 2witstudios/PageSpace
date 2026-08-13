@@ -77,7 +77,7 @@ vi.mock('@pagespace/lib/compliance/erasure/resend-suppression-client', () => ({
 }));
 
 vi.mock('@pagespace/lib/compliance/erasure/purge-stream-state', () => ({
-  deleteStreamStateForUser: vi.fn().mockResolvedValue({ streamSessions: 0, abortIntents: 0 }),
+  deleteStreamStateForUser: vi.fn().mockResolvedValue({ streamSessions: 0, streamFrames: 0, abortIntents: 0 }),
 }));
 
 vi.mock('@pagespace/lib/compliance/erasure/ai-provider-erasure', () => ({
