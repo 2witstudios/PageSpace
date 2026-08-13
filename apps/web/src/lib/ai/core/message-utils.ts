@@ -353,19 +353,35 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 /**
  * The plain text of a stored message, whatever shape the column is in.
  *
- * `messages.content` holds STRUCTURED JSON for any row saved with parts — the
- * text, the file/data parts and a `partsOrder` — and the raw column is what a
- * plain `select` returns. Anything wanting the words has to come through here,
- * or it gets `{"textParts":["Here they are."],…}` and treats it as prose.
+ * `messages.content` does not hold prose. Any row saved with parts — which is
+ * every typed assistant turn — stores a JSON envelope there
+ * (`extractStructuredContentFromParts`), and a plain `select` returns the
+ * envelope. Anything that wants the words and reads the column directly gets
+ * `{"textParts":["Here they are."],…}` and treats it as something someone said.
+ * The voice seed did exactly that, and replayed it at the model.
  *
- * A row with no text parts (a tool call, which renders from its parts) yields
- * an empty string, which is the honest answer: nothing was said.
+ * A row with no text — a tool call, which renders from its parts — yields an
+ * empty string, which is the honest answer: nothing was said.
+ *
+ * This is the ONE reader. `v1-conversations.ts` had a private copy of it, and
+ * two functions that decode the same envelope are two that can disagree about
+ * what a message says.
  */
 export function readMessageText(content: string | null | undefined): string {
-  const structured = parseStructuredContent(content);
-  if (!structured) return content ?? '';
-  const text = structured.textParts.join('').trim();
-  return text.length > 0 ? text : (structured.originalContent ?? '').trim();
+  if (!content) return '';
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const envelope = parsed as { originalContent?: unknown; textParts?: unknown };
+      if (typeof envelope.originalContent === 'string') return envelope.originalContent;
+      if (Array.isArray(envelope.textParts)) {
+        return envelope.textParts.filter((t): t is string => typeof t === 'string').join('');
+      }
+    }
+  } catch {
+    // Not JSON, so it is what it looks like: the message.
+  }
+  return content;
 }
 
 function parseStructuredContent(content: string | null | undefined): StructuredContentData | null {

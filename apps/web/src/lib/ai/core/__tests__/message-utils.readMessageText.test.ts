@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { readMessageText } from '../message-utils';
+import { serializeMessageRowToMessages } from '../../openai-api/v1-conversations';
 
 const structured = (over: Record<string, unknown>) =>
   JSON.stringify({ textParts: [], partsOrder: [], originalContent: '', ...over });
@@ -36,10 +37,32 @@ describe('readMessageText', () => {
     expect(readMessageText(content)).toBe('');
   });
 
-  it('given several text parts, should join them', () => {
-    expect(
-      readMessageText(structured({ textParts: ['One. ', 'Two.'], originalContent: 'One. Two.' })),
-    ).toBe('One. Two.');
+  it('given several text parts and no original body, should join them', () => {
+    expect(readMessageText(JSON.stringify({ textParts: ['One. ', 'Two.'], partsOrder: [] }))).toBe(
+      'One. Two.',
+    );
+  });
+
+  it('should be the ONLY reader — the v1 conversations API decodes through it too', () => {
+    // It had a private copy of this. Two functions decoding the same envelope
+    // are two that can disagree about what a message says, on a surface whose
+    // whole job is reporting what a message says.
+    const envelope = structured({
+      textParts: ['Here they are.'],
+      originalContent: 'Here they are.',
+    });
+
+    const [message] = serializeMessageRowToMessages({
+      id: 'm1',
+      role: 'assistant',
+      content: envelope,
+      toolCalls: null,
+      toolResults: null,
+      createdAt: new Date(0),
+      isActive: true,
+    });
+
+    expect((message as { content: string | null }).content).toBe('Here they are.');
   });
 
   it('given a plain legacy row, should pass it through untouched', () => {
