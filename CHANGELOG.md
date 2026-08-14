@@ -65,6 +65,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   away, frozen. Replies now keep arriving wherever you are in the app, and are complete when you
   return — including the reasoning and command details, not just the text. Only pressing Stop stops
   anything.
+- **Answering one of several questions no longer locks the chat** — when an assistant asked you
+  more than one thing at once, answering the first left the conversation stuck: the composer
+  showed only Stop, the box was greyed out, and the remaining question could not be answered
+  either. The only way out was to open a different conversation. The same thing happened if two
+  places showing the same chat — the sidebar and the main view, say — both tried to submit your
+  answer at once. Answering now behaves the same whether the assistant asked one question or five.
 - **Your own reply is yours in every tab and on every device** — a chat you started on your laptop
   showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
   attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
