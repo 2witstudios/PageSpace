@@ -4,66 +4,52 @@ import {
   abortActiveStreamByMessageId,
   reportAbortOutcome,
 } from '@/lib/ai/core/client';
-import { decideStopAction, shouldRunLocalStop } from '@/lib/ai/streams/decideStopAction';
+import { decideStopAction } from '@/lib/ai/streams/decideStopAction';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 /**
- * Facade — THE Stop action, for every surface (AiChatView, GlobalAssistantView, SidebarChatTab).
- *
- * Replaces `useChatStop`, `useGlobalEffectiveStream`, the GlobalChatContext stop-slot claim
- * protocol, and the dashboard store's `agentStops` slots — all four of which existed to answer
- * "which stop function is the right one to call", a question that only had to be asked because
- * the answer was a slot somebody had to claim. `activeStream` is a READ, so there is nothing to
- * claim and nothing to release.
+ * THE Stop action, for every surface — and now the ONLY thing anywhere in the client that
+ * stops a generation.
  *
  * All decision logic is in the pure, exhaustively tested `decideStopAction`; this hook is the
- * imperative shell that runs it.
+ * imperative shell that runs it. It names the stream by assistant `messageId` when one is
+ * live, and falls back to the `conversationId` captured at send for the TTFB window, where the
+ * server has not yet issued a messageId for the client to name.
  *
- * `rawStop` runs FIRST (instant local feedback; the server abort can wait seconds on a
- * cross-instance owner) — but no longer unconditionally. With conversation-scoped consuming
- * (the dual-stream fix), one chat instance can be locally consuming conversation B's stream
- * while conversation A's own handed-off stream renders via the socket on the SAME surface. A
- * Stop pressed on A must not abort B's live local fetch — that would send B dark mid-token
- * (its generation continues server-side, unwatched). The mirror's latch says which conversation
- * the local fetch belongs to: skip `rawStop` exactly when it names a DIFFERENT conversation
- * than the one being stopped. An undefined latch means the chat is idle, where `rawStop` is a
- * harmless no-op — so absence never suppresses a wanted local stop.
+ * ── WHAT WAS REMOVED, AND WHY ITS ABSENCE IS THE FEATURE ──────────────────────────────────
+ *
+ * This used to run `rawStop()` FIRST — `useChat.stop()`, for "instant local feedback" while
+ * the server abort round-tripped. It also had to decide WHETHER to run it, via
+ * `shouldRunLocalStop` and the own-stream mirror's latch: with one `Chat` serving every
+ * conversation, a Stop pressed on conversation A could otherwise abort conversation B's live
+ * local fetch and send B dark mid-token while its generation carried on unwatched.
+ *
+ * Both are gone, and neither was replaced:
+ *
+ *   - `rawStop` itself. Cancelling a local read stops NOTHING. Streams are server-owned and
+ *     survive client disconnect by design, so the only thing a local abort achieves is ending
+ *     the run's VISIBLE life while it keeps generating, keeps calling write tools, and keeps
+ *     billing. As "instant feedback" it was actively dishonest: the button flipped to Send
+ *     over a generation that had not stopped. The store entry is what the button reads now,
+ *     and it clears when the server actually confirms the stream is over.
+ *   - `shouldRunLocalStop` and the latch it consulted. There is no shared `Chat` and no local
+ *     read to protect, so the question "does this Stop belong to the fetch currently being
+ *     read?" no longer has a referent.
+ *
+ * `only-a-deliberate-stop.test.ts` is the source-level tripwire that keeps a local stop from
+ * being reintroduced, and it asserts that this path REACHES `/api/ai/abort` — because a Stop
+ * that only cancels locally is indistinguishable, from the user's side, from one that works.
  */
 export const useStopStream = ({
   activeStream,
   pendingSendConversationId,
-  rawStop,
-  getLocalSendConversationId,
-  targetConversationId,
 }: {
   /** `useConversationActiveStream(...)` for the conversation on screen. */
   activeStream: ActiveStream | undefined;
   /** `useSendHandoff`'s in-flight pendingSend key — the conversation captured AT SEND. */
   pendingSendConversationId: string | null;
-  /** The mode-selected `useChat.stop` for the surface's own local fetch. */
-  rawStop: () => void;
-  /**
-   * The mode-selected mirror's `getLatchedConversationId` — which conversation the surface's
-   * local fetch is consuming for, if any.
-   */
-  getLocalSendConversationId: () => string | undefined;
-  /** The conversation on screen — the one this Stop is stopping. */
-  targetConversationId: string | null;
 }): (() => Promise<void>) =>
   useCallback(async () => {
-    // Stops this client reading. Stops NOTHING on the server — streams are server-owned and
-    // survive a client disconnect. Skipped only when the local fetch belongs to a DIFFERENT
-    // conversation than the one being stopped — see `shouldRunLocalStop` (pure, tested) for the
-    // rules, including the empty-string-latch placeholder.
-    if (
-      shouldRunLocalStop({
-        localSendConversationId: getLocalSendConversationId(),
-        targetConversationId,
-      })
-    ) {
-      rawStop();
-    }
-
     const action = decideStopAction({ activeStream, pendingSendConversationId });
 
     if (action.type === 'abortByMessageId') {
@@ -71,9 +57,11 @@ export const useStopStream = ({
       return;
     }
     if (action.type === 'abortByConversation') {
-      reportAbortOutcome(await abortActiveStreamByConversation({ conversationId: action.conversationId }));
+      reportAbortOutcome(
+        await abortActiveStreamByConversation({ conversationId: action.conversationId }),
+      );
       return;
     }
     // 'none' — nothing live and nothing sent. Deliberately silent: there is nothing to report
     // and nothing to name.
-  }, [activeStream, pendingSendConversationId, rawStop, getLocalSendConversationId, targetConversationId]);
+  }, [activeStream, pendingSendConversationId]);

@@ -3,6 +3,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pumpSdkStreamToChannel, type PumpResult } from '@/lib/ai/core/pump-sdk-stream';
 import { STREAM_ID_HEADER, removeStream } from '@/lib/ai/core/stream-abort-registry';
 import type { StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import {
+  ADMISSION_ENVELOPE_CONTENT_TYPE,
+  STREAM_MODE_DETACHED,
+  wantsDetachedStream,
+  type StreamAdmissionEnvelope,
+} from '@/lib/ai/core/detached-stream-mode';
 
 /**
  * Caps for the HTTP response subscriber.
@@ -17,11 +23,26 @@ const RESPONSE_MAX_PENDING_FRAMES = 200_000;
 const RESPONSE_MAX_PENDING_BYTES = 64 * 1024 * 1024;
 
 /**
- * Hand the SDK stream to the pump and return a response that SUBSCRIBES to the channel.
+ * Hand the SDK stream to the pump and return either an ADMISSION ENVELOPE (detached mode) or
+ * a response that SUBSCRIBES to the channel (legacy mode).
  *
  * Shared by both turn strategies because it is identical in each, and the duplication ratchet
  * (`turn-duplication-ratchet.test.ts`) correctly refused the copy — `start-chat-generation.ts`
- * is the precedent it names.
+ * is the precedent it names. The detached branch lives HERE, in the one shared function, for
+ * the same reason: pasting the mode check into both strategies is precisely the copy the
+ * ratchet exists to catch, and the two turns have no reason to disagree about it.
+ *
+ * ── WHICH BRANCH, AND WHY THE DEFAULT IS THE LEGACY ONE ───────────────────────────────────
+ *
+ * The client states what it can consume via `X-Stream-Mode: detached`. Absent that header the
+ * body is streamed exactly as before — which is what keeps an OLD CLIENT working against a
+ * NEW SERVER, including a tab left open across a deploy. The server never volunteers the
+ * envelope. See `detached-stream-mode.ts` for the mirror case (new client, old server).
+ *
+ * NOTHING ABOUT CAPTURE CHANGES BETWEEN THE BRANCHES. The pump is the sole reader of the SDK
+ * stream in both, so the generation is equally independent of whether anyone is listening;
+ * the difference is only whether this response is subscriber #0 or a receipt. That is why the
+ * detached branch can simply decline to subscribe rather than having to arrange anything.
  *
  * WHAT THIS BUYS. The pump becomes the SOLE reader of the SDK stream, which makes capture
  * independent of whether anyone is listening. While the response body was the reader, a client
@@ -43,22 +64,64 @@ const RESPONSE_MAX_PENDING_BYTES = 64 * 1024 * 1024;
  *     anyway: cancelling the response `ReadableStream` already detaches this subscriber. See
  *     `SubscribeReadableOptions` in stream-channel.ts.
  *
+ *     THIS MODULE NOW TAKES A `Request`, AND READS EXACTLY ONE THING FROM IT: the
+ *     `X-Stream-Mode` header. That makes it the nearest thing in the generation path to a
+ *     place where somebody could "helpfully" add `request.signal` and revert the system to
+ *     client-owned streams — the disconnect-immunity tripwire watches the two ROUTE files,
+ *     not this one, so it would not catch it here. It is redundant here for the same reason
+ *     it is redundant in the routes, and it is catastrophic for the reason that test's
+ *     docblock spells out. Read the header. Read nothing else.
+ *
  * NOT AWAITED IS NOT THE SAME AS NOT OBSERVED — see `terminalizeOnPumpFailure`.
  */
 export const pumpAndRespond = ({
   sdkStream,
   lifecycle,
   streamId,
+  request,
+  channelId,
+  conversationId,
 }: {
   sdkStream: ReadableStream<UIMessageChunk>;
   lifecycle: StreamLifecycleHandle;
   streamId: string;
+  /** Read for `X-Stream-Mode` ONLY — never for its abort signal. See the note below. */
+  request: Request;
+  /** The socket room this generation broadcasts on; rides the envelope. */
+  channelId: string;
+  /** The conversation being answered into; rides the envelope. */
+  conversationId: string;
 }): Response => {
   terminalizeOnPumpFailure({
     pump: pumpSdkStreamToChannel(sdkStream, lifecycle.channel, loggers.ai),
     lifecycle,
     streamId,
   });
+
+  if (wantsDetachedStream(request.headers)) {
+    // A RECEIPT, not a stream. The generation is already running and already recording into
+    // the channel; this tells the client what to subscribe to. `startedAt` is stamped here
+    // rather than read off the lifecycle, which does not expose it — it trails the row's own
+    // start by the microseconds between `createStreamLifecycle` returning and this line, and
+    // its only client-side jobs (stamping a synthesized bubble's `createdAt`, and driving the
+    // store entry's expiry sweep) are indifferent to that.
+    const envelope: StreamAdmissionEnvelope = {
+      mode: STREAM_MODE_DETACHED,
+      messageId: lifecycle.channel.messageId,
+      conversationId,
+      channelId,
+      streamId,
+      startedAt: new Date().toISOString(),
+    };
+
+    return new Response(JSON.stringify(envelope), {
+      status: 200,
+      headers: {
+        'content-type': ADMISSION_ENVELOPE_CONTENT_TYPE,
+        [STREAM_ID_HEADER]: streamId,
+      },
+    });
+  }
 
   return createUIMessageStreamResponse({
     stream: lifecycle.channel.subscribeReadable({

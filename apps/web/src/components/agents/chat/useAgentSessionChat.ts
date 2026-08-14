@@ -23,19 +23,15 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import type { UIMessage } from 'ai';
-import { useChat } from '@ai-sdk/react';
 import { toast } from 'sonner';
 import { createId } from '@paralleldrive/cuid2';
 import type { AgentInfo } from '@/types/agent';
 import {
-  useChatTransport,
+  useChatSession,
   useCacheMessageActions,
   useSendHandoff,
-  useConversationSendHandoff,
-  HANDOFF_REFUSED_MESSAGE,
   useChatErrorCause,
   useAnswerAskUser,
-  buildChatConfig,
   type AIErrorCause,
 } from '@/lib/ai/shared';
 import type { UseAnswerAskUserResult } from '@/lib/ai/shared/hooks/useAnswerAskUser';
@@ -44,7 +40,6 @@ import { buildSessionChatRequestBody } from '@/lib/agents/build-session-chat-req
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { buildOwnStreamCommitOnFinish } from '@/hooks/ownStreamCommit';
 import {
   loadAgentConversationMessages,
   loadOlderAgentConversationMessages,
@@ -56,7 +51,6 @@ import {
 } from '@/hooks/useRenderedMessages';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { useActiveStream, useConversationActiveStream } from '@/hooks/useActiveStream';
-import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -105,39 +99,39 @@ export function useAgentSessionChat({
     void loadAgentConversationMessages(agent.id, conversationId);
   }, [agent.id, conversationId]);
 
-  const transport = useChatTransport(conversationId, '/api/ai/chat', agent.id);
-  const chatConfig = useMemo(() => {
-    if (!transport) return null;
-    return buildChatConfig({
-      // BOTH ids the onFinish commit closes over are embedded, so a change to
-      // either forces Chat recreation — the callback can never go stale
-      // (useChat reads callbacks at construction; see chat-config.ts).
-      id: `agent-session-chat:${agent.id}:${conversationId}`,
-      transport,
-      onError: (error: Error) => {
-        console.error('Agent session chat error:', error);
-        toast.error('Chat error. Please try again.');
-      },
-      // The sender's own stream entry is already removed when this channel's
-      // onStreamComplete runs (own tab never joins its SSE), leaving only the
-      // full-reload fallback — commit locally instead so the finished reply
-      // never flashes out and survives a failed reload.
-      onFinish: buildOwnStreamCommitOnFinish({ conversationId, agentId: agent.id }),
-    });
-  }, [transport, conversationId, agent.id]);
+  // `userId` is what `isOwnStream` compares, so the optimistic store entry this send opens is
+  // recognised as the user's own in every tab and on every device — not just this one.
+  const sendIdentity = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
+  );
+
+  // ONE OWNED SEND SHELL, no `Chat` instance and no transport object.
+  //
+  // `getBaseMessages` is the settled store view — which is why answering an `ask_user`
+  // question still works after a reload: the persisted assistant message carrying the
+  // question IS the base, so there is no empty internal array to hydrate first.
+  const stableMessagesRef = useRef<UIMessage[]>([]);
+  const getBaseMessages = useCallback(() => stableMessagesRef.current, []);
 
   const {
-    messages: agentChatMessages,
     sendMessage,
     status,
     error,
     clearError,
     regenerate,
-    setMessages,
-    stop,
     addToolResult,
-  } = useChat(chatConfig ?? {});
-  const isStreaming = status === 'submitted' || status === 'streaming';
+  } = useChatSession({
+    api: '/api/ai/chat',
+    channelId: agent.id,
+    conversationId,
+    triggeredBy: sendIdentity,
+    getBaseMessages,
+    onError: (err: Error) => {
+      console.error('Agent session chat error:', err);
+      toast.error('Chat error. Please try again.');
+    },
+  });
 
   const loadConversation = useCallback(
     (id: string) => loadAgentConversationMessages(agent.id, id),
@@ -151,6 +145,13 @@ export function useAgentSessionChat({
 
   const renderedMessages = useRenderedMessages(agent.id, conversationId);
   const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+  // The SETTLED view — live synth rows excluded. This is what the send shell composes its
+  // outbound messages from, and what every action reasons over.
+  const stableMessages = useMemo(
+    () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
+    [renderedMessages],
+  );
+  stableMessagesRef.current = stableMessages;
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(agent.id, conversationId);
@@ -165,25 +166,6 @@ export function useAgentSessionChat({
   const displayIsStreaming =
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === conversationId);
-
-  const mirrorTriggeredBy = useMemo(
-    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
-    [user?.id, user?.name, user?.email],
-  );
-  const { getLatchedConversationId } = useOwnStreamMirror({
-    status,
-    ownMessages: agentChatMessages,
-    pageId: agent.id,
-    conversationId,
-    triggeredBy: mirrorTriggeredBy,
-  });
-
-  const { prepareSend } = useConversationSendHandoff({
-    status,
-    stop,
-    getLatchedConversationId,
-    rejoin: rejoinActiveStreams,
-  });
 
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
   const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
@@ -236,11 +218,9 @@ export function useAgentSessionChat({
     conversationId,
     renderedMessages,
     isConversationBusy: isConversationBusyForAskUser,
-    setMessages,
     addToolResult,
     wrapSend,
     buildBody,
-    prepareSend,
   });
 
   const handleSend = useCallback(
@@ -248,33 +228,32 @@ export function useAgentSessionChat({
       const trimmed = text.trim();
       if (!trimmed || !conversationId) return false;
 
-      if (!(await prepareSend(conversationId))) {
-        toast.error(HANDOFF_REFUSED_MESSAGE);
-        return false;
-      }
-
+      // NO PRE-SEND HANDOFF. There is nothing to hand off: this send is its own `fetch`, so a
+      // generation already running in another conversation is simply not this send's concern.
+      // The `stop()` + settle-wait + possible refusal that stood here is the thing this
+      // workstream exists to delete.
       const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
       conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
 
       rollbackOptimisticSendOnFailure(
-        () => wrapSend(() => sendMessage(userMessage, { body: buildBody() })),
+        () => wrapSend(() => sendMessage(userMessage, conversationId, { body: buildBody() })),
         conversationId,
         userMessage.id,
       );
       return true;
     },
-    [conversationId, prepareSend, wrapSend, sendMessage, buildBody],
+    [conversationId, wrapSend, sendMessage, buildBody],
   );
 
   const handleStop = useStopStream({
     activeStream,
     pendingSendConversationId,
-    rawStop: stop,
-    getLocalSendConversationId: getLatchedConversationId,
-    targetConversationId: conversationId,
   });
 
-  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+  // No raw chat status in this any more: `displayIsStreaming` already ORs the pending send
+  // with the own store entry, which covers the submitted window AND every stream the old
+  // status could not see (bootstrapped, remote, cross-instance).
+  const isOwnSendLive = displayIsStreaming;
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
   const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
@@ -284,10 +263,13 @@ export function useAgentSessionChat({
     conversationId,
     renderedMessages,
     isOwnSendLive,
-    setMessages,
-    regenerate,
-    prepareSend,
-    getIsOwnSendLive,
+    // Adapts the shell's explicit-conversation `regenerate` to the action hook's
+    // conversation-less one. The id is bound HERE, where it is unambiguous, rather than being
+    // inferred inside a shared `Chat` from whatever the surface last touched — which is how a
+    // Retry used to be able to re-send another conversation's trail.
+    regenerate: (opts?: { body?: Record<string, unknown> }) => {
+      void regenerate(conversationId, opts);
+    },
   });
 
   const lastAssistantMessageId = useMemo(

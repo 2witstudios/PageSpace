@@ -1571,7 +1571,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     holdHandedOff = true;
 
 
-    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId });
+    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId });
 
   } catch (error) {
     if (activeStreamId !== undefined) {

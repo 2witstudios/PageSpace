@@ -1,214 +1,184 @@
-import { useEffect, useMemo, useCallback } from 'react';
-import { useChat, UseChatOptions } from '@ai-sdk/react';
-import { UIMessage, type CreateUIMessage } from 'ai';
+import { useMemo, useCallback, useRef } from 'react';
+import { UIMessage } from 'ai';
+import { useChatSession, type ChatSessionStatus } from '@/lib/ai/shared/hooks/useChatSession';
 import type { AgentInfo } from '@/types/agent';
 
 /**
  * Return type for the unified dual-mode chat interface.
  */
 export interface UseDualModeChatReturn {
-  /** Current messages (from active mode) */
-  messages: UIMessage[];
-  /** Send a message — parts-form (client-minted id preserved end to end, PR 5B). */
-  sendMessage: (message: CreateUIMessage<UIMessage>, options?: { body?: Record<string, unknown> }) => void;
-  /** Current status */
-  status: 'ready' | 'submitted' | 'streaming' | 'error';
-  /** Current error (if any) */
+  /** Send a message into `conversationId` — parts-form, client-minted id preserved end to end. */
+  sendMessage: (
+    message: UIMessage,
+    conversationId: string,
+    options?: { body?: Record<string, unknown> },
+  ) => Promise<void>;
+  /** The ACTIVE mode's send status for the conversation on screen. */
+  status: ChatSessionStatus;
+  /** Current error (if any) for the active mode's conversation. */
   error: Error | undefined;
   /** Clear current error state */
   clearError: () => void;
-  /** Regenerate last response */
-  regenerate: (options?: { body?: Record<string, unknown> }) => void;
-  /** Update messages array (accepts updater function) */
-  setMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
-  /** Stop current stream */
-  stop: () => void;
-  /** Whether currently streaming */
-  isStreaming: boolean;
+  /** Regenerate the last response in `conversationId`. */
+  regenerate: (conversationId: string, options?: { body?: Record<string, unknown> }) => Promise<void>;
   /** Global mode status (for syncing to context) */
-  globalStatus: 'ready' | 'submitted' | 'streaming' | 'error';
-  /** Global mode stop function */
-  globalStop: () => void;
-  /** Global mode messages */
-  globalMessages: UIMessage[];
-  /** Set global messages */
-  setGlobalMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
-  /**
-   * Agent mode status/messages, exposed PER CHAT rather than mode-selected.
-   *
-   * The own-stream mirror (PR 5A, leaf 5.5.1 — "4 instances") must be mounted once per useChat
-   * instance, never once for whichever mode is on screen: a mirror reads its chat's status and
-   * messages to decide what to write into usePendingStreamsStore, so a mode-selected mirror
-   * silently swaps which stream it is mirroring when the user switches mode, and emits
-   * removeStream for the one it was mirroring. Each chat's own values, for its own mirror.
-   */
-  agentStatus: 'ready' | 'submitted' | 'streaming' | 'error';
-  /** Agent mode messages (see agentStatus). */
-  agentMessages: UIMessage[];
-  /** Agent mode stop function (per chat, like globalStop — the send handoff needs its own chat's stop). */
-  agentStop: () => void;
+  globalStatus: ChatSessionStatus;
+  /** Agent mode status. */
+  agentStatus: ChatSessionStatus;
   /** Add a client-side tool result (mode-selected) — used by ask_user answers */
   addToolResult: (args: {
     tool: string;
     toolCallId: string;
     output: unknown;
-    options?: { body?: object };
-  }) => void | PromiseLike<void>;
+    conversationId: string;
+    options?: { body?: Record<string, unknown> };
+  }) => Promise<void>;
 }
 
 interface UseDualModeChatOptions {
   /** Currently selected agent (null = default mode) */
   selectedAgent: AgentInfo | null;
-  /** Chat config for default mode (the surface's null-selection identity) */
-  globalChatConfig: UseChatOptions<UIMessage> | null;
-  /** Chat config for agent mode */
-  agentChatConfig: UseChatOptions<UIMessage> | null;
+  /** The socket channel + conversation for the surface's null selection (global assistant). */
+  global: {
+    api: string;
+    channelId: string | null;
+    conversationId: string | null;
+    getBaseMessages: () => UIMessage[];
+    onError?: (error: Error) => void;
+  };
+  /** The socket channel + conversation for agent mode. */
+  agent: {
+    api: string;
+    channelId: string | null;
+    conversationId: string | null;
+    getBaseMessages: () => UIMessage[];
+    onError?: (error: Error) => void;
+  };
+  /** Identity for the optimistic store entry a send opens. `userId` is what `isOwnStream` compares. */
+  triggeredBy: { userId: string; displayName: string };
 }
 
 /**
- * Manages chat for a dual-mode surface (sidebar, machine pane), handling both
- * the default (null-selection) and agent modes.
+ * Manages chat for a dual-mode surface (sidebar, machine pane), handling both the default
+ * (null-selection) and agent modes.
  *
- * - In default mode: Uses globalChatConfig (whatever identity the surface
- *   gives its null selection — the global assistant in the sidebar, the
- *   machine-anchored conversation in a machine pane)
- * - In Agent mode: Uses agentChatConfig, operates independently
+ * ── THE TWO MODE-SWITCH STOPS ARE GONE, AND WERE NOT REPLACED ─────────────────────────────
  *
- * Handles mode switching gracefully (stops streams, clears stale messages).
+ * Two effects used to live here:
+ *
+ *     useEffect(() => { if (selectedAgent && globalIsBusy) globalStop(); }, ...)
+ *     useEffect(() => { if (!selectedAgent && agentIsBusy) agentStop(); }, ...)
+ *
+ * "Stop the global stream when switching to agent mode", and its mirror. They were necessary
+ * under the old design for a reason that no longer exists — one `Chat` per mode, each holding
+ * a response body, and a surface that could only usefully read one at a time — and they were
+ * wrong for a reason that always existed: SWITCHING WHICH MODE YOU ARE LOOKING AT IS NOT A
+ * STOP.
+ *
+ * The residual was documented and accepted on the grounds that "the server generation
+ * continues". That is true and it is the half that does not matter. The user's rule has two
+ * clauses: (a) do not abort the compute, (b) do not end the run's VISIBLE life. Only (a) was
+ * ever reasoned about. In practice a glance at the other mode froze the reply you had left —
+ * tokens kept arriving on a channel this tab had stopped reading, and what you came back to
+ * was whatever had landed before you looked away.
+ *
+ * Nothing replaces them. Both modes' streams live in the same store, written by the same
+ * app-wide session registry, and neither is coupled to a component or a body. Selecting a mode
+ * now changes only which of the two the surface displays.
+ * `only-a-deliberate-stop.test.ts` fails if either comes back.
+ *
+ * There is also no `stop` on the returned interface at all — the one Stop is `useStopStream`,
+ * which reaches `/api/ai/abort`.
  */
 export function useDualModeChat({
   selectedAgent,
-  globalChatConfig,
-  agentChatConfig,
+  global,
+  agent,
+  triggeredBy,
 }: UseDualModeChatOptions): UseDualModeChatReturn {
-  // ============================================
-  // Global Mode Chat Instance
-  // ============================================
-  const {
-    messages: globalMessages,
-    sendMessage: globalSendMessage,
-    status: globalStatus,
-    error: globalError,
-    clearError: globalClearError,
-    regenerate: globalRegenerate,
-    setMessages: setGlobalMessages,
-    stop: globalStop,
-    addToolResult: globalAddToolResult,
-  } = useChat(globalChatConfig || {});
+  // Two independent shells. Unlike the two `Chat` instances they replace, both can have sends
+  // in flight simultaneously and neither constrains the other — a shell is a `fetch` wrapper
+  // with per-conversation state, not a single-body reader.
+  const globalChat = useChatSession({
+    api: global.api,
+    channelId: global.channelId,
+    conversationId: global.conversationId,
+    triggeredBy,
+    getBaseMessages: global.getBaseMessages,
+    onError: global.onError,
+  });
 
-  // ============================================
-  // Agent Mode Chat Instance
-  // ============================================
-  const {
-    messages: agentMessages,
-    sendMessage: agentSendMessage,
-    status: agentStatus,
-    error: agentError,
-    clearError: agentClearError,
-    regenerate: agentRegenerate,
-    setMessages: setAgentMessages,
-    stop: agentStop,
-    addToolResult: agentAddToolResult,
-  } = useChat(agentChatConfig || {});
+  const agentChat = useChatSession({
+    api: agent.api,
+    channelId: agent.channelId,
+    conversationId: agent.conversationId,
+    triggeredBy,
+    getBaseMessages: agent.getBaseMessages,
+    onError: agent.onError,
+  });
 
-  // ============================================
-  // Mode Switching: Stop streams and clear stale messages
-  // ============================================
+  // NO clear-messages-on-switch effect: rendering is per-conversation from the shared
+  // conversation cache, so nothing a mode holds locally can render under the other.
 
-  // Stop global stream when switching to agent mode
-  useEffect(() => {
-    if (selectedAgent && (globalStatus === 'submitted' || globalStatus === 'streaming')) {
-      globalStop();
-    }
-  }, [selectedAgent, globalStatus, globalStop]);
+  // Read at CALL time so a mode switch between render and dispatch cannot send into the wrong
+  // one — the same reason the conversation id is an argument rather than a latch.
+  const modeRef = useRef(selectedAgent);
+  modeRef.current = selectedAgent;
+  const globalChatRef = useRef(globalChat);
+  globalChatRef.current = globalChat;
+  const agentChatRef = useRef(agentChat);
+  agentChatRef.current = agentChat;
 
-  // Stop agent stream when switching to global mode
-  useEffect(() => {
-    if (!selectedAgent && (agentStatus === 'submitted' || agentStatus === 'streaming')) {
-      agentStop();
-    }
-  }, [selectedAgent, agentStatus, agentStop]);
+  const active = () => (modeRef.current ? agentChatRef.current : globalChatRef.current);
 
-  // NO clear-messages-on-switch effect (PR 5B, leaf 5.4 W6): rendering is
-  // per-conversation from the shared conversation cache, so a stale transport
-  // array renders nothing — and the own-stream mirror latches only during its
-  // own send (PR 5A), so an un-cleared array cannot mislead it either.
-
-  // ============================================
-  // Unified Interface: Select correct values based on mode
-  // ============================================
-
-  const messages = selectedAgent ? agentMessages : globalMessages;
-  const status = selectedAgent ? agentStatus : globalStatus;
-  const error = selectedAgent ? agentError : globalError;
-  const clearError = selectedAgent ? agentClearError : globalClearError;
-  const setMessages = selectedAgent ? setAgentMessages : setGlobalMessages;
-  const stop = selectedAgent ? agentStop : globalStop;
-  const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
-  const isStreaming = status === 'submitted' || status === 'streaming';
-
-  // Wrap sendMessage to use correct function
   const sendMessage = useCallback(
-    (message: CreateUIMessage<UIMessage>, options?: { body?: Record<string, unknown> }) => {
-      if (selectedAgent) {
-        agentSendMessage(message, options);
-      } else {
-        globalSendMessage(message, options);
-      }
-    },
-    [selectedAgent, agentSendMessage, globalSendMessage]
+    (message: UIMessage, conversationId: string, options?: { body?: Record<string, unknown> }) =>
+      active().sendMessage(message, conversationId, options),
+    [],
   );
 
-  // Wrap regenerate to use correct function (pass options through for chatId support)
-  const regenerate = useCallback((options?: { body?: Record<string, unknown> }) => {
-    if (selectedAgent) {
-      agentRegenerate(options);
-    } else {
-      globalRegenerate(options);
-    }
-  }, [selectedAgent, agentRegenerate, globalRegenerate]);
+  const regenerate = useCallback(
+    (conversationId: string, options?: { body?: Record<string, unknown> }) =>
+      active().regenerate(conversationId, options),
+    [],
+  );
 
-  // ============================================
-  // Return unified interface
-  // ============================================
+  const addToolResult = useCallback(
+    (args: {
+      tool: string;
+      toolCallId: string;
+      output: unknown;
+      conversationId: string;
+      options?: { body?: Record<string, unknown> };
+    }) => active().addToolResult(args),
+    [],
+  );
 
-  return useMemo(() => ({
-    messages,
-    sendMessage,
-    status,
-    error,
-    clearError,
-    regenerate,
-    setMessages,
-    stop,
-    isStreaming,
-    addToolResult,
-    // Expose global mode specifics for syncing to GlobalChatContext
-    globalStatus,
-    globalStop,
-    globalMessages,
-    setGlobalMessages,
-    // Per-chat agent values — the agent mirror's inputs (see the interface docblock).
-    agentStatus,
-    agentMessages,
-    agentStop,
-  }), [
-    messages,
-    sendMessage,
-    status,
-    error,
-    clearError,
-    regenerate,
-    setMessages,
-    stop,
-    isStreaming,
-    addToolResult,
-    globalStatus,
-    globalStop,
-    globalMessages,
-    setGlobalMessages,
-    agentStatus,
-    agentMessages,
-    agentStop,
-  ]);
+  const clearError = useCallback(() => active().clearError(), []);
+
+  const status = selectedAgent ? agentChat.status : globalChat.status;
+  const error = selectedAgent ? agentChat.error : globalChat.error;
+
+  return useMemo(
+    () => ({
+      sendMessage,
+      status,
+      error,
+      clearError,
+      regenerate,
+      addToolResult,
+      globalStatus: globalChat.status,
+      agentStatus: agentChat.status,
+    }),
+    [
+      sendMessage,
+      status,
+      error,
+      clearError,
+      regenerate,
+      addToolResult,
+      globalChat.status,
+      agentChat.status,
+    ],
+  );
 }

@@ -2149,7 +2149,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
       result = {
         toUIMessageStreamResponse: () =>
-          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId }),
+          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId: chatId!, conversationId: conversationId! }),
       };
     } catch (streamError) {
       removeStream({ streamId });

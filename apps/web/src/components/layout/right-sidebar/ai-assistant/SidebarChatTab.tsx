@@ -17,7 +17,7 @@ import {
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useGlobalChatConversation, useGlobalChatConfig } from '@/contexts/GlobalChatContext';
+import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { useDualModeChat } from '@/hooks/useDualModeChat';
 import { type PendingStream } from '@/stores/usePendingStreamsStore';
@@ -43,8 +43,7 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
-import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useConversationSendHandoff, HANDOFF_REFUSED_MESSAGE, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
@@ -217,10 +216,6 @@ const SidebarChatTab: React.FC = () => {
     rejoinGlobalStream,
   } = useGlobalChatConversation();
 
-  const {
-    chatConfig: globalChatConfig,
-  } = useGlobalChatConfig();
-
   // ============================================
   // Sidebar Agent State (custom hook)
   // ============================================
@@ -236,49 +231,6 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
-  // No `sidebar:<convId>` namespace (PR 5A, leaf 5.5.8): it existed ONLY to keep this surface's
-  // activeStreams-map entry from colliding with the dashboard's when both viewed the same
-  // conversation. The map is gone, so the collision it avoided cannot happen, and the transport
-  // keys on the conversation like every other surface.
-  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat', selectedAgent?.id ?? null);
-
-  const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
-
-    return buildChatConfig({
-      id: SIDEBAR_AGENT_CHAT_ID,
-      transport: agentTransport,
-      onError: (error: Error) => {
-        console.error('Sidebar Agent Chat error:', error);
-        toast.error('Chat error. Please try again.');
-      },
-    });
-  }, [selectedAgent, agentConversationId, agentTransport]);
-
-  // ============================================
-  // Sidebar Chat (custom hook - unified interface)
-  // ============================================
-  const {
-    sendMessage,
-    status,
-    error,
-    clearError,
-    regenerate,
-    setMessages,
-    stop,
-    isStreaming,
-    addToolResult,
-    globalStatus,
-    globalStop,
-    globalMessages,
-    agentStatus,
-    agentMessages,
-    agentStop,
-  } = useDualModeChat({
-    selectedAgent,
-    globalChatConfig,
-    agentChatConfig,
-  });
 
   // ============================================
   // Dashboard Streaming State (for agent mode sync)
@@ -305,6 +257,60 @@ const SidebarChatTab: React.FC = () => {
   // right channel + applies the conversation filter.
   const { user } = useAuth();
   const channelIdForGlobal = user?.id ? globalChannelId(user.id) : null;
+
+  // ============================================
+  // Sidebar Chat (custom hook - unified interface)
+  // ============================================
+  // Both modes' bases are the settled store view for their OWN conversation, read at call time
+  // — see `useChatSession`. Answering an `ask_user` question after a reload therefore works
+  // without any hydration step: the persisted assistant message IS the base.
+  const globalStableMessagesRef = useRef<UIMessage[]>([]);
+  const agentStableMessagesRef = useRef<UIMessage[]>([]);
+  const getGlobalBaseMessages = useCallback(() => globalStableMessagesRef.current, []);
+  const getAgentBaseMessages = useCallback(() => agentStableMessagesRef.current, []);
+
+  // `userId` is what `isOwnStream` compares, so a store entry opened by either send is
+  // recognised as this user's own in every tab and on every device.
+  const sendIdentity = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
+  );
+
+  const {
+    sendMessage,
+    status,
+    error,
+    clearError,
+    regenerate,
+    addToolResult,
+    globalStatus,
+    agentStatus,
+  } = useDualModeChat({
+    selectedAgent,
+    triggeredBy: sendIdentity,
+    global: {
+      api: globalConversationId
+        ? `/api/ai/global/${encodeURIComponent(globalConversationId)}/messages`
+        : '',
+      channelId: channelIdForGlobal,
+      conversationId: globalConversationId,
+      getBaseMessages: getGlobalBaseMessages,
+      onError: (err: Error) => {
+        console.error('Sidebar Global Chat error:', err);
+        toast.error('Chat error. Please try again.');
+      },
+    },
+    agent: {
+      api: '/api/ai/chat',
+      channelId: selectedAgent?.id ?? null,
+      conversationId: agentConversationId,
+      getBaseMessages: getAgentBaseMessages,
+      onError: (err: Error) => {
+        console.error('Sidebar Agent Chat error:', err);
+        toast.error('Chat error. Please try again.');
+      },
+    },
+  });
   // The channel this surface's streams live on: the agent's page id, or this user's global
   // channel id. Same key useChannelStreamSocket/useOwnStreamMirror write their entries under.
   const streamChannelId = selectedAgent ? selectedAgent.id : channelIdForGlobal;
@@ -403,71 +409,28 @@ const SidebarChatTab: React.FC = () => {
 
 
 
-  // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
-  // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
-  // the same way a bootstrapped or remote one is. Everything above derives from store presence, so
-  // without these an own local stream would be invisible to its own Stop button.
+  // NO OWN-STREAM MIRRORS, and no pre-send handoffs. Both are deleted rather than moved.
   //
-  // MOUNTED PER CHAT (leaf 5.5.1 — "4 instances": GVA's two, and these two), never once for the
-  // mode-selected pair. A mirror decides what to write from ITS chat's status and messages, and it
-  // remembers which messageId it is currently mirroring. Point one mirror at whichever mode is on
-  // screen and a mode switch silently repoints it: it sees the new mode's (idle) chat, decides
-  // nothing is streaming, and emits removeStream for the id it was mirroring — deleting a live
-  // stream's entry, and with it that stream's Stop button and its rendered content.
+  // Two `useOwnStreamMirror` mounts stood here, copying each chat's own live assistant reply
+  // OUT of useChat's internal array and INTO `usePendingStreamsStore`. `useChatSession` opens
+  // the store entry itself, from the admission envelope, keyed by the messageId the server
+  // stated — so an own stream is in the store from the instant it is admitted, by the same
+  // call that started it. There is nothing to mirror because nothing is duplicated.
   //
-  // The sidebar's two chats happen to be mutually exclusive today (useDualModeChat stops
-  // the other mode's LOCAL fetch on switch), which is exactly the kind of invariant that makes a
-  // mode-selected mirror look fine until it isn't: those stop effects are themselves scheduled to
-  // change (leaf 5.4, W6), and a local stop never stopped the SERVER stream anyway.
-  //
-  // `ownAssistantMessage` reads the raw useChat arrays: this is the ONE place that must read the
-  // SDK's live-growing content to copy it OUT. It is undefined unless the last message is an
-  // assistant's — during the submitted window the last message is the user's own, which is why no
-  // store entry exists then (and why Stop falls back to the send-time conversationId there).
-  const mirrorTriggeredBy = useMemo(
-    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
-    [user?.id, user?.name, user?.email],
-  );
+  // The old comment here noted that the sidebar's two chats "happen to be mutually exclusive
+  // today (useDualModeChat stops the other mode's LOCAL fetch on switch)" and flagged that as
+  // exactly the kind of invariant that looks fine until it isn't. It was right, and the
+  // invariant is now gone in the other direction: those mode-switch stops are deleted (see
+  // `useDualModeChat`), so both modes CAN be generating at once — and nothing here depends on
+  // their not being.
 
-  const { getLatchedConversationId: getGlobalLatchedConversationId } = useOwnStreamMirror({
-    status: globalStatus,
-    ownMessages: globalMessages,
-    pageId: channelIdForGlobal ?? '',
-    conversationId: globalConversationId ?? '',
-    triggeredBy: mirrorTriggeredBy,
-  });
-
-  const { getLatchedConversationId: getAgentLatchedConversationId } = useOwnStreamMirror({
-    status: agentStatus,
-    ownMessages: agentMessages,
-    pageId: selectedAgent?.id ?? '',
-    conversationId: agentConversationId ?? '',
-    triggeredBy: mirrorTriggeredBy,
-  });
-
-  // Pre-send handoff, PER CHAT like the mirrors: a send into a different conversation than the
-  // one this chat is consuming for must first stop the local read and hand the in-flight stream
-  // to the socket path — the SDK's Chat cannot consume two response bodies at once, and a second
-  // concurrent send is how chat 1's stream ended up rendering inside chat 2. See
-  // useConversationSendHandoff.
-  const { prepareSend: prepareGlobalSend } = useConversationSendHandoff({
-    status: globalStatus,
-    stop: globalStop,
-    getLatchedConversationId: getGlobalLatchedConversationId,
-    rejoin: rejoinGlobalStream,
-  });
-  const { prepareSend: prepareAgentSend } = useConversationSendHandoff({
-    status: agentStatus,
-    stop: agentStop,
-    getLatchedConversationId: getAgentLatchedConversationId,
-    rejoin: rejoinAgentStream,
-  });
-  const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
 
   // Shared store-first message actions (F2/F9): actions reason over SETTLED rows
   // only — a synthesized live-stream row must never reach retry/delete's
   // server-side DELETEs (the live bubble's verb is Stop).
-  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+  // `displayIsStreaming` already ORs the pending send with the own store entry, which covers
+  // the submitted window AND every stream a raw chat status could not see.
+  const isOwnSendLive = displayIsStreaming;
   // Read after an await (resume runs async), so a ref rather than the captured value.
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
@@ -485,12 +448,14 @@ const SidebarChatTab: React.FC = () => {
     conversationId: currentConversationId,
     renderedMessages,
     isOwnSendLive,
-    setMessages,
-    regenerate,
+    // Adapts the shell's explicit-conversation `regenerate` to the action hook's
+    // conversation-less one. Binding the id HERE is what makes a Retry unambiguous.
+    regenerate: (opts?: { body?: Record<string, unknown> }) => {
+      if (!currentConversationId) return;
+      void regenerate(currentConversationId, opts);
+    },
     // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
     // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
-    prepareSend: prepareSendForMode,
-    getIsOwnSendLive,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -724,15 +689,10 @@ const SidebarChatTab: React.FC = () => {
     // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
     setInput('');
 
-    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
-    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
-    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
-    // the latch still held): sending would re-key the new stream under the old conversation.
-    if (!(await prepareSendForMode(currentConversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      setInput((current) => (current === '' ? text : current));
-      return;
-    }
+    // NO PRE-SEND HANDOFF, and no path that can refuse the send. A send is its own `fetch`;
+    // a generation already running in another conversation — or in the other mode — is not
+    // this send's concern. What stood here stopped the other read, waited up to 1.5s for a
+    // status to settle, and on timeout put the user's text back in the composer behind a toast.
     for (const id of sentAttachmentIds) removeFile(id);
 
     // Client-minted id, parts-form send (PR 4 pattern): only that shape preserves the
@@ -749,7 +709,7 @@ const SidebarChatTab: React.FC = () => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     rollbackOptimisticSendOnFailure(
-      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      () => wrapSend(() => sendMessage(userMessage, currentConversationId, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
       currentConversationId,
       userMessage.id,
     );
@@ -765,7 +725,7 @@ const SidebarChatTab: React.FC = () => {
     attachments,
     removeFile,
     wrapSend,
-    prepareSendForMode,
+    currentConversationId,
   ]);
 
   // renderedMessages (selector output): "answerable" is decided by the conversation's
@@ -777,11 +737,8 @@ const SidebarChatTab: React.FC = () => {
     conversationId: currentConversationId,
     renderedMessages,
     isConversationBusy: displayIsStreaming,
-    setMessages,
     addToolResult,
     wrapSend,
-    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
-    prepareSend: prepareSendForMode,
     buildBody: useCallback(
       () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
       [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
@@ -817,8 +774,6 @@ const SidebarChatTab: React.FC = () => {
   useResumeBootstrap({
     rejoin: rejoinActiveMode,
     reload: handleAppResume,
-    stop,
-    isOwnStreamLive: useCallback(() => displayIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -854,11 +809,6 @@ const SidebarChatTab: React.FC = () => {
   const handleStop = useStopStream({
     activeStream,
     pendingSendConversationId,
-    rawStop: stop,
-    // The rawStop gate: a Stop on a socket-attached conversation must not abort another
-    // conversation's live local fetch (conversation-scoped consuming, dual-stream fix).
-    getLocalSendConversationId: selectedAgent ? getAgentLatchedConversationId : getGlobalLatchedConversationId,
-    targetConversationId: currentConversationId,
   });
 
   const handleUndoFromHere = useCallback((messageId: string) => {
@@ -918,7 +868,9 @@ const SidebarChatTab: React.FC = () => {
           <AISelector
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgent}
-            disabled={isStreaming}
+            // The CONVERSATION's own liveness, not a raw chat status — switching agent while
+            // something generates is a view change, not a send.
+            disabled={displayIsStreaming}
             className="text-sm font-medium"
           />
           <Button

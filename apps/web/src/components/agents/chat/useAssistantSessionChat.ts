@@ -27,26 +27,21 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import type { UIMessage } from 'ai';
-import { useChat } from '@ai-sdk/react';
 import { toast } from 'sonner';
 import { createId } from '@paralleldrive/cuid2';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
-  useChatTransport,
+  useChatSession,
   useCacheMessageActions,
   useSendHandoff,
-  useConversationSendHandoff,
-  HANDOFF_REFUSED_MESSAGE,
   useChatErrorCause,
   useAnswerAskUser,
-  buildChatConfig,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { buildOwnStreamCommitOnFinish } from '@/hooks/ownStreamCommit';
 import {
   loadGlobalConversationMessages,
   loadOlderGlobalConversationMessages,
@@ -57,7 +52,6 @@ import {
   useConversationOlderPageState,
 } from '@/hooks/useRenderedMessages';
 import { useActiveStream, useConversationActiveStream } from '@/hooks/useActiveStream';
-import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -96,40 +90,46 @@ export function useAssistantSessionChat({
     void loadGlobalConversationMessages(conversationId);
   }, [conversationId]);
 
-  const transport = useChatTransport(
-    conversationId,
-    `/api/ai/global/${encodeURIComponent(conversationId)}/messages`,
-    channelId,
+  // `userId` is what `isOwnStream` compares, so the optimistic store entry this send opens is
+  // recognised as the user's own in every tab and on every device — not just this one.
+  const sendIdentity = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
   );
-  const chatConfig = useMemo(() => {
-    if (!transport) return null;
-    return buildChatConfig({
-      id: `assistant-session-chat:${conversationId}`,
-      transport,
-      onError: (error: Error) => {
-        console.error('Assistant session chat error:', error);
-        toast.error('Chat error. Please try again.');
-      },
-      // Panes must not depend on the stream_complete broadcast to keep a
-      // finished reply: GlobalChatProvider's subscriber is gated on ITS active
-      // conversation, never this pane's, so without a local commit the reply
-      // vanishes when the mirror releases — see buildOwnStreamCommitOnFinish.
-      onFinish: buildOwnStreamCommitOnFinish({ conversationId, agentId: null }),
-    });
-  }, [transport, conversationId]);
+
+  // ONE OWNED SEND SHELL, no `Chat` instance and no transport object.
+  //
+  // `getBaseMessages` is the settled store view — which is why answering an `ask_user`
+  // question still works after a reload: the persisted assistant message carrying the
+  // question IS the base, so there is no empty internal array to hydrate first.
+  //
+  // NO `onFinish` COMMIT either. This pane used to need one because the completed reply could
+  // not depend on the best-effort `chat:stream_complete` broadcast — it has no
+  // conversation-scoped subscriber of its own. It does not need one now: the stream session
+  // registry fires its end notification on EVERY terminal path, including the purely local
+  // one (the SSE join resolving), and it does so while the store entry is still present, so
+  // the shared commit protocol runs off the same entry it always did.
+  const stableMessagesRef = useRef<UIMessage[]>([]);
+  const getBaseMessages = useCallback(() => stableMessagesRef.current, []);
 
   const {
-    messages: assistantChatMessages,
     sendMessage,
     status,
     error,
     clearError,
     regenerate,
-    setMessages,
-    stop,
     addToolResult,
-  } = useChat(chatConfig ?? {});
-  const isStreaming = status === 'submitted' || status === 'streaming';
+  } = useChatSession({
+    api: `/api/ai/global/${encodeURIComponent(conversationId)}/messages`,
+    channelId,
+    conversationId,
+    triggeredBy: sendIdentity,
+    getBaseMessages,
+    onError: (err: Error) => {
+      console.error('Assistant session chat error:', err);
+      toast.error('Chat error. Please try again.');
+    },
+  });
 
   // No channel socket mounted here: GlobalChatProvider wraps the whole Layout
   // and already subscribes this user's global channel, so remote lifecycle
@@ -148,6 +148,13 @@ export function useAssistantSessionChat({
 
   const renderedMessages = useRenderedMessages(channelId ?? '', conversationId);
   const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+  // The SETTLED view — live synth rows excluded. This is what the send shell composes its
+  // outbound messages from, and what every action reasons over.
+  const stableMessages = useMemo(
+    () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
+    [renderedMessages],
+  );
+  stableMessagesRef.current = stableMessages;
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(channelId, conversationId);
@@ -162,25 +169,6 @@ export function useAssistantSessionChat({
   const displayIsStreaming =
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === conversationId);
-
-  const mirrorTriggeredBy = useMemo(
-    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
-    [user?.id, user?.name, user?.email],
-  );
-  const { getLatchedConversationId } = useOwnStreamMirror({
-    status,
-    ownMessages: assistantChatMessages,
-    pageId: channelId ?? '',
-    conversationId,
-    triggeredBy: mirrorTriggeredBy,
-  });
-
-  const { prepareSend } = useConversationSendHandoff({
-    status,
-    stop,
-    getLatchedConversationId,
-    rejoin: rejoinGlobalStream,
-  });
 
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
   const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
@@ -232,11 +220,9 @@ export function useAssistantSessionChat({
     conversationId,
     renderedMessages,
     isConversationBusy: isConversationBusyForAskUser,
-    setMessages,
     addToolResult,
     wrapSend,
     buildBody,
-    prepareSend,
   });
 
   const handleSend = useCallback(
@@ -244,36 +230,32 @@ export function useAssistantSessionChat({
       const trimmed = text.trim();
       if (!trimmed || !conversationId) return false;
 
-      if (!(await prepareSend(conversationId))) {
-        toast.error(HANDOFF_REFUSED_MESSAGE);
-        return false;
-      }
-
+      // NO PRE-SEND HANDOFF. There is nothing to hand off: this send is its own `fetch`, so a
+      // generation already running in another conversation is simply not this send's concern.
+      // The `stop()` + settle-wait + possible refusal that stood here is the thing this
+      // workstream exists to delete.
       const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
       conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
 
       rollbackOptimisticSendOnFailure(
-        () => wrapSend(() => sendMessage(userMessage, { body: buildBody() })),
+        () => wrapSend(() => sendMessage(userMessage, conversationId, { body: buildBody() })),
         conversationId,
         userMessage.id,
       );
       return true;
     },
-    [conversationId, prepareSend, wrapSend, sendMessage, buildBody],
+    [conversationId, wrapSend, sendMessage, buildBody],
   );
 
   const handleStop = useStopStream({
     activeStream,
     pendingSendConversationId,
-    rawStop: stop,
-    getLocalSendConversationId: getLatchedConversationId,
-    targetConversationId: conversationId,
   });
 
-  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
-  const isOwnSendLiveRef = useRef(isOwnSendLive);
-  isOwnSendLiveRef.current = isOwnSendLive;
-  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
+  // No raw chat status in this any more: `displayIsStreaming` already ORs the pending send
+  // with the own store entry, which covers the submitted window AND every stream the old
+  // status could not see (bootstrapped, remote, cross-instance).
+  const isOwnSendLive = displayIsStreaming;
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     // null = global mode — the cache actions' own dual-pipeline switch, the
@@ -282,10 +264,12 @@ export function useAssistantSessionChat({
     conversationId,
     renderedMessages,
     isOwnSendLive,
-    setMessages,
-    regenerate,
-    prepareSend,
-    getIsOwnSendLive,
+    // Adapts the shell's explicit-conversation `regenerate` to the action hook's
+    // conversation-less one. The id is bound HERE, where it is unambiguous, rather than being
+    // inferred inside a shared `Chat` from whatever the surface last touched.
+    regenerate: (opts?: { body?: Record<string, unknown> }) => {
+      void regenerate(conversationId, opts);
+    },
   });
 
   const lastAssistantMessageId = useMemo(

@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useRef } from 'react';
-import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
+import { patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -13,8 +13,6 @@ import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistant
 const browserSessionHeaders = (): Record<string, string> => ({
   'X-Browser-Session-Id': getBrowserSessionId(),
 });
-
-type SetMessagesAction = UIMessage[] | ((previousMessages: UIMessage[]) => UIMessage[]);
 
 interface UseMessageActionsOptions {
   /**
@@ -31,11 +29,7 @@ interface UseMessageActionsOptions {
    */
   messages: UIMessage[];
   /**
-   * Setter for messages (from useChat)
-   */
-  setMessages: (messages: SetMessagesAction) => void;
-  /**
-   * Regenerate function (from useChat)
+   * Regenerate function (from useChatSession)
    */
   regenerate: (options?: { body?: Record<string, unknown> }) => void;
   /**
@@ -72,7 +66,6 @@ export function useMessageActions({
   agentId,
   conversationId,
   messages,
-  setMessages,
   regenerate,
   onEditVersionChange,
   isOwnStreamLive = false,
@@ -90,24 +83,17 @@ export function useMessageActions({
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
-      const originalMessage = messagesRef.current.find((message) => message.id === messageId);
-      if (!originalMessage) {
+      // Existence guard only. It used to also be the rollback snapshot; nothing is written
+      // locally now, so all it does is refuse to PATCH a message this conversation does not
+      // have — which is still worth refusing.
+      if (!messagesRef.current.some((message) => message.id === messageId)) {
         return;
       }
 
-      // Optimistically apply the edit for responsive UI feedback.
-      setMessages((previousMessages) =>
-        previousMessages.map((message) => {
-          if (message.id !== messageId) return message;
-          return {
-            ...message,
-            parts: message.parts.map((part) =>
-              part.type === 'text' ? { ...part, text: newContent } : part
-            ),
-          };
-        })
-      );
-
+      // NO optimistic transport write. The optimistic UI is the CACHE write in
+      // `useCacheMessageActions.handleEdit` (`conversationMessagesActions.applyEdit`), which
+      // is what actually renders under store-first rendering; the write that used to be here
+      // went into useChat's array, which never rendered anything.
       try {
         if (isAgentMode) {
           await patch(
@@ -126,50 +112,29 @@ export function useMessageActions({
         onEditVersionChange?.();
         toast.success('Message updated successfully');
 
-        // Refetch to reconcile with server state (non-critical)
-        try {
-          const url = isAgentMode
-            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
-            : `/api/ai/global/${conversationId}/messages`;
-          const response = await fetchWithAuth(url);
-          if (response.ok) {
-            const data = await response.json();
-            const loaded = isAgentMode
-              ? data.messages || []
-              : Array.isArray(data) ? data : data.messages || [];
-            // NOT while our own stream is live. This is the one write here that replaces the WHOLE
-            // array, and useOwnStreamMirror reads that array to find its own live stream. DB
-            // history whose newest row is a foreign assistant message — another TAB of this same
-            // user counts, since `isOwn` is browserSessionId-scoped — makes the mirror re-target
-            // onto a finished message: our live entry goes, and Stop then aborts an id the server
-            // has no stream for (user-scoped → not_found → silent by design) while the generation
-            // keeps running its write tools and keeps billing.
-            //
-            // Skipping it costs nothing that matters: the edit is already applied optimistically
-            // above and the server has it; this refetch is explicitly "non-critical" reconciliation,
-            // and the next load re-syncs the array once the stream is over. Read through a ref
-            // because this runs after an await.
-            if (!isOwnStreamLiveRef.current) {
-              setMessages(loaded);
-            }
-          }
-        } catch {
-          // Refetch failed — optimistic update already applied, server has the edit
-        }
+        // THE RECONCILE REFETCH IS GONE, and its absence is the fix rather than a loss.
+        //
+        // It re-read the whole conversation and replaced useChat's array with it, guarded by
+        // `isOwnStreamLive` because that array was the own-stream mirror's read source: DB
+        // history whose newest row was a foreign assistant message made the mirror re-target
+        // onto a finished message, the live entry went, and Stop then named an id the server
+        // had no stream for while the generation kept running and kept billing.
+        //
+        // There is no transport array to replace now, and the cache — which is what renders —
+        // is written by `useCacheMessageActions` from the edit itself. A server-side
+        // reconciliation would be a whole-conversation refetch to update a container nothing
+        // reads, so it is deleted rather than re-pointed at the cache: the next real load
+        // re-syncs, exactly as this refetch's own comment described it ("non-critical").
       } catch (error) {
-        // Roll back only the edited message to avoid clobbering unrelated updates.
-        setMessages((previousMessages) =>
-          previousMessages.map((message) =>
-            message.id === messageId ? originalMessage : message
-          )
-        );
-
+        // No local rollback: nothing was optimistically written HERE. The cache write in
+        // `useCacheMessageActions` happens only after this resolves, so a failure leaves the
+        // rendered content untouched — which is what the rollback was arranging for.
         console.error('Failed to edit message:', error);
         toast.error('Failed to save edit. Your local changes may not persist.');
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, onEditVersionChange]
   );
 
   // Delete a message
@@ -177,17 +142,10 @@ export function useMessageActions({
     async (messageId: string) => {
       if (!conversationId) return;
 
-      const deletedMessage = messagesRef.current.find((message) => message.id === messageId);
-      if (!deletedMessage) {
+      // Existence guard only — see handleEdit.
+      if (!messagesRef.current.some((message) => message.id === messageId)) {
         return;
       }
-
-      const previousIndex = messagesRef.current.findIndex((message) => message.id === messageId);
-
-      // Optimistically remove the message for fast UI feedback.
-      setMessages((previousMessages) =>
-        previousMessages.filter((message) => message.id !== messageId)
-      );
 
       try {
         if (isAgentMode) {
@@ -206,29 +164,14 @@ export function useMessageActions({
 
         toast.success('Message deleted');
       } catch (error) {
-        // Roll back only the deleted message so we don't clobber unrelated updates
-        // that may have arrived while the request was in flight.
-        setMessages((previousMessages) => {
-          if (previousMessages.some((message) => message.id === messageId)) {
-            return previousMessages;
-          }
-
-          const nextMessages = [...previousMessages];
-          const safeInsertIndex = Math.min(
-            Math.max(previousIndex, 0),
-            nextMessages.length
-          );
-          nextMessages.splice(safeInsertIndex, 0, deletedMessage);
-
-          return nextMessages;
-        });
-
+        // No local rollback, for the same reason as handleEdit: the rendered removal is the
+        // cache write in `useCacheMessageActions`, which only runs once this resolves.
         console.error('Failed to delete message:', error);
         toast.error('Failed to delete message');
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, setMessages]
+    [isAgentMode, agentId, conversationId]
   );
 
   // Retry/regenerate the last response
@@ -253,12 +196,8 @@ export function useMessageActions({
         })
       );
 
-      // Remove them from state using functional updater to avoid stale snapshot
-      setMessages((previousMessages) =>
-        previousMessages.filter(
-          (m) => !assistantMessagesToDelete.some((toDelete) => toDelete.id === m.id)
-        )
-      );
+      // No local array to prune — `useCacheMessageActions` deletes the same rows from the
+      // cache, which is both what renders and what `regenerate` composes its request from.
     }
 
     // Now regenerate with a clean slate. conversationId is included for both
@@ -276,7 +215,7 @@ export function useMessageActions({
             conversationId,
           },
     });
-  }, [isAgentMode, agentId, conversationId, setMessages, regenerate]);
+  }, [isAgentMode, agentId, conversationId, regenerate]);
 
   // Compute last message IDs for UI
   const lastAssistantMessageId = messages
