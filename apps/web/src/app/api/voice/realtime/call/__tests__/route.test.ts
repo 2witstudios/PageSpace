@@ -14,7 +14,6 @@ const {
   mockIsBillingEnabled,
   mockGetUserSettings,
   mockRunCallHandshake,
-  mockBuildRealtimeTools,
   mockSignHeaders,
   mockLoadVoiceBinding,
 } = vi.hoisted(() => ({
@@ -25,7 +24,6 @@ const {
   mockIsBillingEnabled: vi.fn(),
   mockGetUserSettings: vi.fn(),
   mockRunCallHandshake: vi.fn(),
-  mockBuildRealtimeTools: vi.fn(),
   mockSignHeaders: vi.fn(),
 }));
 
@@ -45,9 +43,10 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: mockSignHeaders,
 }));
 vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCallHandshake }));
-vi.mock('@/lib/ai/realtime/tools', () => ({ buildRealtimeTools: mockBuildRealtimeTools }));
 vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
-vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: {} }));
+// A FACTORY, not a value: the binding deps take the caller's auth principal,
+// because the active-plan lookup behind them needs a principal-aware page check.
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}) }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -77,8 +76,7 @@ describe('POST /api/voice/realtime/call', () => {
     mockGetManagedKey.mockReturnValue({ apiKey: 'sk-managed' });
     mockIsBillingEnabled.mockReturnValue(true);
     mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'pro' });
-    mockBuildRealtimeTools.mockReturnValue(TOOLS);
-    mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'Speak out loud.' });
+    mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'Speak out loud.', tools: TOOLS });
     mockSignHeaders.mockReturnValue({ 'X-Broadcast-Signature': 't=1,v1=sig' });
     mockRunCallHandshake.mockResolvedValue({
       ok: true,
@@ -331,28 +329,34 @@ describe('POST /api/voice/realtime/call', () => {
       enabledTools: ['read_page'],
     };
 
-    it("should advertise only the bound agent's allowed tools", async () => {
+    it("should advertise the binding's own tools rather than building a second set", async () => {
+      // The tools and the instructions come from ONE exposure, computed where
+      // the allowlist is resolved. A route that rebuilt them from the assistant
+      // could advertise a set the prompt does not describe — and would repeat a
+      // whole registry build on a handshake the caller is waiting through.
+      const agentTools = [
+        { type: 'function' as const, name: 'read_page', description: 'r', parameters: {} },
+      ];
       mockLoadVoiceBinding.mockResolvedValue({
         seed: [],
         instructions: 'You are "Release Notes Bot".',
+        tools: agentTools,
         assistant,
       });
 
       await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
 
-      expect(mockBuildRealtimeTools).toHaveBeenCalledWith(expect.anything(), ['read_page']);
-    });
-
-    it('given no bound agent, should advertise the registry unrestricted', async () => {
-      await POST(callRequest({ sdp: 'v=0 offer' }));
-
-      expect(mockBuildRealtimeTools).toHaveBeenCalledWith(expect.anything(), null);
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(
+        expect.objectContaining({ tools: agentTools }),
+        expect.anything(),
+      );
     });
 
     it('should hand the instructions and the assistant to the handshake', async () => {
       mockLoadVoiceBinding.mockResolvedValue({
         seed: [],
         instructions: 'You are "Release Notes Bot".',
+        tools: TOOLS,
         assistant,
       });
 

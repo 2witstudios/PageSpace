@@ -159,3 +159,71 @@ export const aiPendingAbortIntents = pgTable('ai_pending_abort_intents', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.conversationId, table.userId] }),
 }));
+
+/**
+ * The durable, append-only frame log: the authoritative record of what a generation
+ * actually streamed.
+ *
+ * WHY THIS REPLACES `ai_stream_sessions.parts`.
+ *
+ * `parts` held a periodically-rewritten, merged, byte-capped snapshot of a SECOND, lossy
+ * copy of the stream — the `chunkToPart` projection, which forwarded four chunk types and
+ * dropped reasoning, files, sources, step boundaries and every `data-*` part the routes
+ * write straight to the writer. That was a different representation from the one the HTTP
+ * response body carried, and that fork is what every re-attach, every crash recovery, and a
+ * year of client reconciliation machinery was built on top of. Here the stored form is the
+ * raw `UIMessageChunk` frames exactly as the AI SDK emitted them, and parts are computed
+ * from them by the fold when someone needs to render or persist a message.
+ *
+ * SEQ NUMBERS FRAMES, NOT ROWS. A row covers `[from_seq, from_seq + frame_count)`. A reader
+ * holding cursor X asks
+ *   WHERE message_id = $1 AND from_seq + frame_count > $X ORDER BY from_seq
+ * and slices `X - from_seq` off the first row. Exact, and it retires the "how many raw
+ * frames does this merged snapshot already reflect" arithmetic that `raw_parts_count` /
+ * `skipReplayCount` existed to answer — where under-skipping duplicated visible text and
+ * over-skipping left a silent, permanent gap.
+ *
+ * CHEAPER THAN WHAT IT REPLACES. The old checkpoint rewrote the ENTIRE converged parts array
+ * into one jsonb column every ~1s — O(n²) in message size, with a dead tuple and TOAST churn
+ * on one hot row per write (~600 KB for a 20 KB reply). This writes each frame once (~25 KB
+ * for the same reply) into an append-only table with no updates and no dead tuples.
+ *
+ * RETENTION. Rows are deleted once the terminal assistant message is confirmed persisted —
+ * the same write-then-settle ordering `materializeInterruptedStream` already documents, and
+ * for the same reason: settling first can lose the only copy of the content. A time-based
+ * backstop sweep covers rows whose stream died before either path ran.
+ *
+ * ROLLOUT. Additive. `ai_stream_sessions.parts` and `raw_parts_count` are dropped one deploy
+ * LATER, not here: during a rolling deploy an old worker is still writing `parts` for streams
+ * it owns, and a new reader must be able to fall back to that snapshot for a stream this
+ * table knows nothing about. Expand, migrate readers, then contract.
+ */
+export const aiStreamFrames = pgTable('ai_stream_frames', {
+  messageId:  text('message_id').notNull(),
+  /**
+   * Carried solely to inherit the cascade, and it is load-bearing for exactly the reason
+   * `ai_stream_sessions.conversation_id` became a real FK: these rows hold MESSAGE CONTENT.
+   * `parts` used to survive a user deletion, which was a real GDPR leak; frames are the same
+   * content by a different name, so they must cascade the same way or this change quietly
+   * reopens the hole that migration 0250 closed.
+   *
+   * Keyed on the conversation rather than on `message_id` deliberately: the assistant
+   * placeholder row a frame's `message_id` would reference is inserted best-effort at stream
+   * start (a failed insert is tolerated and logged), so an FK there could reject the frame
+   * write itself — trading a durability hole for a durability failure. The conversation
+   * always exists by the time a generation starts.
+   */
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  /** First seq in this batch. The row covers [from_seq, from_seq + frame_count). */
+  fromSeq:    integer('from_seq').notNull(),
+  frameCount: integer('frame_count').notNull(),
+  /** Raw `UIMessageChunk`s, in seq order. Never queried into — only ever read whole. */
+  frames:     jsonb('frames').$type<unknown[]>().notNull(),
+  /** Serialized size of this batch, for the per-stream durable budget. */
+  byteSize:   integer('byte_size').notNull(),
+  createdAt:  timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.messageId, table.fromSeq] }),
+  // The retention backstop's only scan.
+  createdAtIdx: index('ai_stream_frames_created_at_idx').on(table.createdAt),
+}));

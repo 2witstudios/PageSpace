@@ -22,10 +22,7 @@
  */
 import { useCallback, useMemo } from 'react';
 import type { UIMessage } from 'ai';
-import { toast } from 'sonner';
 import { useMessageActions } from './useMessageActions';
-import { hydrateTransportBeforeReinvoke } from './hydrateTransportBeforeReinvoke';
-import { HANDOFF_REFUSED_MESSAGE } from './useConversationSendHandoff';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { planRetry } from '@/lib/ai/streams/planRetry';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
@@ -37,32 +34,27 @@ export interface UseCacheMessageActionsOptions {
   conversationId: string | null;
   /** The full rendered list (selectRenderedMessages output, mode included). */
   renderedMessages: RenderedMessage[];
-  /**
-   * Is THIS surface's own send live right now (status submitted/streaming OR an
-   * own store entry)? Gates every transport-array write here — the own-stream
-   * mirror reads that array to find its live stream.
-   */
-  isOwnSendLive: boolean;
-  /** This surface's useChat setter (transport bookkeeping only — never renders). */
-  setMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
   regenerate: (options?: { body?: Record<string, unknown> }) => void;
-  /**
-   * The surface's cross-conversation send handoff (`useConversationSendHandoff.prepareSend`,
-   * mode-selected where applicable). Retry is a send: with a shared chat instance it can be
-   * issued for the conversation ON SCREEN while the chat is still consuming ANOTHER
-   * conversation's stream, and regenerating in that state re-sends the other conversation's
-   * transport trail under this conversation's body. The handoff runs BEFORE the retry's
-   * destructive steps, so a refused handoff deletes nothing.
-   */
-  prepareSend: (conversationId: string) => Promise<boolean>;
-  /**
-   * Live read of `isOwnSendLive` (a ref-reader, not the render-captured boolean). The
-   * hydrate-before-regenerate decision must be made AFTER the handoff settles the chat —
-   * the render-captured value still says "busy" for the stream that was just handed off,
-   * which skipped hydration and let regenerate re-send the stale transport array.
-   */
-  getIsOwnSendLive: () => boolean;
 }
+
+/**
+ * TWO THINGS THIS HOOK USED TO DO AND NO LONGER NEEDS TO.
+ *
+ * `prepareSend` — Retry is a send, and under the shared-`Chat` design a Retry issued for the
+ * conversation on screen while the chat consumed ANOTHER conversation's stream would re-send
+ * the other conversation's transport trail under this conversation's body. That was a
+ * cross-conversation content leak, and the handoff ran before the destructive steps so a
+ * refusal deleted nothing. `useChatSession` has no shared instance and no shared trail —
+ * `regenerate` sends the store's view of THIS conversation — so there is nothing to hand off
+ * and nothing to refuse.
+ *
+ * `hydrateTransportBeforeReinvoke` + `getIsOwnSendLive` — `regenerate` indexed into useChat's
+ * own array, which was empty after a reload, so the settled rows had to be copied in first;
+ * and that copy had to be skipped while a send was live (the array was the mirror's read
+ * source), which meant reading liveness AFTER the handoff settled rather than from the
+ * render-captured prop. All of it existed to keep two stateful containers agreeing. There is
+ * now one: the store.
+ */
 
 export interface UseCacheMessageActionsResult {
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
@@ -76,11 +68,7 @@ export function useCacheMessageActions({
   agentId,
   conversationId,
   renderedMessages,
-  isOwnSendLive,
-  setMessages,
   regenerate,
-  prepareSend,
-  getIsOwnSendLive,
 }: UseCacheMessageActionsOptions): UseCacheMessageActionsResult {
   const stableMessages = useMemo(
     () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
@@ -95,9 +83,7 @@ export function useCacheMessageActions({
     agentId,
     conversationId,
     messages: stableMessages,
-    setMessages,
     regenerate,
-    isOwnStreamLive: isOwnSendLive,
   });
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
@@ -125,29 +111,6 @@ export function useCacheMessageActions({
     const { assistantIdsToDelete, lastUserMessage } = planRetry(renderedMessages);
     if (!lastUserMessage) return;
 
-    // Retry is a send: hand off any OTHER conversation's stream this chat is consuming
-    // FIRST, before anything destructive. A refused handoff must delete nothing — the old
-    // wiring (handoff inside the injected regenerate) refused only AFTER the assistant rows
-    // were already deleted, orphaning the retry.
-    if (conversationId && !(await prepareSend(conversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      return;
-    }
-
-    // regenerate() indexes into useChat's OWN local array (crashes if empty, throws
-    // "not found" on an unknown id). Post-cutover nothing keeps that array in sync
-    // with loaded history — the loads write the cache — so a Retry on a conversation
-    // opened from history would act on an empty or stale transport copy. Seed it from
-    // the settled rendered rows at the moment of the action — TRANSITIONAL, shared
-    // with AskUser answering (see hydrateTransportBeforeReinvoke).
-    //
-    // Liveness read AFTER the handoff (through the ref-reader), never the render-captured
-    // prop: while the chat consumed another conversation's stream the captured value said
-    // "busy", which skipped hydration — and regenerate then re-sent the OTHER conversation's
-    // transport trail under this conversation's body (cross-conversation content leak).
-    // Post-handoff the chat has settled, the read is false, and hydration seeds this
-    // conversation's settled rows.
-    hydrateTransportBeforeReinvoke(setMessages, stableMessages, getIsOwnSendLive());
     // Delete BEFORE awaiting handleRetryBase, not after: its underlying `regenerate` is a
     // real Promise that resolves once the new stream finishes (the ai SDK's makeRequest
     // reads the response to completion), so awaiting it first would leave the old assistant
@@ -157,7 +120,7 @@ export function useCacheMessageActions({
       for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
     }
     await handleRetryBase();
-  }, [renderedMessages, handleRetryBase, stableMessages, conversationId, setMessages, prepareSend, getIsOwnSendLive]);
+  }, [renderedMessages, handleRetryBase, conversationId]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };
 }

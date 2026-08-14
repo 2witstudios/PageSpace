@@ -8,7 +8,6 @@
 export {
   abortActiveStreamByConversation,
   abortActiveStreamByMessageId,
-  createStreamTrackingFetch,
   reportAbortOutcome,
   reportAbortOutcomes,
   type AbortResult,

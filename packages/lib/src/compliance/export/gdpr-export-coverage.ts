@@ -103,6 +103,14 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // the better source, it is the only one.
   agent_workspace_nodes: 'agentWorkspaces',
   ai_stream_sessions: 'streamState',
+  // The durable frame log — the same generated content `ai_stream_sessions.parts`
+  // holds, in the form that replaces it once the frame-log writer lands and that
+  // column is dropped. Registered WITH its collector at the moment the table was
+  // added rather than when its writer arrives, because a table that reaches
+  // `master` unexported is precisely the failure this registry exists to catch,
+  // and "nothing writes it yet" is a state that expires quietly. Read by
+  // `collectUserStreamState`, which owns the Art 15(4) boundary for both tables.
+  ai_stream_frames: 'streamState',
 };
 
 /**

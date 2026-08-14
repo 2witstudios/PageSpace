@@ -274,5 +274,10 @@ describe('tenant export table registry', () => {
     // through the GDPR export's `stream-state.json`; the two exports answer
     // different questions and are allowed to differ, but only out loud.
     expect(Object.keys(TENANT_EXPORT_EXCLUDED_TABLES)).toContain('ai_stream_sessions');
+    // `ai_stream_frames` is the successor to that table's `parts` column, so the two
+    // decisions must agree — carrying the frame log would move exactly the content the
+    // line above refuses. Pinned individually so a future edit has to argue with this
+    // test rather than silently split the pair.
+    expect(Object.keys(TENANT_EXPORT_EXCLUDED_TABLES)).toContain('ai_stream_frames');
   });
 });

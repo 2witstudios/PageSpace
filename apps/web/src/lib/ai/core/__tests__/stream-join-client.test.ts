@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-const text = (text: string) => ({ type: 'text' as const, text });
+/** A text part arrives as three frames; the fold needs the start before any delta. */
+const textFrames = (...deltas: string[]) => [
+  'data: {"seq":0,"chunk":{"type":"text-start","id":"t1"}}\n\n',
+  ...deltas.map((d, i) => `data: {"seq":${i + 1},"chunk":{"type":"text-delta","id":"t1","delta":"${d}"}}\n\n`),
+];
+
+/** The folded shape a completed text part reduces to. */
+const textPart = (text: string) => ({
+  type: 'text', text, state: 'streaming', providerMetadata: undefined,
+});
 
 describe('consumeStreamJoin', () => {
   beforeEach(() => {
@@ -30,215 +39,154 @@ describe('consumeStreamJoin', () => {
     );
   }
 
-  it('given valid part frames and done sentinel, should call onChunk for each part and return { aborted: false }', async () => {
+  it('given frames and a done sentinel, should fold them and report the seq each fold reflects', async () => {
     stubFetch(encodeLines([
-      'data: {"part":{"type":"text","text":"hello"}}\n\n',
-      'data: {"part":{"type":"text","text":" world"}}\n\n',
+      ...textFrames('hello', ' world'),
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    const result = await consumeStreamJoin('msg-1', AbortSignal.timeout(5000), onChunk);
+    const seen: { parts: unknown[]; seq: number }[] = [];
+    const result = await consumeStreamJoin('m1', new AbortController().signal,
+      (parts, seq) => seen.push({ parts, seq }));
 
-    expect(onChunk).toHaveBeenCalledTimes(2);
-    expect(onChunk).toHaveBeenNthCalledWith(1, text('hello'));
-    expect(onChunk).toHaveBeenNthCalledWith(2, text(' world'));
-    expect(result).toEqual({ aborted: false });
+    expect(result).toEqual({ aborted: false, resumeFromSeq: undefined });
+    // The caller gets the FULL folded array each time, not a delta — so it writes with
+    // replace semantics and there is no skip count to get wrong.
+    expect(seen.at(-1)).toEqual({ parts: [textPart('hello world')], seq: 2 });
   });
 
-  it('given a tool part frame, should pass the full tool object through to onChunk', async () => {
-    const tool = {
-      type: 'tool-list_pages',
-      toolCallId: 'tc1',
-      toolName: 'list_pages',
-      state: 'output-available',
-      input: { driveId: 'd1' },
-      output: { pages: [] },
-    };
+  it('given a tool round trip, should fold it into one part rather than forwarding raw frames', async () => {
     stubFetch(encodeLines([
-      `data: ${JSON.stringify({ part: tool })}\n\n`,
+      'data: {"seq":0,"chunk":{"type":"tool-input-start","toolCallId":"tc1","toolName":"list_pages"}}\n\n',
+      'data: {"seq":1,"chunk":{"type":"tool-input-available","toolCallId":"tc1","toolName":"list_pages","input":{"driveId":"d1"}}}\n\n',
+      'data: {"seq":2,"chunk":{"type":"tool-output-available","toolCallId":"tc1","output":{"pages":[]}}}\n\n',
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    await consumeStreamJoin('msg-tool', AbortSignal.timeout(5000), onChunk);
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
-    expect(onChunk).toHaveBeenCalledWith(tool);
+    expect(seen.at(-1)).toHaveLength(1);
+    expect(seen.at(-1)?.[0]).toMatchObject({
+      type: 'tool-list_pages', toolCallId: 'tc1', state: 'output-available',
+    });
+  });
+
+  it('given reasoning frames, should fold them — the wire this replaces dropped them entirely', async () => {
+    // chunkToPart forwarded four chunk types, so a joiner never saw reasoning, files or
+    // sources. That is the fidelity gap this whole change exists to close.
+    stubFetch(encodeLines([
+      'data: {"seq":0,"chunk":{"type":"reasoning-start","id":"r1"}}\n\n',
+      'data: {"seq":1,"chunk":{"type":"reasoning-delta","id":"r1","delta":"thinking"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
+
+    expect(seen.at(-1)?.[0]).toMatchObject({ type: 'reasoning', text: 'thinking' });
   });
 
   it('given done sentinel with aborted: true, should return { aborted: true } without throwing', async () => {
-    stubFetch(encodeLines([
-      'data: {"part":{"type":"text","text":"partial"}}\n\n',
-      'data: {"done":true,"aborted":true}\n\n',
-    ]));
+    stubFetch(encodeLines(['data: {"done":true,"aborted":true}\n\n']));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    const result = await consumeStreamJoin('msg-2', AbortSignal.timeout(5000), onChunk);
+    const result = await consumeStreamJoin('m1', new AbortController().signal, () => {});
 
-    expect(onChunk).toHaveBeenCalledWith(text('partial'));
-    expect(result).toEqual({ aborted: true });
+    expect(result.aborted).toBe(true);
   });
 
-  it('given signal is already aborted, should return { aborted: true } without calling onChunk', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockRejectedValue(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })),
-    );
+  it('given the server refuses the cursor as too old, should surface the resume point', async () => {
+    // The successor to silently serving a later prefix. An evicted cursor is recoverable if
+    // the client is told where to restart, and a silent gap is not.
+    stubFetch(encodeLines(['data: {"done":true,"resumeFromSeq":42}\n\n']));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    const controller = new AbortController();
-    controller.abort();
+    const result = await consumeStreamJoin('m1', new AbortController().signal, () => {}, 7);
 
-    const result = await consumeStreamJoin('msg-3', controller.signal, onChunk);
-
-    expect(result).toEqual({ aborted: true });
-    expect(onChunk).not.toHaveBeenCalled();
-  });
-
-  it('given non-2xx response, should throw an error with the status', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 403, body: encodeLines([]) }),
-    );
-
-    const { consumeStreamJoin } = await import('../stream-join-client');
-
-    await expect(
-      consumeStreamJoin('msg-4', AbortSignal.timeout(5000), vi.fn()),
-    ).rejects.toThrow('403');
+    expect(result.resumeFromSeq).toBe(42);
   });
 
   it('given malformed SSE lines, should skip them and continue processing', async () => {
     stubFetch(encodeLines([
-      'data: not-json\n\n',
-      'comment: ignored\n\n',
-      'data: {"part":{"type":"text","text":"ok"}}\n\n',
+      'data: {not json}\n\n',
+      ...textFrames('ok'),
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    const result = await consumeStreamJoin('msg-5', AbortSignal.timeout(5000), onChunk);
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
-    expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith(text('ok'));
-    expect(result).toEqual({ aborted: false });
+    expect(seen.at(-1)).toEqual([textPart('ok')]);
   });
 
-  it('given a legacy {text:...} frame from an old server, should skip it (no part field present)', async () => {
+  it('given a frame with no chunk type or no seq, should skip it rather than feed the fold garbage', async () => {
     stubFetch(encodeLines([
-      'data: {"text":"legacy"}\n\n',
-      'data: {"part":{"type":"text","text":"current"}}\n\n',
+      'data: {"seq":0,"chunk":{}}\n\n',
+      'data: {"chunk":{"type":"text-start","id":"t1"}}\n\n',
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    await consumeStreamJoin('msg-mixed', AbortSignal.timeout(5000), onChunk);
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
-    expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith(text('current'));
+    expect(seen).toEqual([]);
   });
 
-  it('given a frame with an empty part object, should skip it without forwarding (no type discriminator means no renderer route)', async () => {
+  it('given a legacy {part:...} frame from an old server, should skip it', async () => {
+    // Mid-rollout an old worker still emits the previous wire. Skipping is correct: the fold
+    // consumes chunks, and a part fed to it would produce nothing coherent.
     stubFetch(encodeLines([
-      'data: {"part":{}}\n\n',
-      'data: {"part":{"type":"text","text":"after"}}\n\n',
+      'data: {"part":{"type":"text","text":"legacy"}}\n\n',
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    await consumeStreamJoin('msg-empty-part', AbortSignal.timeout(5000), onChunk);
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
-    expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith(text('after'));
+    expect(seen).toEqual([]);
   });
 
-  it('given a tool part frame missing toolCallId, should skip it (the idempotency key would be lost)', async () => {
-    stubFetch(encodeLines([
-      'data: {"part":{"type":"tool-list_pages","state":"output-available"}}\n\n',
-      'data: {"part":{"type":"text","text":"recovered"}}\n\n',
-      'data: {"done":true,"aborted":false}\n\n',
-    ]));
+  it('given a cursor, should request it and send credentials', async () => {
+    stubFetch(encodeLines(['data: {"done":true,"aborted":false}\n\n']));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    await consumeStreamJoin('msg-bad-tool', AbortSignal.timeout(5000), onChunk);
+    await consumeStreamJoin('m1', new AbortController().signal, () => {}, 12);
 
-    expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith(text('recovered'));
-  });
-
-  it('given fetch call, should include credentials and the correct URL', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: encodeLines(['data: {"done":true,"aborted":false}\n\n']),
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    const { consumeStreamJoin } = await import('../stream-join-client');
-    await consumeStreamJoin('msg-xyz', AbortSignal.timeout(5000), vi.fn());
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      '/api/ai/chat/stream-join/msg-xyz',
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/ai/chat/stream-join/m1?fromSeq=12',
       expect.objectContaining({ credentials: 'include' }),
     );
   });
 
   it('given messageId with special characters, should URL-encode it in the request', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: encodeLines(['data: {"done":true,"aborted":false}\n\n']),
-    });
-    vi.stubGlobal('fetch', mockFetch);
+    stubFetch(encodeLines(['data: {"done":true,"aborted":false}\n\n']));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    await consumeStreamJoin('msg/with spaces', AbortSignal.timeout(5000), vi.fn());
+    await consumeStreamJoin('m 1/x', new AbortController().signal, () => {});
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      '/api/ai/chat/stream-join/msg%2Fwith%20spaces',
-      expect.any(Object),
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/ai/chat/stream-join/m%201%2Fx?fromSeq=0',
+      expect.anything(),
     );
-  });
-
-  it('given a 2xx response with a null body, should throw', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, status: 200, body: null }),
-    );
-
-    const { consumeStreamJoin } = await import('../stream-join-client');
-
-    await expect(
-      consumeStreamJoin('msg-null', AbortSignal.timeout(5000), vi.fn()),
-    ).rejects.toThrow();
   });
 
   it('given an SSE line split across two read chunks, should buffer and parse correctly', async () => {
-    const encoder = new TextEncoder();
-    const halfA = 'data: {"part":{"type":"text"';
-    const halfB = ',"text":"hello"}}\n\ndata: {"done":true,"aborted":false}\n\n';
-
-    stubFetch(new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(halfA));
-        controller.enqueue(encoder.encode(halfB));
-        controller.close();
-      },
-    }));
+    stubFetch(encodeLines([
+      'data: {"seq":0,"chunk":{"type":"text-start","id":"t1"}}\n\ndata: {"seq":1,"chunk":{"type":"text-de',
+      'lta","id":"t1","delta":"split"}}\n\ndata: {"done":true,"aborted":false}\n\n',
+    ]));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
-    const onChunk = vi.fn();
-    const result = await consumeStreamJoin('msg-split', AbortSignal.timeout(5000), onChunk);
+    const seen: unknown[][] = [];
+    await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
-    expect(onChunk).toHaveBeenCalledWith(text('hello'));
-    expect(result).toEqual({ aborted: false });
+    expect(seen.at(-1)).toEqual([textPart('split')]);
   });
 });

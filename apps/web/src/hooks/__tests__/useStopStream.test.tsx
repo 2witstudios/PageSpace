@@ -1,105 +1,98 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-
-const { mockAbortByMessageId, mockAbortByConversation, mockReportAbortOutcome } = vi.hoisted(() => ({
-  mockAbortByMessageId: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
-  mockAbortByConversation: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
-  mockReportAbortOutcome: vi.fn(),
-}));
-
-vi.mock('@/lib/ai/core/client', () => ({
-  abortActiveStreamByMessageId: mockAbortByMessageId,
-  abortActiveStreamByConversation: mockAbortByConversation,
-  reportAbortOutcome: mockReportAbortOutcome,
-}));
-
 import { useStopStream } from '../useStopStream';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
-const OWN_STREAM: ActiveStream = {
-  messageId: 'msg-1',
-  conversationId: 'conv-1',
-  isOwn: true,
-};
+const abortByMessageId = vi.fn();
+const abortByConversation = vi.fn();
+const reportAbortOutcome = vi.fn();
 
-describe('useStopStream — rawStop conversation gate', () => {
+vi.mock('@/lib/ai/core/client', () => ({
+  abortActiveStreamByMessageId: (args: { messageId: string }) => abortByMessageId(args),
+  abortActiveStreamByConversation: (args: { conversationId: string }) => abortByConversation(args),
+  reportAbortOutcome: (result: unknown) => reportAbortOutcome(result),
+}));
+
+const OK = { aborted: true, code: 'aborted' as const, reason: 'stopped' };
+
+/**
+ * Stop is a SERVER action, and these cases are all about which name it sends.
+ *
+ * The local-stop half of this hook is gone — see `useStopStream`'s docblock and
+ * `only-a-deliberate-stop.test.ts`. Two cases that used to live here ("given an idle chat, calls
+ * rawStop"; "given no target conversation, calls rawStop") pinned a mechanism that no longer
+ * exists and are deleted rather than rewritten: cancelling a local read never stopped a
+ * generation, so there is no behaviour under them to preserve. What they were really protecting
+ * — that a Stop always names something true server-side — is the subject of every case below.
+ */
+describe('useStopStream', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    abortByMessageId.mockResolvedValue(OK);
+    abortByConversation.mockResolvedValue(OK);
   });
 
-  const run = ({
-    latched,
-    target,
-    activeStream,
-  }: {
-    latched: string | undefined;
-    target: string | null;
-    activeStream?: ActiveStream;
-  }) => {
-    const rawStop = vi.fn();
+  const liveStream = (messageId: string): ActiveStream =>
+    ({ messageId, conversationId: 'conv-1', isOwn: true }) as ActiveStream;
+
+  it('given a live own stream, aborts by its messageId and reports the outcome', async () => {
     const { result } = renderHook(() =>
-      useStopStream({
-        activeStream,
-        pendingSendConversationId: null,
-        rawStop,
-        getLocalSendConversationId: () => latched,
-        targetConversationId: target,
-      }),
+      useStopStream({ activeStream: liveStream('msg-1'), pendingSendConversationId: null }),
     );
-    return { stop: result.current, rawStop };
-  };
 
-  it('given an idle chat (no latch), should call rawStop (harmless no-op, never suppressed)', async () => {
-    const { stop, rawStop } = run({ latched: undefined, target: 'conv-1', activeStream: OWN_STREAM });
+    await act(async () => {
+      await result.current();
+    });
 
-    await act(async () => { await stop(); });
-
-    expect(rawStop).toHaveBeenCalledTimes(1);
+    expect(abortByMessageId).toHaveBeenCalledWith({ messageId: 'msg-1' });
+    expect(abortByConversation).not.toHaveBeenCalled();
+    expect(reportAbortOutcome).toHaveBeenCalledWith(OK);
   });
 
-  it('given the local fetch belongs to the conversation being stopped, should call rawStop', async () => {
-    const { stop, rawStop } = run({ latched: 'conv-1', target: 'conv-1', activeStream: OWN_STREAM });
+  it('given only a pending send, aborts by the conversation captured at send', async () => {
+    // The TTFB window: the server has not issued a messageId yet, so the conversation is the
+    // only name the client holds — and this is exactly when a user who spotted a typo presses
+    // Stop. Without this branch the abort would silently name nothing.
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: 'conv-9' }),
+    );
 
-    await act(async () => { await stop(); });
+    await act(async () => {
+      await result.current();
+    });
 
-    expect(rawStop).toHaveBeenCalledTimes(1);
+    expect(abortByConversation).toHaveBeenCalledWith({ conversationId: 'conv-9' });
+    expect(abortByMessageId).not.toHaveBeenCalled();
+    expect(reportAbortOutcome).toHaveBeenCalledWith(OK);
   });
 
-  // THE gate. Conversation A renders via the socket (handed off) while this chat's local fetch
-  // consumes conversation B. Stop pressed on A must abort A on the SERVER but must not cancel
-  // B's live local read — that would send B dark mid-token.
-  it('given the local fetch belongs to ANOTHER conversation, should skip rawStop but still abort on the server', async () => {
-    const { stop, rawStop } = run({ latched: 'conv-2', target: 'conv-1', activeStream: OWN_STREAM });
+  it('given nothing live and nothing sent, issues no abort and stays silent', async () => {
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: null }),
+    );
 
-    await act(async () => { await stop(); });
+    await act(async () => {
+      await result.current();
+    });
 
-    expect(rawStop).not.toHaveBeenCalled();
-    expect(mockAbortByMessageId).toHaveBeenCalledWith({ messageId: 'msg-1' });
+    expect(abortByMessageId).not.toHaveBeenCalled();
+    expect(abortByConversation).not.toHaveBeenCalled();
+    // Deliberately silent: there is nothing to report and nothing to name.
+    expect(reportAbortOutcome).not.toHaveBeenCalled();
   });
 
-  it('given an empty-string latch (unresolved-identity placeholder), should call rawStop', async () => {
-    const { stop, rawStop } = run({ latched: '', target: 'conv-1', activeStream: OWN_STREAM });
+  it('given an unconfirmed abort, still reports it so the user learns the stream may run on', async () => {
+    const unconfirmed = { aborted: false, code: 'unconfirmed' as const, reason: 'no response' };
+    abortByMessageId.mockResolvedValue(unconfirmed);
 
-    await act(async () => { await stop(); });
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: liveStream('msg-2'), pendingSendConversationId: null }),
+    );
 
-    expect(rawStop).toHaveBeenCalledTimes(1);
-  });
+    await act(async () => {
+      await result.current();
+    });
 
-  it('given no target conversation (null), should call rawStop (no basis to withhold it)', async () => {
-    const { stop, rawStop } = run({ latched: 'conv-2', target: null });
-
-    await act(async () => { await stop(); });
-
-    expect(rawStop).toHaveBeenCalledTimes(1);
-  });
-
-  it('given nothing live and nothing sent, should stay silent (no server abort, no report)', async () => {
-    const { stop } = run({ latched: undefined, target: 'conv-1' });
-
-    await act(async () => { await stop(); });
-
-    expect(mockAbortByMessageId).not.toHaveBeenCalled();
-    expect(mockAbortByConversation).not.toHaveBeenCalled();
-    expect(mockReportAbortOutcome).not.toHaveBeenCalled();
+    expect(reportAbortOutcome).toHaveBeenCalledWith(unconfirmed);
   });
 });

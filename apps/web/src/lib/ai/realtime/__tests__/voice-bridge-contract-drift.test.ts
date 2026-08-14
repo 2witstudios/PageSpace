@@ -1,7 +1,7 @@
 /**
  * Drift guard between the two declarations of one wire shape.
  *
- * `RealtimeTool` (this app) is what `buildRealtimeTools` produces; the shared
+ * `RealtimeTool` (this app) is what `toRealtimeTools` produces; the shared
  * `realtimeToolSchema` is what `apps/realtime` validates on arrival. They are
  * deliberately separate declarations — the realtime server must not import from
  * the web app — so the only thing keeping them honest is this file.
@@ -12,21 +12,23 @@
  * a 400 from the attach endpoint, for a reason nobody can see from here).
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  voiceBridgeRequestSchema,
   realtimeToolSchema,
   realtimeAttachPayloadSchema,
   realtimeSeedEventSchema,
   type RealtimeSeedEventWire,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
-import { buildRealtimeTools } from '../tools';
+import { buildRealtimeToolExposure, toRealtimeTools } from '../tools';
+import { handleVoiceBridgeRequest } from '../bridge-handler';
 import { buildRealtimeSeed, type SeedEvent } from '../seed';
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import type { RealtimeTool } from '../session';
 
 describe('realtime tool wire shape', () => {
   it('given the real registry, every emitted tool should satisfy the shared schema', () => {
-    const tools = buildRealtimeTools(buildPageSpaceTools());
+    const tools = toRealtimeTools(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
     expect(tools.length).toBeGreaterThan(0);
 
     for (const tool of tools) {
@@ -36,7 +38,7 @@ describe('realtime tool wire shape', () => {
   });
 
   it('should carry the whole registry-built tool set through the attach payload intact', () => {
-    const tools = buildRealtimeTools(buildPageSpaceTools());
+    const tools = toRealtimeTools(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
 
     const parsed = realtimeAttachPayloadSchema.safeParse({
       callId: 'rtc_u0_abc',
@@ -143,5 +145,86 @@ describe('realtime seed wire shape', () => {
         item: { type: 'message', role: 'user', content: [] },
       }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * The request union and the handler that narrows it.
+ *
+ * `handleVoiceBridgeRequest` used to narrow `kind === 'tool'` and then FALL
+ * THROUGH to the transcript write, so a kind added to the schema would have
+ * been persisted as a spoken turn — a wrong row, written confidently, with
+ * nothing raised anywhere. The handler is exhaustive now; this is what keeps it
+ * that way, because the next member will be added by someone who has not read
+ * that story.
+ */
+describe('every request kind is handled', () => {
+  const kinds = voiceBridgeRequestSchema.options.map(
+    (option) => (option.shape.kind as { value: string }).value,
+  );
+
+  it('should know exactly which kinds exist', () => {
+    // Fails when a member is added, which is the prompt to handle it below.
+    expect(kinds.sort()).toEqual(['tool', 'tool_finished', 'tool_started', 'transcript']);
+  });
+
+  it('should route every one of them without falling through to the transcript write', async () => {
+    const transcriptDeps = {
+      loadConversation: vi.fn(async () => ({
+        id: 'conv1',
+        userId: 'u1',
+        isShared: false,
+        type: 'global',
+        contextId: null,
+        isActive: true,
+      })),
+      createConversation: vi.fn(),
+      canAccess: vi.fn(async () => true),
+      saveGlobalMessage: vi.fn(async () => ({ saved: true, rev: 1 })),
+      savePageMessage: vi.fn(async () => ({ saved: true, rev: 1 })),
+      newMessageId: vi.fn(() => 'm1'),
+      logger: { warn: vi.fn() },
+    };
+    const deps = {
+      toolDeps: () => ({ tools: {}, logger: { warn: vi.fn(), error: vi.fn() } }),
+      transcriptDeps,
+      model: 'gpt-realtime-2.1',
+    } as unknown as Parameters<typeof handleVoiceBridgeRequest>[0];
+
+    const base = { callId: 'rtc_1', userId: 'u1', conversationId: 'conv1' };
+    const bodies: Record<string, unknown> = {
+      tool: { ...base, kind: 'tool', name: 'read_page', argumentsJson: '{}' },
+      transcript: { ...base, kind: 'transcript', role: 'assistant', text: 'hello' },
+      tool_started: {
+        ...base,
+        kind: 'tool_started',
+        toolCallId: 'call_1',
+        name: 'read_page',
+        argumentsJson: '{}',
+      },
+      tool_finished: {
+        ...base,
+        kind: 'tool_finished',
+        toolCallId: 'call_1',
+        name: 'read_page',
+        argumentsJson: '{}',
+        messageId: 'm1',
+        output: 'ok',
+      },
+    };
+
+    for (const kind of kinds) {
+      const response = await handleVoiceBridgeRequest(deps, JSON.stringify(bodies[kind]));
+
+      expect(response.status, `${kind} was refused`).toBe(200);
+      expect(response.body.ok, `${kind} failed`).toBe(true);
+      // The tell for a fallthrough: a kind answered as though it were a transcript.
+      if (kind !== 'transcript') {
+        expect(
+          response.body.ok && response.body.kind,
+          `${kind} was answered as a ${response.body.ok ? response.body.kind : ''}`,
+        ).not.toBe('transcript');
+      }
+    }
   });
 });

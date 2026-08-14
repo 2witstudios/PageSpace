@@ -12,13 +12,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -373,6 +371,32 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
+/**
+ * A stand-in for the lifecycle's frame channel.
+ *
+ * The turn strategies hand the SDK stream to the pump and serve the response by SUBSCRIBING
+ * to this — so a mocked lifecycle has to carry one or the route cannot build a response at
+ * all. Only the surface `pumpAndRespond` touches is modelled; the channel's real behaviour is
+ * covered in stream-channel.test.ts, and the reduction in foldChunksToParts.test.ts.
+ */
+const makeFakeChannel = () => {
+  const frames: unknown[] = [];
+  return {
+    messageId: 'msg-1',
+    get nextSeq() { return frames.length; },
+    firstAvailableSeq: 0,
+    finished: false,
+    aborted: false,
+    subscriberCount: 0,
+    append: (chunk: unknown) => { frames.push(chunk); },
+    finish: () => {},
+    getFrames: () => frames.slice(),
+    subscribe: () => () => {},
+    subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+  } as never;
+};
+
+
 const makeRequest = () =>
   new Request('https://example.com/api/ai/global/conv-1/messages', {
     method: 'POST',
@@ -400,7 +424,7 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
   });
 
   it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
@@ -469,7 +493,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
   });
 
   it('calls AIMonitoring.trackUsage even when the provider returns no usage metadata', async () => {

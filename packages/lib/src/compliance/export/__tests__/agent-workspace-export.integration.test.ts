@@ -34,7 +34,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
-import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { factories } from '@pagespace/db/test/factories';
 import {
   collectUserAgentWorkspaces,
@@ -56,12 +56,30 @@ let sharedWorkspaceId: string;
 let foreignWorkspaceId: string;
 /** A conversation the subject owns, in the subject's workspace. */
 let subjectConversationId: string;
+/** The subject's own generation, and the other human's inside the subject's thread. */
+let subjectMessageId: string;
+let otherMessageId: string;
 
 const SUBJECT_SHELL_TAIL = 'subject scrollback: cargo build --release';
 const OTHER_SHELL_TAIL = 'other-person scrollback: DO NOT EXPORT';
 const SUBJECT_PARTS = [{ type: 'text', text: 'the subject asked, the agent answered' }];
 const AGENT_PARTS = [{ type: 'text', text: 'dispatched worker output in the subject thread' }];
 const OTHER_PARTS = [{ type: 'text', text: 'another human generation — DO NOT EXPORT' }];
+
+/**
+ * The frame log for the subject's generation, split across two batch rows and
+ * INSERTED tail-first, so the collector's ordering is doing real work: reading
+ * these back in insertion order would fail.
+ */
+const SUBJECT_FRAMES_HEAD = [
+  { type: 'text-start', id: 't1' },
+  { type: 'text-delta', id: 't1', delta: 'raw frames the subject ' },
+];
+const SUBJECT_FRAMES_TAIL = [
+  { type: 'text-delta', id: 't1', delta: 'generated' },
+  { type: 'text-end', id: 't1' },
+];
+const OTHER_FRAMES = [{ type: 'text-delta', id: 'x1', delta: 'another human\'s frames — DO NOT EXPORT' }];
 
 beforeAll(async () => {
   if (!process.env.DATABASE_URL) {
@@ -163,10 +181,13 @@ beforeAll(async () => {
     },
   ]);
 
+  subjectMessageId = createId();
+  otherMessageId = createId();
+
   await db.insert(aiStreamSessions).values([
     // Leg 1: triggered by the subject, in their own thread.
     {
-      messageId: createId(),
+      messageId: subjectMessageId,
       channelId: `conversation:${subjectConversationId}`,
       conversationId: subjectConversationId,
       userId: subjectId,
@@ -188,7 +209,7 @@ beforeAll(async () => {
     // ANOTHER HUMAN's generation inside the subject's own conversation —
     // that person's content, and Art 15(4) keeps it out.
     {
-      messageId: createId(),
+      messageId: otherMessageId,
       channelId: `conversation:${subjectConversationId}`,
       conversationId: subjectConversationId,
       userId: otherId,
@@ -205,6 +226,38 @@ beforeAll(async () => {
       status: 'complete',
     },
   ]);
+
+  // The frame log for two of those generations. Batched across two rows for the
+  // subject's, because the flattening — order by `from_seq`, concatenate — is
+  // the part of the collector that a single-row fixture could not catch.
+  await db.insert(aiStreamFrames).values([
+    {
+      messageId: subjectMessageId,
+      conversationId: subjectConversationId,
+      fromSeq: 2,
+      frameCount: SUBJECT_FRAMES_TAIL.length,
+      frames: SUBJECT_FRAMES_TAIL,
+      byteSize: JSON.stringify(SUBJECT_FRAMES_TAIL).length,
+    },
+    {
+      messageId: subjectMessageId,
+      conversationId: subjectConversationId,
+      fromSeq: 0,
+      frameCount: SUBJECT_FRAMES_HEAD.length,
+      frames: SUBJECT_FRAMES_HEAD,
+      byteSize: JSON.stringify(SUBJECT_FRAMES_HEAD).length,
+    },
+    // The other human's frames, inside the SUBJECT's conversation. The cascade
+    // key would reach them; the session row's `user_id` is what must not.
+    {
+      messageId: otherMessageId,
+      conversationId: subjectConversationId,
+      fromSeq: 0,
+      frameCount: OTHER_FRAMES.length,
+      frames: OTHER_FRAMES,
+      byteSize: JSON.stringify(OTHER_FRAMES).length,
+    },
+  ]);
 });
 
 afterAll(async () => {
@@ -216,6 +269,7 @@ afterAll(async () => {
   if (ids.length === 0) return;
   const orphanConversations = [subjectConversationId].filter(Boolean);
   if (orphanConversations.length > 0) {
+    await db.delete(aiStreamFrames).where(inArray(aiStreamFrames.conversationId, orphanConversations));
     await db.delete(aiStreamSessions).where(inArray(aiStreamSessions.conversationId, orphanConversations));
   }
   await db.delete(users).where(inArray(users.id, ids));
@@ -314,11 +368,42 @@ describe('collectUserStreamState (Art 15 completeness)', () => {
     expect(JSON.stringify(rows)).not.toContain('DO NOT EXPORT');
   });
 
+  it('carries the durable FRAME LOG, flattened into seq order across batch rows', async () => {
+    // The successor to `parts`, and the only copy of a generation that was
+    // interrupted before its assistant row materialized. Rows are inserted
+    // tail-first, so an unordered read returns the reply backwards.
+    const rows = await collectUserStreamState(database, subjectId);
+    const subjectRow = rows.find((r) => r.messageId === subjectMessageId);
+
+    expect(subjectRow, 'the subject\'s own generation was dropped').toBeDefined();
+    expect(subjectRow!.frames).toEqual([...SUBJECT_FRAMES_HEAD, ...SUBJECT_FRAMES_TAIL]);
+  });
+
+  it('withholds ANOTHER human\'s frames even though they sit in the subject\'s conversation', async () => {
+    // The frame log has no `user_id` — only the session row knows whose content
+    // it is. Reaching frames by conversation instead of by the sessions this
+    // collector already filtered would disclose the other person's generation.
+    const rows = await collectUserStreamState(database, subjectId);
+    expect(rows.map((r) => r.messageId)).not.toContain(otherMessageId);
+    expect(JSON.stringify(rows.map((r) => r.frames))).not.toContain('DO NOT EXPORT');
+  });
+
+  it('returns an empty frame array for a generation with no frame log', async () => {
+    // Every generation until the frame-log writer lands, and every one whose
+    // frames the retention sweep already took. Must not be undefined: the
+    // bundle is serialized straight to JSON.
+    const rows = await collectUserStreamState(database, subjectId);
+    const unframed = rows.filter((r) => r.messageId !== subjectMessageId);
+
+    expect(unframed.length).toBeGreaterThan(0);
+    for (const row of unframed) expect(row.frames).toEqual([]);
+  });
+
   it('strips stream transport plumbing, keeping only the content and its lifecycle', async () => {
     const [row] = await collectUserStreamState(database, subjectId);
     expect(row).toBeDefined();
     expect(Object.keys(row).sort()).toEqual(
-      ['completedAt', 'conversationId', 'messageId', 'parts', 'startedAt', 'status'],
+      ['completedAt', 'conversationId', 'frames', 'messageId', 'parts', 'startedAt', 'status'],
     );
   });
 

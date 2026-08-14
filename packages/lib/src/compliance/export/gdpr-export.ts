@@ -3,7 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
-import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
@@ -359,6 +359,13 @@ export interface UserAgentWorkspaceNodeExport {
  * record of a generation that was interrupted before its assistant row was
  * materialized.
  *
+ * `frames` is that same content in its successor form. `ai_stream_frames` is
+ * the durable, append-only log of the raw `UIMessageChunk`s the generation
+ * emitted, and it is what `parts` becomes once the frame-log writer lands and
+ * the `parts` column is dropped. Both are carried here for exactly the span in
+ * which both can hold rows: a subject access request answered mid-migration
+ * must not depend on which side of that rollout the generation ran on.
+ *
  * Excludes `channelId`, `browserSessionId`, `streamId`, `rawPartsCount`,
  * `lastHeartbeatAt` and `abortRequestedAt`: multicast routing keys, client
  * session telemetry, replay bookkeeping and liveness plumbing — the same
@@ -372,6 +379,12 @@ export interface UserStreamStateExport {
   status: 'streaming' | 'complete' | 'aborted';
   /** Checkpointed generation content. */
   parts: unknown[];
+  /**
+   * The raw frame log for this generation, flattened into seq order across the
+   * batch rows that hold it. Empty for a generation whose frames were already
+   * swept, and — until the frame-log writer lands — for every generation.
+   */
+  frames: unknown[];
   startedAt: Date;
   completedAt: Date | null;
 }
@@ -1187,6 +1200,16 @@ export async function collectUserAgentWorkspaces(
  * It stops there. A row triggered by ANOTHER HUMAN inside the subject's shared
  * conversation stays out: `parts` is that person's generated content, and
  * Art 15(4) forbids letting one subject's access right override another's.
+ *
+ * ── Why `ai_stream_frames` rides this collector rather than its own ──────────
+ * The frame log has no `user_id` of its own; it is keyed by `message_id` and
+ * carries `conversation_id` solely to inherit the cascade. So the only thing
+ * that can say whose content a frame is, is the session row for its
+ * `message_id` — which means the disclosure boundary above is already the
+ * correct one, and a separate collector would have to re-derive it. Fetching
+ * frames for exactly the sessions this collector returns keeps the Art 15(4)
+ * line in ONE place: a generation withheld above cannot leak through its
+ * frames, because its messageId never reaches the second query.
  */
 export async function collectUserStreamState(
   database: DB,
@@ -1211,7 +1234,46 @@ export async function collectUserStreamState(
       ),
     );
 
-  return rows.map((row) => ({ ...row, parts: row.parts ?? [] }));
+  const framesByMessage = await collectStreamFrames(database, rows.map((row) => row.messageId));
+
+  return rows.map((row) => ({
+    ...row,
+    parts: row.parts ?? [],
+    frames: framesByMessage.get(row.messageId) ?? [],
+  }));
+}
+
+/**
+ * Flatten `ai_stream_frames` into one frame array per messageId.
+ *
+ * A row covers `[from_seq, from_seq + frame_count)`, so ordering by `from_seq`
+ * and concatenating reproduces the emitted sequence exactly — the same read the
+ * runtime's own cursor join performs, minus the slicing, because an export
+ * wants the whole stream rather than a suffix.
+ */
+async function collectStreamFrames(
+  database: DB,
+  messageIds: string[],
+): Promise<Map<string, unknown[]>> {
+  const byMessage = new Map<string, unknown[]>();
+  if (messageIds.length === 0) return byMessage;
+
+  const batches = await database
+    .select({
+      messageId: aiStreamFrames.messageId,
+      frames: aiStreamFrames.frames,
+    })
+    .from(aiStreamFrames)
+    .where(inArray(aiStreamFrames.messageId, messageIds))
+    .orderBy(aiStreamFrames.messageId, aiStreamFrames.fromSeq);
+
+  for (const batch of batches) {
+    const existing = byMessage.get(batch.messageId);
+    if (existing) existing.push(...(batch.frames ?? []));
+    else byMessage.set(batch.messageId, [...(batch.frames ?? [])]);
+  }
+
+  return byMessage;
 }
 
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {

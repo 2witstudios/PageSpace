@@ -26,6 +26,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **The assistant on the call is the one you picked, with the instructions and the tools its owner
   gave it** — an agent you built to answer a particular way answers that way out loud too, and one
   whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **You can now delegate out loud, not just talk** — the assistant on a call now knows how to
+  operate your workspace the same way it does when you type at it: how tasks, agents, automations
+  and search work, which skills it can load, and the tools it does not list up front. Ask it about
+  your calendar, to file a task, or to set something running, and it goes and does it instead of
+  saying it cannot. It also stops asking permission first: say what you want and it acts, then tells
+  you what it did. Work that would take minutes gets handed to an agent or a task rather than
+  leaving you listening to silence, and it will say where it went. "This page" and "here" mean what
+  you are looking at, so it never asks you to read out an id.
+- **The assistant on a call can see whole answers, and you can see it working** — it was being handed
+  only the first 700 characters of everything it looked up, which is why it lost track of documents,
+  misread pages and fumbled edits: it was reading through a keyhole. It now gets what you get when
+  you type. And the work is no longer invisible — the call bar names what it is doing while it does
+  it ("Read Page: Roadmap") instead of going silent, and each tool call appears in the conversation
+  as it happens, spinner and all, exactly the way it does when you type. It is still there when you
+  come back to the thread later.
 - **A call you cannot have does not start** — running out of credit, or already having as many calls
   open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
   talking to something nobody was counting.
@@ -47,6 +62,44 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   away.) The same check also stripped the destination when you opened a CLI login link while signed
   out, so signing in dumped you on a blank sign-in screen instead of the consent page — that is
   fixed too.
+- **You can send a message, open another chat, send a second one, and trust the first finishes** —
+  every chat surface shared one connection to the AI, so a second message could not be sent while
+  the first was still answering. What you got instead was one of two things: the first reply was
+  quietly cut off so the second could go, or the send was refused outright with "The previous
+  response is still wrapping up — please try again in a moment." Both conversations now answer at
+  the same time, each with its own Stop button, and switching between them shows whatever has
+  arrived so far with no gap and no waiting.
+- **Leaving a chat no longer abandons the reply** — closing the pane, navigating away, or switching
+  between the assistant and an agent used to stop the reply arriving, even though the work carried
+  on running (and billing) on the server. You came back to whatever had landed before you looked
+  away, frozen. Replies now keep arriving wherever you are in the app, and are complete when you
+  return — including the reasoning and command details, not just the text. Only pressing Stop stops
+  anything.
+- **Answering one of several questions no longer locks the chat** — when an assistant asked you
+  more than one thing at once, answering the first left the conversation stuck: the composer
+  showed only Stop, the box was greyed out, and the remaining question could not be answered
+  either. The only way out was to open a different conversation. The same thing happened if two
+  places showing the same chat — the sidebar and the main view, say — both tried to submit your
+  answer at once. Answering now behaves the same whether the assistant asked one question or five.
+- **Your own reply is yours in every tab and on every device** — a chat you started on your laptop
+  showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
+  attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
+  from any of them. A colleague's reply on a shared page is still correctly not yours to stop.
+- **A long reply interrupted by a restart comes back whole, beginning included** — when the server
+  that was writing a reply went away mid-sentence (a deploy, a crash, a machine moving), what you
+  got back afterwards was rebuilt from a periodic snapshot rather than from the reply itself. For
+  short answers that was close enough. For a long one it was not: the snapshot was assembled from a
+  buffer that discards its oldest content once a reply runs past a certain length, and because the
+  discarded part included the marker that opens a paragraph, everything after it was dropped too.
+  The reply did not come back shortened — the text disappeared entirely, leaving a stub that looked
+  like the assistant had barely started.
+
+  The reply is now written down as it is produced, so recovering one is a matter of reading it back
+  rather than reconstructing it: the beginning survives however long the answer ran, and what
+  returns is at most a fraction of a second behind what was on your screen instead of a second or
+  more. Tool calls and reasoning steps come back in the same shape they were rendered in. Nothing
+  changes for a reply that finishes normally — the record is deleted the moment the finished message
+  is safely saved, and a reply that never had a chance to save is the one case it is kept for.
 
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
@@ -152,6 +205,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ## [1.7.1] — 2026-08-10
 
 ### Fixed
+
+- **A reply no longer disappears when you look away** — a stream was carried on two separate
+  channels: the one your browser tab was reading, and the one everything else used. They did not
+  carry the same thing, so the moment you stopped being the tab holding the connection — you
+  switched to another chat, flipped between the assistant and an agent, reloaded, or opened the
+  conversation on another device — the reply you came back to was missing its reasoning, its
+  sources, any files it had produced, and the chips showing which commands it had run. Worse, the
+  act of switching told everyone watching that the reply had FINISHED while it was still being
+  written: the Stop button stopped working, the recovery snapshot was thrown away, and the agent
+  carried on running tools and spending credits with nothing showing it. There is now one channel.
+  Whatever your tab sees is exactly what a reload, a second device, or a colleague watching a
+  shared conversation sees, and stepping away does not end anything.
 
 - **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
   sent you out to the dashboard when you clicked it, including conversations that were already open

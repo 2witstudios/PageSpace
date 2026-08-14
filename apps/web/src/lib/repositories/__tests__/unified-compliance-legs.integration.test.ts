@@ -32,7 +32,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { aiStreamSessions, aiPendingAbortIntents } from '@pagespace/db/schema/ai-streams';
+import { aiStreamSessions, aiPendingAbortIntents, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { factories } from '@pagespace/db/test/factories';
 import { collectUserMessages } from '@pagespace/lib/compliance/export/gdpr-export';
 import { cleanupSoftDeletedChatRecords } from '@pagespace/lib/compliance/retention/retention-engine';
@@ -58,7 +58,27 @@ async function seedStreamSession(args: {
     userId: args.userId,
     parts: [{ type: 'text', text: 'checkpointed content' }],
   });
+  // The durable frame log for the same generation. Seeded on every session so
+  // the erasure assertions below cover both halves of the content — the two are
+  // the same reply in two forms, and reaching only one is the shape of hole
+  // `purge-stream-state` exists to close.
+  await db.insert(aiStreamFrames).values({
+    messageId,
+    conversationId: args.conversationId,
+    fromSeq: 0,
+    frameCount: 1,
+    frames: [{ type: 'text-delta', id: 't1', delta: 'raw frame content' }],
+    byteSize: 64,
+  });
   return messageId;
+}
+
+/** Frame-log rows still on disk for a generation. */
+async function framesFor(messageId: string) {
+  return db
+    .select({ fromSeq: aiStreamFrames.fromSeq })
+    .from(aiStreamFrames)
+    .where(eq(aiStreamFrames.messageId, messageId));
 }
 
 describe('compliance over the unified message corpus (Phase 4 PR 13; one table since PR 15)', () => {
@@ -298,6 +318,10 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
         .from(aiStreamSessions)
         .where(eq(aiStreamSessions.messageId, streamMessageId));
       expect(left).toEqual([]);
+      // The frame log carries `conversation_id` for exactly this reason — the
+      // cascade that reaches `parts` has to reach the frames with it, or the
+      // hole migration 0250 closed reopens under a new column name.
+      expect(await framesFor(streamMessageId)).toEqual([]);
     });
 
     it('purge-stream-state removes the subject\'s stream rows inside SOMEONE ELSE\'S conversation — no cascade reaches those, and nothing else in the codebase ever deletes them', async () => {
@@ -326,10 +350,14 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
         .from(aiStreamSessions)
         .where(eq(aiStreamSessions.messageId, strandedStreamId));
       expect(survivedTheCascade).toHaveLength(1);
+      // Frames survive it for the same reason, and worse: they have no
+      // `user_id` at all, so once the session row goes nothing can find them.
+      expect(await framesFor(strandedStreamId)).toHaveLength(1);
 
       // The erasure step is what reaches them.
       const result = await deleteStreamStateForUser(subject.id);
       expect(result.streamSessions).toBe(1);
+      expect(result.streamFrames).toBe(1);
       expect(result.abortIntents).toBe(1);
 
       const streamsLeft = await db
@@ -342,6 +370,7 @@ describe('compliance over the unified message corpus (Phase 4 PR 13; one table s
         .where(eq(aiPendingAbortIntents.conversationId, hostConversationId));
       expect(streamsLeft).toEqual([]);
       expect(intentsLeft).toEqual([]);
+      expect(await framesFor(strandedStreamId)).toEqual([]);
     });
   });
 

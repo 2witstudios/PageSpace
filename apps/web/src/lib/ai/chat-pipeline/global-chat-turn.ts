@@ -13,14 +13,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
-import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
@@ -42,10 +41,10 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
-import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { getAllowedDriveIds, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -64,8 +63,7 @@ import {
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
@@ -98,7 +96,6 @@ import {
   attachStreamFinisher,
   createStreamAbortController,
   removeStream,
-  STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
@@ -111,6 +108,7 @@ import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
 import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
+  buildAgentSystemPrompt,
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
@@ -253,6 +251,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         return row?.isActive === true;
       },
     });
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it — see the identical gate in page-chat-turn.ts, and
+    // `confirmTerminalWrite`'s docblock for why the first terminal write of a turn is the
+    // wrong moment to delete.
+    if (saved && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
     return saved;
   };
   try {
@@ -825,16 +829,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       });
     }
 
-    // Build system prompt. Note: "current page/drive" is turn-volatile — it's
-    // built separately as `locationPrompt` below and injected via
-    // buildVolatileTurnContext, NOT baked in here, so this string stays
-    // byte-identical across turns regardless of where the user navigates.
-    const baseSystemPrompt = buildSystemPrompt(
-      readOnlyMode,
-      personalization ?? undefined,
-      isCodeExecutionEnabled()
-    );
-
+    // The system prompt itself is assembled once, below, by
+    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+    // that "current page/drive" is turn-volatile: it is built separately as
+    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+    // into the system prompt, so that string stays byte-identical across turns
+    // regardless of where the user navigates.
     const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
     // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
     // ceiling is always empty here. Passed explicitly anyway so this stays correct
@@ -874,48 +874,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       }
     }
 
-    // Add global assistant specific instructions (including tool discovery — only this route has tool_search).
-    // Stable order: base → TOOL_DISCOVERY → global instructions → drivePrompt → agentAwareness → pageTree → nonCoreToolNames.
-    // Volatile sections (timestamp/location/mention/command) are NOT concatenated here; they are
-    // appended to the last user message at assembly time so the system prefix stays
-    // byte-identical across turns and provider prefix caches are not invalidated —
-    // including turns where only the user's current page/drive changed.
+    // The Global Assistant's own guidance — the exploration rules and the
+    // conversation-type report — now lives beside the page surface's assembly in
+    // `buildAgentSystemPrompt`, so the two can be read against each other.
     // Workspace knowledge (page types, tasks, agents, automation, search,
-    // mentions) comes from the SHARED inline-instructions sections appended
-    // at finalSystemPrompt assembly below — this route previously carried a
-    // bespoke copy that drifted (it claimed tasks create linked DOCUMENT
-    // pages; they create TASK_LIST children). Only genuinely
-    // global-assistant-specific guidance remains inline here.
-    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
-
-You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-SMART EXPLORATION RULES:
-1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
-   - ALWAYS use list_pages on the current drive when:
-     • User asks about the drive, its contents, or what's available
-     • User wants to create, write, or modify ANYTHING
-     • User mentions something that MAY exist in the drive
-     • User asks general questions about content or organization
-     • You need to understand the workspace structure
-   - Start with list_pages on the current drive BEFORE other actions
-2. Context-first approach:
-   - Default scope: current drive/location (see LOCATION context) is your primary workspace
-   - Only explore OTHER drives when explicitly mentioned
-   - When user says "here" or "this", they mean current context
-   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation — never fall back to the Home drive as a guess
-3. Efficient exploration pattern:
-   - FIRST: list_pages on the current drive — omit driveId and it uses the drive in your LOCATION context
-   - THEN: read specific pages as needed
-   - ONLY IF NEEDED: explore other drives/workspaces
-4. Proactive assistance:
-   - Don't ask "what's in your drive" - use list_pages to discover
-   - Suggest creating AI_CHAT and CHANNEL pages for organization
-   - Be autonomous within current context
-
-CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}` +
-      (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
-      drivePromptSection;
+    // mentions) comes from the SHARED inline-instructions sections: this route
+    // previously carried a bespoke copy that drifted (it claimed tasks create
+    // linked DOCUMENT pages; they create TASK_LIST children), which is the
+    // reason there is one assembly now rather than three.
 
     // The PAYER's sandbox eligibility for this Global Assistant turn —
     // derived from the conversation's BOUND SESSION, never the location
@@ -1022,13 +988,21 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     const activePlanPrompt = buildActivePlanPrompt(await getActivePlan(conversationId, userId));
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
-    const finalSystemPrompt = systemPrompt
-      + '\n' + buildGlobalAssistantInstructions(availableToolNames)
-      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
-      + pageTreePrompt
-      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
-      + skillCatalogPrompt
-      + activePlanPrompt;
+    const finalSystemPrompt = buildAgentSystemPrompt({
+      surface: 'global',
+      readOnly: readOnlyMode,
+      personalization,
+      allowedToolNames: availableToolNames,
+      skillCatalog: skillCatalogPrompt,
+      activePlan: activePlanPrompt,
+      pageTree: pageTreePrompt,
+      conversationType: conversation.type,
+      conversationContextId: conversation.contextId,
+      includeAskUser: canUseAskUser({ role: auth.role }),
+      drivePromptSection,
+      agentAwareness: agentAwarenessPrompt,
+      nonCoreToolNames: nonCoreToolNamesPrompt,
+    });
 
     let finalTools: ToolSet = {
       ...coreTools,
@@ -1309,7 +1283,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // observability — so no separate usage/steps promises are needed.
     let agentRun: RunAgentWithRetryResult | undefined;
 
-    const stream = createUIMessageStream({
+    const sdkStream = createUIMessageStream({
       originalMessages: sanitizedMessages, // full history — UI always sees all messages
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
@@ -1404,10 +1378,6 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               agentCallDepth: agentDispatchDepth,
             },
             maxRetries: 20,
-            onChunk: ({ chunk }) => {
-              const part = chunkToPart(chunk as never);
-              if (part) lifecycle!.pushPart(part);
-            },
             onAbort: () => {
               loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId),
@@ -1440,7 +1410,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // responseMessage; when onFinish never runs, this write stands as the sole record.
         // See Server Stream Durability epic PR 2 — CodeRabbit review.
         {
-          const bufferedParts = lifecycle!.getBufferedParts();
+          const bufferedParts = await lifecycle!.getParts();
           const aborted = isRunAborted({ agentRun, abortSignal });
           const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
           try {
@@ -1605,19 +1575,19 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
 
     // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
     holdHandedOff = true;
-    return createUIMessageStreamResponse({
-      stream,
-      headers: { [STREAM_ID_HEADER]: streamId },
-    });
+
+
+    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId });
 
   } catch (error) {
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
-    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
-    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
-    // silently discard any real partial content the cleanup write below is meant to preserve.
-    const bufferedPartsAtError = lifecycle?.getBufferedParts() ?? [];
+    // Captured before finish() as the most faithful snapshot. The hazard this guarded against
+    // is gone — finish() used to delete the registry entry backing getBufferedParts(), so a
+    // call afterwards saw an empty buffer; a finished channel keeps its ring, so getParts()
+    // still returns real content either way.
+    const bufferedPartsAtError = (lifecycle ? await lifecycle.getParts() : []);
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before onFinish ever got a chance to settle the

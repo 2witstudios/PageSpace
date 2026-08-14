@@ -22,11 +22,10 @@ const baseOptions = (overrides: Partial<UseAnswerAskUserOptions> = {}): UseAnswe
   conversationId: 'conv-1',
   renderedMessages: [askUserMessage('m1', 'tc1')],
   isConversationBusy: false,
-  setMessages: vi.fn(),
-  addToolResult: vi.fn().mockResolvedValue(undefined),
+  addToolResult: vi.fn().mockResolvedValue({ dispatched: true }),
   wrapSend: (sendFn) => sendFn(),
+  releasePendingSend: vi.fn(),
   buildBody: () => ({}),
-  prepareSend: vi.fn().mockResolvedValue(true),
   ...overrides,
 });
 
@@ -103,45 +102,79 @@ describe('useAnswerAskUser', () => {
 
   // Answering re-invokes the chat (addToolResult auto-resend) — with a shared chat instance it
   // must go through the cross-conversation handoff like every other send path (dual-stream fix).
-  it('given a refused handoff, should patch nothing, send nothing, and release the claim', async () => {
-    const applyAskUserAnswerSpy = vi.spyOn(conversationMessagesActions, 'applyAskUserAnswer');
-    const addToolResult = vi.fn().mockResolvedValue(undefined);
-    const prepareSend = vi.fn().mockResolvedValue(false);
+  // TWO HANDOFF CASES WERE HERE ('given a refused handoff…', 'given a confirmed handoff…').
+  //
+  // They pinned `useConversationSendHandoff`, which existed because the AI SDK's `Chat` could
+  // not consume two response bodies at once: answering a question re-invokes the chat, and with
+  // one shared instance per surface the question's conversation could be ON SCREEN while the
+  // chat was still consuming ANOTHER conversation's stream. A refusal meant the user's click
+  // did nothing but raise a toast.
+  //
+  // `useChatSession` has no shared instance and no single-body limit — a resume is simply a
+  // `fetch` alongside whatever else is in flight — so the handoff is deleted rather than
+  // moved, and there is no refusal path left to have behaviour. The cases go with it.
+});
+
+describe('a pendingSend that will never become a stream must be released', () => {
+  // `useSendHandoff`'s clearing effect is keyed on [isStreamLive, status, conversationId], and a
+  // wrapped callback that returns WITHOUT dispatching moves none of them — so the name sticks
+  // for the life of the mount. The composer then renders only Stop, and `isConversationBusy`
+  // keeps the REMAINING question unanswerable. Both non-dispatching paths must say so.
+
+  it('given the answer did not resume the turn, releases the pendingSend', async () => {
+    // A turn with several ask_user questions resumes only once every one is answered, so
+    // answering the first records a patch and sends nothing.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: false });
     const { result } = renderHook(() =>
-      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
     );
 
     await act(async () => {
-      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
     });
 
-    expect(prepareSend).toHaveBeenCalledWith('conv-1');
-    expect(applyAskUserAnswerSpy).not.toHaveBeenCalled();
-    expect(addToolResult).not.toHaveBeenCalled();
-    // The claim mutex is released — a later answer attempt is not wedged.
-    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
-    applyAskUserAnswerSpy.mockRestore();
+    expect(addToolResult).toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
   });
 
-  it('given a confirmed handoff, should proceed through patch and send exactly as before', async () => {
-    const addToolResult = vi.fn().mockResolvedValue(undefined);
-    const prepareSend = vi.fn().mockResolvedValue(true);
+  it('given the answer DID resume the turn, does not release it', async () => {
+    // The stream is coming; the pendingSend hands off to the store entry as designed.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
     const { result } = renderHook(() =>
-      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
     );
 
     await act(async () => {
-      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
     });
 
-    expect(prepareSend).toHaveBeenCalledWith('conv-1');
-    expect(addToolResult).toHaveBeenCalledTimes(1);
-    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+    expect(releasePendingSend).not.toHaveBeenCalled();
+  });
+
+  it('given the claimAnswering race is LOST, releases without sending', async () => {
+    // A co-mounted surface (or a double-click) got there first. `wrapSend` has already
+    // registered a pendingSend for a send that will not happen.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    // The handler a co-mounted surface bound from a render BEFORE any claim landed — which is
+    // what the race actually is. Claiming first instead would make the id unanswerable and the
+    // callback would bail at the render-time guard, never registering a pendingSend at all.
+    const submitFromEarlierRender = result.current.submitAnswers;
+    act(() => {
+      useAskUserAnsweringStore.getState().claimAnswering('tc1');
+    });
+
+    await act(async () => {
+      submitFromEarlierRender('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(addToolResult).not.toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
   });
 });

@@ -293,7 +293,7 @@ export const reconcileDeadStreamRows = async ({
 }): Promise<string[]> => {
   if (messageIds.length === 0) return [];
 
-  let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[]; startedAt: Date }[];
+  let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[]; rawPartsCount: number; startedAt: Date }[];
   try {
     rows = await db
       .select({
@@ -302,6 +302,9 @@ export const reconcileDeadStreamRows = async ({
         conversationId: aiStreamSessions.conversationId,
         userId: aiStreamSessions.userId,
         parts: aiStreamSessions.parts,
+        // Lets the materializer compare the snapshot's reach against the durable frame log's
+        // before choosing between them — see `recoverParts`.
+        rawPartsCount: aiStreamSessions.rawPartsCount,
         startedAt: aiStreamSessions.startedAt,
       })
       .from(aiStreamSessions)

@@ -28,16 +28,37 @@
  *   - `function_call_output.output` must be a STRING — so everything below
  *     returns one, including every failure.
  *
- * WHY RESULTS ARE TRUNCATED. A spoken answer cannot be skimmed. A full page
- * read is a two-minute monologue that the user cannot scan, interrupt usefully,
- * or remember — and in a live turn latency wins, with completeness happening in
- * the thread afterwards. The reference prototype
- * (`~/production/pagespace-voice/src/core/present.ts`) solves this with a
- * hand-written presenter per tool; that does not scale to PageSpace's registry
- * of dozens, and a curated presenter list would be a second tool surface that
- * drifts every time a tool is added. So the cap is generic and structural: cut
- * at a word boundary, say how much was left out, and tell the model how to get
- * the rest — the same contract `truncateForSpeech` offers, applied uniformly.
+ * THE OLD 700-CHARACTER CAP WAS MEASURING THE WRONG THING. Every result was cut
+ * to 700 characters here on the reasoning that a spoken answer cannot be
+ * skimmed — which is true, and is a fact about what the model SAYS. This is
+ * what the model KNOWS, and starving that is what made a call unable to do its
+ * job:
+ *   - `tool_search` returns JSON Schemas. Sliced at 700 characters it handed
+ *     back one schema cut mid-object, so the model could not build the
+ *     `execute_tool` call it went looking for — it guessed parameters, failed,
+ *     and tried again.
+ *   - `read_page` returned the first 700 characters of a document, which is
+ *     neither a summary nor enough to edit from: `replace_lines` needs line
+ *     numbers off a full read.
+ *   - `list_pages` was cut off, so "find my document" failed whenever the
+ *     document sorted late.
+ *
+ * Brevity is still required; it is enforced where it belongs. The spoken
+ * override in `instructions.ts` asks for two or three sentences a turn, and the
+ * model summarises the result rather than reciting it.
+ *
+ * THERE IS STILL A CEILING, AND IT IS ABOUT THE SESSION. A realtime session has
+ * 32k tokens, shared with the seed, the instructions and the audio for the whole
+ * call, and a `function_call_output` stays in it — so one result can end a call
+ * outright. Measured, not theorised: `tool_search` returns 21k characters for a
+ * broad keyword and 89k for a single letter, which is ~22k tokens on its own.
+ *
+ * `MAX_RESULT_CHARS` is therefore set so the path the model is actually TOLD to
+ * take survives whole. `TOOL_DISCOVERY_PROMPT` instructs
+ * `tool_search("select:name")` to get a schema before calling a tool; two tools
+ * that way is ~7k characters, and an ordinary page read is far less. What gets
+ * cut is the case nobody wanted whole — a broad dump — and the model is told how
+ * to ask again for less.
  */
 
 import type { Tool, ToolSet } from 'ai';
@@ -49,11 +70,16 @@ import type {
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /**
- * How much of a tool result is worth reading aloud. 700 characters is roughly
- * 45 seconds of speech — already long for a spoken answer, and past the point
- * where a listener retains the beginning.
+ * How much of one tool result a call can afford to keep.
+ *
+ * ~3k tokens. Sized against the 32k session rather than against a listener's
+ * patience — the model summarises for the listener, and the prompt is what
+ * makes it brief. Above `tool_search("select:…")` (~7k characters for two
+ * tools, the schema lookup the discovery prompt instructs) and above an
+ * ordinary page read; below the point where a single result crowds out the
+ * conversation it belongs to.
  */
-export const MAX_SPOKEN_RESULT_CHARS = 700;
+export const MAX_RESULT_CHARS = 12_000;
 
 /** Parsed arguments, or the sentence to say instead. */
 type ParsedArguments =
@@ -148,29 +174,33 @@ const firstBalancedObject = (text: string): string | undefined => {
 };
 
 /**
- * A tool's return value as one speakable string, capped.
+ * A tool's return value as the one string `function_call_output.output` accepts.
  *
- * A string result is spoken as-is; anything else is serialized, because the
- * model reads JSON perfectly well and inventing prose for an arbitrary shape
+ * A string result passes through untouched; anything else is serialized, because
+ * the model reads JSON perfectly well and inventing prose for an arbitrary shape
  * would mean guessing at a schema this module does not know.
+ *
+ * `'Done.'` for an empty result is not cosmetic: a tool that returns nothing has
+ * still succeeded, and an empty `output` reads to the model as a call that
+ * produced no answer.
  */
-export const formatToolResult = (
-  value: unknown,
-  maxChars: number = MAX_SPOKEN_RESULT_CHARS,
-): string => {
+export const formatToolResult = (value: unknown): string => {
   const text = typeof value === 'string' ? value : safeStringify(value);
   const trimmed = text.trim();
   if (trimmed.length === 0) return 'Done.';
-  if (trimmed.length <= maxChars) return trimmed;
+  if (trimmed.length <= MAX_RESULT_CHARS) return trimmed;
 
-  const window = trimmed.slice(0, maxChars);
+  const window = trimmed.slice(0, MAX_RESULT_CHARS);
   const lastSpace = window.lastIndexOf(' ');
   const head = (lastSpace > 0 ? window.slice(0, lastSpace) : window).trimEnd();
-  const omitted = trimmed.length - head.length;
-  // The continuation hint is for the MODEL, not the user: it is what turns a
-  // cut-off result into "I can read you the rest if you want" instead of the
-  // model asserting the content ended there.
-  return `${head}… (${omitted} more characters were not read out; call the tool again for a specific part if the user asks for more.)`;
+  // The hint is for the MODEL. Without it a cut result reads as a complete one,
+  // and the model reports that the content ended where the ceiling did.
+  //
+  // It leads with the general instruction because the general case is what
+  // usually gets cut — a listing or a search that matched too much — and then
+  // names the two specific escapes, which only help if the cut result was one
+  // of those. Advice that assumes the wrong tool is worse than none.
+  return `${head}…\n\n[${trimmed.length - head.length} characters were not returned. Ask again for less: a narrower query or filter, an exact name via tool_search("select:name"), or a line range via read_page's lineStart/lineEnd.]`;
 };
 
 /**
@@ -203,6 +233,23 @@ export type RealtimeToolDispatchRequest = {
   readonly assistant?: VoiceAssistant;
 };
 
+/**
+ * What a dispatch produced: the sentence the model gets, and whether the tool
+ * actually WORKED.
+ *
+ * The two are deliberately different questions. Every failure below still
+ * yields a speakable `output` — the model is blocked on `function_call_output`
+ * and must be unblocked whatever happened — so "the call returned" is not
+ * evidence the tool succeeded. Anything recording the call for a human needs
+ * the other answer: without it, a permission error is written into the thread
+ * as a completed tool call with a sentence about failure inside it, rendered
+ * green.
+ */
+export type RealtimeToolOutcome = {
+  readonly output: string;
+  readonly failed: boolean;
+};
+
 export type RealtimeToolDispatchDeps = {
   /** The set the session advertised — `buildRealtimeToolSet(buildPageSpaceTools())`. */
   readonly tools: ToolSet;
@@ -210,7 +257,6 @@ export type RealtimeToolDispatchDeps = {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
     readonly error: (message: string, error: Error, meta?: Record<string, unknown>) => void;
   };
-  readonly maxChars?: number;
 };
 
 /**
@@ -275,7 +321,9 @@ export const dispatchRealtimeToolCall = async (
   deps: RealtimeToolDispatchDeps,
   request: RealtimeToolDispatchRequest,
   model: string,
-): Promise<string> => {
+): Promise<RealtimeToolOutcome> => {
+  const failure = (output: string): RealtimeToolOutcome => ({ output, failed: true });
+
   const tool: Tool | undefined = deps.tools[request.name];
   if (!tool) {
     deps.logger.warn('Realtime voice tool call named an unadvertised tool', {
@@ -283,10 +331,12 @@ export const dispatchRealtimeToolCall = async (
       userId: request.userId,
       tool: request.name,
     });
-    return `There is no tool called "${request.name}". Use tool_search to find the right one.`;
+    return failure(
+      `There is no tool called "${request.name}". Use tool_search to find the right one.`,
+    );
   }
   if (!tool.execute) {
-    return `The tool "${request.name}" cannot be run.`;
+    return failure(`The tool "${request.name}" cannot be run.`);
   }
 
   const parsed = parseToolArguments(request.argumentsJson);
@@ -296,12 +346,14 @@ export const dispatchRealtimeToolCall = async (
       userId: request.userId,
       tool: request.name,
     });
-    return parsed.message;
+    return failure(parsed.message);
   }
 
   const validated = (tool.inputSchema as z.ZodType).safeParse(parsed.args);
   if (!validated.success) {
-    return `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`;
+    return failure(
+      `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`,
+    );
   }
 
   const context = buildVoiceToolContext(request, model);
@@ -315,7 +367,7 @@ export const dispatchRealtimeToolCall = async (
       // that grows a use for them should not break on voice.
       { experimental_context: context, toolCallId: request.callId, messages: [] },
     );
-    return formatToolResult(result, deps.maxChars);
+    return { output: formatToolResult(result), failed: false };
   } catch (error) {
     // A throwing tool is a normal outcome (permission denied, missing page),
     // and the model has to be able to say something about it. The message is
@@ -326,6 +378,6 @@ export const dispatchRealtimeToolCall = async (
       { callId: request.callId, userId: request.userId, tool: request.name },
     );
     const message = error instanceof Error ? error.message : String(error);
-    return formatToolResult(`That didn't work: ${message}`, deps.maxChars);
+    return failure(formatToolResult(`That didn't work: ${message}`));
   }
 };

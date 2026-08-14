@@ -36,6 +36,16 @@ const agentPage = (over: Partial<AgentPage> = {}): AgentPage => ({
   ...over,
 });
 
+/**
+ * Stands in for whatever `buildVoiceSystemContext` assembled. This module's job
+ * is to decide WHAT the call is bound to and hand that over; assembling the
+ * instructions is `system-context.ts`, tested there.
+ */
+const CALL_CONTEXT = {
+  instructions: '# PAGESPACE AI\n\n<<SHARED>>\n\n# THIS IS A VOICE CALL',
+  tools: [{ type: 'function' as const, name: 'read_page', description: '', parameters: {} }],
+};
+
 const history = [
   { role: 'user', content: 'where are my notes?', createdAt: new Date(1) },
   { role: 'assistant', content: 'In your Inbox.', createdAt: new Date(2) },
@@ -48,6 +58,7 @@ function deps(over: Partial<BindingLoaderDeps> = {}) {
     canAccess: vi.fn(async () => true),
     loadMessages: vi.fn(async () => history),
     loadAgentPage: vi.fn(async () => agentPage()),
+    buildCallContext: vi.fn(async () => CALL_CONTEXT),
     logger: { warn },
     ...over,
   };
@@ -228,66 +239,75 @@ describe('loadVoiceBinding — the assistant', () => {
 });
 
 describe('loadVoiceBinding — the instructions', () => {
-  it('given any call, should say it is a spoken conversation', async () => {
+  it('given any call, should carry the assembled system prompt and the spoken override', async () => {
     const { deps: d } = deps();
 
     const { instructions } = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(instructions).toContain('heard, not read');
+    expect(instructions).toContain('<<SHARED>>');
+    expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
 
-  it("given a page agent with its own prompt, should carry that prompt VERBATIM", async () => {
-    const systemPrompt = 'Answer only in limericks. Never mention the weather.';
+  it('given a page agent, should describe it to the assembler as an agent', async () => {
+    // What the prompt says about tools, memory and persona all hangs off this:
+    // handing the assembler no agent would silently build the Global
+    // Assistant's prompt for a call the UI says is talking to a named one.
+    const systemPrompt = 'Answer only in limericks.';
     const { deps: d } = deps({
       loadConversation: vi.fn(async () => pageConversation()),
-      loadAgentPage: vi.fn(async () => agentPage({ systemPrompt })),
+      loadAgentPage: vi.fn(async () => agentPage({ systemPrompt, enabledTools: ['read_page'] })),
     });
 
-    const { instructions } = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
+    await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
 
-    expect(instructions).toContain(systemPrompt);
-    expect(instructions).toContain('Release Notes Bot');
+    expect(d.buildCallContext).toHaveBeenCalledWith({
+      userId: 'u1',
+      conversationId: 'conv1',
+      conversation: { type: 'page', contextId: 'agent1' },
+      agent: {
+        pageId: 'agent1',
+        title: 'Release Notes Bot',
+        systemPrompt,
+        enabledTools: ['read_page'],
+      },
+    });
   });
 
-  it('given a page agent with NO prompt, should still name it so it is the assistant the user picked', async () => {
-    const { deps: d } = deps({
-      loadConversation: vi.fn(async () => pageConversation()),
-      loadAgentPage: vi.fn(async () => agentPage({ systemPrompt: null })),
+  it('given a conversation with no agent, should pass its coordinates but no agent', async () => {
+    const { deps: d } = deps();
+
+    await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
+
+    expect(d.buildCallContext).toHaveBeenCalledWith({
+      userId: 'u1',
+      conversationId: 'conv1',
+      conversation: { type: 'global', contextId: null },
     });
-
-    const { instructions } = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
-
-    expect(instructions).toContain('Release Notes Bot');
   });
 
-  it('given a whitespace-only prompt, should treat it as no prompt rather than send blanks', async () => {
-    const { deps: d } = deps({
-      loadConversation: vi.fn(async () => pageConversation()),
-      loadAgentPage: vi.fn(async () => agentPage({ systemPrompt: '   \n  ' })),
-    });
+  it('given an unbound call, should still assemble a prompt for it', async () => {
+    // An unbound call talks to the Global Assistant — the same one the
+    // dashboard talks to — so it is a real call, not a degraded one.
+    const { deps: d } = deps();
 
-    const { instructions } = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
+    const { instructions } = await loadVoiceBinding(d, { userId: 'u1' });
 
-    expect(instructions).toContain('PageSpace');
-    expect(instructions).not.toMatch(/instructions follow/);
+    expect(d.buildCallContext).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(instructions).toContain('<<SHARED>>');
+    expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
-});
 
-describe('loadVoiceBinding — a failed agent read', () => {
-  it('should cost the identity but KEEP the history', async () => {
-    // The seed was fetched successfully alongside it; throwing it away because
-    // a different read failed helps nobody.
-    const { deps: d, warn } = deps({
-      loadConversation: vi.fn(async () => pageConversation()),
-      loadAgentPage: vi.fn(async () => {
-        throw new Error('db unreachable');
-      }),
+  it('given a conversation the caller cannot read, should assemble as if unbound', async () => {
+    // No history, and nothing derived from a thread this caller may not see.
+    const { deps: d } = deps({ canAccess: vi.fn(async () => false) });
+
+    const { instructions, seed } = await loadVoiceBinding(d, {
+      userId: 'u1',
+      conversationId: 'conv1',
     });
 
-    const binding = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
-
-    expect(binding.seed).toHaveLength(2);
-    expect(binding.assistant).toBeUndefined();
-    expect(warn).toHaveBeenCalled();
+    expect(seed).toEqual([]);
+    expect(d.buildCallContext).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(instructions).toContain('# THIS IS A VOICE CALL');
   });
 });

@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { ChatOnFinishCallback, UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 import type { AgentInfo } from '@/types/agent';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
@@ -30,32 +30,20 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 const chat = vi.hoisted(() => ({
   capturedConfigs: [] as Array<Record<string, unknown>>,
   instance: {
-    sendMessage: vi.fn(),
-    regenerate: vi.fn(),
-    setMessages: vi.fn(),
-    stop: vi.fn(),
+    sendMessage: vi.fn(async () => {}),
+    regenerate: vi.fn(async () => {}),
     clearError: vi.fn(),
-    addToolResult: vi.fn(),
+    addToolResult: vi.fn(async () => {}),
   },
-  // Mutable per-test override for useChat's own live return — distinct from
-  // the shared conversation cache, so a test can simulate a stream that is
-  // in-flight in useChat's local state but not yet (or never) mirrored into
-  // usePendingStreamsStore/the rendered cache.
   state: {
-    messages: [] as UIMessage[],
     status: 'ready' as 'ready' | 'submitted' | 'streaming' | 'error',
   },
 }));
 
-vi.mock('@ai-sdk/react', () => ({
-  useChat: vi.fn((config: Record<string, unknown> | undefined) => {
-    if (config && typeof config.id === 'string') chat.capturedConfigs.push(config);
-    return {
-      messages: chat.state.messages,
-      status: chat.state.status,
-      error: undefined,
-      ...chat.instance,
-    };
+vi.mock('@/lib/ai/shared/hooks/useChatSession', () => ({
+  useChatSession: vi.fn((config: Record<string, unknown>) => {
+    chat.capturedConfigs.push(config);
+    return { status: chat.state.status, error: undefined, ...chat.instance };
   }),
 }));
 
@@ -140,7 +128,6 @@ function ids(slug: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   chat.capturedConfigs.length = 0;
-  chat.state.messages = [];
   chat.state.status = 'ready';
   multiplayer.calls.length = 0;
   activeStream.remoteStreams = [];
@@ -165,13 +152,22 @@ describe('useAgentSessionChat', () => {
     ).toBe(true);
   });
 
-  it('uses a stable per-conversation useChat id', () => {
+  it('binds the send shell to this agent\'s channel and this conversation', () => {
+    // There is no `useChat` id to be stable ANY MORE, and that is the point: a stable id was
+    // what made one `Chat` serve every conversation on a surface, which is the constraint that
+    // required the cross-conversation handoff. A shell is bound to its endpoint and channel;
+    // the conversation is an argument at send time.
     const { agent, conversationId } = ids('chat-id');
 
     renderHook(() => useAgentSessionChat({ agent, conversationId }));
 
-    expect(chat.capturedConfigs.some((c) => c.id === `agent-session-chat:${agent.id}:${conversationId}`)).toBe(
-      true,
+    expect(chat.capturedConfigs).toContainEqual(
+      expect.objectContaining({
+        api: '/api/ai/chat',
+        channelId: agent.id,
+        conversationId,
+        triggeredBy: expect.objectContaining({ userId: 'user-1' }),
+      }),
     );
   });
 
@@ -186,10 +182,14 @@ describe('useAgentSessionChat', () => {
     });
 
     await waitFor(() => expect(chat.instance.sendMessage).toHaveBeenCalledTimes(1));
-    const [message, options] = chat.instance.sendMessage.mock.calls[0] as [
+    const [message, sentConversationId, options] = chat.instance.sendMessage.mock.calls[0] as unknown as [
       UIMessage,
+      string,
       { body?: Record<string, unknown> },
     ];
+    // The conversation is passed EXPLICITLY at send time rather than latched from surface props
+    // — which is what removes the whole class of "the latch named the wrong conversation" bugs.
+    expect(sentConversationId).toBe(conversationId);
     expect(message.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'hello agent' })]),
     );
@@ -218,7 +218,13 @@ describe('useAgentSessionChat', () => {
     expect(chat.instance.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('handleStop stops the chat instance', async () => {
+  it('handleStop never cancels locally — there is nothing local to cancel', async () => {
+    // INVERTED. This used to assert `chat.instance.stop` was called. Cancelling a local read
+    // stops NOTHING server-side: streams are server-owned and survive client disconnect, so all
+    // a local stop achieved was ending the run's VISIBLE life while it kept generating, kept
+    // calling write tools, and kept billing. The one Stop goes through `useStopStream` to
+    // `/api/ai/abort`, which is covered in that hook's own suite; here the assertion is that no
+    // local stop exists to be called.
     const { agent, conversationId } = ids('stop');
 
     const { result } = renderHook(() => useAgentSessionChat({ agent, conversationId }));
@@ -227,7 +233,7 @@ describe('useAgentSessionChat', () => {
       await result.current.handleStop();
     });
 
-    expect(chat.instance.stop).toHaveBeenCalled();
+    expect(chat.instance).not.toHaveProperty('stop');
   });
 
   it('renders messages from the shared conversation cache', async () => {
@@ -297,7 +303,7 @@ describe('useAgentSessionChat', () => {
     });
 
     await waitFor(() => expect(chat.instance.addToolResult).toHaveBeenCalledTimes(1));
-    const [callArgs] = chat.instance.addToolResult.mock.calls[0] as [{ toolCallId: string; tool: string }];
+    const [callArgs] = chat.instance.addToolResult.mock.calls[0] as unknown as [{ toolCallId: string; tool: string }];
     expect(callArgs.toolCallId).toBe('tc-1');
     expect(callArgs.tool).toBe('ask_user');
   });
@@ -336,66 +342,27 @@ describe('useAgentSessionChat', () => {
     expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(false);
   });
 
-  // Regression: the sender's own pane went blank mid-stream while other viewers saw the reply
-  // stream in fine. useOwnStreamMirror's `ownMessages` must be useChat's OWN live-growing
-  // `messages` array (its doc comment: "This chat's ENTIRE message array (useChat's local
-  // state) — not a pre-picked message") so it can copy the in-flight assistant reply into
-  // usePendingStreamsStore — the store every pane actually renders from. Feeding it the
-  // rendered/cache-derived array instead (what shadowed a `messages` binding of the same name
-  // here) leaves that store empty for the sender, so their own pane shows nothing until a later
-  // reload. This test mounts the hook with useChat mid-stream (status: 'streaming', an assistant
-  // reply as the last message) and asserts the mirror actually wrote that message into the store.
-  it('mirrors an in-progress own-stream assistant reply into usePendingStreamsStore, from useChat\'s own live messages', async () => {
-    const { agent, conversationId } = ids('own-stream-mirror');
-    chat.state.status = 'streaming';
-    chat.state.messages = [
-      { id: 'm-user-1', role: 'user', parts: [{ type: 'text', text: 'hello agent' }] } as UIMessage,
-      {
-        id: 'm-assistant-1',
-        role: 'assistant',
-        parts: [{ type: 'text', text: 'Partial reply in progress...' }],
-      } as UIMessage,
-    ];
-
-    renderHook(() => useAgentSessionChat({ agent, conversationId }));
-
-    await waitFor(() => {
-      const entry = usePendingStreamsStore.getState().streams.get('m-assistant-1');
-      expect(entry).toBeDefined();
-      expect(entry?.isOwn).toBe(true);
-      expect(entry?.pageId).toBe(agent.id);
-      expect(entry?.conversationId).toBe(conversationId);
-    });
-  });
-
-  // Sibling of the mirror regression above, for the COMPLETION edge: the sender's own tab
-  // never joins its SSE multicast, so at chat:stream_complete its stream entry is already
-  // removed and the socket handler can only fall back to a full reload — a visible flash,
-  // and a vanished reply if that reload fails. The chatConfig's onFinish must commit the
-  // finished reply locally so neither the broadcast nor the reload is load-bearing.
-  it('given the own stream finishes, commits the reply into the cache via the chatConfig onFinish', async () => {
-    const { agent, conversationId } = ids('own-finish-commit');
-    conversationMessagesActions.addOptimisticSend(conversationId, {
-      id: 'm-user-1',
-      role: 'user',
-      parts: [{ type: 'text', text: 'the question' }],
-    } as UIMessage);
-
-    const { result } = renderHook(() => useAgentSessionChat({ agent, conversationId }));
-
-    const config = chat.capturedConfigs.at(-1)!;
-    expect(typeof config.onFinish).toBe('function');
-    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
-
-    const reply = assistantMessage('m-assistant-1', 'the full reply');
-    act(() => {
-      onFinish({ message: reply, messages: [reply], isAbort: false, isDisconnect: false, isError: false });
-    });
-
-    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
-    await waitFor(() => {
-      expect(result.current.messages.map((m) => m.id)).toEqual(['m-user-1', 'm-assistant-1']);
-    });
-    expect(loaders.refreshConversationSnapshot).toHaveBeenCalledWith(agent.id, conversationId);
-  });
+  // TWO CASES WERE HERE, and both pinned mechanisms that are structurally gone.
+  //
+  // 'mirrors an in-progress own-stream assistant reply into usePendingStreamsStore, from
+  // useChat's own live messages' pinned `useOwnStreamMirror` — the hook that copied this
+  // chat's live reply OUT of useChat's internal array and INTO the store, so an own stream
+  // was present the same way a bootstrapped or remote one was. `useChatSession` opens the
+  // store entry ITSELF, from the admission envelope, keyed by the messageId the server
+  // stated. There is nothing to mirror because nothing is duplicated, and the entry exists
+  // from the moment the send is admitted rather than from its first token. The end-to-end
+  // version of this fact is in `hooks/__tests__/concurrentConversations.integration.test.tsx`,
+  // over the real shell, registry and store.
+  //
+  // 'given the own stream finishes, commits the reply into the cache via the chatConfig
+  // onFinish' pinned `buildOwnStreamCommitOnFinish`. It existed because the sender's own tab
+  // never joined its own SSE multicast, so at `chat:stream_complete` its store entry was
+  // already gone and the socket handler could only fall back to a full reload — a visible
+  // flash, and a vanished reply if the reload failed. Neither premise holds: this tab DOES
+  // subscribe to its own stream (one registry, one subscription, whoever announces it), and
+  // the registry fires its end notification on every terminal path — including the purely
+  // local one, the SSE join resolving — while the store entry is STILL PRESENT. The shared
+  // commit protocol therefore runs off the same entry it always did, with no callback needed.
+  // That ordering is pinned in `streamSessionRegistry.test.ts` and end-to-end in the
+  // integration suite.
 });
