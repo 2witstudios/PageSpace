@@ -11,7 +11,8 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * Deletes expired rows from: sessions, verification_tokens, socket_tokens,
  * email_unsubscribe_tokens, pulse_summaries, page_versions (unpinned),
  * drive_backups (unpinned), drive_invitations (pending), page_permissions,
- * and ai_usage_logs.
+ * and ai_usage_logs — plus the durable AI frame log's backstop
+ * (ai_stream_frames), which is aged rather than expiry-stamped.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */

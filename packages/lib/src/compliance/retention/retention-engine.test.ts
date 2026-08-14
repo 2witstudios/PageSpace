@@ -32,6 +32,9 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 vi.mock('@pagespace/db/schema/sessions', () => ({
   sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
 }));
+vi.mock('@pagespace/db/schema/ai-streams', () => ({
+  aiStreamFrames: { messageId: 'asf.messageId', createdAt: 'asf.createdAt' },
+}));
 vi.mock('@pagespace/db/schema/versioning', () => ({
   pageVersions: { id: 'pv.id', expiresAt: 'pv.expiresAt', isPinned: 'pv.isPinned' },
   driveBackups: { id: 'db.id', expiresAt: 'db.expiresAt', isPinned: 'db.isPinned' },
@@ -54,6 +57,7 @@ import {
   cleanupExpiredDriveBackups,
   cleanupExpiredPagePermissions,
   cleanupExpiredAiUsageLogs,
+  cleanupAbandonedStreamFrames,
   runRetentionCleanup,
 } from './retention-engine';
 
@@ -63,12 +67,15 @@ import { pagePermissions } from '@pagespace/db/schema/members';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
+import { aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 
 /**
  * Creates a mock DB that captures which table and condition were passed,
  * allowing assertions on the contract boundary rather than internal chaining.
  */
-function createMockDb(rows: { id: string }[] = []) {
+// `rows` is only ever counted, never read — the sweeps differ in which key they RETURNING
+// (`ai_stream_frames` has no `id`; its primary key is composite), so the shape stays open.
+function createMockDb(rows: Record<string, string>[] = []) {
   const captured = { table: null as unknown, condition: null as unknown };
   const returning = vi.fn().mockResolvedValue(rows);
   const where = vi.fn((cond: unknown) => {
@@ -230,13 +237,59 @@ describe('cleanupExpiredAiUsageLogs', () => {
   });
 });
 
+/**
+ * The durable AI frame log's BACKSTOP.
+ *
+ * `ai_stream_frames` normally clears itself: the writer deletes a message's log once a
+ * terminal `messages` row for it is confirmed. This sweep covers the case where neither the
+ * generation's own save nor a crash recovery ever ran — otherwise those frames are message
+ * CONTENT sitting in a table with no reader and no expiry.
+ */
+describe('cleanupAbandonedStreamFrames', () => {
+  it('given_abandonedFrames_deletesThemByAge', async () => {
+    const { db, deleteFn } = createMockDb([{ messageId: 'm1' }, { messageId: 'm2' }]);
+
+    const result = await cleanupAbandonedStreamFrames(db);
+
+    expect(result).toEqual({ table: 'ai_stream_frames', deleted: 2 });
+    expect(deleteFn).toHaveBeenCalledWith(aiStreamFrames);
+  });
+
+  it('given_abandonedFrames_agesOnCreatedAt_notAnExpiresAtColumn', async () => {
+    // The table carries no expiry stamp — a frame does not know when it stops being needed,
+    // only when it was written. `created_at` is also its only index.
+    const { db, captured } = createMockDb([]);
+
+    await cleanupAbandonedStreamFrames(db);
+
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'lt', col: 'asf.createdAt' })
+    );
+  });
+
+  it('given_abandonedFrames_cutoffIsAFullDayBack_soADelayedRecoveryStillFindsItsFrames', async () => {
+    // A dead stream is materialized well inside two hours, but only when something LOOKS —
+    // a poll, the next send, a Stop. That trigger can be arbitrarily delayed, so the window
+    // has to outlast a user who closes the tab and comes back tomorrow.
+    const { db, captured } = createMockDb([]);
+    const before = Date.now();
+
+    await cleanupAbandonedStreamFrames(db);
+
+    const cutoff = (captured.condition as { val: Date }).val.getTime();
+    const ageMs = before - cutoff;
+    expect(ageMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
+  });
+});
+
 describe('runRetentionCleanup', () => {
-  it('given_allCleanupsSucceed_returnsResultsForAll13Tables', async () => {
+  it('given_allCleanupsSucceed_returnsResultsForAll14Tables', async () => {
     const { db } = createMockDb([]);
 
     const results = await runRetentionCleanup(db);
 
-    expect(results).toHaveLength(13);
+    expect(results).toHaveLength(14);
   });
 
   it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
@@ -246,6 +299,7 @@ describe('runRetentionCleanup', () => {
     const tableNames = results.map(r => r.table).sort();
 
     expect(tableNames).toEqual([
+      'ai_stream_frames',
       'ai_usage_logs',
       'api_metrics',
       'conversations',

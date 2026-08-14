@@ -15,6 +15,8 @@ const {
   mockNotifyMentionedUsers,
   mockRecomputeLastMessageAt,
   mockLoggerWarn,
+  mockFrameSelectOrderBy,
+  mockDeleteWhere,
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockInsertValues: vi.fn(),
@@ -29,12 +31,25 @@ const {
   mockNotifyMentionedUsers: vi.fn(),
   mockRecomputeLastMessageAt: vi.fn(),
   mockLoggerWarn: vi.fn(),
+  // The durable frame log's read (`readFrames`) and release (`deleteFrames`). Kept as raw
+  // db chains rather than a module mock so these tests exercise the REAL frame-log module —
+  // the seq-contiguity rule that decides what a recovery actually folds lives there.
+  mockFrameSelectOrderBy: vi.fn(),
+  mockDeleteWhere: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
+    // `readFrames` — the only top-level select the materializer makes.
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ orderBy: mockFrameSelectOrderBy })),
+      })),
+    })),
+    // `deleteFrames` — the retention release, once the message write is confirmed.
+    delete: vi.fn(() => ({ where: mockDeleteWhere })),
     // The repository choke point (SSoT Phase 2) wraps the CAS upsert + the
     // conversations.rev bump in one transaction. The tx reuses the SAME
     // insert spies (so every table-routing/setWhere assertion below still
@@ -81,12 +96,19 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn(),
   isNotNull: vi.fn(),
   inArray: vi.fn(),
+  asc: vi.fn((field: unknown) => ({ asc: field })),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
   aiStreamSessions: {
     messageId: 'ai_stream_sessions.message_id',
     status: 'ai_stream_sessions.status',
+  },
+  aiStreamFrames: {
+    messageId: 'ai_stream_frames.message_id',
+    fromSeq: 'ai_stream_frames.from_seq',
+    frameCount: 'ai_stream_frames.frame_count',
+    frames: 'ai_stream_frames.frames',
   },
 }));
 
@@ -199,6 +221,11 @@ beforeEach(() => {
   // zero-row race (a concurrent reap already settled this row) override this per-case.
   mockUpdateWhere.mockResolvedValue({ rowCount: 1 });
   mockBroadcastAiStreamComplete.mockResolvedValue(undefined);
+  // Default: no durable frame log for this stream — a row started by a worker from before
+  // the log had a writer. Every pre-existing case below therefore keeps exercising the
+  // `parts` fallback exactly as it did, and the frame path is opted into per-test.
+  mockFrameSelectOrderBy.mockResolvedValue([]);
+  mockDeleteWhere.mockResolvedValue(undefined);
 });
 
 describe('materializeInterruptedStream — table routing', () => {
@@ -774,6 +801,204 @@ describe('materializeInterruptedStream — conversations.lastMessageAt recompute
       should: 'return false and leave the session row unsettled so the next sweep retries',
       actual: { settled, sessionSettleAttempts: mockUpdateSet.mock.calls.length },
       expected: { settled: false, sessionSettleAttempts: 0 },
+    });
+  });
+});
+
+/**
+ * LEAF 3 — recovery reads the durable frame log.
+ *
+ * The reason the log exists at all: `row.parts` is a debounced, folded snapshot, whereas
+ * `ai_stream_frames` holds the generation's own `UIMessageChunk`s. Folding those here runs the
+ * SAME reduction a live client ran over the SAME frames, so a recovered reply is not a
+ * degraded approximation of what was on screen — it is the same message.
+ */
+describe('materializeInterruptedStream — durable frame log', () => {
+  /**
+   * The persisted `content` is `extractStructuredContentFromParts`' envelope whenever a reply
+   * has more than plain text in it. These tests are about WHICH FRAMES were folded, not about
+   * that envelope's shape, so they compare the text it carries.
+   */
+  const persistedText = (values: Record<string, unknown>): string => {
+    const content = values.content as string;
+    try {
+      const parsed = JSON.parse(content) as { originalContent?: unknown };
+      return typeof parsed.originalContent === 'string' ? parsed.originalContent : content;
+    } catch {
+      return content;
+    }
+  };
+
+  /** One row of the log, in the shape `readFrames` selects. */
+  const frameRow = (fromSeq: number, frames: unknown[]) => ({
+    fromSeq,
+    frameCount: frames.length,
+    frames,
+  });
+
+  /** An ordinary turn: reasoning, a tool round trip, then the answer. */
+  const RICH_TURN = [
+    { type: 'start', messageId: 'msg-1' },
+    { type: 'reasoning-start', id: 'r1' },
+    { type: 'reasoning-delta', id: 'r1', delta: 'checking the invoices' },
+    { type: 'reasoning-end', id: 'r1' },
+    { type: 'tool-input-available', toolCallId: 'tc1', toolName: 'search_pages', input: { q: 'inv' } },
+    { type: 'tool-output-available', toolCallId: 'tc1', output: { hits: 3 } },
+    { type: 'text-start', id: 't1' },
+    { type: 'text-delta', id: 't1', delta: 'I found ' },
+    { type: 'text-delta', id: 't1', delta: 'three invoices.' },
+  ];
+
+  it('given a frame log, materializes from the frames rather than the parts snapshot', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([
+      frameRow(0, RICH_TURN.slice(0, 4)),
+      frameRow(4, RICH_TURN.slice(4)),
+    ]);
+
+    await materializeInterruptedStream(
+      pageRow({ parts: [textPart('a much staler debounced snapshot')] }),
+    );
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a dead stream whose frame log holds the whole turn',
+      should: 'persist the content folded from the FRAMES, not the stale parts column',
+      actual: persistedText(values),
+      expected: 'I found three invoices.',
+    });
+  });
+
+  it('given a frame log, preserves the fidelity a live client saw — reasoning and tool parts, not just text', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
+
+    await materializeInterruptedStream(pageRow({ parts: [] }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    const persisted = JSON.parse(values.content as string) as { textParts?: unknown[] };
+    const toolCalls = JSON.parse((values.toolCalls as string) ?? 'null') as { toolName: string }[] | null;
+    assert({
+      given: 'a frame log containing reasoning and a tool round trip',
+      should: 'carry the tool call through to the persisted message rather than flattening to text',
+      actual: toolCalls?.map((c) => c.toolName) ?? null,
+      expected: ['search_pages'],
+    });
+    assert({
+      given: 'a frame log whose text arrived as two deltas',
+      should: 'fold them into one text part, exactly as the SDK reduction would',
+      actual: Array.isArray(persisted.textParts) ? persisted.textParts.length : -1,
+      expected: 1,
+    });
+  });
+
+  it('given NO frame log (a stream started by an older worker), falls back to the parts snapshot', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([]);
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a dead stream with no rows in the frame log',
+      should: 'materialize from the parts column rather than an empty reply',
+      actual: persistedText(values),
+      expected: 'the debounced snapshot',
+    });
+  });
+
+  it('given a frame-log read that fails, falls back to the parts snapshot rather than losing the reply', async () => {
+    mockFrameSelectOrderBy.mockRejectedValue(new Error('frames table unreachable'));
+
+    const settled = await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a frame-log read that throws',
+      should: 'still materialize, from the parts column',
+      actual: { content: persistedText(values), settled },
+      expected: { content: 'the debounced snapshot', settled: true },
+    });
+  });
+
+  it('given a GAP in the frame log, folds only the contiguous prefix rather than splicing across the hole', async () => {
+    // seq 2 is missing: the row after the first batch starts at 3, not 2. Folding across
+    // that would concatenate text the model never said consecutively.
+    mockFrameSelectOrderBy.mockResolvedValue([
+      frameRow(0, [
+        { type: 'text-start', id: 't1' },
+        { type: 'text-delta', id: 't1', delta: 'before the gap' },
+      ]),
+      frameRow(3, [{ type: 'text-delta', id: 't1', delta: ' AFTER the gap' }]),
+    ]);
+
+    await materializeInterruptedStream(pageRow({ parts: [] }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a frame log missing a seq in the middle',
+      should: 'keep only what precedes the hole — a truncated prefix, never a spliced message',
+      actual: persistedText(values),
+      expected: 'before the gap',
+    });
+  });
+
+  it('given a frame log that does not start at seq 0, treats it as no log rather than an empty reply', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([
+      frameRow(7, [{ type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'orphan tail' }]),
+    ]);
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a log whose earliest surviving row is not seq 0 (its head was swept)',
+      should: 'fall back to the parts snapshot instead of materializing a headless tail',
+      actual: persistedText(values),
+      expected: 'the debounced snapshot',
+    });
+  });
+});
+
+/**
+ * LEAF 2 — retention, from the recovery side.
+ *
+ * "Only after the write is confirmed" is the whole rule. Frames are the ONLY copy of a reply
+ * whose process died, so deleting them on any path that did not durably persist the message
+ * throws away exactly what the log was built to keep.
+ */
+describe('materializeInterruptedStream — frame retention', () => {
+  it('given a confirmed message write, releases that message\'s frames', async () => {
+    await materializeInterruptedStream(pageRow({ messageId: 'msg-released' }));
+
+    assert({
+      given: 'a materialization whose message write succeeded',
+      should: 'delete the frame log, scoped to that messageId',
+      actual: mockDeleteWhere.mock.calls.map((c) => c[0]),
+      expected: [{ field: 'ai_stream_frames.message_id', value: 'msg-released' }],
+    });
+  });
+
+  it('given a FAILED message write, leaves the frames alone so the next sweep can still recover', async () => {
+    mockReturning.mockRejectedValueOnce(new Error('message write failed'));
+
+    const settled = await materializeInterruptedStream(pageRow());
+
+    assert({
+      given: 'a materialization whose message write threw',
+      should: 'return false and delete nothing — the frames are still the only copy of the reply',
+      actual: { settled, deletes: mockDeleteWhere.mock.calls.length },
+      expected: { settled: false, deletes: 0 },
+    });
+  });
+
+  it('given a frame delete that fails, still settles the session row', async () => {
+    mockDeleteWhere.mockRejectedValue(new Error('delete failed'));
+
+    const settled = await materializeInterruptedStream(pageRow());
+
+    assert({
+      given: 'a retention delete that throws after a confirmed message write',
+      should: 'degrade to the retention backstop rather than un-succeed the materialization',
+      actual: settled,
+      expected: true,
     });
   });
 });

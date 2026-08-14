@@ -11,6 +11,9 @@ import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
+import { readFrames } from '@/lib/ai/core/frame-log';
+import { releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
+import { foldChunksToParts } from '@/lib/ai/streams/foldChunksToParts';
 import type { UIMessagePart } from '@/lib/ai/core/stream-channel-registry';
 
 /**
@@ -126,11 +129,35 @@ const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: s
   }
 };
 
+/**
+ * The dead stream's content, at the best fidelity anything left behind can give.
+ *
+ * PREFERS THE DURABLE FRAME LOG, which is the point of this whole leaf. `row.parts` is a
+ * DEBOUNCED, FOLDED snapshot — up to one checkpoint interval stale by construction, and
+ * historically bounded by the memory ring it was folded from. `ai_stream_frames` holds the
+ * generation's own `UIMessageChunk`s, written in batches within ~200ms of being produced, so
+ * folding them here reconstructs the same message a live client assembled from the same
+ * frames. Same reduction (`foldChunksToParts`), same input: same reply.
+ *
+ * FALLS BACK TO `parts`, and must. A stream started by a worker from before this table had a
+ * writer leaves no frames at all, and neither does one whose frames were already released by
+ * a terminal write that then failed to settle its session row. `readFrames` answers `null`
+ * for both — and for a read that failed outright — which is exactly the case where the older
+ * snapshot is the only content there is. A `null`/`[]` distinction is load-bearing here:
+ * treating "no frames" as "an empty reply" would materialize emptiness over a snapshot that
+ * had content.
+ */
+const recoverParts = async (row: MaterializableStreamRow): Promise<UIMessagePart[]> => {
+  const frames = await readFrames(row.messageId);
+  if (frames === null) return row.parts as UIMessagePart[];
+  return foldChunksToParts(frames);
+};
+
 export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<boolean> => {
   const now = new Date();
 
   try {
-    const payload = buildAssistantPersistencePayload(row.messageId, row.parts as UIMessagePart[]);
+    const payload = buildAssistantPersistencePayload(row.messageId, await recoverParts(row));
     const structuredContent = payload.uiMessage.parts.length > 0
       ? await extractStructuredContentFromParts(payload.uiMessage.parts, payload.content)
       : payload.content;
@@ -205,6 +232,18 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     // it here would report the stream over while its reply was never actually saved.
     return false;
   }
+
+  // The message write is CONFIRMED — the try above returns early on any failure — so the
+  // frames have done their job and become storage. Released here and nowhere earlier: this is
+  // the one point on this path where a durable `messages` row provably holds the reply, and
+  // deleting before it would throw away the only copy of a reply nothing else recorded.
+  //
+  // Deliberately before the session-row settle rather than after. Settling can fail (it is
+  // conditional, and its own catch swallows), and this function is retried by the next sweep;
+  // a retry re-reads no frames and falls back to `parts`, which is the same content one fold
+  // earlier. Ordering it the other way would leave frames behind on exactly the rows that get
+  // retried most.
+  await releaseFramesForMessage(row.messageId);
 
   let settled: boolean;
   try {

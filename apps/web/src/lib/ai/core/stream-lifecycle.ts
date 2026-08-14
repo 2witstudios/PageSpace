@@ -12,9 +12,11 @@ import {
   type UIMessagePart,
 } from '@/lib/ai/core/stream-channel-registry';
 import type { StreamChannel } from '@/lib/ai/core/stream-channel';
-import { foldChunksToParts } from '@/lib/ai/streams/foldChunksToParts';
+import { createPartsFolder } from '@/lib/ai/streams/foldChunksToParts';
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
+import { isDurabilityBoundary } from '@/lib/ai/core/durability-boundary';
+import { startFrameLogWriter, releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -118,21 +120,6 @@ const HEARTBEAT_INTERVAL_MS = 20 * 1000;
  * backwards, calling the checkpoint beat a mitigation. It was the hole.)
  */
 const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
-
-/**
- * The tool-family chunk types that are durability boundaries — every one except
- * `tool-input-delta`. See `isDurabilityBoundary` for why this is enumerated rather than
- * prefix-matched.
- */
-const TOOL_BOUNDARY_CHUNK_TYPES: ReadonlySet<string> = new Set([
-  'tool-input-start',
-  'tool-input-available',
-  'tool-input-error',
-  'tool-output-available',
-  'tool-output-error',
-  'tool-output-denied',
-  'tool-approval-request',
-]);
 
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
@@ -261,6 +248,14 @@ export const createStreamLifecycle = async (
       });
     }
 
+    // A pre-aborted attempt records nothing, so no frame-log writer is started for it — but a
+    // PREVIOUS attempt on this messageId may have left durable frames, and this row's `parts`
+    // were just reset for exactly that reason. Clearing them here keeps the two records
+    // agreeing; leaving them would let a recovery materialize the superseded generation's
+    // reply under a messageId whose row already says 'aborted'. Fire-and-forget, like the rest
+    // of this branch's cleanup: it never rejects, and the retention backstop covers a failure.
+    void releaseFramesForMessage(messageId);
+
     // Nothing has subscribed yet — the channel opened a moment ago and broadcastAiStreamStart
     // has not fired — so closing it here is a plain cleanup, not a notification to a live client.
     try {
@@ -303,6 +298,21 @@ export const createStreamLifecycle = async (
     .streamLifecycleMirror(conversationId, 'chat:stream_start', streamStartPayload)
     .catch(() => {});
 
+  /**
+   * The durable frame log for this generation.
+   *
+   * Another plain subscriber on the same channel — it does not sit between the pump and the
+   * channel, so a slow or failing Postgres cannot apply backpressure to the generation. This
+   * is the record that survives the process: `parts` below is a folded snapshot on a row that
+   * is cleared the moment the stream ends, whereas these are the frames themselves.
+   *
+   * Started AFTER the pending-abort check, so a stream that never generates never writes. Its
+   * first act is to delete any frames left by a previous attempt on this messageId, for the
+   * same reason the INSERT above resets `parts`: a retry or takeover reuses the id, and a log
+   * holding both generations replays them spliced into a message that never existed.
+   */
+  const frameLog = startFrameLogWriter({ messageId, conversationId, channel });
+
   let finished = false;
   // True when the in-memory buffer holds content not yet reflected in the last checkpoint
   // write — decideCheckpoint's dirty gate.
@@ -312,6 +322,49 @@ export const createStreamLifecycle = async (
   // its own final write — otherwise a slow periodic write could resolve AFTER
   // finish()'s write and clobber the final parts with a stale snapshot.
   let persistInFlight: Promise<void> | null = null;
+
+  /**
+   * The stream's running reduction — fed one frame at a time, for the life of the generation.
+   *
+   * THIS IS WHAT MAKES EVICTION STOP BEING TRUNCATION. The checkpoint used to fold
+   * `channel.getFrames()`, i.e. whatever the memory ring still held, so a reply long enough to
+   * evict its oldest frames wrote a snapshot that had silently lost its beginning. The
+   * lifecycle already subscribes to every frame exactly once, in order, before any eviction
+   * can reach it — so folding THERE keeps the whole message regardless of what the ring drops.
+   * The ring's caps go back to being what they were meant to be: a bound on replay latency for
+   * late joiners, not a bound on what a reply may contain.
+   *
+   * It is also strictly cheaper. Re-folding the ring on every checkpoint was O(frames) per
+   * write and O(frames²) across a turn; this is O(frames) for the whole turn, with a
+   * per-checkpoint cost of cloning tens of parts.
+   *
+   * `push` is async (`tool-input-delta` reconstructs partial JSON), and frames arrive from a
+   * SYNCHRONOUS fan-out, so they are chained rather than awaited at the call site — the chain
+   * is what preserves order. `foldedFrames` counts what the folder has actually absorbed, and
+   * is deliberately not `channel.nextSeq`: a frame appended after a reader awaited the chain
+   * would be counted by the channel but not yet reflected in `parts`, and a `rawPartsCount`
+   * that runs ahead of the snapshot it describes makes an old client over-skip on rejoin —
+   * a silent, permanent gap in the reply it renders.
+   */
+  const folder = createPartsFolder();
+  let foldChain: Promise<void> = Promise.resolve();
+  let foldedFrames = 0;
+  const foldFrame = (chunk: UIMessageChunk): void => {
+    foldChain = foldChain
+      .then(async () => {
+        await folder.push(chunk);
+        foldedFrames += 1;
+      })
+      .catch((error: unknown) => {
+        // A rejected chain would skip every later push, so the fold would freeze at this frame
+        // while the checkpoint went on writing that frozen snapshot as if it were current.
+        // Absorb it: the frame is lost from the reduction, the rest of the stream is not.
+        loggers.ai.warn('stream-lifecycle: fold failed for a frame', {
+          messageId,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+  };
 
   /**
    * Persist a checkpoint of the stream so far.
@@ -327,22 +380,24 @@ export const createStreamLifecycle = async (
    * lossless where it used to drop reasoning, files, sources, step boundaries and the routes'
    * own `data-*` parts.
    *
-   * KNOWN TRUNCATION, carried forward deliberately. `channel.getFrames()` returns what the
-   * memory ring still holds, so once a very long reply evicts its oldest frames this snapshot
-   * silently loses its beginning. The code this replaces truncated too (`capPartsToByteBudget`
-   * dropped the oldest merged content), so this is not a regression — but the ring's frame cap
-   * is reachable by a long multi-step agent run, which is more reachable than the old byte cap
-   * was. It is not fixed here because the fix is the durable frame log: once frames are read
-   * from Postgres rather than from memory, eviction stops being truncation at all. Tracked on
-   * the epic board rather than left as a comment nobody is accountable for. `rawPartsCount` is still written (as the frame count) because the
-   * column is NOT NULL and older clients still read it; it is dropped with the parts column
-   * in the contract leaf.
+   * THE KNOWN TRUNCATION IS CLOSED. This used to fold `channel.getFrames()` — what the memory
+   * ring still held — so a reply long enough to evict its oldest frames wrote a snapshot that
+   * had silently lost its beginning. It now reads the running fold above, which absorbed every
+   * frame before eviction could reach it, so what gets written is the whole message however
+   * long it ran. (The durable frame log is the other half of the same answer: it holds the
+   * frames themselves, so a crash recovery does not depend on this column at all.)
+   *
+   * `rawPartsCount` is still written (as the folded frame count) because the column is NOT NULL
+   * and older clients still read it; it is dropped with the parts column in the contract leaf.
    */
-  const persistCheckpoint = (frames: readonly UIMessageChunk[]): Promise<void> => {
-    const frameCount = frames.length;
+  const persistCheckpoint = (): Promise<void> => {
     const attempt = (async () => {
       try {
-        const shaped = await foldChunksToParts(frames);
+        // Awaited first, then both values read in the SAME synchronous step, so the snapshot
+        // and the count it advertises can never describe different sets of frames.
+        await foldChain;
+        const shaped = folder.parts;
+        const frameCount = foldedFrames;
         await db
           .update(aiStreamSessions)
           .set({ parts: shaped, rawPartsCount: frameCount, lastHeartbeatAt: new Date() })
@@ -427,7 +482,7 @@ export const createStreamLifecycle = async (
 
     dirty = false;
     lastPersistAt = now;
-    persistCheckpoint(channel.getFrames());
+    persistCheckpoint();
   };
 
   // Independent of the frame flow on purpose — see maybeCheckpoint's docblock. Obeys the same
@@ -451,6 +506,14 @@ export const createStreamLifecycle = async (
     clearInterval(checkpointInterval);
 
     const priorPersist = persistInFlight;
+
+    // Flush the frame log's tail rather than let it die with the process. NOT a delete: the
+    // frames are released only once a terminal message write is CONFIRMED (see
+    // `releaseFramesForMessage`), and finish() runs on paths where no such write happened at
+    // all — the pump failing is the clearest one, and it is precisely the case the durable log
+    // exists for. Closing the channel below ends this writer's subscription too, so this is
+    // belt to that braces; both are idempotent.
+    void frameLog.close();
 
     try {
       streamChannelRegistry.close(messageId, aborted);
@@ -502,41 +565,6 @@ export const createStreamLifecycle = async (
       .catch(() => {});
   };
 
-  /**
-   * A frame worth checkpointing IMMEDIATELY rather than waiting out the dirty-flush throttle.
-   *
-   * A rejoining client should see a tool call start or finish, a route-written data part, or
-   * an error as soon as it happens — those are the frames that change what the UI shows,
-   * whereas a text delta is one of thousands. This is the successor to the `isToolPart(part)`
-   * bypass, restated over chunk types now that the checkpoint reads frames.
-   *
-   * Deliberately an explicit allow-list rather than "anything that is not a text delta":
-   * reasoning streams token-by-token exactly like text, so a negative check would bypass the
-   * throttle on every reasoning frame of a long chain-of-thought and turn the checkpoint back
-   * into a per-token write.
-   *
-   * WHICH IS WHY THE TOOL FAMILY IS ENUMERATED AND NOT PREFIX-MATCHED. `tool-input-delta`
-   * carries the model's tool ARGUMENTS token by token — the same shape as a text or reasoning
-   * delta, and just as numerous for a tool call with a large input. A `startsWith('tool-')`
-   * check therefore made every one of those frames a boundary, which is the exact per-token
-   * write the paragraph above rejects: `persistInFlight` serializes those writes but does not
-   * throttle them, so the checkpoint would rewrite the whole parts array back-to-back for the
-   * length of the argument stream (review finding — coderabbitai, PR #2408).
-   *
-   * `data-` stays a prefix: those types are open-ended by construction (`data-${string}`), so
-   * there is no set to enumerate, and they are route-written and discrete rather than
-   * streamed per token.
-   */
-  const isDurabilityBoundary = (chunk: UIMessageChunk): boolean =>
-    TOOL_BOUNDARY_CHUNK_TYPES.has(chunk.type) ||
-    chunk.type.startsWith('data-') ||
-    chunk.type === 'start-step' ||
-    chunk.type === 'finish-step' ||
-    chunk.type === 'error' ||
-    chunk.type === 'file' ||
-    chunk.type === 'source-url' ||
-    chunk.type === 'source-document';
-
   // The lifecycle watches its own channel to drive checkpoints. It does NOT feed the channel
   // — the pump does — which is the point: capture is independent of anything the lifecycle,
   // or any client, does. `finished` guards re-entry, since finish() closes the channel and
@@ -551,6 +579,7 @@ export const createStreamLifecycle = async (
       // in this file that a future reordering should fail closed. Mutation-tested: removing it
       // changes nothing, which is the point.
       if (finished) return;
+      foldFrame(frame.chunk);
       dirty = true;
       maybeCheckpoint(isDurabilityBoundary(frame.chunk));
     },
@@ -561,7 +590,10 @@ export const createStreamLifecycle = async (
     },
   });
 
-  const getParts = (): Promise<UIMessagePart[]> => foldChunksToParts(channel.getFrames());
+  const getParts = async (): Promise<UIMessagePart[]> => {
+    await foldChain;
+    return folder.parts;
+  };
 
   return { finish, channel, getParts, preAborted: false };
 };

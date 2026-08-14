@@ -7,6 +7,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
 import { messages, conversations } from '@pagespace/db/schema/conversations';
+import { aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { runMonitoringRetentionCleanup } from './monitoring-retention';
 import {
   resolveChatRetentionDays,
@@ -181,6 +182,43 @@ export async function cleanupSoftDeletedChatRecords(database: DB): Promise<Clean
   ];
 }
 
+/**
+ * How long an AI stream's raw frames may survive without anything having claimed them.
+ *
+ * `ai_stream_frames` is normally self-clearing: the writer deletes a message's log the moment
+ * a terminal `messages` row for it is confirmed (the generation's own save, or a crash
+ * recovery's materialization). This sweep is the BACKSTOP for the case where neither ran at
+ * all — the owning process died before it could save, and nothing has since polled, sent, or
+ * stopped anything on that conversation to trigger a recovery. Without it those frames are
+ * message CONTENT sitting in a table with no reader and no expiry.
+ *
+ * 24 hours, chosen against the recovery path rather than picked round. A row is judged dead
+ * and materialized well inside two hours (`RECONCILE_BACKSTOP_MS`, stream-liveness.ts — twice
+ * the one-hour stream lifetime horizon), but only when something looks: a client polling
+ * `/active-streams`, the next send's takeover, a Stop. That trigger can be arbitrarily
+ * delayed — a user who closes the tab on a crashed stream and comes back tomorrow. A day of
+ * headroom means such a recovery still folds the real frames; past it the recovery still
+ * happens, just from the `parts` snapshot, which is the documented fallback. The daily cron
+ * cadence makes the effective window 24-48h.
+ *
+ * Aged per ROW, on `created_at`, which is the table's only index and the only column that can
+ * be swept without a join. For a stream still running after a full day this could in
+ * principle age out its early batches while later ones survive — leaving a log that no longer
+ * starts at seq 0. That is safe rather than corrupting: the reader requires a contiguous
+ * prefix from seq 0 and answers "no log" otherwise, so such a stream degrades to the `parts`
+ * fallback instead of replaying a message missing its beginning.
+ */
+const STREAM_FRAME_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+export async function cleanupAbandonedStreamFrames(database: DB): Promise<CleanupResult> {
+  const cutoff = new Date(Date.now() - STREAM_FRAME_RETENTION_MS);
+  const result = await database
+    .delete(aiStreamFrames)
+    .where(lt(aiStreamFrames.createdAt, cutoff))
+    .returning({ messageId: aiStreamFrames.messageId });
+  return { table: 'ai_stream_frames', deleted: result.length };
+}
+
 export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]> {
   const [expiryResults, chatResults, monitoringResults] = await Promise.all([
     Promise.all([
@@ -193,6 +231,7 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
       cleanupExpiredDriveBackups(database),
       cleanupExpiredPagePermissions(database),
       cleanupExpiredAiUsageLogs(database),
+      cleanupAbandonedStreamFrames(database),
     ]),
     cleanupSoftDeletedChatRecords(database),
     runMonitoringRetentionCleanup(),

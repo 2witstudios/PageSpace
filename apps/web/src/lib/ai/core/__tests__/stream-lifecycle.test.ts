@@ -10,6 +10,9 @@ const {
   mockLoggerWarn,
   mockConsumePendingAbort,
   mockEnsureWatcher,
+  mockStartFrameLogWriter,
+  mockFrameWriterClose,
+  mockReleaseFrames,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
   mockBroadcastStart: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +24,9 @@ const {
   mockLoggerWarn: vi.fn(),
   mockConsumePendingAbort: vi.fn().mockResolvedValue(false),
   mockEnsureWatcher: vi.fn(),
+  mockStartFrameLogWriter: vi.fn(),
+  mockFrameWriterClose: vi.fn(),
+  mockReleaseFrames: vi.fn(),
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
 
@@ -89,6 +95,20 @@ vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
   consumePendingAbort: mockConsumePendingAbort,
 }));
 
+/**
+ * The durable frame log's writer is mocked here, and only here.
+ *
+ * It has its own suite (`frame-log-writer.test.ts`) built on a real channel, where the
+ * batching cadence and the failure paths are the subject. What this file needs to know is
+ * narrower: that the lifecycle STARTS one for the generation, hands it the channel every
+ * other subscriber shares, and ends it — and, crucially, that the parts checkpoint's
+ * behaviour below is the lifecycle's own and not the writer's.
+ */
+vi.mock('@/lib/ai/core/frame-log-writer', () => ({
+  startFrameLogWriter: mockStartFrameLogWriter,
+  releaseFramesForMessage: mockReleaseFrames,
+}));
+
 import type { UIMessageChunk } from 'ai';
 import { streamChannelRegistry } from '../stream-channel-registry';
 import { createStreamLifecycle as createStreamLifecycleUntracked } from '../stream-lifecycle';
@@ -141,30 +161,45 @@ const writeText = (handle: { channel: { append: (c: UIMessageChunk) => void } },
   handle.channel.append(textDelta(text));
 };
 
-describe('createStreamLifecycle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockConsumePendingAbort.mockResolvedValue(false);
-    mockEnsureWatcher.mockImplementation(() => {});
-    // The registry is module-global state, not a mock, so it leaks across tests unless reset.
-    // Same hazard the old mockReturnValue leak had, different mechanism.
-    streamChannelRegistry.reset();
-    mockInsertOnConflict.mockResolvedValue(undefined);
-    mockUpdateWhere.mockResolvedValue(undefined);
-    mockBroadcastStart.mockResolvedValue(undefined);
-    mockBroadcastComplete.mockResolvedValue(undefined);
-  });
+/**
+ * Shared reset. Three top-level describes need it, and a describe's own beforeEach does not
+ * reach its siblings — the frame-log-writer assertions below are call-count assertions, so a
+ * missed reset makes them read another test's calls.
+ */
+const resetStreamLifecycleMocks = () => {
+  vi.clearAllMocks();
+  mockConsumePendingAbort.mockResolvedValue(false);
+  mockEnsureWatcher.mockImplementation(() => {});
+  mockFrameWriterClose.mockResolvedValue(undefined);
+  mockStartFrameLogWriter.mockImplementation(() => ({
+    close: mockFrameWriterClose,
+    abandon: vi.fn().mockResolvedValue(undefined),
+  }));
+  mockReleaseFrames.mockResolvedValue(undefined);
+  // The registry is module-global state, not a mock, so it leaks across tests unless reset.
+  // Same hazard the old mockReturnValue leak had, different mechanism.
+  streamChannelRegistry.reset();
+  mockInsertOnConflict.mockResolvedValue(undefined);
+  mockUpdateWhere.mockResolvedValue(undefined);
+  mockBroadcastStart.mockResolvedValue(undefined);
+  mockBroadcastComplete.mockResolvedValue(undefined);
+};
 
-  afterEach(() => {
-    for (const handle of activeLifecycles) {
-      try {
-        handle.finish(true);
-      } catch {
-        // best-effort cleanup only — a throw here must not fail an unrelated test
-      }
+/** Finish every lifecycle a test created, so no interval survives into the next one. */
+const finishTrackedLifecycles = () => {
+  for (const handle of activeLifecycles) {
+    try {
+      handle.finish(true);
+    } catch {
+      // best-effort cleanup only — a throw here must not fail an unrelated test
     }
-    activeLifecycles = [];
-  });
+  }
+  activeLifecycles = [];
+};
+
+describe('createStreamLifecycle', () => {
+  beforeEach(resetStreamLifecycleMocks);
+  afterEach(finishTrackedLifecycles);
 
   describe('register / insert / broadcastStart on creation', () => {
     it('given valid params, should open a channel for the messageId carrying full stream meta', async () => {
@@ -1017,5 +1052,129 @@ describe('createStreamLifecycle', () => {
 
       expect(await handle.getParts()).toEqual([]);
     });
+  });
+});
+
+/**
+ * LEAF 4 — the checkpoint no longer truncates when the memory ring evicts.
+ *
+ * The lifecycle used to fold `channel.getFrames()`: whatever the ring still held. A reply long
+ * enough to evict its oldest frames therefore wrote a snapshot that had silently lost its
+ * beginning — and losing the beginning is not a partial loss, because the fold needs a part's
+ * OPENING frame to attach its deltas to. Drop a `text-start` and every delta after it is
+ * skipped as an orphan, so the reply does not shorten; it VANISHES.
+ *
+ * The lifecycle now folds each frame as it arrives, before eviction can reach it.
+ */
+describe('createStreamLifecycle — checkpoint survives ring eviction', () => {
+  beforeEach(resetStreamLifecycleMocks);
+  afterEach(finishTrackedLifecycles);
+
+  /**
+   * One frame big enough to blow the channel's 24MB ring on its own, so everything appended
+   * before it is evicted. A `data-*` frame rather than a giant text delta, so the eviction is
+   * the only thing under test — the assertion reads a small text part, not a 25MB string.
+   * It is also a durability boundary, so it flushes a checkpoint immediately.
+   */
+  const evictingFrame = chunk({ type: 'data-bulk', id: 'bulk-1', data: { blob: 'x'.repeat(25 * 1024 * 1024) } });
+
+  it('given a reply whose opening frames were evicted, should still persist them in the snapshot', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    handle.channel.append(textStart);
+    handle.channel.append(textDelta('the beginning of the reply'));
+    handle.channel.append(evictingFrame);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // The ring really did evict — otherwise this test proves nothing.
+    expect(handle.channel.firstAvailableSeq).toBeGreaterThan(0);
+
+    const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { parts: { type: string; text?: string }[] };
+    expect(persisted.parts.find((p) => p.type === 'text')?.text).toBe('the beginning of the reply');
+  });
+
+  it('given evicted frames, should count them in rawPartsCount rather than reporting only what survived in memory', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    handle.channel.append(textStart);
+    handle.channel.append(textDelta('a'));
+    handle.channel.append(evictingFrame);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { rawPartsCount: number };
+    // Three frames were folded; the ring holds one. The count describes the SNAPSHOT, so it
+    // must be the folded total — an under-count makes an old client re-apply text it has
+    // already rendered.
+    expect(persisted.rawPartsCount).toBe(3);
+    expect(handle.channel.getFrames().length).toBeLessThan(3);
+  });
+
+  it('given evicted frames, getParts() should return the whole reply, not the ring\'s remainder', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    handle.channel.append(textStart);
+    handle.channel.append(textDelta('survives eviction'));
+    handle.channel.append(evictingFrame);
+    await flushMicrotasks();
+
+    const parts = await handle.getParts();
+    expect(parts.find((p) => p.type === 'text')).toMatchObject({ text: 'survives eviction' });
+  });
+});
+
+/**
+ * The durable frame log is wired to the SAME channel every other subscriber reads. The
+ * writer's own behaviour is covered in frame-log-writer.test.ts; what belongs here is that
+ * the lifecycle starts one, ends it, and — the part with teeth — does NOT delete its frames.
+ */
+describe('createStreamLifecycle — durable frame log wiring', () => {
+  beforeEach(resetStreamLifecycleMocks);
+  afterEach(finishTrackedLifecycles);
+
+  it('given a generation, should start a frame-log writer on this stream\'s own channel', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    expect(mockStartFrameLogWriter).toHaveBeenCalledWith({
+      messageId: 'msg-1',
+      conversationId: 'conv-1',
+      channel: handle.channel,
+    });
+  });
+
+  it('given finish(), should close the frame log so its tail is written rather than dying with the process', async () => {
+    const handle = await createStreamLifecycle(params());
+    handle.finish(false);
+
+    expect(mockFrameWriterClose).toHaveBeenCalled();
+  });
+
+  it('given finish(), should NOT release the frames — no terminal message write has been confirmed here', async () => {
+    // The distinction the whole retention contract rests on. finish() also runs when the pump
+    // failed and nothing was persisted at all, which is exactly the case the durable log
+    // exists for; deleting here would throw away the only copy of the reply.
+    const handle = await createStreamLifecycle(params());
+    handle.finish(false);
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).not.toHaveBeenCalled();
+  });
+
+  it('given a pre-aborted stream, should release any frames left by the superseded attempt', async () => {
+    mockConsumePendingAbort.mockResolvedValue(true);
+
+    await createStreamLifecycle(params({ messageId: 'msg-preaborted' }));
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-preaborted');
+  });
+
+  it('given a pre-aborted stream, should not start a frame-log writer for a generation that never runs', async () => {
+    mockConsumePendingAbort.mockResolvedValue(true);
+
+    await createStreamLifecycle(params());
+
+    expect(mockStartFrameLogWriter).not.toHaveBeenCalled();
   });
 });
