@@ -61,6 +61,7 @@ export const pages = pgTable('pages', {
   toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
   sandboxEnabled: boolean('sandboxEnabled').default(false).notNull(), // AI_CHAT agents: whether the sandbox tool families (bash/files, git+gh, sessions/shells) are offered to this agent. Provisioning stays lazy and automatic on first use — this is the settings switch, not a provision button. Successor to the old pages.terminalAccess (dropped in 0234, phase 8's teardown of the Machines model — never pages.machineAccess, which never existed in this package).
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
+  siteMode: boolean('siteMode').default(false).notNull(), // CANVAS pages only, author-toggled: when true the page renders under buildSiteCsp() instead of buildBaselineCsp() — script-src/connect-src open to any https host so the page can load CDN libraries and call APIs like an ordinary website. Defaults false so no page already published silently widens its policy; flipping it is the author's explicit opt-in.
   description: text('description'), // Freeform description surfaced on a page's Settings tab
   // File-specific fields.
   // fileSize/mimeType/contentHash are DERIVED DISPLAY METADATA copied from the

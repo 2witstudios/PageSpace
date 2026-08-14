@@ -1,5 +1,5 @@
 import { sanitizeCSS } from './sanitize-css';
-import { buildBaselineCsp } from './csp';
+import { buildBaselineCsp, buildSiteCsp } from './csp';
 import { escapeHtml } from '../utils/html';
 
 /**
@@ -159,6 +159,20 @@ export interface RenderCanvasDocumentInput {
    * unchanged canvas baseline CSP.
    */
   cspOverride?: string;
+  /**
+   * Mirrors `pages.siteMode`. When true the document is rendered as a real
+   * website rather than a sandboxed artifact:
+   *
+   *  - the CSP becomes `buildSiteCsp()` (`script-src`/`connect-src` open to any
+   *    https host) instead of `buildBaselineCsp()`;
+   *  - author CSS keeps its external https `url()` and `@import` values instead
+   *    of having them rewritten to `url("")`.
+   *
+   * Ignored when `cspOverride` is set, so the DOCUMENT/CODE/SHEET publish
+   * pipelines keep their stricter policies no matter what the source page has
+   * toggled. Defaults to the unchanged baseline behavior when omitted.
+   */
+  siteMode?: boolean;
 }
 
 /**
@@ -407,7 +421,7 @@ function stampScriptNonce(scriptBlock: string, nonce: string): string {
     + scriptBlock.slice(openTag.length);
 }
 
-function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], nonce?: string): { css: string; body: string } {
+function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], nonce?: string, allowAnyHttpsUrl?: boolean): { css: string; body: string } {
   // Tag names require a genuine delimiter — whitespace, `/`, or `>` — immediately
   // after the name (the `(?=[\s/>])` lookahead), mirroring the HTML tokenizer.
   // Only after that delimiter is arbitrary junk/attributes tolerated up to `>`,
@@ -421,7 +435,16 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
     // styleContent is the capture group; defined only when a real <style>
     // element matched (not a <script> block).
     if (styleContent !== undefined) {
-      cssParts.push(sanitizeCSS(styleContent, allowedHttpsHosts?.length ? { allowedHttpsHosts } : undefined));
+      cssParts.push(
+        sanitizeCSS(
+          styleContent,
+          allowAnyHttpsUrl
+            ? { allowAnyHttpsUrl: true }
+            : allowedHttpsHosts?.length
+              ? { allowedHttpsHosts }
+              : undefined,
+        ),
+      );
       return '';
     }
     return nonce ? stampScriptNonce(match, nonce) : match; // <script> block — leave verbatim (unless nonce is stamped)
@@ -433,10 +456,13 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, navigationBridge, escapeBridge, nonce, cspOverride } = input;
-  const csp = cspOverride ?? buildBaselineCsp(formActionOrigin);
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, navigationBridge, escapeBridge, nonce, cspOverride, siteMode } = input;
+  // `cspOverride` still wins: the publish pipelines for DOCUMENT/CODE/SHEET pages
+  // pass an explicit `script-src 'none'` policy and must never be widened by a
+  // stray siteMode flag on the page they render from.
+  const csp = cspOverride ?? (siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin));
 
-  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
+  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce, siteMode);
   const rawTitle = title && title.trim() ? title : 'Untitled';
   const safeTitle = escapeHtml(rawTitle);
   const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');
