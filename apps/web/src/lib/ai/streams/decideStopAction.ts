@@ -12,23 +12,15 @@ export type StopAction =
 /**
  * Decides what a Stop click should name, for every surface.
  *
- * WHY THE LOCAL STOP IS NOT PART OF THIS DECISION.
+ * THERE IS NO LOCAL STOP TO DECIDE ABOUT ANY MORE.
  *
- * Callers call `rawStop()` (useChat's own stop) before applying this result — the same order
- * AiChatView already uses, and for the reason useChatStop's docblock gives: the local stop is
- * synchronous and purely local, while the server abort can now WAIT seconds to find out whether
- * a cross-instance owner actually stopped the generation. Running the local stop first gives
- * instant UI feedback and guarantees it strictly harder than a `finally` would.
+ * Callers used to run `rawStop()` — useChat's own stop — before applying this result, for
+ * "instant UI feedback" while the server abort round-tripped. `useStopStream` even had to
+ * decide WHETHER to run it, because one shared `Chat` meant a Stop on conversation A could
+ * abort conversation B's live local read. Both are gone: this client reads no response body,
+ * so there is no local fetch to cancel and no gate to get right.
  *
- * It used to be UNCONDITIONAL, because `stop()` on an idle useChat is a no-op and the chat could
- * not be busy with anything but the conversation being stopped. Conversation-scoped consuming
- * (the dual-stream fix) broke that: the same chat instance can be locally consuming conversation
- * B's stream while conversation A's handed-off stream renders via the socket on this surface, and
- * a Stop on A must not abort B's live local fetch. `useStopStream` gates `rawStop` on the
- * mirror's latched conversation for exactly that case; the SERVER-side decision below is
- * unchanged — it names streams by store entry / send-time conversation, never by the local fetch.
- *
- * AND CANCELLING THE FETCH STOPS NOTHING ANYWAY. Streams are deliberately server-owned and
+ * CANCELLING A FETCH STOPS NOTHING ANYWAY. Streams are deliberately server-owned and
  * survive a client disconnect — that is the architecture. So a Stop that names nothing on the
  * server is a Stop that did nothing: the button flips back to Send while the generation keeps
  * running its write tools and keeps billing. Every branch below exists to make sure Stop can

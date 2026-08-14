@@ -61,9 +61,10 @@ export function useSendHandoff(
     // Everything else is a resolution and must clear it:
     //   - `isStreamLive` — the stream took over; the registration now derives from the store entry.
     //   - `'error'`      — the request failed.
-    //   - `'ready'`      — the request SETTLED. Crucially this covers Stop-during-the-submitted-
-    //     window: useChat.stop() aborts the fetch and settles to 'ready', never 'error', and no
-    //     assistant message was ever pushed so `isStreamLive` never becomes true. Excluding 'ready'
+    //   - `'ready'`      — the request SETTLED. This still covers Stop-during-the-submitted-
+    //     window: a Stop there aborts server-side, the POST answers, the shell returns to
+    //     'ready', and no store entry was ever opened so `isStreamLive` never becomes true.
+    //     Excluding 'ready'
     //     leaked the name forever — and because all three surfaces OR it into their streaming flag,
     //     and the composer renders ONLY a Stop button while that is true, the conversation wedged
     //     unusable until unmount. 'ready' cannot arrive while the POST is still in flight, so
