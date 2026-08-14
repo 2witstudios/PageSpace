@@ -13,12 +13,37 @@ const {
   mockLoggerWarn: vi.fn(),
 }));
 
+/**
+ * `readFrames` runs TWO queries — a metadata pass that decides the prefix, then a payload pass
+ * bounded by `from_seq <= lastWanted`. The mock therefore has to MODEL that predicate rather
+ * than replay one canned array to both, or the payload pass would hand back rows the budget
+ * and gap checks had already excluded and every truncation assertion would be vacuous.
+ *
+ * `mockSelectOrderBy` stays the single source of rows; the chain applies the bound.
+ */
+const lteBoundOf = (cond: unknown): number | null => {
+  const parts = (cond as { conds?: unknown[] })?.conds ?? [cond];
+  for (const part of parts) {
+    const bound = (part as { lteValue?: number })?.lteValue;
+    if (typeof bound === 'number') return bound;
+  }
+  return null;
+};
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn(() => ({ values: mockInsertValues })),
     delete: vi.fn(() => ({ where: mockDeleteWhere })),
     select: vi.fn(() => ({
-      from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: mockSelectOrderBy })) })),
+      from: vi.fn(() => ({
+        where: vi.fn((cond: unknown) => ({
+          orderBy: async () => {
+            const rows = (await mockSelectOrderBy()) as { fromSeq: number }[];
+            const bound = lteBoundOf(cond);
+            return bound === null ? rows : rows.filter((r) => r.fromSeq <= bound);
+          },
+        })),
+      })),
     })),
   },
 }));
@@ -26,6 +51,8 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   asc: vi.fn((field: unknown) => ({ asc: field })),
+  and: vi.fn((...conds: unknown[]) => ({ conds })),
+  lte: vi.fn((field: unknown, value: unknown) => ({ field, lteValue: value })),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({

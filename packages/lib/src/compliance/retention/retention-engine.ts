@@ -246,6 +246,13 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
   //
   // Costs one extra round trip and makes the counts unambiguous: this reports what age-based
   // sweeping removed, and whatever the cascade took was already condemned.
+  //
+  // ONE BEHAVIOUR CHANGE WORTH NAMING: a rejection anywhere in the group above now skips this
+  // sweep entirely, where previously it was already in flight and would have completed. That
+  // is the right trade — the alternative is the deadlock this sequencing exists to avoid — and
+  // it self-heals, because the next daily run covers whatever a failed run left behind. It is
+  // deliberately NOT wrapped in its own try/catch: a retention run that partly failed should
+  // surface as a failure to the cron route, not be quietly completed around.
   const streamFrameResults = await cleanupAbandonedStreamFrames(database);
 
   return [...expiryResults, ...chatResults, ...monitoringResults, streamFrameResults];

@@ -602,6 +602,42 @@ describe('writer.release() — the INSTANCE release, used by the owning lifecycl
     });
   });
 
+  it('given a successor registering WHILE the release is awaiting its write chain, still refuses', async () => {
+    // The TOCTOU the second identity check closes. `abandon()` waits out the in-flight write
+    // chain — unbounded in time — and deregisters `self` on the way, so a writer that registers
+    // during that window is invisible to a check made before it AND will not see `self` to wait
+    // for. The stale DELETE would land on the successor's freshly inserted rows: the exact
+    // failure the guard exists to prevent, through the guard.
+    let settleInsert: (ok: boolean) => void = () => {};
+    mockAppendFrameBatch.mockImplementation(
+      () => new Promise<boolean>((resolve) => { settleInsert = resolve; }),
+    );
+
+    const first = start('msg-toctou');
+    first.channel.append(toolBoundary);
+    await settle();
+
+    mockDeleteFrames.mockClear();
+    const releasing = first.writer.release();
+    await settle();
+
+    // A new generation claims the messageId while the release is parked on its write chain.
+    start('msg-toctou');
+    settleInsert(true);
+    await releasing;
+    await settle();
+
+    // Exactly ONE delete, and it is the successor's own pre-write clear — the thing every new
+    // writer does before its first insert. A second would be the stale release landing on the
+    // successor's rows, which is what the guard prevents.
+    assert({
+      given: 'a successor that registered during the release\'s await',
+      should: 'leave only the successor\'s own pre-write clear, never a second stale delete',
+      actual: mockDeleteFrames.mock.calls.filter(([id]) => id === 'msg-toctou').length,
+      expected: 1,
+    });
+  });
+
   it('given a writer that still owns the messageId, deletes', async () => {
     const { writer } = start('msg-owner');
     await settle();

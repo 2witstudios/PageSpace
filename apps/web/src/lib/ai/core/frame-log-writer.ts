@@ -188,11 +188,11 @@ export const startFrameLogWriter = ({
   /**
    * Leave the registry — but only once this writer can no longer write.
    *
-   * DELIBERATELY NOT PART OF `terminate()`, which runs while a final batch may still be
-   * queued. `releaseFramesForMessage` resolves a writer through this map and awaits it before
-   * DELETEing; a writer that deregistered early would be invisible to that lookup, its queued
-   * INSERT would land after the DELETE, and the message would be left holding a partial log
-   * that nothing reclaims until the retention backstop sweeps it a day later.
+   * DELIBERATELY NOT PART OF `terminate()`, which runs while a final batch may still be queued.
+   * Registry membership is what `releaseFramesForMessage` reads as "this process is still
+   * generating that message" and refuses on; a writer that deregistered while it could still
+   * write would be invisible to that refusal, and the by-name DELETE would race its queued
+   * INSERT.
    *
    * Identity, not existence — the same rule the checkpoint's registry guard uses. A newer
    * writer may already have claimed this messageId (retry/takeover), and this one winding
@@ -200,6 +200,21 @@ export const startFrameLogWriter = ({
    */
   const deregister = (): void => {
     if (writers.get(messageId) === self) writers.delete(messageId);
+  };
+
+  /**
+   * The writer that has taken this messageId from us, or `null` if none has.
+   *
+   * An absent entry is NOT supersession — it is this writer having deregistered normally, and
+   * its log is still rightfully its own to delete.
+   */
+  const supersededBy = (): FrameLogWriter | null => {
+    const current = writers.get(messageId);
+    if (current === undefined || current === self) return null;
+    loggers.ai.warn('frame-log-writer: release skipped — this messageId was re-registered', {
+      messageId,
+    });
+    return current;
   };
 
   /** Stop intake AND cancel anything still queued. See `writesDisabled`. */
@@ -308,15 +323,20 @@ export const startFrameLogWriter = ({
       deregister();
     },
     async release(): Promise<void> {
-      const current = writers.get(messageId);
-      if (current !== undefined && current !== self) {
-        // A newer generation owns this messageId now. Its log is not ours to delete.
-        loggers.ai.warn('frame-log-writer: release skipped — this messageId was re-registered', {
-          messageId,
-        });
-        return;
-      }
+      // Wind down FIRST, then check ownership, then delete — and the order is the whole guard.
+      //
+      // Checking before the await instead would be a TOCTOU: `abandon()` waits out the
+      // in-flight write chain, which is unbounded in time, and deregisters `self` on the way,
+      // so a writer registering during that window is invisible to the earlier check AND will
+      // not find `self` to wait for either. The stale DELETE would then land on the successor's
+      // freshly inserted rows — the exact failure this guard exists to prevent, through the
+      // guard (review finding — adversarial pass).
+      //
+      // Abandoning a writer that turns out to be superseded is harmless: it is already off the
+      // registry and its successor never waited on it. So one check, in the only position that
+      // holds, rather than a redundant fast-path check no test can distinguish.
       await self.abandon();
+      if (supersededBy() !== null) return;
       await deleteFrames(messageId);
     },
   };

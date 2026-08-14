@@ -1,6 +1,6 @@
 import type { UIMessageChunk } from 'ai';
 import { db } from '@pagespace/db/db';
-import { asc, eq } from '@pagespace/db/operators';
+import { and, asc, eq, lte } from '@pagespace/db/operators';
 import { aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -30,7 +30,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 /**
  * Ceiling on how much of one message's log a single read will materialize.
  *
- * Matches `MAX_FOLD_BYTES` in stream-lifecycle.ts deliberately — see `readFrames`.
+ * The same number as `MAX_FOLD_BYTES` in stream-lifecycle.ts, so a recovery costs no more
+ * memory than the generation did — but measured in a different unit, which is worth saying
+ * rather than leaving to be discovered. This counts the exact UTF-8 `byte_size` the writer
+ * recorded; the fold counts `estimateFrameBytes`, which pads each frame by 64. The read budget
+ * is therefore the marginally more permissive of the two, and `recoverParts`' length
+ * comparison degrades safely whichever way they land.
  */
 const MAX_READ_BYTES = 24 * 1024 * 1024;
 
@@ -132,12 +137,21 @@ export const deleteFrames = async (messageId: string): Promise<boolean> => {
  * what a client that disconnected at that seq would have seen. The writer additionally stops
  * at its first failed batch, so this is defence in depth rather than the primary guard.
  *
- * BOUNDED, because the callers are batch loops. `reconcileDeadStreamRows` and the takeover
- * fan `materializeInterruptedStream` out with `Promise.all` over every dead row an instance
- * left behind — "potentially dozens" by their own docblocks — and each call now reads and
- * folds a whole log rather than one already-capped `parts` blob. Without a ceiling here, a
- * mass recovery's peak is dozens x the per-stream durable budget, which is how a recovery
- * sweep turns one dead instance into two (review finding — adversarial pass).
+ * BOUNDED IN TWO QUERIES, and the split is the whole reason this is not one. The callers are
+ * batch loops: `reconcileDeadStreamRows` and the takeover fan `materializeInterruptedStream`
+ * out with `Promise.all` over every dead row an instance left behind — "potentially dozens" by
+ * their own docblocks — and each call reads and folds a whole log rather than one
+ * already-capped `parts` blob. A single `SELECT` with the budget applied afterwards does NOT
+ * bound that: the driver has already materialized and parsed every row of the log before any
+ * JavaScript ceiling can look at it, so peak stays at dozens x the per-stream durable budget,
+ * which is how a recovery sweep turns one dead instance into two (review finding — adversarial
+ * pass; an earlier version of this code did exactly that and said otherwise).
+ *
+ * So the payload is never over-fetched. The first query reads only the row METADATA — three
+ * integers per row, tens of rows, negligible whatever the log holds — and the contiguous
+ * prefix and the byte budget are both decided from it. The second fetches `frames` for exactly
+ * the rows that survived that decision. One extra round trip, on a path that only runs when a
+ * process has already died.
  *
  * The ceiling is the LIVE fold's, so recovering a stream costs no more than generating it did,
  * and a reader can never reconstruct more than a live client could have held. Past it the walk
@@ -145,26 +159,18 @@ export const deleteFrames = async (messageId: string): Promise<boolean> => {
  * truncated read simply reaches less far than the `parts` snapshot and loses the comparison
  * to it.
  *
- * WHAT IT DOES AND DOES NOT BOUND, stated precisely rather than left to be assumed. It bounds
- * what this function RETAINS and what the caller then FOLDS — the dominant cost, since the fold
- * allocates a part per frame family, reconstructs partial JSON, and grows a string. It does NOT
- * bound the SELECT: the driver has already materialized this message's rows by the time the
- * walk starts, so the transient floor is one message's whole log. That is capped in turn by the
- * writer's own `MAX_DURABLE_BYTES`, which is the honest residual — bounding it tightly would
- * need a cumulative-sum window function or a streaming cursor, and neither is worth the
- * machinery against a per-message cap that already holds.
- *
  * NEVER THROWS: a read failure returns `null`, degrading to the `parts` fallback rather than
  * failing a crash recovery that had a usable snapshot all along.
  */
 export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | null> => {
-  let rows: { fromSeq: number; frameCount: number; frames: unknown[]; byteSize: number }[];
+  // PASS 1 — metadata only. Three integers per row: this is what makes the budget below a real
+  // bound rather than a ceiling applied to something already in memory.
+  let index: { fromSeq: number; frameCount: number; byteSize: number }[];
   try {
-    rows = await db
+    index = await db
       .select({
         fromSeq: aiStreamFrames.fromSeq,
         frameCount: aiStreamFrames.frameCount,
-        frames: aiStreamFrames.frames,
         byteSize: aiStreamFrames.byteSize,
       })
       .from(aiStreamFrames)
@@ -178,16 +184,20 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
     return null;
   }
 
-  if (rows.length === 0) return null;
+  if (index.length === 0) return null;
 
-  const frames: UIMessageChunk[] = [];
+  // Decide the contiguous, budgeted prefix from the metadata alone.
   let expectedSeq = 0;
   let readBytes = 0;
-  for (const row of rows) {
+  let lastWantedSeq = -1;
+  for (const row of index) {
+    // Checked BEFORE the row is taken, so the budget bounds what gets fetched. The first row is
+    // always taken — a single oversized row still yields frames rather than a spurious `null` —
+    // and overshoot is bounded by one row.
     if (readBytes >= MAX_READ_BYTES) {
-      loggers.ai.warn('frame-log: read budget reached — returning the prefix read so far', {
+      loggers.ai.warn('frame-log: read budget reached — fetching only the prefix within it', {
         messageId,
-        keptFrames: frames.length,
+        keptRows: lastWantedSeq + 1,
         readBytes,
       });
       break;
@@ -197,20 +207,42 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
         messageId,
         expectedSeq,
         foundSeq: row.fromSeq,
-        keptFrames: frames.length,
       });
       break;
     }
-    frames.push(...(row.frames as UIMessageChunk[]));
-    // The column the writer measured, so this costs no re-serialization.
     readBytes += row.byteSize;
-    // Advance by the RECORDED count, not by `row.frames.length`. They agree for every row
-    // this code writes; trusting the column is what makes a disagreement show up as a gap
-    // (and truncate) rather than silently shifting every subsequent row's seq.
+    lastWantedSeq = row.fromSeq;
+    // Advance by the RECORDED count, not by any payload length. Trusting the column is what
+    // makes a disagreement show up as a gap (and truncate) rather than silently shifting every
+    // subsequent row's seq.
     expectedSeq = row.fromSeq + row.frameCount;
   }
 
-  // A first row that did not start at seq 0 leaves nothing usable — say "no log" rather than
+  // Nothing usable — the log's earliest surviving row is not seq 0. Say "no log" rather than
   // handing back an empty array the caller would read as "this stream produced nothing".
+  if (lastWantedSeq < 0) return null;
+
+  // PASS 2 — the payload for exactly those rows.
+  let rows: { fromSeq: number; frames: unknown[] }[];
+  try {
+    rows = await db
+      .select({ fromSeq: aiStreamFrames.fromSeq, frames: aiStreamFrames.frames })
+      .from(aiStreamFrames)
+      .where(and(
+        eq(aiStreamFrames.messageId, messageId),
+        lte(aiStreamFrames.fromSeq, lastWantedSeq),
+      ))
+      .orderBy(asc(aiStreamFrames.fromSeq));
+  } catch (error) {
+    loggers.ai.warn('frame-log: frame payload read failed', {
+      messageId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return null;
+  }
+
+  const frames: UIMessageChunk[] = [];
+  for (const row of rows) frames.push(...(row.frames as UIMessageChunk[]));
+
   return frames.length > 0 ? frames : null;
 };

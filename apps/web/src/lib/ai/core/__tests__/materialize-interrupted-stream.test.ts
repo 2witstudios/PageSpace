@@ -42,10 +42,21 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
-    // `readFrames` — the only top-level select the materializer makes.
+    // `readFrames` — the only top-level select the materializer makes. It runs a metadata pass
+    // and then a payload pass bounded by `from_seq <= lastWanted`, so the mock models that
+    // predicate; replaying one canned array to both would make its truncation cases vacuous.
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => ({ orderBy: mockFrameSelectOrderBy })),
+        where: vi.fn((cond: unknown) => ({
+          orderBy: async () => {
+            const rows = (await mockFrameSelectOrderBy()) as { fromSeq: number }[];
+            const parts = (cond as { conds?: unknown[] })?.conds ?? [cond];
+            const bound = parts
+              .map((part) => (part as { lteValue?: number })?.lteValue)
+              .find((v): v is number => typeof v === 'number');
+            return bound === undefined ? rows : rows.filter((r) => r.fromSeq <= bound);
+          },
+        })),
       })),
     })),
     // `deleteFrames` — the retention release, once the message write is confirmed.
@@ -97,6 +108,7 @@ vi.mock('@pagespace/db/operators', () => ({
   isNotNull: vi.fn(),
   inArray: vi.fn(),
   asc: vi.fn((field: unknown) => ({ asc: field })),
+  lte: vi.fn((field: unknown, value: unknown) => ({ field, lteValue: value })),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
