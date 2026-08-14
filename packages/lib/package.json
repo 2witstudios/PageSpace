@@ -1117,6 +1117,11 @@
       "import": "./dist/canvas/render-document.js",
       "require": "./dist/canvas/render-document.js"
     },
+    "./canvas/preview-headers": {
+      "types": "./dist/canvas/preview-headers.d.ts",
+      "import": "./dist/canvas/preview-headers.js",
+      "require": "./dist/canvas/preview-headers.js"
+    },
     "./canvas/csp": {
       "types": "./dist/canvas/csp.d.ts",
       "import": "./dist/canvas/csp.js",
