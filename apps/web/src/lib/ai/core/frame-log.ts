@@ -190,6 +190,10 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
   let expectedSeq = 0;
   let readBytes = 0;
   let lastWantedSeq = -1;
+  // Counted, not derived from `lastWantedSeq`: seq numbers FRAMES, not rows, so that value is a
+  // frame offset and using it as a row count misreports every multi-frame batch — which is the
+  // normal case (review finding — coderabbitai, PR #2409).
+  let keptRows = 0;
   for (const row of index) {
     // Checked BEFORE the row is taken, so the budget bounds what gets fetched. The first row is
     // always taken — a single oversized row still yields frames rather than a spurious `null` —
@@ -197,7 +201,10 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
     if (readBytes >= MAX_READ_BYTES) {
       loggers.ai.warn('frame-log: read budget reached — fetching only the prefix within it', {
         messageId,
-        keptRows: lastWantedSeq + 1,
+        keptRows,
+        // `expectedSeq` has advanced by each accepted row's `frame_count`, so it IS the frame
+        // total — the number the row count above cannot express.
+        keptFrames: expectedSeq,
         readBytes,
       });
       break;
@@ -212,6 +219,7 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
     }
     readBytes += row.byteSize;
     lastWantedSeq = row.fromSeq;
+    keptRows += 1;
     // Advance by the RECORDED count, not by any payload length. Trusting the column is what
     // makes a disagreement show up as a gap (and truncate) rather than silently shifting every
     // subsequent row's seq.
