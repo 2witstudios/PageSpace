@@ -5,10 +5,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object),
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
-  isSafeNextPath: vi.fn(),
-  SIGNIN_NEXT_ALLOWED_PREFIXES: ['/oauth/consent'],
-}));
+// The real predicate + allowlist from the implementation leaf (url-utils), not
+// a stub: mocking isSafeNextPath is exactly how the consent-URL regression
+// below shipped unnoticed. Only the Node-only parts of the auth-helpers barrel
+// ('server-only', the '@/lib/auth' graph) are kept out of the test.
+vi.mock('@/lib/auth/auth-helpers', () => import('@/lib/auth/url-utils'));
 
 const checkDistributedRateLimit = vi.fn();
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -25,7 +26,13 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
+
+// The exact `next` the consent page sends during `pagespace login`: its own
+// URL, whose query embeds the CLI's percent-encoded loopback redirect_uri.
+const CLI_CONSENT_URL =
+  '/oauth/consent?client_id=psc_cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A51739%2Fcallback' +
+  '&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' +
+  '&code_challenge_method=S256&scope=drive.read+drive.write&state=xyzABC123';
 
 const AUTHENTICATED = { tokenType: 'session', userId: 'user-1', role: 'user', tokenVersion: 0, sessionId: 'sess-1' };
 const ALLOWED = { allowed: true, attemptsRemaining: 2 };
@@ -43,7 +50,6 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(AUTHENTICATED as never);
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
   requestMagicLinkStepUp.mockResolvedValue({ ok: true });
-  vi.mocked(isSafeNextPath).mockReturnValue(true);
 });
 
 describe('POST /api/auth/step-up/magic-link/request', () => {
@@ -66,9 +72,7 @@ describe('POST /api/auth/step-up/magic-link/request', () => {
     expect(res.status).toBe(429);
   });
 
-  it('drops an unsafe next path rather than passing it through', async () => {
-    vi.mocked(isSafeNextPath).mockReturnValue(false);
-
+  it('drops an unsafe next path rather than passing it through (real predicate)', async () => {
     await POST(requestReq({ actionBinding: { clientId: 'cli-1' }, next: 'https://evil.example.com' }) as never);
 
     expect(requestMagicLinkStepUp).toHaveBeenCalledWith(
@@ -81,6 +85,14 @@ describe('POST /api/auth/step-up/magic-link/request', () => {
 
     expect(requestMagicLinkStepUp).toHaveBeenCalledWith(
       expect.objectContaining({ next: '/oauth/consent?client_id=x' }),
+    );
+  });
+
+  it('stores the CLI consent URL — encoded loopback redirect_uri and all — as next (regression)', async () => {
+    await POST(requestReq({ actionBinding: { clientId: 'psc_cli' }, next: CLI_CONSENT_URL }) as never);
+
+    expect(requestMagicLinkStepUp).toHaveBeenCalledWith(
+      expect.objectContaining({ next: CLI_CONSENT_URL }),
     );
   });
 

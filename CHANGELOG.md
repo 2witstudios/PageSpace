@@ -37,6 +37,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Confirming a CLI login by email now actually finishes the login** — running `pagespace login`
+  without a passkey sends a confirmation email, and clicking its link used to land on a page saying
+  "Confirmed | You can return to the tab where you started this action" while the tab you started in
+  sat there doing nothing until the CLI gave up five minutes later. The confirmation link now sends
+  you back to the consent screen you came from, which completes the login on its own. (The address
+  the CLI listens on was being carried inside the consent page's own URL, and an over-cautious
+  safety check mistook it for a redirect to somewhere else and quietly threw the return address
+  away.) The same check also stripped the destination when you opened a CLI login link while signed
+  out, so signing in dumped you on a blank sign-in screen instead of the consent page — that is
+  fixed too.
+
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
   Creating a calendar event through an app or script without naming a timezone read it as UTC, so
