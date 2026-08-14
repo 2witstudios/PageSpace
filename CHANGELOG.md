@@ -52,6 +52,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **You can send a message, open another chat, send a second one, and trust the first finishes** —
+  every chat surface shared one connection to the AI, so a second message could not be sent while
+  the first was still answering. What you got instead was one of two things: the first reply was
+  quietly cut off so the second could go, or the send was refused outright with "The previous
+  response is still wrapping up — please try again in a moment." Both conversations now answer at
+  the same time, each with its own Stop button, and switching between them shows whatever has
+  arrived so far with no gap and no waiting.
+- **Leaving a chat no longer abandons the reply** — closing the pane, navigating away, or switching
+  between the assistant and an agent used to stop the reply arriving, even though the work carried
+  on running (and billing) on the server. You came back to whatever had landed before you looked
+  away, frozen. Replies now keep arriving wherever you are in the app, and are complete when you
+  return — including the reasoning and command details, not just the text. Only pressing Stop stops
+  anything.
+- **Your own reply is yours in every tab and on every device** — a chat you started on your laptop
+  showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
+  attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
+  from any of them. A colleague's reply on a shared page is still correctly not yours to stop.
+
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
   Creating a calendar event through an app or script without naming a timezone read it as UTC, so

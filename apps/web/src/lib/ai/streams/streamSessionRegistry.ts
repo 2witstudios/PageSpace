@@ -501,9 +501,6 @@ export const closeChannelSessions = (channelId: string): void => {
   store().clearPageStreams(channelId);
 };
 
-/** Is this generation already being watched? Lets an announcer skip redundant work. */
-export const hasStreamSession = (messageId: string): boolean => sessions.has(messageId);
-
 /**
  * Reconcile against the server's list of what is still live on a channel.
  *

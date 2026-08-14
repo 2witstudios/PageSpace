@@ -25,7 +25,6 @@ import {
   closeChannelSessions,
   reconcileChannelSessions,
   onStreamSessionEnd,
-  hasStreamSession,
   resetStreamSessionRegistry,
   type StreamSessionEnd,
 } from '../streamSessionRegistry';
@@ -116,7 +115,6 @@ describe('a surface unmounting must not touch the stream', () => {
 
     expect(Object.keys(registry)).not.toContain('release');
     expect(Object.keys(registry)).not.toContain('releaseStreamSession');
-    expect(hasStreamSession('msg-1')).toBe(true);
     expect(store().streams.has('msg-1')).toBe(true);
   });
 });
@@ -257,7 +255,7 @@ describe('reconcile and revoke', () => {
   it('leaves a session the server still reports as live alone', () => {
     openStreamSession(descriptor());
     reconcileChannelSessions('page-1', new Set(['msg-1']));
-    expect(hasStreamSession('msg-1')).toBe(true);
+    expect(store().streams.has('msg-1')).toBe(true);
   });
 
   it('given access revoked, tears down WITHOUT reporting completions', () => {
@@ -279,8 +277,8 @@ describe('reconcile and revoke', () => {
 
     closeChannelSessions('page-1');
 
-    expect(hasStreamSession('msg-1')).toBe(false);
-    expect(hasStreamSession('msg-2')).toBe(true);
+    expect(store().streams.has('msg-1')).toBe(false);
+    expect(store().streams.has('msg-2')).toBe(true);
   });
 });
 
