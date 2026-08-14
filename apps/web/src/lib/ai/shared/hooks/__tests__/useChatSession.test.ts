@@ -291,8 +291,10 @@ describe('useChatSession — two conversations at once', () => {
     expect(openStreamSession).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'msg-B', conversationId: 'conv-B' }),
     );
-    // ...while A is STILL GENERATING, untouched.
-    expect(requestBody(0).messages).toBeDefined();
+    // ...while A is STILL GENERATING, untouched. Asserted on what A's request actually
+    // carried, not merely that it had a body.
+    expect((requestBody(0).messages as UIMessage[]).map((m) => m.id)).toEqual(['u-a']);
+    expect((requestBody(1).messages as UIMessage[]).map((m) => m.id)).toEqual(['u-b']);
 
     // Switching back shows A's send state, not B's — each conversation's status is its own.
     rerender({ conversationId: 'conv-A' });

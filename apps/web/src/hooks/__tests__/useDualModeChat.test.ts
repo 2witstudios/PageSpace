@@ -175,11 +175,21 @@ describe('a mode switch stops nothing', () => {
       { initialProps: { agent: null as AgentInfo | null } },
     );
 
+    vi.clearAllMocks();
     rerender({ agent: mockAgent });
 
-    // There is nothing to assert a call ON — no stop is reachable from here. That absence IS
-    // the assertion, and `only-a-deliberate-stop.test.ts` enforces it at the source level so a
-    // future reviewer cannot restore one without failing.
-    expect(streamingGlobal.status).toBe('streaming');
+    // Asserted on the STREAMING mode's own shell: a mode switch must not reach into it at all.
+    // (`expect(streamingGlobal.status).toBe('streaming')` stood here, which asserts a literal
+    // this test set two lines earlier and could never fail — the same defect CodeRabbit caught
+    // in the legacy reader's test. If a future effect fires anything on the mode being switched
+    // AWAY from, one of these goes red.)
+    for (const [name, fn] of Object.entries(streamingGlobal)) {
+      if (typeof fn === 'function' && 'mock' in fn) {
+        expect(fn, `a mode switch must not call global.${name}`).not.toHaveBeenCalled();
+      }
+    }
+    // And the agent shell is not driven either — selecting a mode is a view change, not a send.
+    expect(agentSession.sendMessage).not.toHaveBeenCalled();
+    expect(agentSession.regenerate).not.toHaveBeenCalled();
   });
 });
