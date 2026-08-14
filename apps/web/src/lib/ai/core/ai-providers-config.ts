@@ -69,6 +69,7 @@ export const FREE_TIER_MODELS = new Set<string>([
   'openai/gpt-5.4-nano',
   'openai/gpt-5.4-mini',
   'anthropic/claude-haiku-4.5',
+  'google/gemini-3.7-flash',
   'google/gemini-3.5-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.1-flash-lite',
@@ -156,6 +157,7 @@ export const AI_PROVIDERS = {
   google: {
     name: 'Google',
     models: {
+      'google/gemini-3.7-flash': 'Gemini 3.7 Flash',
       'google/gemini-3.6-flash': 'Gemini 3.6 Flash',
       'google/gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
       'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
@@ -310,6 +312,7 @@ export const AI_PROVIDERS = {
     // NOT billed against the shared credit pool (see METERING_EXEMPT_PROVIDERS).
     // Models officially supported by that endpoint; bare `glm-*` ids (no vendor prefix).
     models: {
+      'glm-5.3':     'GLM-5.3',
       'glm-5.2':     'GLM-5.2',
       'glm-5.1':     'GLM-5.1',
       'glm-5-turbo': 'GLM-5 Turbo',
