@@ -603,10 +603,13 @@ export const createStreamLifecycle = async (
    *
    * Fire-and-forget and idempotent. Never awaited by `finish()`, which must stay synchronous.
    */
-  const maybeReleaseFrames = (): void => {
-    if (framesReleased || !terminalWriteConfirmed || !finished) return;
+  const maybeReleaseFrames = (): boolean => {
+    if (framesReleased || !terminalWriteConfirmed || !finished) return false;
     framesReleased = true;
-    void releaseFramesForMessage(messageId);
+    // Through THIS generation's own writer, not by messageId. A superseded lifecycle releasing
+    // by name would delete the log its successor is still writing — see `release()`.
+    void frameLog.release();
+    return true;
   };
 
   const confirmTerminalWrite = (writtenMessageId: string): void => {
@@ -625,16 +628,21 @@ export const createStreamLifecycle = async (
 
     const priorPersist = persistInFlight;
 
-    // Flush the frame log's tail rather than let it die with the process. NOT a delete: the
-    // frames are released only once a terminal message write is CONFIRMED, and finish() runs on
-    // paths where no such write happened at all — the pump failing is the clearest one, and it
-    // is precisely the case the durable log exists for. Closing the channel below ends this
-    // writer's subscription too, so this is belt to that braces; both are idempotent.
-    void frameLog.close();
-    // The other half of the release gate just closed. If a terminal write was already
-    // confirmed, this is the moment the frames stop being the only copy of the reply; if not,
-    // they are kept for recovery and the retention backstop.
-    maybeReleaseFrames();
+    // The other half of the release gate just closed. On the ORDINARY path a terminal write
+    // was already confirmed (execute-end persists before this runs), so the frames stop being
+    // the only copy of the reply here and the whole log is deleted.
+    //
+    // Only if it is NOT released does the tail need flushing — and then it genuinely does,
+    // rather than being written and immediately dropped. `release()` abandons the writer,
+    // which cancels any batch a `close()` had queued, so calling both would have made the
+    // flush a no-op while the comment claimed otherwise (review finding — adversarial pass).
+    if (!maybeReleaseFrames()) {
+      // No terminal write was confirmed — the pump failed, or the conversation was deleted
+      // mid-generation and nothing persisted. Write the tail rather than let it die with the
+      // process; these frames are the only copy of the reply, and the retention backstop is
+      // what eventually reclaims them if no recovery ever claims them first.
+      void frameLog.close();
+    }
 
     try {
       streamChannelRegistry.close(messageId, aborted);

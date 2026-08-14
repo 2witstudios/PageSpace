@@ -452,47 +452,83 @@ describe('startFrameLogWriter — error paths end the writer', () => {
   });
 });
 
-describe('releaseFramesForMessage', () => {
+describe('releaseFramesForMessage — the BY-NAME release, for callers holding no writer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAppendFrameBatch.mockResolvedValue(true);
     mockDeleteFrames.mockResolvedValue(true);
   });
 
-  it('given a live writer for the message, stops it BEFORE deleting', async () => {
-    // Without this ordering the writer's final flush lands after the DELETE and resurrects a
-    // partial log that nothing reclaims until the retention backstop sweeps it.
-    //
-    // The channel is finished AFTER the release, deliberately: that is the event which would
-    // otherwise drive the writer's close-and-flush, so it is the moment the stranded write
-    // would actually appear. Asserting straight after the release proves nothing — the tail
-    // is still merely pending at that point, and a writer that was never stopped would look
-    // identical.
-    const { channel } = start('msg-release');
-    channel.append(textDelta('still pending when the message was saved'));
-
-    mockDeleteFrames.mockClear();
-    await releaseFramesForMessage('msg-release');
-    channel.finish(false);
+  it('given a LIVE local writer, refuses to delete', async () => {
+    // The merge-blocking hazard this guards. Liveness is heartbeat-based and the heartbeat
+    // write swallows its own failures, so a Postgres blip longer than the stale window leaves
+    // every in-flight row looking dead; when the DB returns, the next `/active-streams` poll
+    // reaps them — on the very instance still generating them. Acting on that would set
+    // `writesDisabled`, which is terminal and never re-armed, so the generation would stream
+    // on to the user with no durable record at all.
+    const { channel } = start('msg-still-live');
+    channel.append(toolBoundary);
     await settle();
 
+    mockDeleteFrames.mockClear();
+    mockAppendFrameBatch.mockClear();
+    await releaseFramesForMessage('msg-still-live');
+
     assert({
-      given: 'a confirmed terminal message write while frames were still buffered',
-      should: 'delete the log, and write nothing afterwards even once the channel ends',
-      actual: {
-        deleted: mockDeleteFrames.mock.calls.map(([id]) => id),
-        writes: mockAppendFrameBatch.mock.calls.length,
-      },
-      expected: { deleted: ['msg-release'], writes: 0 },
+      given: 'a by-name release for a message this process is still generating',
+      should: 'delete nothing — a live writer outranks whatever concluded the stream was over',
+      actual: mockDeleteFrames.mock.calls.length,
+      expected: 0,
+    });
+
+    // …and the writer is untouched: it can still record.
+    channel.append(toolBoundary);
+    await settle();
+    assert({
+      given: 'a refused by-name release',
+      should: 'leave durability on for the rest of the generation',
+      actual: mockAppendFrameBatch.mock.calls.length,
+      expected: 1,
     });
   });
 
-  it('given a writer mid-close with an INSERT still in flight, waits for it before deleting', async () => {
-    // The narrow window a writer that left the registry too early would open: `close()` stops
-    // intake and queues its final batch, but that batch is still in the air. If the release
-    // could not see the writer, it would DELETE now and the INSERT would land afterwards —
-    // leaving a partial log under a messageId whose reply is already durably saved, which
-    // nothing reclaims until the retention backstop sweeps it a day later.
+  it('given no local writer (the owning process died elsewhere), deletes', async () => {
+    await releaseFramesForMessage('msg-not-ours');
+
+    assert({
+      given: 'a messageId this process never generated',
+      should: 'delete — a miss means no local generation can be harmed',
+      actual: mockDeleteFrames.mock.calls.map(([id]) => id),
+      expected: ['msg-not-ours'],
+    });
+  });
+
+  it('given a writer that already finished and deregistered, deletes', async () => {
+    const { writer } = start('msg-finished');
+    await writer.close();
+
+    mockDeleteFrames.mockClear();
+    await releaseFramesForMessage('msg-finished');
+
+    assert({
+      given: 'a by-name release after the generation ended normally',
+      should: 'delete — the writer left the registry when it stopped being able to write',
+      actual: mockDeleteFrames.mock.calls.map(([id]) => id),
+      expected: ['msg-finished'],
+    });
+  });
+});
+
+describe('writer.release() — the INSTANCE release, used by the owning lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppendFrameBatch.mockResolvedValue(true);
+    mockDeleteFrames.mockResolvedValue(true);
+  });
+
+  it('given an INSERT still in flight, waits for it before deleting', async () => {
+    // Without this ordering the in-flight write lands after the DELETE and resurrects a
+    // partial log that nothing reclaims until the retention backstop sweeps it.
     let settleInsert: (ok: boolean) => void = () => {};
     mockAppendFrameBatch.mockImplementation(
       () => new Promise<boolean>((resolve) => { settleInsert = resolve; }),
@@ -500,34 +536,84 @@ describe('releaseFramesForMessage', () => {
 
     const { channel, writer } = start('msg-race');
     channel.append(toolBoundary);
-    void writer.close();
     await settle();
 
     mockDeleteFrames.mockClear();
-    const release = releaseFramesForMessage('msg-race');
+    const releasing = writer.release();
     await settle();
     const deletesWhileInsertInFlight = mockDeleteFrames.mock.calls.length;
 
     settleInsert(true);
-    await release;
+    await releasing;
     await settle();
 
     assert({
-      given: 'a release racing a closing writer whose INSERT has not returned',
+      given: 'a release while this writer\'s INSERT has not returned',
       should: 'hold the delete until that write settles, then delete',
       actual: { deletesWhileInsertInFlight, deletesAfter: mockDeleteFrames.mock.calls.length },
       expected: { deletesWhileInsertInFlight: 0, deletesAfter: 1 },
     });
   });
 
-  it('given no local writer (the owning process died elsewhere), deletes anyway', async () => {
-    await releaseFramesForMessage('msg-not-ours');
+  it('given a pending tail, discards it rather than writing it into a log about to be deleted', async () => {
+    const { channel, writer } = start('msg-tail');
+    channel.append(textDelta('a tail nobody needs'));
+
+    mockAppendFrameBatch.mockClear();
+    await writer.release();
+    channel.finish(false);
+    await settle();
 
     assert({
-      given: 'a messageId this process never generated',
-      should: 'still delete — a miss means no local write can race it',
+      given: 'a release with frames still buffered',
+      should: 'write nothing — the log is being deleted',
+      actual: mockAppendFrameBatch.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('given a SUPERSEDED writer, does not delete its successor\'s log', async () => {
+    // The worst failure in the module: a lifecycle that lost its messageId to a newer
+    // generation wiping the durable record of a stream that is still running. Not reachable
+    // today (server-minted ids, one lifecycle per send), guarded because every neighbouring
+    // mechanism guards the same thing.
+    const first = start('msg-superseded');
+    const second = start('msg-superseded');
+    await settle();
+
+    mockDeleteFrames.mockClear();
+    mockAppendFrameBatch.mockClear();
+    await first.writer.release();
+
+    assert({
+      given: 'a release from a writer whose messageId was re-registered',
+      should: 'delete nothing — the log now belongs to the successor',
+      actual: mockDeleteFrames.mock.calls.length,
+      expected: 0,
+    });
+
+    second.channel.append(toolBoundary);
+    await settle();
+    assert({
+      given: 'the superseded release having run',
+      should: 'leave the successor writing normally',
+      actual: mockAppendFrameBatch.mock.calls.length,
+      expected: 1,
+    });
+  });
+
+  it('given a writer that still owns the messageId, deletes', async () => {
+    const { writer } = start('msg-owner');
+    await settle();
+
+    mockDeleteFrames.mockClear();
+    await writer.release();
+
+    assert({
+      given: 'a release from the writer that still owns the messageId',
+      should: 'delete its log',
       actual: mockDeleteFrames.mock.calls.map(([id]) => id),
-      expected: ['msg-not-ours'],
+      expected: ['msg-owner'],
     });
   });
 });

@@ -64,15 +64,42 @@ export interface FrameLogWriter {
    * awaiting this cannot be undercut by a write still in the air.
    */
   abandon(): Promise<void>;
+  /**
+   * Abandon this writer and DELETE its message's durable log — the retention release, aimed
+   * at a writer INSTANCE rather than at a messageId.
+   *
+   * That distinction is the whole reason this exists alongside `releaseFramesForMessage`. A
+   * lifecycle releases when its own terminal write is confirmed, and it identifies the log by
+   * the only name it has: the messageId. But a messageId can be re-registered — the registry's
+   * `open()`, the sessions INSERT's `onConflictDoUpdate`, and this module's own `superseded`
+   * handling all exist for that case — and a by-name delete issued by a SUPERSEDED lifecycle
+   * would wipe the log its successor is actively writing, destroying the durable record of a
+   * live generation.
+   *
+   * So the delete is skipped when another writer has claimed this messageId. Identity, not
+   * existence: no registered writer means this one finished normally and the log is still
+   * rightfully its own, which must still delete.
+   *
+   * DEFENCE IN DEPTH, and knowingly so: `createStreamLifecycle` has a single call site and
+   * `runAgentWithRetry` retries INSIDE one lifecycle, so today a messageId has exactly one
+   * generation and `current` is never a different writer. It is guarded anyway because every
+   * neighbouring mechanism guards it (the checkpoint compares channel identity for the same
+   * reason and says the same thing), and because the failure it prevents — silently deleting a
+   * running generation's only durable copy — is the worst outcome in this file.
+   */
+  release(): Promise<void>;
 }
 
 /**
  * Process-local index of live frame-log writers, keyed by assistant `messageId`.
  *
  * Same single-process caveat as `streamChannelRegistry`, and for the same reason: a writer
- * exists only on the instance running the generation. Callers that may run anywhere
- * (`releaseFramesForMessage`) treat a miss as "not ours" and go straight to the DELETE, which
- * is correct — if this process does not own the stream, no local write can race it.
+ * exists only on the instance running the generation.
+ *
+ * Membership is therefore evidence of LIVENESS, and `releaseFramesForMessage` reads it that
+ * way: an entry means this process is still generating that message, so a by-name release —
+ * which can only have come from something that believes the stream is over — is refused. A
+ * miss means the generation is not ours (or is finished), and the delete proceeds.
  */
 const writers = new Map<string, FrameLogWriter>();
 
@@ -121,8 +148,19 @@ export const startFrameLogWriter = ({
 
   /**
    * Prior frames for this messageId are deleted BEFORE the first insert, and every write
-   * awaits this — a retry or takeover reuses the messageId, and a log holding both
-   * generations replays them spliced together into a message that never existed.
+   * awaits this — if a messageId were ever re-registered, a log holding both generations
+   * would replay them spliced together into a message that never existed.
+   *
+   * DEFENSIVE, AND UNREACHABLE AS THE ROUTES STAND — said plainly so the next reader does not
+   * have to reverse-engineer them to find that out. Both turn strategies mint a fresh
+   * `serverAssistantMessageId` per request, and `startGenerationExclusive` guarantees
+   * `createStreamLifecycle` runs exactly once per send, so no messageId is re-registered and
+   * `superseded` is always undefined. What this costs is one extra DELETE, matching zero rows,
+   * per generation — off the response's critical path, since the writer is a subscriber and
+   * nothing awaits it. It is kept at that price because the failure it prevents is a message
+   * that never existed being replayed to a user as if it had, and because the surrounding
+   * mechanisms (the registry's `open()`, the sessions INSERT's `onConflictDoUpdate`) already
+   * pay the same premium for the same reason.
    *
    * The previous writer is abandoned first (not closed): closing would flush its tail
    * straight into the window this delete is meant to clear.
@@ -269,6 +307,18 @@ export const startFrameLogWriter = ({
       await writeChain.catch(() => {});
       deregister();
     },
+    async release(): Promise<void> {
+      const current = writers.get(messageId);
+      if (current !== undefined && current !== self) {
+        // A newer generation owns this messageId now. Its log is not ours to delete.
+        loggers.ai.warn('frame-log-writer: release skipped — this messageId was re-registered', {
+          messageId,
+        });
+        return;
+      }
+      await self.abandon();
+      await deleteFrames(messageId);
+    },
   };
 
   writers.set(messageId, self);
@@ -317,27 +367,41 @@ export const startFrameLogWriter = ({
 };
 
 /**
- * Release a message's durable frames — the retention half of the log's lifecycle.
+ * Release a message's durable frames BY NAME — for a caller that holds no writer.
  *
- * CALLED ONLY AFTER A TERMINAL MESSAGE WRITE IS CONFIRMED, and the ordering is the whole
- * contract. Frames exist to reconstruct a reply that no `messages` row holds yet; once one
- * does, they are storage. Deleting them a moment EARLIER — on `finish()`, say, which also
- * runs when the pump failed and nothing was persisted at all — would throw away the only
- * copy of a reply precisely in the case the log was built for.
+ * The crash-recovery path (`materializeInterruptedStream`) and the pre-abort cleanup, both of
+ * which act on a messageId whose generation belongs to a process that is gone, or has not
+ * started. A lifecycle releasing its OWN generation uses `writer.release()` instead, which
+ * cannot delete a successor's log.
  *
- * Stops this process's writer for the messageId first. Without that, the writer's final
- * flush can land after the DELETE and resurrect a partial log that nothing will ever
- * reclaim until the retention backstop sweeps it. `abandon` (not `close`) because everything
- * still pending is about to be deleted anyway.
+ * IT REFUSES TO TOUCH A LIVE GENERATION, and that refusal is the point. A registered writer
+ * means THIS process is still generating that message — so whatever concluded the stream was
+ * finished is either wrong or racing, and acting on it would be destructive twice over:
+ * `abandon()` sets `writesDisabled`, which is terminal and never re-armed, so durability for
+ * that generation would be off for the rest of its life; and the DELETE would drop the frames
+ * it had written so far. The generation would keep streaming to the user with no durable
+ * record at all — precisely the state this table exists to remove, entered silently.
+ *
+ * The trigger is not hypothetical. Liveness is heartbeat-based and the heartbeat write
+ * swallows its own failures, so a Postgres blip longer than STREAM_HEARTBEAT_STALE_MS leaves
+ * every in-flight row looking stale; when the database comes back, the next `/active-streams`
+ * poll judges them all provably dead and reaps them — on the very instance that is still
+ * generating them.
+ *
+ * So a live local writer wins. The frames stay, and the generation's own lifecycle releases
+ * them when it finishes (or the retention backstop does). The cost of being wrong in this
+ * direction is a log that lives a little longer than it needed to; in the other direction it
+ * is a reply with no durable copy.
  *
  * Never throws: it is called from persistence paths whose success must not depend on a
  * cleanup, and the retention backstop reclaims anything a failure here leaves behind.
  */
 export const releaseFramesForMessage = async (messageId: string): Promise<void> => {
-  try {
-    await writers.get(messageId)?.abandon();
-  } catch {
-    // `abandon` never rejects; a failure to wind the writer down must not skip the delete.
+  if (writers.has(messageId)) {
+    loggers.ai.warn('frame-log: release by name refused — this process is still generating that message', {
+      messageId,
+    });
+    return;
   }
   await deleteFrames(messageId);
 };

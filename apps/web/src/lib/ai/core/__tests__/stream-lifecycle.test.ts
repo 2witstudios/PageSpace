@@ -12,6 +12,7 @@ const {
   mockEnsureWatcher,
   mockStartFrameLogWriter,
   mockFrameWriterClose,
+  mockFrameWriterRelease,
   mockReleaseFrames,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const {
   mockEnsureWatcher: vi.fn(),
   mockStartFrameLogWriter: vi.fn(),
   mockFrameWriterClose: vi.fn(),
+  mockFrameWriterRelease: vi.fn(),
   mockReleaseFrames: vi.fn(),
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
@@ -171,9 +173,13 @@ const resetStreamLifecycleMocks = () => {
   mockConsumePendingAbort.mockResolvedValue(false);
   mockEnsureWatcher.mockImplementation(() => {});
   mockFrameWriterClose.mockResolvedValue(undefined);
+  mockFrameWriterRelease.mockResolvedValue(undefined);
   mockStartFrameLogWriter.mockImplementation(() => ({
     close: mockFrameWriterClose,
     abandon: vi.fn().mockResolvedValue(undefined),
+    // The lifecycle releases through its OWN writer, so a superseded lifecycle cannot delete
+    // a successor's log. `releaseFramesForMessage` (by name) is only the pre-abort path.
+    release: mockFrameWriterRelease,
   }));
   mockReleaseFrames.mockResolvedValue(undefined);
   // The registry is module-global state, not a mock, so it leaks across tests unless reset.
@@ -1226,6 +1232,7 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     handle.finish(false);
     await flushMicrotasks();
 
+    expect(mockFrameWriterRelease).not.toHaveBeenCalled();
     expect(mockReleaseFrames).not.toHaveBeenCalled();
   });
 
@@ -1237,7 +1244,7 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     handle.confirmTerminalWrite('msg-1');
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).not.toHaveBeenCalled();
+    expect(mockFrameWriterRelease).not.toHaveBeenCalled();
   });
 
   it('given a confirmed terminal write and then finish(), should release', async () => {
@@ -1246,7 +1253,7 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     handle.finish(false);
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-1');
+    expect(mockFrameWriterRelease).toHaveBeenCalled();
   });
 
   it('given finish() FIRST and the confirmation afterwards, should still release', async () => {
@@ -1255,12 +1262,12 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     const handle = await createStreamLifecycle(params());
     handle.finish(true);
     await flushMicrotasks();
-    expect(mockReleaseFrames).not.toHaveBeenCalled();
+    expect(mockFrameWriterRelease).not.toHaveBeenCalled();
 
     handle.confirmTerminalWrite('msg-1');
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-1');
+    expect(mockFrameWriterRelease).toHaveBeenCalled();
   });
 
   it('given several terminal writes on one turn, should release exactly once', async () => {
@@ -1271,7 +1278,31 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     handle.confirmTerminalWrite('msg-1');
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).toHaveBeenCalledTimes(1);
+    expect(mockFrameWriterRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a release, should NOT also close the writer — the flush it queues would be discarded', async () => {
+    // `release()` abandons the writer, which cancels any batch a `close()` had queued. Calling
+    // both made the flush a no-op while the comment claimed the tail had been written — and if
+    // the delete then failed, the log was left as a prefix missing exactly that tail.
+    const handle = await createStreamLifecycle(params());
+    handle.confirmTerminalWrite('msg-1');
+    handle.finish(false);
+    await flushMicrotasks();
+
+    expect(mockFrameWriterRelease).toHaveBeenCalledTimes(1);
+    expect(mockFrameWriterClose).not.toHaveBeenCalled();
+  });
+
+  it('given NO confirmed write, should close the writer so the tail is actually persisted', async () => {
+    // The pump-failure path, and the conversation-deleted-mid-generation path. These frames are
+    // the only copy of the reply, so the tail genuinely has to be written here.
+    const handle = await createStreamLifecycle(params());
+    handle.finish(false);
+    await flushMicrotasks();
+
+    expect(mockFrameWriterClose).toHaveBeenCalled();
+    expect(mockFrameWriterRelease).not.toHaveBeenCalled();
   });
 
   it('given a confirmation for another message, should ignore it', async () => {
@@ -1282,7 +1313,7 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     handle.finish(false);
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).not.toHaveBeenCalled();
+    expect(mockFrameWriterRelease).not.toHaveBeenCalled();
   });
 
   it('given a pre-aborted stream, should release any frames left by the superseded attempt', async () => {

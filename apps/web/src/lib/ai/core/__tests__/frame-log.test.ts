@@ -46,10 +46,16 @@ import type { UIMessageChunk } from 'ai';
 import { appendFrameBatch, deleteFrames, readFrames } from '../frame-log';
 
 const chunk = (value: unknown): UIMessageChunk => value as UIMessageChunk;
-const frameRow = (fromSeq: number, frames: unknown[], frameCount = frames.length) => ({
+const frameRow = (
+  fromSeq: number,
+  frames: unknown[],
+  frameCount = frames.length,
+  byteSize = JSON.stringify(frames).length,
+) => ({
   fromSeq,
   frameCount,
   frames,
+  byteSize,
 });
 
 beforeEach(() => {
@@ -220,6 +226,42 @@ describe('readFrames', () => {
       should: 'expect the next row at seq 2, find seq 1, and truncate',
       actual: (await readFrames('msg-1'))?.map((f) => f.type),
       expected: ['text-start'],
+    });
+  });
+
+  it('given a log past the read budget, returns the prefix rather than materializing all of it', async () => {
+    // The callers are batch loops: a mass recovery fans `materializeInterruptedStream` out with
+    // `Promise.all` over every dead row an instance left behind. Unbounded, peak memory is
+    // dozens x the per-stream durable budget — one dead instance becoming two.
+    const MB = 1024 * 1024;
+    mockSelectOrderBy.mockResolvedValue([
+      frameRow(0, [{ type: 'text-start', id: 't1' }], 1, 10 * MB),
+      frameRow(1, [{ type: 'text-delta', id: 't1', delta: 'kept' }], 1, 10 * MB),
+      frameRow(2, [{ type: 'text-delta', id: 't1', delta: 'also kept' }], 1, 10 * MB),
+      // The budget is already spent by the time this row is reached.
+      frameRow(3, [{ type: 'text-delta', id: 't1', delta: 'past the budget' }], 1, 10 * MB),
+      frameRow(4, [{ type: 'text-delta', id: 't1', delta: 'also past it' }], 1, 10 * MB),
+    ]);
+
+    assert({
+      given: 'a log whose recorded size runs past the read budget',
+      should: 'stop at the budget and return the contiguous prefix read so far',
+      actual: (await readFrames('msg-1'))?.length,
+      expected: 3,
+    });
+  });
+
+  it('given an ordinary log, does not truncate — the budget must not bite a normal reply', async () => {
+    mockSelectOrderBy.mockResolvedValue([
+      frameRow(0, [{ type: 'text-start', id: 't1' }]),
+      frameRow(1, [{ type: 'text-delta', id: 't1', delta: 'a normal reply' }]),
+    ]);
+
+    assert({
+      given: 'a log of ordinary size',
+      should: 'return every frame',
+      actual: (await readFrames('msg-1'))?.length,
+      expected: 2,
     });
   });
 

@@ -231,10 +231,22 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
       cleanupExpiredDriveBackups(database),
       cleanupExpiredPagePermissions(database),
       cleanupExpiredAiUsageLogs(database),
-      cleanupAbandonedStreamFrames(database),
     ]),
     cleanupSoftDeletedChatRecords(database),
     runMonitoringRetentionCleanup(),
   ]);
-  return [...expiryResults, ...chatResults, ...monitoringResults];
+  // SEQUENCED AFTER the chat sweep, not run alongside it, for the reason
+  // `cleanupSoftDeletedChatRecords` sequences its own two statements: that function's
+  // `conversations` DELETE CASCADES into `ai_stream_frames`, so running this direct sweep
+  // concurrently puts two statements with an overlapping row set on the same table, taking
+  // locks in different orders — and a deadlock aborts the whole retention run. The overlap is
+  // narrow in steady state (a row must be older than a day AND belong to a conversation
+  // soft-deleted a month ago), but the ordering discipline this file already established for
+  // exactly this table graph should not have an exception (review finding — adversarial pass).
+  //
+  // Costs one extra round trip and makes the counts unambiguous: this reports what age-based
+  // sweeping removed, and whatever the cascade took was already condemned.
+  const streamFrameResults = await cleanupAbandonedStreamFrames(database);
+
+  return [...expiryResults, ...chatResults, ...monitoringResults, streamFrameResults];
 }

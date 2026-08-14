@@ -27,6 +27,13 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * writing (see `deleteFrames`, and the re-registration path in `frame-log-writer.ts`).
  */
 
+/**
+ * Ceiling on how much of one message's log a single read will materialize.
+ *
+ * Matches `MAX_FOLD_BYTES` in stream-lifecycle.ts deliberately — see `readFrames`.
+ */
+const MAX_READ_BYTES = 24 * 1024 * 1024;
+
 /** A batch of frames destined for one row. */
 export interface FrameBatch {
   messageId: string;
@@ -125,17 +132,31 @@ export const deleteFrames = async (messageId: string): Promise<boolean> => {
  * what a client that disconnected at that seq would have seen. The writer additionally stops
  * at its first failed batch, so this is defence in depth rather than the primary guard.
  *
+ * BOUNDED, because the callers are batch loops. `reconcileDeadStreamRows` and the takeover
+ * fan `materializeInterruptedStream` out with `Promise.all` over every dead row an instance
+ * left behind — "potentially dozens" by their own docblocks — and each call now reads and
+ * folds a whole log rather than one already-capped `parts` blob. Without a ceiling here, a
+ * mass recovery's peak memory is dozens x the per-stream durable budget, which is how a
+ * recovery sweep turns one dead instance into two.
+ *
+ * The ceiling is the LIVE fold's, so recovering a stream costs no more memory than generating
+ * it did, and a reader can never reconstruct more than a live client could have held. Past it
+ * the walk stops and returns the prefix — which composes correctly with `recoverParts`, since
+ * a truncated read simply reaches less far than the `parts` snapshot and loses the comparison
+ * to it (review finding — adversarial pass).
+ *
  * NEVER THROWS: a read failure returns `null`, degrading to the `parts` fallback rather than
  * failing a crash recovery that had a usable snapshot all along.
  */
 export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | null> => {
-  let rows: { fromSeq: number; frameCount: number; frames: unknown[] }[];
+  let rows: { fromSeq: number; frameCount: number; frames: unknown[]; byteSize: number }[];
   try {
     rows = await db
       .select({
         fromSeq: aiStreamFrames.fromSeq,
         frameCount: aiStreamFrames.frameCount,
         frames: aiStreamFrames.frames,
+        byteSize: aiStreamFrames.byteSize,
       })
       .from(aiStreamFrames)
       .where(eq(aiStreamFrames.messageId, messageId))
@@ -152,7 +173,16 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
 
   const frames: UIMessageChunk[] = [];
   let expectedSeq = 0;
+  let readBytes = 0;
   for (const row of rows) {
+    if (readBytes >= MAX_READ_BYTES) {
+      loggers.ai.warn('frame-log: read budget reached — returning the prefix read so far', {
+        messageId,
+        keptFrames: frames.length,
+        readBytes,
+      });
+      break;
+    }
     if (row.fromSeq !== expectedSeq) {
       loggers.ai.warn('frame-log: gap in durable frames — truncating at the hole', {
         messageId,
@@ -163,6 +193,8 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
       break;
     }
     frames.push(...(row.frames as UIMessageChunk[]));
+    // The column the writer measured, so this costs no re-serialization.
+    readBytes += row.byteSize;
     // Advance by the RECORDED count, not by `row.frames.length`. They agree for every row
     // this code writes; trusting the column is what makes a disagreement show up as a gap
     // (and truncate) rather than silently shifting every subsequent row's seq.
