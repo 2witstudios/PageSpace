@@ -460,6 +460,23 @@ describe('a join failure that cannot be polled must still END the session', () =
     errorSpy.mockRestore();
   });
 
+  it('REPORTS the failure — the log used to sit after the teardown, where it was unreachable', async () => {
+    // `endSession` aborts the session's controller, so an `if (!controller.signal.aborted)`
+    // guard placed after it can never be true. The error was silently swallowed on exactly the
+    // path where a developer most needs to see it.
+    consumeStreamJoin.mockRejectedValue(new StreamJoinError('server error', 500));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    openStreamSession(descriptor());
+    await settle();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[streamSessionRegistry] stream join error',
+      expect.any(StreamJoinError),
+    );
+    errorSpy.mockRestore();
+  });
+
   it('given a 403 over a SEEDED snapshot, still ends it', async () => {
     // Same reasoning: the seeded snapshot is not worth an app-wide refresh freeze, and
     // `joinFailed: true` tells consumers to reload the durably-persisted message anyway.

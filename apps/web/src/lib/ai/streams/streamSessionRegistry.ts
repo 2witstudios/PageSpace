@@ -425,7 +425,17 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
       });
     })
     .catch((error: unknown) => {
+      // Reaching here with the session still present means a GENUINE join failure. Two things
+      // rule out the alternatives: a teardown removes the session from `sessions` (so the
+      // guard above returns), and `consumeStreamJoin` RESOLVES with `{ aborted: true }` rather
+      // than rejecting when its own signal fires. So there is no "was this just a
+      // cancellation?" question to ask, and no guard on the log.
+      //
+      // Logged BEFORE the teardown below, which is the part that was wrong: `endSession`
+      // aborts the session's controller, so an `if (!controller.signal.aborted)` check placed
+      // after it could never be true and the error was never reported.
       if (!sessions.has(descriptor.messageId)) return;
+      console.error('[streamSessionRegistry] stream join error', error);
 
       const polling = fallBackToDatabase(session, {
         canPoll: error instanceof StreamJoinError && error.status === 404,
@@ -453,13 +463,6 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
           channelId: descriptor.channelId,
           joinFailed: true,
         });
-        if (!session.controller.signal.aborted) {
-          console.error('[streamSessionRegistry] stream join error', error);
-        }
-        return;
-      }
-      if (!session.controller.signal.aborted) {
-        console.error('[streamSessionRegistry] stream join error', error);
       }
     });
 };
