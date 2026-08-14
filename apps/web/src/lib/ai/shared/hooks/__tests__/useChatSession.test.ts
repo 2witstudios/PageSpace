@@ -21,8 +21,11 @@ import {
   ADMISSION_ENVELOPE_CONTENT_TYPE,
   STREAM_MODE_DETACHED,
   STREAM_MODE_HEADER,
+  STREAM_MODE_INLINE,
 } from '@/lib/ai/core/detached-stream-mode';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { useChatSession } from '../useChatSession';
 
 const envelope = (overrides: Record<string, unknown> = {}) =>
@@ -51,6 +54,13 @@ const sseResponse = (records: string[]) =>
     headers: { 'content-type': 'text/event-stream' },
   });
 
+/** A COMPLETE reply on the body, marked so the client does not mistake it for a stream. */
+const inlineResponse = (records: string[]) =>
+  new Response(records.map((r) => `data: ${r}\n\n`).join(''), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream', [STREAM_MODE_HEADER]: STREAM_MODE_INLINE },
+  });
+
 const userMessage = (text: string): UIMessage =>
   ({ id: `u-${text}`, role: 'user', parts: [{ type: 'text', text }] }) as UIMessage;
 
@@ -74,6 +84,7 @@ const requestBody = (call = 0) => JSON.parse(String(requestInit(call).body));
 beforeEach(() => {
   vi.clearAllMocks();
   usePendingStreamsStore.setState({ streams: new Map() });
+  useConversationMessagesStore.setState({ byConversationId: {} });
   fetchWithAuth.mockResolvedValue(envelope());
 });
 
@@ -109,6 +120,47 @@ describe('useChatSession — the send', () => {
         triggeredBy: { userId: 'user-1', displayName: 'Ada' },
       }),
     );
+  });
+
+  it('given an INLINE reply (/help), commits it as a finished message and opens NO session', async () => {
+    // The `/help` short-circuit answers from code: no lifecycle, no channel, no
+    // `chat:stream_start`. Treating it as an old server's streamed body cancelled the answer
+    // after the `start` frame and subscribed to a channel that does not exist — a 404 join, a
+    // fruitless poll, and an empty bubble over a locked composer until both gave up.
+    conversationMessagesActions.seedConversation('conv-1');
+    fetchWithAuth.mockResolvedValue(
+      inlineResponse([
+        '{"type":"start","messageId":"msg-help"}',
+        '{"type":"text-start","id":"t1"}',
+        '{"type":"text-delta","id":"t1","delta":"the help text"}',
+      ]),
+    );
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current.sendMessage(userMessage('/help'), 'conv-1');
+    });
+
+    expect(openStreamSession, 'nothing to subscribe to').not.toHaveBeenCalled();
+    expect(
+      usePendingStreamsStore.getState().streams.size,
+      'and no pending-stream entry to wedge the composer',
+    ).toBe(0);
+
+    const committed = conversationMessagesActions.getEntry('conv-1').messages;
+    expect(committed.map((m) => m.id)).toContain('msg-help');
+    expect(JSON.stringify(committed)).toContain('the help text');
+  });
+
+  it('given an inline reply that never names its message, FAILS the send', async () => {
+    fetchWithAuth.mockResolvedValue(inlineResponse(['{"type":"text-delta","id":"t1","delta":"x"}']));
+    const { result } = mount();
+
+    await act(async () => {
+      await expect(result.current.sendMessage(userMessage('/help'), 'conv-1')).rejects.toThrow(
+        /never named/i,
+      );
+    });
   });
 
   it('given an OLD SERVER, announces the session from the start frame — no gap, no second writer', async () => {

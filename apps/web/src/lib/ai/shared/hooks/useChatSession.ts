@@ -71,6 +71,9 @@ import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { toErrorCause } from '@/lib/ai/shared/toErrorCause';
 import { askUserAnswersComplete } from '@/lib/ai/shared/ask-user-client';
 import { readLegacyStreamStart } from '@/lib/ai/core/legacy-stream-start';
+import { readInlineReply } from '@/lib/ai/core/inline-reply';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import {
   DETACHED_STREAM_ENABLED,
   STREAM_MODE_DETACHED,
@@ -281,7 +284,26 @@ export const useChatSession = ({
           throw new Error(`Stream admission failed: ${admission.reason}`);
         }
 
-        if (admission.kind === 'detached') {
+        if (admission.kind === 'inline') {
+          // A COMPLETE reply on the body, with nothing streaming behind it (the `/help`
+          // short-circuit). No session: there is no channel to join, and subscribing to one
+          // that does not exist is a 404 join, a fruitless poll, and an empty bubble over a
+          // locked composer. The server already persisted it, so this commits what it is —
+          // a finished assistant message. See `inline-reply.ts`.
+          const reply = await readInlineReply(response);
+          if (!reply) {
+            throw new Error(
+              'Stream admission failed: the server sent an inline reply that never named its message',
+            );
+          }
+          // Promote first, so the question can never render below its own answer — the same
+          // ordering `commitConfirmedReply` documents for the streamed path.
+          conversationMessagesActions.promoteOptimisticSends(targetConversationId);
+          conversationMessagesActions.applyConfirmedMessage(
+            targetConversationId,
+            synthesizeAssistantMessage(reply.messageId, reply.parts, undefined, 'complete'),
+          );
+        } else if (admission.kind === 'detached') {
           // The generation is already running and already recording; this opens the one
           // subscription that will follow it, owned by the module rather than by whatever
           // component happens to be mounted. The messageId comes from the envelope and is

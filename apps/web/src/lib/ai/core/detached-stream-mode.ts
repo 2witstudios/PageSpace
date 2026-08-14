@@ -69,8 +69,28 @@ import type { UIMessageChunk } from 'ai';
  */
 export const STREAM_MODE_HEADER = 'X-Stream-Mode';
 
-/** The only value `STREAM_MODE_HEADER` carries today. Anything else means "stream the body". */
+/** Request value: the client can consume a receipt instead of a body. */
 export const STREAM_MODE_DETACHED = 'detached';
+
+/**
+ * RESPONSE value: this body IS the whole reply, and nothing is streaming behind it.
+ *
+ * The `/help` short-circuit returns one. It answers from code with no model call, so it builds
+ * no stream lifecycle, opens no channel, inserts no `ai_stream_sessions` row and broadcasts no
+ * `chat:stream_start` — a decision `page-chat-turn.ts` makes deliberately, because replicating
+ * the live-stream protocol for an already-complete synthetic reply risks destabilising it for
+ * every other conversation.
+ *
+ * Without this marker that response is INDISTINGUISHABLE from an old server's streamed body,
+ * and the client guesses wrong in a way it cannot recover from: it reads to the `start` frame,
+ * cancels — discarding the entire answer — and subscribes to a channel that does not exist. The
+ * join 404s, the poll finds no row, and the user watches an empty bubble with a locked composer
+ * for two round trips before a reload flip. The reply is only "not lost" because the server
+ * persisted it before responding.
+ *
+ * So the server says which it is. A client cannot infer it.
+ */
+export const STREAM_MODE_INLINE = 'inline';
 
 /**
  * Content type of the admission envelope.
@@ -136,6 +156,11 @@ export const wantsDetachedStream = (headers: Headers): boolean =>
 export type AdmissionRead =
   | { kind: 'detached'; envelope: StreamAdmissionEnvelope }
   /**
+   * The body is the COMPLETE reply and nothing is streaming behind it — read it to the end and
+   * commit it as a finished message. No session, because there is nothing to subscribe to.
+   */
+  | { kind: 'inline' }
+  /**
    * Not an envelope, and the body was never touched.
    *
    * The caller reads it only far enough to learn the server-issued messageId from the `start`
@@ -153,6 +178,12 @@ export type AdmissionRead =
  * always means "still readable" — that guarantee is what the caller's fallback rests on.
  */
 export const readAdmissionEnvelope = async (response: Response): Promise<AdmissionRead> => {
+  // Checked BEFORE the content type: an inline reply is also `text/event-stream`, so the only
+  // thing separating it from an old server's streamed body is this header.
+  if (response.headers.get(STREAM_MODE_HEADER)?.trim().toLowerCase() === STREAM_MODE_INLINE) {
+    return { kind: 'inline' };
+  }
+
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes(ADMISSION_ENVELOPE_CONTENT_TYPE)) return { kind: 'legacy' };
 
