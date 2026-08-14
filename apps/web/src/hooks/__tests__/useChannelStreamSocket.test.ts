@@ -242,14 +242,20 @@ describe('useChannelStreamSocket', () => {
         'msg-1',
         expect.any(AbortSignal),
         expect.any(Function),
+        // The cursor. A fresh attach starts at 0 and the fold replaces whatever the
+        // bootstrap seeded — there is no prefix to reconcile any more.
+        0,
       );
     });
 
-    it('should wire onChunk to appendPart in the store', async () => {
-      let capturedOnChunk!: (part: unknown) => void;
+    it('should write each folded snapshot to the store with replace semantics', async () => {
+      // Was "wire onChunk to appendPart". The join now hands back the FULL folded parts array
+      // plus the seq it reflects, so the store takes it wholesale — the client no longer folds
+      // frame-by-frame, and there is no skip count to keep in step.
+      let capturedOnParts!: (parts: unknown[], seq: number) => void;
       mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
-          capturedOnChunk = onChunk;
+        (_id: string, _signal: AbortSignal, onParts: (parts: unknown[], seq: number) => void) => {
+          capturedOnParts = onParts;
           return new Promise(() => {}); // never resolves
         },
       );
@@ -257,9 +263,12 @@ describe('useChannelStreamSocket', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
-      const textPart = { type: 'text', text: 'hello' };
-      capturedOnChunk(textPart);
-      expect(mockAppendPart).toHaveBeenCalledWith('msg-1', textPart);
+      const folded = [{ type: 'text', text: 'hello' }];
+      capturedOnParts(folded, 4);
+
+      // seq + 1: the store's gate is monotonic and exclusive, so a fold reflecting frame 4
+      // is written as watermark 5.
+      expect(mockSetStreamParts).toHaveBeenCalledWith('msg-1', folded, 5);
     });
 
     it('should call removeStream and onStreamComplete after consumeStreamJoin resolves', async () => {
@@ -313,6 +322,83 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(callOrder).toEqual(['onStreamComplete', 'removeStream']);
+    });
+  });
+
+  // An evicted cursor is a RESOLUTION, not a rejection: the server answers
+  // `{ done: true, resumeFromSeq }` when the requested seq has aged out of the memory ring.
+  // It used to land in the completion branch, reporting a finished stream to every consumer
+  // while the server was still generating.
+  describe('evicted cursor (join resolves with resumeFromSeq)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should NOT report completion while the stream is still listed as running', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      // The generation is still live — active-streams keeps listing it, so the fallback
+      // keeps polling and nothing has finished.
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'still going' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(
+        onStreamComplete,
+        'an evicted cursor was reported to consumers as a completed stream',
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to checkpoint polling, the same as a cross-instance 404', async () => {
+      // The frames before `resumeFromSeq` are gone, so re-joining from it would render a
+      // reply missing its beginning. The DB checkpoint is the complete view; the live
+      // channel is not.
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'polled' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(mockRemoveStream).not.toHaveBeenCalled();
+      expect(mockSetStreamParts).toHaveBeenCalledWith('msg-1', [{ type: 'text', text: 'polled' }], 1);
+    });
+
+    it('should mark the join failed so chat:stream_complete reloads from the DB', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockResolvedValueOnce({ aborted: false, resumeFromSeq: 4096 });
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => {
+        mockSocket._trigger('chat:stream_complete', {
+          messageId: 'msg-1', pageId: 'page-a', conversationId: 'conv-1', aborted: false,
+        });
+      });
+
+      // joinFailed: true is what makes a consumer fetch the persisted message rather than
+      // synthesize a bubble from a snapshot that is missing the stream's beginning.
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, false);
     });
   });
 
@@ -1468,6 +1554,17 @@ describe('useChannelStreamSocket', () => {
 
   // AC5 — DB bootstrap on mount
   describe('DB bootstrap on mount', () => {
+    // DELETED with the skip-count protocol (4 cases): "should skip the duplicate replayed
+    // chunks", "should skip the full raw prefix rather than under-skip by parts.length",
+    // "given rawPartsCount is 0 ... fall back to skipping by parts.length", and "given no
+    // persisted parts, should not skip any live-joined chunks".
+    //
+    // They pinned arithmetic that reconciled two different representations of one stream: the
+    // server's merged snapshot counted parts, the registry's replay counted raw frames, and the
+    // client was told how many of the latter its seed already covered. Under-skipping duplicated
+    // visible text; over-skipping left a silent, permanent gap. The join is cursor-addressed now
+    // and returns a full folded array, so the seed is simply replaced and there is nothing left
+    // to reconcile. Not ported — there is no mechanism under them to test.
     it('given the hook mounts, should fetch active streams for the channelId', async () => {
       renderHook(() => useChannelStreamSocket('page-a'));
 
@@ -1518,13 +1615,23 @@ describe('useChannelStreamSocket', () => {
         'msg-bootstrap',
         expect.any(AbortSignal),
         expect.any(Function),
+        0,
       );
     });
 
-    it('given a bootstrapped stream carries persisted raw text-delta parts, should fold them into addStream initial parts the same way live appendPart would', async () => {
-      // The persisted snapshot is the raw registry buffer — one entry per
-      // pushed text delta — not a pre-folded array.
-      const persistedParts = [{ type: 'text', text: 'partial' }, { type: 'text', text: ' content' }];
+    it('given a snapshot with ADJACENT TEXT PARTS, should seed them separately rather than concatenating', async () => {
+      // The snapshot is the server's finished reduction — `foldChunksToParts(frames)` — and
+      // that fold gives every `text-start` its own part. Re-reducing it client-side through
+      // `appendPart` (a fold over CHUNKS, not parts) ran them together, because
+      // `mergeTextDeltas` concatenates a text part onto a preceding text part. A two-block
+      // reply came back as one, and the first part's `state` was kept for both.
+      //
+      // Reached by any turn with two text blocks, including every text→step-boundary→text
+      // run: `finish-step` closes the open text ids without emitting a part of its own.
+      const persistedParts = [
+        { type: 'text', text: 'first block', state: 'done' },
+        { type: 'text', text: 'second block', state: 'streaming' },
+      ];
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -1543,9 +1650,7 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-bootstrap',
-        // Folded to one merged text part, matching what two live appendPart
-        // calls with the same deltas would have produced in the store.
-        parts: [{ type: 'text', text: 'partial content' }],
+        parts: persistedParts,
       }));
       // Seeding must NOT go through the store's appendPart action — addStream
       // no-ops when the entry already exists, which is what makes a second
@@ -1553,9 +1658,13 @@ describe('useChannelStreamSocket', () => {
       expect(mockAppendPart).not.toHaveBeenCalled();
     });
 
-    it('given a bootstrapped stream carries a completed tool call as two raw frames, should fold to a single converged tool part', async () => {
+    it('given a snapshot carrying a converged tool part, should seed it verbatim', async () => {
+      // The tool call's state transitions were converged by the SERVER's fold before the
+      // checkpoint was written (and were converged by master's `convergeRawPartsWithOrigins`
+      // before that) — so the snapshot holds one part per toolCallId already, and there is
+      // nothing left for the client to dedup.
       const persistedParts = [
-        { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'input-available', input: { q: 'x' } },
+        { type: 'text', text: 'searching', state: 'done' },
         { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'output-available', input: { q: 'x' }, output: { results: [] } },
       ];
       mockFetchWithAuth.mockResolvedValueOnce({
@@ -1576,10 +1685,7 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-tool',
-        // Without folding, both raw frames would render as separate tool
-        // parts sharing one toolCallId — a duplicate "still running" entry
-        // beside the completed one instead of a single converged part.
-        parts: [persistedParts[1]],
+        parts: persistedParts,
       }));
     });
 
@@ -1663,160 +1769,6 @@ describe('useChannelStreamSocket', () => {
       errorSpy.mockRestore();
     });
 
-    it('given persisted parts were seeded and the live join replays the same prefix, should skip the duplicate replayed chunks', async () => {
-      const persistedParts = [{ type: 'text', text: 'partial' }];
-      mockFetchWithAuth.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          streams: [{
-            messageId: 'msg-bootstrap',
-            conversationId: 'conv-1',
-            parts: persistedParts,
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
-          }],
-        }),
-      });
-      let capturedOnChunk!: (part: unknown) => void;
-      mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
-          capturedOnChunk = onChunk;
-          return new Promise(() => {});
-        },
-      );
-
-      renderHook(() => useChannelStreamSocket('page-a'));
-      await act(async () => { await Promise.resolve(); });
-
-      mockAppendPart.mockClear();
-
-      // Live join replays its full buffer, starting with the same part we
-      // already seeded from the persisted snapshot, followed by genuinely new content.
-      const newPart = { type: 'text', text: ' — and more' };
-      capturedOnChunk(persistedParts[0]);
-      capturedOnChunk(newPart);
-
-      expect(mockAppendPart).toHaveBeenCalledTimes(1);
-      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', newPart);
-    });
-
-    // The server merges consecutive text-delta chunks before persisting (checkpoint-serialize.ts),
-    // so `parts` can hold FEWER entries than were actually pushed. The live SSE replay always
-    // sends the raw, unmerged buffer — skipping by `parts.length` alone would under-skip and
-    // re-apply chunks already reflected in the seeded snapshot, duplicating visible text.
-    // `rawPartsCount` carries the true raw count so the skip stays correct.
-    it('given the persisted snapshot was merged server-side (rawPartsCount > parts.length), should skip the full raw prefix rather than under-skip by parts.length', async () => {
-      mockFetchWithAuth.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          streams: [{
-            messageId: 'msg-bootstrap',
-            conversationId: 'conv-1',
-            // One merged entry representing three raw text-delta chunks.
-            parts: [{ type: 'text', text: 'hello world' }],
-            rawPartsCount: 3,
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
-          }],
-        }),
-      });
-      let capturedOnChunk!: (part: unknown) => void;
-      mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
-          capturedOnChunk = onChunk;
-          return new Promise(() => {});
-        },
-      );
-
-      renderHook(() => useChannelStreamSocket('page-a'));
-      await act(async () => { await Promise.resolve(); });
-
-      mockAppendPart.mockClear();
-
-      // Live join replays its full raw buffer: the three chunks already folded into the
-      // seeded "hello world", then genuinely new content.
-      capturedOnChunk({ type: 'text', text: 'hel' });
-      capturedOnChunk({ type: 'text', text: 'lo ' });
-      capturedOnChunk({ type: 'text', text: 'world' });
-      const newPart = { type: 'text', text: ' — and more' };
-      capturedOnChunk(newPart);
-
-      // Only the genuinely new chunk reaches appendPart — under the bug this fixes, the
-      // skip would have stopped after 1 chunk (parts.length) and the second/third replayed
-      // chunks would have duplicated content already in the seed.
-      expect(mockAppendPart).toHaveBeenCalledTimes(1);
-      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', newPart);
-    });
-
-    // aiStreamSessions.raw_parts_count is NOT NULL DEFAULT 0 — a row written by a
-    // not-yet-updated worker mid-rollout (whose code never sets this column) reads back
-    // as a real `0`, not null/undefined. `??` would use that 0 verbatim (skip nothing)
-    // and reproduce the exact duplicate-text bug the rawPartsCount fix exists to close;
-    // `||` correctly falls through to persistedParts.length whenever rawPartsCount is
-    // falsy, which is what makes this rollout scenario safe.
-    it('given rawPartsCount is 0 but the persisted snapshot has real content (a legacy row from a not-yet-updated worker), should fall back to skipping by parts.length rather than skipping nothing', async () => {
-      mockFetchWithAuth.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          streams: [{
-            messageId: 'msg-legacy',
-            conversationId: 'conv-1',
-            parts: [{ type: 'text', text: 'partial' }],
-            rawPartsCount: 0,
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
-          }],
-        }),
-      });
-      let capturedOnChunk!: (part: unknown) => void;
-      mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
-          capturedOnChunk = onChunk;
-          return new Promise(() => {});
-        },
-      );
-
-      renderHook(() => useChannelStreamSocket('page-a'));
-      await act(async () => { await Promise.resolve(); });
-
-      mockAppendPart.mockClear();
-
-      // Live join replays the one raw frame already reflected in the seed, then new content.
-      capturedOnChunk({ type: 'text', text: 'partial' });
-      const newPart = { type: 'text', text: ' more' };
-      capturedOnChunk(newPart);
-
-      // Under the `??` bug, rawPartsCount=0 would be used verbatim (skip nothing), so the
-      // first replayed chunk would have duplicated the seeded "partial" text.
-      expect(mockAppendPart).toHaveBeenCalledTimes(1);
-      expect(mockAppendPart).toHaveBeenCalledWith('msg-legacy', newPart);
-    });
-
-    it('given no persisted parts, should not skip any live-joined chunks', async () => {
-      mockFetchWithAuth.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          streams: [{
-            messageId: 'msg-bootstrap',
-            conversationId: 'conv-1',
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
-          }],
-        }),
-      });
-      let capturedOnChunk!: (part: unknown) => void;
-      mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
-          capturedOnChunk = onChunk;
-          return new Promise(() => {});
-        },
-      );
-
-      renderHook(() => useChannelStreamSocket('page-a'));
-      await act(async () => { await Promise.resolve(); });
-
-      mockAppendPart.mockClear();
-      const firstLivePart = { type: 'text', text: 'hello' };
-      capturedOnChunk(firstLivePart);
-
-      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', firstLivePart);
-    });
 
     it('given a stream from the current tab is active in the DB, should addStream with isOwn=true', async () => {
       mockFetchWithAuth.mockResolvedValueOnce({

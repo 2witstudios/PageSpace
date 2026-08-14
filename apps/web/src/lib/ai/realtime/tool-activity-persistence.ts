@@ -7,10 +7,15 @@
  * typed surface has recorded tool calls all along — same columns, same parts,
  * same renderer — and voice simply never sent them.
  *
- * Nothing here is new machinery. The part shape is the one `chunkToPart`
- * produces, the payload is built by the same `buildAssistantPersistencePayload`
- * the typed path uses, and delivery is the socket event a voice write already
- * triggers. This module only decides what a tool call looks like as a message.
+ * Nothing here is new machinery. The part shape is the one `foldChunksToParts`
+ * produces for a tool call, the payload is built by the same
+ * `buildAssistantPersistencePayload` the typed path uses, and delivery is the
+ * socket event a voice write already triggers. This module only decides what a
+ * tool call looks like as a message.
+ *
+ * (It named `chunkToPart` when it landed. That projection is gone — the typed
+ * path now folds the SDK's own frames — but the shape this builds is unchanged,
+ * because the fold produces the same `tool-${name}` part for a tool call.)
  *
  * TWO WRITES, ONE ROW. `started` creates it in `input-available` — a spinner —
  * and `finished` names the same `messageId` so the repository UPDATES it into
@@ -26,7 +31,7 @@
 
 import type { UIMessage } from 'ai';
 import { buildAssistantPersistencePayload } from '../core/persistAssistantParts';
-import type { UIMessagePart } from '../core/stream-multicast-registry';
+import type { UIMessagePart } from '../core/stream-channel-registry';
 import {
   persistVoiceTranscript,
   type TranscriptPersistenceDeps,

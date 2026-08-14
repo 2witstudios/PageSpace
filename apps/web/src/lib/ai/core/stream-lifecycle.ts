@@ -6,18 +6,15 @@ import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 import { ensureStreamAbortWatcher } from '@/lib/ai/core/stream-abort-watcher';
 import { broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
+import type { UIMessageChunk } from 'ai';
 import {
-  streamMulticastRegistry,
+  streamChannelRegistry,
   type UIMessagePart,
-} from '@/lib/ai/core/stream-multicast-registry';
+} from '@/lib/ai/core/stream-channel-registry';
+import type { StreamChannel } from '@/lib/ai/core/stream-channel';
+import { foldChunksToParts } from '@/lib/ai/streams/foldChunksToParts';
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
-import {
-  convergeRawPartsWithOrigins,
-  capPartsToByteBudget,
-  CHECKPOINT_MAX_SERIALIZED_BYTES,
-} from '@/lib/ai/core/checkpoint-serialize';
-import { isToolPart } from '@/lib/ai/streams/appendPart';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -49,8 +46,22 @@ export interface StreamLifecycleParams {
 
 export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
-  pushPart: (part: UIMessagePart) => void;
-  getBufferedParts: () => UIMessagePart[];
+  /**
+   * This generation's frame channel. The pump appends to it; the HTTP response, the SSE
+   * joiner, and this lifecycle's own checkpoint all subscribe to the SAME object.
+   *
+   * Replaces `pushPart`. Nothing re-derives a second copy of the stream any more: what the
+   * response body carries and what the checkpoint persists are now the same frames, folded
+   * by the SDK's own reduction rather than by a hand-written projection.
+   */
+  channel: StreamChannel;
+  /**
+   * Everything captured so far, folded to parts.
+   *
+   * Async because the fold reconstructs partially-streamed tool input with
+   * `parsePartialJson`. Was `getBufferedParts(): UIMessagePart[]`.
+   */
+  getParts: () => Promise<UIMessagePart[]>;
   /**
    * True when a pending-abort intent was consumed immediately after INSERT time (#2028 item 1).
    * The row was updated to 'aborted' directly; the caller should abort the controller so
@@ -99,13 +110,29 @@ const HEARTBEAT_INTERVAL_MS = 20 * 1000;
  * terminal, the lie `decideStreamTakeover` exists to avoid. An hour buys enough headroom
  * that the trade is academic, while still bounding a leaked interval.
  *
- * The parts checkpoint in `pushPart` obeys this same deadline, and MUST. It writes
+ * The parts checkpoint driven by the channel subscription obeys this same deadline, and
+ * MUST. It writes
  * lastHeartbeatAt too, so an uncapped checkpoint let any still-chattering generation refresh
  * its own liveness forever — reinstating the immortal ghost this cap exists to kill, on the
  * one stream most likely to hit it. (An earlier version of this comment had it exactly
  * backwards, calling the checkpoint beat a mitigation. It was the hole.)
  */
 const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
+
+/**
+ * The tool-family chunk types that are durability boundaries — every one except
+ * `tool-input-delta`. See `isDurabilityBoundary` for why this is enumerated rather than
+ * prefix-matched.
+ */
+const TOOL_BOUNDARY_CHUNK_TYPES: ReadonlySet<string> = new Set([
+  'tool-input-start',
+  'tool-input-available',
+  'tool-input-error',
+  'tool-output-available',
+  'tool-output-error',
+  'tool-output-denied',
+  'tool-approval-request',
+]);
 
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
@@ -116,20 +143,21 @@ export const createStreamLifecycle = async (
   // never generates never polls.
   ensureStreamAbortWatcher();
 
-  try {
-    streamMulticastRegistry.register(messageId, {
-      pageId: channelId,
-      userId,
-      displayName,
-      conversationId,
-      browserSessionId,
-    });
-  } catch (error) {
-    loggers.ai.warn('stream-lifecycle: registry.register threw', {
-      messageId,
-      error: error instanceof Error ? error.message : 'unknown',
-    });
-  }
+  // Opened BEFORE anything can append, and returned on the handle, so the pump and every
+  // subscriber address one object. `open` finishes any previous channel on this messageId
+  // (the retry/takeover path) rather than stranding its subscribers.
+  //
+  // Not wrapped in try/catch, unlike the registration it replaces: that catch existed
+  // because a failed registration still left a usable lifecycle, whereas a lifecycle with no
+  // channel has nowhere to put frames and would swallow the entire generation silently.
+  // Failing loudly here is strictly better than returning a handle that cannot record.
+  const channel = streamChannelRegistry.open(messageId, {
+    pageId: channelId,
+    userId,
+    displayName,
+    conversationId,
+    browserSessionId,
+  });
 
   // Captured once so the DB row and the broadcast agree on the stream's start
   // time — remote surfaces stamp synthesized bubbles with this value.
@@ -233,20 +261,28 @@ export const createStreamLifecycle = async (
       });
     }
 
-    // Nothing has subscribed yet — registration just happened and broadcastAiStreamStart has not
-    // fired — so evicting the entry here is a plain cleanup, not a notification to a live client.
+    // Nothing has subscribed yet — the channel opened a moment ago and broadcastAiStreamStart
+    // has not fired — so closing it here is a plain cleanup, not a notification to a live client.
     try {
-      streamMulticastRegistry.finish(messageId, true);
+      streamChannelRegistry.close(messageId, true);
     } catch (error) {
-      loggers.ai.warn('stream-lifecycle: registry.finish threw during pre-abort', {
+      loggers.ai.warn('stream-lifecycle: channel close threw during pre-abort', {
         messageId,
         error: error instanceof Error ? error.message : 'unknown',
       });
     }
 
-    // No broadcast, no heartbeat. A no-op handle whose finish is idempotent.
+    // No broadcast, no heartbeat. The handle still carries the (already finished) channel
+    // rather than a no-op: a caller that pumps into it regardless gets frames REFUSED by a
+    // finished channel, which is observable, instead of a `pushPart: noop` that accepted the
+    // whole generation and dropped it on the floor.
     const noop = (): void => {};
-    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
+    return {
+      finish: noop,
+      channel,
+      getParts: async () => [],
+      preAborted: true,
+    };
   }
 
   const streamStartPayload = {
@@ -276,43 +312,40 @@ export const createStreamLifecycle = async (
   // its own final write — otherwise a slow periodic write could resolve AFTER
   // finish()'s write and clobber the final parts with a stale snapshot.
   let persistInFlight: Promise<void> | null = null;
-  // One warning per stream, not one per checkpoint — a reply that stays over the cap for its
-  // whole remaining run would otherwise log on every tick.
-  let hasWarnedSizeCap = false;
 
-  const persistBufferedParts = (parts: UIMessagePart[]): Promise<void> => {
-    // The RAW count, before convergence/capping — the one thing the merged/capped `parts`
-    // column below cannot answer for a rejoining client. See rawPartsCount's docblock on the
-    // schema for why this must travel separately from parts.length.
-    const rawPartsCount = parts.length;
-    const { parts: converged, originRawIndex } = convergeRawPartsWithOrigins(parts);
-    const { parts: shaped, wasCapped, survivingFromRawIndex, prefixDropped } = capPartsToByteBudget(converged, originRawIndex);
-    if (wasCapped && !hasWarnedSizeCap) {
-      hasWarnedSizeCap = true;
-      loggers.ai.warn('stream-lifecycle: parts snapshot at or over the serialized size cap', {
-        messageId,
-        maxBytes: CHECKPOINT_MAX_SERIALIZED_BYTES,
-      });
-    }
-    // Capping drops the oldest merged content from `shaped`, so the seed no longer reflects
-    // the raw frames that fed it — telling the client to skip all the way to `rawPartsCount`
-    // (the pre-cap total) would permanently lose that content, since the live multicast
-    // buffer (the only remaining copy) gets skipped past too. Reporting the raw position
-    // `shaped[0]` actually starts at instead means the client under-skips (a harmless,
-    // self-correcting duplicate) rather than over-skips (a silent, permanent gap) — see
-    // capPartsToByteBudget's doc.
-    //
-    // Keyed on `prefixDropped`, NOT `wasCapped`: `wasCapped` is also true when the single
-    // surviving part alone exceeds the budget (nothing was actually droppable) — in that case
-    // `survivingFromRawIndex` only marks where that one part FIRST started, discarding every
-    // raw frame that went on to EXTEND it, and using it as rawPartsCount would tell the client
-    // to re-replay the entire already-seeded content on top of itself.
-    const persistedRawPartsCount = prefixDropped ? survivingFromRawIndex : rawPartsCount;
+  /**
+   * Persist a checkpoint of the stream so far.
+   *
+   * The whole convergence/capping apparatus this replaces existed to make ONE jsonb column
+   * serve as a joiner's seed: `convergeRawPartsWithOrigins` merged raw frames,
+   * `capPartsToByteBudget` bounded the result, and `rawPartsCount` told the client how many
+   * raw frames the merged snapshot already reflected so it could skip that many on replay.
+   * Every part of that was in service of a splice the seq cursor now makes unnecessary —
+   * a joiner asks for `fromSeq` and gets exactly those frames.
+   *
+   * So the snapshot is simply the SDK's own reduction of everything captured, and it is now
+   * lossless where it used to drop reasoning, files, sources, step boundaries and the routes'
+   * own `data-*` parts.
+   *
+   * KNOWN TRUNCATION, carried forward deliberately. `channel.getFrames()` returns what the
+   * memory ring still holds, so once a very long reply evicts its oldest frames this snapshot
+   * silently loses its beginning. The code this replaces truncated too (`capPartsToByteBudget`
+   * dropped the oldest merged content), so this is not a regression — but the ring's frame cap
+   * is reachable by a long multi-step agent run, which is more reachable than the old byte cap
+   * was. It is not fixed here because the fix is the durable frame log: once frames are read
+   * from Postgres rather than from memory, eviction stops being truncation at all. Tracked on
+   * the epic board rather than left as a comment nobody is accountable for. `rawPartsCount` is still written (as the frame count) because the
+   * column is NOT NULL and older clients still read it; it is dropped with the parts column
+   * in the contract leaf.
+   */
+  const persistCheckpoint = (frames: readonly UIMessageChunk[]): Promise<void> => {
+    const frameCount = frames.length;
     const attempt = (async () => {
       try {
+        const shaped = await foldChunksToParts(frames);
         await db
           .update(aiStreamSessions)
-          .set({ parts: shaped, rawPartsCount: persistedRawPartsCount, lastHeartbeatAt: new Date() })
+          .set({ parts: shaped, rawPartsCount: frameCount, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
@@ -328,7 +361,7 @@ export const createStreamLifecycle = async (
     return attempt;
   };
 
-  // Liveness beat. Independent of pushPart on purpose — see HEARTBEAT_INTERVAL_MS.
+  // Liveness beat. Independent of the frame flow on purpose — see HEARTBEAT_INTERVAL_MS.
   // Touches only lastHeartbeatAt, so it can never race the parts writes (and a tick that
   // lands after the terminal write cannot resurrect the row: every reader filters
   // status='streaming').
@@ -352,13 +385,14 @@ export const createStreamLifecycle = async (
   // Never hold the process open for a heartbeat.
   heartbeat.unref?.();
 
-  // Runs the checkpoint decision and, if eligible, kicks off the persist. Shared by pushPart
+  // Runs the checkpoint decision and, if eligible, kicks off the persist. Shared by the
+  // channel subscription
   // (isToolBoundary reflects the part just pushed) and the 1s interval below (always false —
-  // it isn't tied to any specific part; it exists so a DIRTY buffer with no further pushPart
+  // it isn't tied to any specific frame; it exists so a DIRTY buffer with no further frames
   // calls — e.g. sitting inside a long tool call after the tool-input-available part landed —
   // still gets flushed instead of staying frozen until the tool call ends.
   const maybeCheckpoint = (isToolBoundary: boolean): void => {
-    // Both current call sites (pushPart, the checkpointInterval tick) already check
+    // Both current call sites (the channel subscription, the checkpointInterval tick) check
     // `finished` before calling in, so this is unreachable today — kept as defense in
     // depth rather than removed. A part flushed after finish() has already deleted the
     // registry entry and issued the final write races that write with no ordering
@@ -377,19 +411,26 @@ export const createStreamLifecycle = async (
     });
     if (!shouldFlush) return;
 
-    // The registry entry is the source of the snapshot. Once it is gone — evicted at the
-    // horizon, or deleted by a finish() that raced us — `getBufferedParts` returns `[]`
-    // meaning "NO ENTRY", not "no content". Serializing that would overwrite the real parts
-    // snapshot with nothing, destroying exactly the crash-recovery state it exists to provide:
-    // a client restoring mid-stream content after the originator's process dies.
-    if (streamMulticastRegistry.getMeta(messageId) === undefined) return;
+    // Only the lifecycle that CURRENTLY owns the registry entry may checkpoint.
+    //
+    // Identity, not existence. The pre-inversion guard asked `getMeta(messageId) === undefined`
+    // because the snapshot was fetched BY messageId, so an evicted entry returned `[]` — which
+    // would have overwritten a real snapshot with nothing. That hazard is gone: this lifecycle
+    // closes over its own `channel`, so its frames survive eviction.
+    //
+    // What remains is supersession, which the old shape could not see at all. A retry or
+    // takeover opens a NEW channel on the same messageId; the old lifecycle's `finished` flag
+    // is still false and its checkpoint interval is still armed, so it would go on writing its
+    // stale frames over the new generation's row. Comparing identity stops that, and still
+    // covers horizon eviction (`get` returns undefined, which is also not `channel`).
+    if (streamChannelRegistry.get(messageId) !== channel) return;
 
     dirty = false;
     lastPersistAt = now;
-    persistBufferedParts(streamMulticastRegistry.getBufferedParts(messageId));
+    persistCheckpoint(channel.getFrames());
   };
 
-  // Independent of pushPart on purpose — see maybeCheckpoint's docblock above. Obeys the same
+  // Independent of the frame flow on purpose — see maybeCheckpoint's docblock. Obeys the same
   // MAX_HEARTBEAT_MS horizon as the heartbeat interval and self-clears past it for the same
   // reason: an interval that kept ticking forever on an abandoned-cap lifecycle would be a
   // leak, even though decideCheckpoint would keep declining to flush past the deadline anyway.
@@ -412,9 +453,9 @@ export const createStreamLifecycle = async (
     const priorPersist = persistInFlight;
 
     try {
-      streamMulticastRegistry.finish(messageId, aborted);
+      streamChannelRegistry.close(messageId, aborted);
     } catch (error) {
-      loggers.ai.warn('stream-lifecycle: registry.finish threw', {
+      loggers.ai.warn('stream-lifecycle: channel close threw', {
         messageId,
         error: error instanceof Error ? error.message : 'unknown',
       });
@@ -461,35 +502,66 @@ export const createStreamLifecycle = async (
       .catch(() => {});
   };
 
-  const pushPart = (part: UIMessagePart): void => {
-    // finish() already deleted the registry entry and issued the final
-    // write; a part pushed after that point would still trip the checkpoint
-    // below with an empty getBufferedParts() snapshot, racing the final
-    // write with no ordering guarantee against it.
-    if (finished) return;
+  /**
+   * A frame worth checkpointing IMMEDIATELY rather than waiting out the dirty-flush throttle.
+   *
+   * A rejoining client should see a tool call start or finish, a route-written data part, or
+   * an error as soon as it happens — those are the frames that change what the UI shows,
+   * whereas a text delta is one of thousands. This is the successor to the `isToolPart(part)`
+   * bypass, restated over chunk types now that the checkpoint reads frames.
+   *
+   * Deliberately an explicit allow-list rather than "anything that is not a text delta":
+   * reasoning streams token-by-token exactly like text, so a negative check would bypass the
+   * throttle on every reasoning frame of a long chain-of-thought and turn the checkpoint back
+   * into a per-token write.
+   *
+   * WHICH IS WHY THE TOOL FAMILY IS ENUMERATED AND NOT PREFIX-MATCHED. `tool-input-delta`
+   * carries the model's tool ARGUMENTS token by token — the same shape as a text or reasoning
+   * delta, and just as numerous for a tool call with a large input. A `startsWith('tool-')`
+   * check therefore made every one of those frames a boundary, which is the exact per-token
+   * write the paragraph above rejects: `persistInFlight` serializes those writes but does not
+   * throttle them, so the checkpoint would rewrite the whole parts array back-to-back for the
+   * length of the argument stream (review finding — coderabbitai, PR #2408).
+   *
+   * `data-` stays a prefix: those types are open-ended by construction (`data-${string}`), so
+   * there is no set to enumerate, and they are route-written and discrete rather than
+   * streamed per token.
+   */
+  const isDurabilityBoundary = (chunk: UIMessageChunk): boolean =>
+    TOOL_BOUNDARY_CHUNK_TYPES.has(chunk.type) ||
+    chunk.type.startsWith('data-') ||
+    chunk.type === 'start-step' ||
+    chunk.type === 'finish-step' ||
+    chunk.type === 'error' ||
+    chunk.type === 'file' ||
+    chunk.type === 'source-url' ||
+    chunk.type === 'source-document';
 
-    try {
-      streamMulticastRegistry.push(messageId, part);
-    } catch (error) {
-      // one bad chunk must not interrupt the stream — log so the swallow stays observable
-      loggers.ai.warn('stream-lifecycle: registry.push threw', {
-        messageId,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
-    }
+  // The lifecycle watches its own channel to drive checkpoints. It does NOT feed the channel
+  // — the pump does — which is the point: capture is independent of anything the lifecycle,
+  // or any client, does. `finished` guards re-entry, since finish() closes the channel and
+  // that closure calls straight back into this subscription's onEnd.
+  channel.subscribe({
+    fromSeq: 0,
+    onFrame: (frame) => {
+      // Defence in depth, and knowingly unreachable today: finish() sets this flag and THEN
+      // closes the channel, and a closed channel refuses appends, so no frame can arrive after
+      // the flag is set. Kept because the cost is a boolean and the failure it would prevent —
+      // a checkpoint racing the terminal write with a post-finish snapshot — has enough history
+      // in this file that a future reordering should fail closed. Mutation-tested: removing it
+      // changes nothing, which is the point.
+      if (finished) return;
+      dirty = true;
+      maybeCheckpoint(isDurabilityBoundary(frame.chunk));
+    },
+    onEnd: () => {
+      // The channel ending is not by itself a reason to run the lifecycle's terminal write:
+      // finish() is the only caller that knows whether this was an abort, and it closes the
+      // channel itself. Nothing to do here.
+    },
+  });
 
-    dirty = true;
-    // A tool call starting or finishing is a boundary a rejoining client should see
-    // immediately — see decideCheckpoint. isToolPart (reused from appendPart.ts, the
-    // same file convergeRawParts already delegates to) so a future part type
-    // chunkToPart.ts starts forwarding (reasoning, source, file — its docblock names
-    // these as future waves) doesn't silently start bypassing the dirty-flush throttle
-    // on every chunk the way a bare "anything but text" check would.
-    maybeCheckpoint(isToolPart(part));
-  };
+  const getParts = (): Promise<UIMessagePart[]> => foldChunksToParts(channel.getFrames());
 
-  const getBufferedParts = (): UIMessagePart[] =>
-    streamMulticastRegistry.getBufferedParts(messageId);
-
-  return { finish, pushPart, getBufferedParts, preAborted: false };
+  return { finish, channel, getParts, preAborted: false };
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildAssistantPersistencePayload } from '../persistAssistantParts';
-import type { UIMessagePart } from '../stream-multicast-registry';
+import type { UIMessagePart } from '../stream-channel-registry';
 
 const textPart = (text: string): UIMessagePart => ({ type: 'text', text });
 

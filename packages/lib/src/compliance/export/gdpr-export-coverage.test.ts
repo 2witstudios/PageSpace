@@ -189,5 +189,10 @@ describe('GDPR export table coverage', () => {
     // deletes `ai_stream_sessions` on an erasure request. Anything we will
     // delete on demand, we must be able to disclose on demand.
     expect(EXPORTED_TABLES['ai_stream_sessions']).toBe('streamState');
+    // `ai_stream_frames` is the same content in the form that replaces `parts`,
+    // and `purge-stream-state` deletes it too. Pinned separately so a future
+    // edit that moves it to the exclusion list has to argue with this test
+    // rather than with a set difference.
+    expect(EXPORTED_TABLES['ai_stream_frames']).toBe('streamState');
   });
 });

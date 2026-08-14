@@ -257,8 +257,15 @@ describe('runImport', () => {
       // this fails the moment someone adds the table to TABLE_IMPORT_ORDER
       // without also deleting the recorded exclusion.
       expect(TENANT_EXPORT_EXCLUDED_TABLES).toHaveProperty('ai_stream_sessions');
+      // Its successor travels with it. `ai_stream_frames` holds the same generation's
+      // content in the form that replaces `parts`, so importing it would reconstitute
+      // exactly the phantom this exclusion exists to prevent — and its `message_id`
+      // names an assistant placeholder written best-effort, which the bundle may not
+      // carry a row for at all.
+      expect(TENANT_EXPORT_EXCLUDED_TABLES).toHaveProperty('ai_stream_frames');
       const sqlContent = await readFile(path.join(bundleDir, 'data.sql'), 'utf-8');
       expect(sqlContent).not.toContain('ai_stream_sessions');
+      expect(sqlContent).not.toContain('ai_stream_frames');
       // …and the conversation whose rows they would have been is present, so
       // the absence above is a decision about this table rather than an empty
       // bundle trivially satisfying it.

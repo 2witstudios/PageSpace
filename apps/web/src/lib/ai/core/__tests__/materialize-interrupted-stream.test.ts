@@ -142,7 +142,7 @@ vi.mock('@/lib/repositories/message-repository', async (importOriginal) => {
 });
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
-import type { UIMessagePart } from '../stream-multicast-registry';
+import type { UIMessagePart } from '../stream-channel-registry';
 
 const textPart = (text: string): UIMessagePart => ({ type: 'text', text }) as UIMessagePart;
 
