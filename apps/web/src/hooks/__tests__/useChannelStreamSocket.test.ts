@@ -1770,20 +1770,6 @@ describe('useChannelStreamSocket', () => {
     });
 
 
-    // The server merges consecutive text-delta chunks before persisting (checkpoint-serialize.ts),
-    // so `parts` can hold FEWER entries than were actually pushed. The live SSE replay always
-    // sends the raw, unmerged buffer — skipping by `parts.length` alone would under-skip and
-    // re-apply chunks already reflected in the seeded snapshot, duplicating visible text.
-    // `rawPartsCount` carries the true raw count so the skip stays correct.
-
-    // aiStreamSessions.raw_parts_count is NOT NULL DEFAULT 0 — a row written by a
-    // not-yet-updated worker mid-rollout (whose code never sets this column) reads back
-    // as a real `0`, not null/undefined. `??` would use that 0 verbatim (skip nothing)
-    // and reproduce the exact duplicate-text bug the rawPartsCount fix exists to close;
-    // `||` correctly falls through to persistedParts.length whenever rawPartsCount is
-    // falsy, which is what makes this rollout scenario safe.
-
-
     it('given a stream from the current tab is active in the DB, should addStream with isOwn=true', async () => {
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,
