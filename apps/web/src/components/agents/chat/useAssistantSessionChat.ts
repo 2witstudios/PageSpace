@@ -42,6 +42,7 @@ import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRe
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/hooks/outboundMessages';
 import {
   loadGlobalConversationMessages,
   loadOlderGlobalConversationMessages,
@@ -109,8 +110,6 @@ export function useAssistantSessionChat({
   // registry fires its end notification on EVERY terminal path, including the purely local
   // one (the SSE join resolving), and it does so while the store entry is still present, so
   // the shared commit protocol runs off the same entry it always did.
-  const stableMessagesRef = useRef<UIMessage[]>([]);
-  const getBaseMessages = useCallback(() => stableMessagesRef.current, []);
 
   const {
     sendMessage,
@@ -124,7 +123,7 @@ export function useAssistantSessionChat({
     channelId,
     conversationId,
     triggeredBy: sendIdentity,
-    getBaseMessages,
+    getBaseMessages: getOutboundMessages,
     onError: (err: Error) => {
       console.error('Assistant session chat error:', err);
       toast.error('Chat error. Please try again.');
@@ -154,7 +153,6 @@ export function useAssistantSessionChat({
     () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
     [renderedMessages],
   );
-  stableMessagesRef.current = stableMessages;
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(channelId, conversationId);

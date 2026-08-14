@@ -90,6 +90,7 @@ import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveS
 import { useStopStream } from '@/hooks/useStopStream';
 import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/hooks/outboundMessages';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
@@ -301,10 +302,6 @@ const GlobalAssistantView: React.FC = () => {
   // same mode. That is the whole reason the pre-send handoff below is gone rather than moved.
   //
   // Their bases are the settled store views, read at call time — see `useChatSession`.
-  const agentStableMessagesRef = useRef<UIMessage[]>([]);
-  const globalStableMessagesRef = useRef<UIMessage[]>([]);
-  const getAgentBaseMessages = useCallback(() => agentStableMessagesRef.current, []);
-  const getGlobalBaseMessages = useCallback(() => globalStableMessagesRef.current, []);
 
   const {
     sendMessage: agentSendMessage,
@@ -318,7 +315,7 @@ const GlobalAssistantView: React.FC = () => {
     channelId: selectedAgent?.id ?? null,
     conversationId: agentConversationId,
     triggeredBy: sendIdentity,
-    getBaseMessages: getAgentBaseMessages,
+    getBaseMessages: getOutboundMessages,
     onError: (error: Error) => {
       console.error('Agent Chat error:', error);
     },
@@ -338,7 +335,7 @@ const GlobalAssistantView: React.FC = () => {
     channelId: channelIdForGlobal,
     conversationId: globalConversationId,
     triggeredBy: sendIdentity,
-    getBaseMessages: getGlobalBaseMessages,
+    getBaseMessages: getOutboundMessages,
     onError: (error: Error) => {
       console.error('Global Chat Error:', error);
       if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {

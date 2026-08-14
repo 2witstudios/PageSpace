@@ -40,6 +40,7 @@ import { buildSessionChatRequestBody } from '@/lib/agents/build-session-chat-req
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/hooks/outboundMessages';
 import {
   loadAgentConversationMessages,
   loadOlderAgentConversationMessages,
@@ -111,8 +112,6 @@ export function useAgentSessionChat({
   // `getBaseMessages` is the settled store view — which is why answering an `ask_user`
   // question still works after a reload: the persisted assistant message carrying the
   // question IS the base, so there is no empty internal array to hydrate first.
-  const stableMessagesRef = useRef<UIMessage[]>([]);
-  const getBaseMessages = useCallback(() => stableMessagesRef.current, []);
 
   const {
     sendMessage,
@@ -126,7 +125,7 @@ export function useAgentSessionChat({
     channelId: agent.id,
     conversationId,
     triggeredBy: sendIdentity,
-    getBaseMessages,
+    getBaseMessages: getOutboundMessages,
     onError: (err: Error) => {
       console.error('Agent session chat error:', err);
       toast.error('Chat error. Please try again.');
@@ -151,7 +150,6 @@ export function useAgentSessionChat({
     () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
     [renderedMessages],
   );
-  stableMessagesRef.current = stableMessages;
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(agent.id, conversationId);

@@ -105,20 +105,30 @@ export interface UseChatSessionOptions {
   /** Identity for the optimistic store entry. `userId` is what `isOwnStream` compares. */
   triggeredBy: { userId: string; displayName: string };
   /**
-   * The settled messages this session composes over, read at CALL time.
+   * The settled messages a send composes over, resolved BY CONVERSATION at call time.
    *
-   * A getter rather than a value because it is read inside async continuations that outlive
-   * the render they were issued from — a captured array would be the one that existed when
-   * the send started, which after a tool-result round trip is exactly the stale copy this
-   * shell exists to stop passing to the server.
+   * Takes the target conversation rather than closing over one, and that signature is
+   * load-bearing. It began as `() => UIMessage[]` fed from a per-surface ref, and two of the
+   * four surfaces never assigned their ref — so `getBaseMessages()` returned `[]` there
+   * forever, every send carried no history, and `regenerate` re-sent nothing (review: codex
+   * P1 on PR #2410). A parameterless getter makes the wiring a per-surface obligation that
+   * compiles fine when forgotten; taking the id lets every surface pass the SAME shared
+   * resolver, so there is nothing left to forget.
+   *
+   * Read at CALL time because it runs inside async continuations that outlive the render
+   * which issued them — a captured array would be the one that existed when the send started,
+   * which after a tool-result round trip is exactly the stale copy this shell exists to stop
+   * sending.
    */
-  getBaseMessages: () => UIMessage[];
+  getBaseMessages: (conversationId: string) => UIMessage[];
   onError?: (error: Error) => void;
 }
 
 export interface UseChatSessionResult {
-  /** Base + local tool patches. Never rendered — the store is the renderer. */
-  messages: UIMessage[];
+  // NO `messages`. The shell holds no message array to hand back: the store is the renderer,
+  // and outbound messages are composed per send from `getBaseMessages(conversationId)`. An
+  // array here would be a second container to keep in sync with the store — which is the
+  // thing this whole change removes.
   /** Fire a send for `conversationId`. Resolves when the send is ADMITTED, not when it ends. */
   sendMessage: (
     message: UIMessage,
@@ -169,7 +179,6 @@ export const useChatSession = ({
 }: UseChatSessionOptions): UseChatSessionResult => {
   const [sends, setSends] = useState<Record<string, SendState>>({});
   const patchesRef = useRef<ToolPatch[]>([]);
-  const [patchVersion, setPatchVersion] = useState(0);
 
   // Read inside async continuations, so refs — see `getBaseMessages`'s docblock for why a
   // captured value is the stale-copy bug rather than a style preference.
@@ -184,9 +193,9 @@ export const useChatSession = ({
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  /** Compose the base with any local patches the base does not yet reflect. */
-  const composeMessages = useCallback((): UIMessage[] => {
-    const base = getBaseMessagesRef.current();
+  /** Compose a conversation's settled base with any local patches it does not yet reflect. */
+  const composeMessages = useCallback((targetConversationId: string): UIMessage[] => {
+    const base = getBaseMessagesRef.current(targetConversationId);
     const patches = patchesRef.current;
     if (patches.length === 0) return base;
 
@@ -204,14 +213,6 @@ export const useChatSession = ({
       return changed ? { ...message, parts } : message;
     }) as UIMessage[];
   }, []);
-
-  const messages = useMemo(
-    () => composeMessages(),
-    // `patchVersion` is the dependency that matters: the base is read through a getter, and
-    // the surfaces re-render on their own store subscriptions when it changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [composeMessages, patchVersion, getBaseMessages],
-  );
 
   const setSendState = useCallback((id: string, state: SendState | null): void => {
     setSends((previous) => {
@@ -322,7 +323,7 @@ export const useChatSession = ({
       // answers into the persisted row by now, and carrying them forward would re-apply them
       // over whatever the reload returns.
       patchesRef.current = [];
-      const outbound = [...getBaseMessagesRef.current(), message];
+      const outbound = [...getBaseMessagesRef.current(targetConversationId), message];
       await dispatch(targetConversationId, { ...(options?.body ?? {}) }, outbound);
     },
     [dispatch],
@@ -333,7 +334,11 @@ export const useChatSession = ({
       // The base IS the settled store view, so a regenerate after a reload re-sends real
       // history rather than an empty transport array — the failure
       // `hydrateTransportBeforeReinvoke` was invented to patch around, absent by construction.
-      await dispatch(targetConversationId, { ...(options?.body ?? {}) }, getBaseMessagesRef.current());
+      await dispatch(
+        targetConversationId,
+        { ...(options?.body ?? {}) },
+        getBaseMessagesRef.current(targetConversationId),
+      );
     },
     [dispatch],
   );
@@ -355,9 +360,8 @@ export const useChatSession = ({
         ...patchesRef.current.filter((patch) => patch.toolCallId !== toolCallId),
         { toolCallId, output },
       ];
-      setPatchVersion((version) => version + 1);
 
-      const patched = composeMessages();
+      const patched = composeMessages(targetConversationId);
 
       // Resume ONLY when every ask_user question on the last assistant message is answered —
       // the same predicate the SDK's `sendAutomaticallyWhen` ran, now explicit. It is not the
@@ -378,7 +382,6 @@ export const useChatSession = ({
   }, [conversationId, setSendState]);
 
   return {
-    messages,
     sendMessage,
     regenerate,
     addToolResult,

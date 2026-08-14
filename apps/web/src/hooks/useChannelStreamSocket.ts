@@ -255,10 +255,16 @@ export function useChannelStreamSocket(
         // list lost its terminal event; reconciling drops it and tells consumers to reload,
         // rather than leaving it to the registry's hour-long expiry sweep. Superseded runs
         // stay silent — their answer is stale, and acting on it would tear down live sessions.
+        //
+        // SCOPED TO THE SAME QUESTION THIS BOOTSTRAP ASKED. When `bootstrapConversationId` is
+        // set the response lists ONE conversation's streams, so reconciling channel-wide
+        // against it reports every sibling conversation as finished — mounting conversation A
+        // would tear down conversation B mid-generation. See `reconcileChannelSessions`.
         if (generation === bootstrapGeneration) {
           reconcileChannelSessions(
             channel,
             new Set((data.streams ?? []).map((stream) => stream.messageId)),
+            bootstrapConversationId ? { conversationId: bootstrapConversationId } : undefined,
           );
         }
       } catch (err) {

@@ -153,11 +153,12 @@ interface Session {
   /**
    * Monotonic write counter for the POLL fallback's writes.
    *
-   * Kept on the session rather than inside the poll closure: a fallback that restarts for the
-   * same messageId must CONTINUE the count, not reset it. `applySetStreamParts` drops any
-   * write whose seq is not strictly greater than the stored one, so a restarted counter's
-   * early writes would be silently swallowed against the previous instance's watermark and
-   * the bubble would freeze on stale content until the count caught back up.
+   * `applySetStreamParts` drops any write whose seq is not strictly greater than the stored
+   * one, so this must only ever rise — a counter that stalled or reset would have its writes
+   * silently swallowed and the bubble would freeze on stale content. It lives on the session
+   * rather than in the poll closure simply because that is where the session's other
+   * per-stream bookkeeping lives; there is exactly one fallback per session, so the two are
+   * equivalent in reach.
    */
   pollSeq: number;
   /** The join delivered at least one folded write — i.e. what we hold is authoritative. */
@@ -254,7 +255,6 @@ const endSession = (messageId: string, end: Omit<StreamSessionEnd, 'messageId'>)
 
 const ensureSweep = (): void => {
   if (sweepTimer !== null) return;
-  if (typeof setInterval !== 'function') return;
   sweepTimer = setInterval(() => {
     const cutoff = Date.now() - STREAM_MAX_LIFETIME_MS;
     for (const [messageId, session] of [...sessions.entries()]) {
@@ -305,9 +305,11 @@ const fallBackToDatabase = (
   const { messageId, channelId, conversationId } = session.descriptor;
   if (!canPoll || session.controller.signal.aborted) return false;
 
-  // A stale fallback for this messageId must not be orphaned — an overwritten handle would
-  // leak its interval for the life of the tab.
-  session.pollController?.abort();
+  // No pre-abort of an existing `pollController`, because there cannot be one: this runs from
+  // the settlement of ONE `consumeStreamJoin` promise, which settles once, so a session reaches
+  // here at most once. `teardown` is what aborts a live poll. (A defensive
+  // `session.pollController?.abort()` stood here; it read as handling a restart that the
+  // single-settlement invariant makes impossible.)
   const pollController = new AbortController();
   session.pollController = pollController;
 
@@ -400,9 +402,13 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
         // fold starting mid-stream renders a reply missing its beginning — the
         // "plausible-looking gap" the channel's own invariant refuses to produce. The DB
         // checkpoint is the complete view; the live channel is not.
-        if (!fallBackToDatabase(session, { canPoll: true }) && !hadSeed) {
-          teardown(descriptor.messageId, { dropStoreEntry: true });
-        }
+        // Unconditional, and its return value is deliberately ignored: `canPoll` is true here,
+        // and `teardown` is the only thing that aborts a session's controller — which it does
+        // in the same breath as removing it from `sessions`. So an aborted controller implies
+        // a session the guard above already returned on, and the fallback cannot fail from
+        // here. It USED to be `if (!fallBackToDatabase(...) && !hadSeed) teardown(...)`, which
+        // read as a real branch and was unreachable.
+        fallBackToDatabase(session, { canPoll: true });
         return;
       }
 
@@ -502,19 +508,39 @@ export const closeChannelSessions = (channelId: string): void => {
 };
 
 /**
- * Reconcile against the server's list of what is still live on a channel.
+ * Reconcile against the server's list of what is still live.
  *
  * A session whose stream the server no longer reports as running lost its terminal event —
  * the same class the expiry sweep catches, but caught in seconds rather than at the horizon,
  * because bootstrap actually asked. Dropped WITH an end notification (unlike the sweep):
  * bootstrap is an authoritative answer, so consumers should reload the persisted message.
+ *
+ * ── `scope` IS NOT OPTIONAL POLISH; OMITTING IT DESTROYS SIBLING STREAMS ──────────────────
+ *
+ * `liveMessageIds` is only ever as broad as the request that produced it, and `/active-streams`
+ * accepts a `conversationId` narrowing that EVERY agent-pane subscription sends
+ * (`useConversationSubscription` passes its own conversation as `bootstrapConversationId`).
+ * A scoped response therefore lists one conversation's streams — and reconciling the whole
+ * channel against it reads every OTHER conversation on that channel as finished.
+ *
+ * Concretely: two conversations generating under one agent, and merely mounting or rejoining
+ * conversation A tore down conversation B — B's join aborted, its store entry dropped, its
+ * bubble replaced by a reload — while B was still generating happily on the server (review:
+ * codex P1 on PR #2410). That is the same "the reply vanished" failure this whole workstream
+ * exists to end, reintroduced through the back door.
+ *
+ * So the scope must match the QUESTION that was asked. A caller that narrowed its bootstrap
+ * must narrow its reconcile identically; only an unscoped, channel-wide snapshot may reconcile
+ * channel-wide.
  */
 export const reconcileChannelSessions = (
   channelId: string,
   liveMessageIds: ReadonlySet<string>,
+  scope?: { conversationId: string },
 ): void => {
   for (const [messageId, session] of [...sessions.entries()]) {
     if (session.descriptor.channelId !== channelId) continue;
+    if (scope && session.descriptor.conversationId !== scope.conversationId) continue;
     if (liveMessageIds.has(messageId)) continue;
     endSession(messageId, {
       conversationId: session.descriptor.conversationId,

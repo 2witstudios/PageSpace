@@ -85,12 +85,16 @@ vi.mock('@/lib/ai/core/browser-session-id', () => ({
   getBrowserSessionId: () => LOCAL_SESSION,
 }));
 
+// Every stub forwards ...args verbatim. An earlier version spelled out the parameters it
+// happened to know about — `reconcileChannelSessions: (id, live) => spy(id, live)` — which
+// silently DROPPED the conversation scope when that argument was added, so an assertion on the
+// scope could never have failed. A mock that narrows the real signature is a mock that lies
+// about the contract.
 vi.mock('@/lib/ai/streams/streamSessionRegistry', () => ({
-  openStreamSession: (d: unknown) => openStreamSession(d),
-  completeStreamSession: (d: unknown) => completeStreamSession(d),
-  closeChannelSessions: (id: string) => closeChannelSessions(id),
-  reconcileChannelSessions: (id: string, live: ReadonlySet<string>) =>
-    reconcileChannelSessions(id, live),
+  openStreamSession: (...args: unknown[]) => openStreamSession(...args),
+  completeStreamSession: (...args: unknown[]) => completeStreamSession(...args),
+  closeChannelSessions: (...args: unknown[]) => closeChannelSessions(...args),
+  reconcileChannelSessions: (...args: unknown[]) => reconcileChannelSessions(...args),
   onStreamSessionEnd: (listener: (end: unknown) => void) => {
     endListeners.add(listener);
     return () => endListeners.delete(listener);
@@ -375,7 +379,11 @@ describe('bootstrap', () => {
     mount();
 
     await waitFor(() =>
-      expect(reconcileChannelSessions).toHaveBeenCalledWith(CHANNEL, new Set(['msg-live'])),
+      expect(reconcileChannelSessions).toHaveBeenCalledWith(
+        CHANNEL,
+        new Set(['msg-live']),
+        undefined,
+      ),
     );
   });
 
@@ -384,6 +392,27 @@ describe('bootstrap', () => {
 
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
     expect(String(mockFetchWithAuth.mock.calls[0][0])).toContain('conversationId=conv-scoped');
+  });
+
+  it('reconciles with the SAME narrowing it bootstrapped with', async () => {
+    // codex P1 on PR #2410. A scoped bootstrap lists one conversation's streams; passing that
+    // narrow set to an UNSCOPED reconcile reads every sibling conversation on the channel as
+    // finished, tearing down a live stream the request never even asked about.
+    mount(undefined, 'conv-scoped');
+
+    await waitFor(() => expect(reconcileChannelSessions).toHaveBeenCalled());
+    expect(reconcileChannelSessions).toHaveBeenCalledWith(CHANNEL, expect.any(Set), {
+      conversationId: 'conv-scoped',
+    });
+  });
+
+  it('given NO narrowing, reconciles channel-wide', async () => {
+    // The provider's channel-wide subscription asks about everything, so its answer is
+    // authoritative for everything.
+    mount();
+
+    await waitFor(() => expect(reconcileChannelSessions).toHaveBeenCalled());
+    expect(reconcileChannelSessions).toHaveBeenCalledWith(CHANNEL, expect.any(Set), undefined);
   });
 
   it('given a failed bootstrap, does not reconcile — a missing answer is not "nothing is live"', async () => {

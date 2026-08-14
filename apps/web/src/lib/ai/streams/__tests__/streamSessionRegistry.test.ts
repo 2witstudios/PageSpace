@@ -339,3 +339,190 @@ describe('the expiry sweep — the failure mode this design introduces', () => {
     expect(store().streams.has('msg-1')).toBe(false);
   });
 });
+
+describe('the poll fallback — the near-live view when the channel cannot serve us', () => {
+  /** Grab the two callbacks `startStreamJoinPollFallback` was handed. */
+  const pollCallbacks = (call = 0) => {
+    const args = startStreamJoinPollFallback.mock.calls[call];
+    return { onParts: args[3] as (p: unknown[]) => void, onGone: args[4] as () => void };
+  };
+
+  beforeEach(() => {
+    consumeStreamJoin.mockRejectedValue(new StreamJoinError('cross-instance', 404));
+    startStreamJoinPollFallback.mockImplementation(() => {});
+  });
+
+  it('writes polled parts with a seq that keeps rising', async () => {
+    openStreamSession(descriptor());
+    await settle();
+
+    const { onParts } = pollCallbacks();
+    onParts([{ type: 'text', text: 'first' }]);
+    onParts([{ type: 'text', text: 'second' }]);
+
+    // `applySetStreamParts` drops any write whose seq is not strictly greater than the stored
+    // one, so a counter that stalled would silently swallow the second write.
+    expect(store().streams.get('msg-1')!.parts).toEqual([{ type: 'text', text: 'second' }]);
+  });
+
+  it('given the row vanishes from /active-streams, ends the session and tells consumers to reload', async () => {
+    // That broadcast is best-effort, so when `chat:stream_complete` never arrives this poll
+    // noticing the row disappear is the ONLY remaining signal. Without an end notification the
+    // synthesized bubble would vanish with nothing replacing it — strictly worse than the
+    // frozen-but-visible snapshot that preceded the fallback.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    openStreamSession(descriptor());
+    await settle();
+
+    pollCallbacks().onGone();
+
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ messageId: 'msg-1', conversationId: 'conv-1', channelId: 'page-1', joinFailed: true });
+    expect(store().streams.has('msg-1')).toBe(false);
+  });
+});
+
+describe('late continuations after the session is already gone', () => {
+  it('given the join RESOLVES after a teardown, does nothing', async () => {
+    // A `chat:stream_complete` can land while the join promise is still settling. The session
+    // is gone by then, and re-notifying would fire a second completion for one stream.
+    let resolveJoin!: (r: { aborted: boolean }) => void;
+    consumeStreamJoin.mockImplementation(() => new Promise((res) => { resolveJoin = res; }));
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    closeChannelSessions('page-1');
+    resolveJoin({ aborted: false });
+    await settle();
+
+    expect(ends, 'a revocation is not a completion, and the late resolve must not invent one').toEqual([]);
+  });
+
+  it('given the join REJECTS after a teardown, does nothing', async () => {
+    let rejectJoin!: (e: unknown) => void;
+    consumeStreamJoin.mockImplementation(() => new Promise((_res, rej) => { rejectJoin = rej; }));
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    closeChannelSessions('page-1');
+    rejectJoin(new StreamJoinError('gone', 404));
+    await settle();
+
+    expect(ends).toEqual([]);
+    expect(startStreamJoinPollFallback, 'nothing left to poll for').not.toHaveBeenCalled();
+  });
+});
+
+describe('listener hygiene', () => {
+  it('given one listener throws, still delivers to the others', async () => {
+    // A consumer throwing must never strand the others, or the session's own teardown.
+    consumeStreamJoin.mockResolvedValue({ aborted: false });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const delivered: string[] = [];
+    onStreamSessionEnd(() => { throw new Error('consumer blew up'); });
+    onStreamSessionEnd((end) => delivered.push(end.messageId));
+
+    openStreamSession(descriptor());
+    await settle();
+
+    expect(delivered).toEqual(['msg-1']);
+    expect(errorSpy).toHaveBeenCalled();
+    // And the teardown itself still completed.
+    expect(store().streams.has('msg-1')).toBe(false);
+    errorSpy.mockRestore();
+  });
+
+  it('unsubscribing actually stops delivery', async () => {
+    consumeStreamJoin.mockResolvedValue({ aborted: false });
+    const ends: StreamSessionEnd[] = [];
+    const unsubscribe = onStreamSessionEnd((end) => ends.push(end));
+    unsubscribe();
+
+    openStreamSession(descriptor());
+    await settle();
+
+    expect(ends).toEqual([]);
+  });
+});
+
+describe('completeStreamSession — the old-build wire shape', () => {
+  it('given NO conversationId and no session to supply one, stays silent', async () => {
+    // An old-build completion for a stream this tab never watched. There is no conversation to
+    // name, so a consumer could not act on it — and inventing an empty id would send every
+    // conversation-keyed listener looking for a row under `''`.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    completeStreamSession({ messageId: 'msg-unknown', channelId: 'page-1' });
+
+    expect(ends).toEqual([]);
+  });
+});
+
+describe('reconcileChannelSessions — scoped to the question that was asked', () => {
+  it('given a CONVERSATION-SCOPED snapshot, leaves sibling conversations on the same channel alone', async () => {
+    // codex P1 on PR #2410. `/active-streams` accepts a conversationId narrowing, and every
+    // agent-pane subscription sends one — so a scoped response lists ONE conversation's
+    // streams. Reconciling channel-wide against it read every sibling as finished: two
+    // conversations generating under one agent, and merely mounting conversation A tore down
+    // conversation B mid-generation.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    openStreamSession(descriptor({ messageId: 'msg-A', conversationId: 'conv-A' }));
+    openStreamSession(descriptor({ messageId: 'msg-B', conversationId: 'conv-B' }));
+
+    // Conversation A's pane bootstraps: the server answers with A's stream only.
+    reconcileChannelSessions('page-1', new Set(['msg-A']), { conversationId: 'conv-A' });
+
+    expect(store().streams.has('msg-A'), 'A is live and listed').toBe(true);
+    expect(
+      store().streams.has('msg-B'),
+      'B was never asked about, so its absence proves nothing about it',
+    ).toBe(true);
+    expect(ends).toEqual([]);
+  });
+
+  it('given a scoped snapshot, still drops a stale session WITHIN that conversation', () => {
+    // The narrowing must not disable reconciliation, only bound it.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    openStreamSession(descriptor({ messageId: 'msg-A', conversationId: 'conv-A' }));
+    openStreamSession(descriptor({ messageId: 'msg-B', conversationId: 'conv-B' }));
+
+    reconcileChannelSessions('page-1', new Set(), { conversationId: 'conv-A' });
+
+    expect(store().streams.has('msg-A')).toBe(false);
+    expect(store().streams.has('msg-B')).toBe(true);
+    expect(ends.map((e) => e.messageId)).toEqual(['msg-A']);
+  });
+
+  it('given an UNSCOPED snapshot, still reconciles the whole channel', () => {
+    // The channel-wide provider subscription sends no narrowing, so its answer IS authoritative
+    // for the channel.
+    openStreamSession(descriptor({ messageId: 'msg-A', conversationId: 'conv-A' }));
+    openStreamSession(descriptor({ messageId: 'msg-B', conversationId: 'conv-B' }));
+
+    reconcileChannelSessions('page-1', new Set(['msg-A']));
+
+    expect(store().streams.has('msg-A')).toBe(true);
+    expect(store().streams.has('msg-B')).toBe(false);
+  });
+});
+
+describe('reconcileChannelSessions — scoped to its own channel', () => {
+  it('leaves a session on ANOTHER channel alone, however empty the live set', async () => {
+    // Bootstrap answers for one channel at a time. A reconcile that ignored the channel would
+    // tear down every other pane's streams on every bootstrap.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    openStreamSession(descriptor({ messageId: 'msg-other', channelId: 'page-2' }));
+
+    reconcileChannelSessions('page-1', new Set());
+
+    expect(store().streams.has('msg-other')).toBe(true);
+    expect(ends).toEqual([]);
+  });
+});

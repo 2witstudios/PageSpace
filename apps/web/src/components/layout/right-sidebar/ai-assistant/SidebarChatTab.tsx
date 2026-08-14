@@ -33,6 +33,7 @@ import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRe
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
 import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/hooks/outboundMessages';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
@@ -264,10 +265,6 @@ const SidebarChatTab: React.FC = () => {
   // Both modes' bases are the settled store view for their OWN conversation, read at call time
   // — see `useChatSession`. Answering an `ask_user` question after a reload therefore works
   // without any hydration step: the persisted assistant message IS the base.
-  const globalStableMessagesRef = useRef<UIMessage[]>([]);
-  const agentStableMessagesRef = useRef<UIMessage[]>([]);
-  const getGlobalBaseMessages = useCallback(() => globalStableMessagesRef.current, []);
-  const getAgentBaseMessages = useCallback(() => agentStableMessagesRef.current, []);
 
   // `userId` is what `isOwnStream` compares, so a store entry opened by either send is
   // recognised as this user's own in every tab and on every device.
@@ -292,7 +289,7 @@ const SidebarChatTab: React.FC = () => {
         : '',
       channelId: channelIdForGlobal,
       conversationId: globalConversationId,
-      getBaseMessages: getGlobalBaseMessages,
+      getBaseMessages: getOutboundMessages,
       onError: (err: Error) => {
         console.error('Sidebar Global Chat error:', err);
         toast.error('Chat error. Please try again.');
@@ -302,7 +299,7 @@ const SidebarChatTab: React.FC = () => {
       api: '/api/ai/chat',
       channelId: selectedAgent?.id ?? null,
       conversationId: agentConversationId,
-      getBaseMessages: getAgentBaseMessages,
+      getBaseMessages: getOutboundMessages,
       onError: (err: Error) => {
         console.error('Sidebar Agent Chat error:', err);
         toast.error('Chat error. Please try again.');

@@ -35,25 +35,27 @@ export interface UseDualModeChatReturn {
   }) => Promise<void>;
 }
 
+/** One mode's binding. Both modes take the same shape; only their endpoint and ids differ. */
+interface ModeConfig {
+  api: string;
+  channelId: string | null;
+  conversationId: string | null;
+  /**
+   * Resolved BY CONVERSATION, so both modes can pass the same shared resolver — see
+   * `getOutboundMessages`. It used to be parameterless and fed from a per-surface ref, which
+   * two of four surfaces never assigned.
+   */
+  getBaseMessages: (conversationId: string) => UIMessage[];
+  onError?: (error: Error) => void;
+}
+
 interface UseDualModeChatOptions {
   /** Currently selected agent (null = default mode) */
   selectedAgent: AgentInfo | null;
   /** The socket channel + conversation for the surface's null selection (global assistant). */
-  global: {
-    api: string;
-    channelId: string | null;
-    conversationId: string | null;
-    getBaseMessages: () => UIMessage[];
-    onError?: (error: Error) => void;
-  };
+  global: ModeConfig;
   /** The socket channel + conversation for agent mode. */
-  agent: {
-    api: string;
-    channelId: string | null;
-    conversationId: string | null;
-    getBaseMessages: () => UIMessage[];
-    onError?: (error: Error) => void;
-  };
+  agent: ModeConfig;
   /** Identity for the optimistic store entry a send opens. `userId` is what `isOwnStream` compares. */
   triggeredBy: { userId: string; displayName: string };
 }
