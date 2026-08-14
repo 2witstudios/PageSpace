@@ -21,20 +21,18 @@ import type { AgentInfo } from '@/types/agent';
 const globalSession = {
   sendMessage: vi.fn(async () => {}),
   regenerate: vi.fn(async () => {}),
-  addToolResult: vi.fn(async () => {}),
+  addToolResult: vi.fn(async () => ({ dispatched: true })),
   clearError: vi.fn(),
   status: 'ready' as const,
   error: undefined,
-  messages: [] as UIMessage[],
 };
 const agentSession = {
   sendMessage: vi.fn(async () => {}),
   regenerate: vi.fn(async () => {}),
-  addToolResult: vi.fn(async () => {}),
+  addToolResult: vi.fn(async () => ({ dispatched: true })),
   clearError: vi.fn(),
   status: 'ready' as const,
   error: undefined,
-  messages: [] as UIMessage[],
 };
 
 let sessionCallCount = 0;

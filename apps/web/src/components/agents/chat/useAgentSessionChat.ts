@@ -149,7 +149,7 @@ export function useAgentSessionChat({
   const activeStream = useConversationActiveStream(agent.id, conversationId);
   const { streams: remoteStreams } = useActiveStream(agent.id, conversationId);
 
-  const { wrapSend, pendingSendConversationId } = useSendHandoff(
+  const { wrapSend, pendingSendConversationId, releasePendingSend } = useSendHandoff(
     conversationId,
     status,
     activeStream?.isOwn === true,
@@ -212,6 +212,7 @@ export function useAgentSessionChat({
     isConversationBusy: isConversationBusyForAskUser,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody,
   });
 

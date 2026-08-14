@@ -41,6 +41,25 @@ export function useSendHandoff(
 ): {
   wrapSend: <T>(sendFn: () => T) => T | undefined;
   /**
+   * Release a pendingSend that will never become a stream.
+   *
+   * The clearing effect below is keyed on `[isStreamLive, status, conversationId]`, and a
+   * wrapped callback that returns WITHOUT dispatching moves none of them — so the name stays
+   * set for the life of the mount. Two reachable paths do exactly that: answering one of
+   * several `ask_user` questions on a turn (the resume only fires once every question is
+   * answered), and losing the `claimAnswering` race to a co-mounted surface.
+   *
+   * The consequence is not cosmetic. `displayIsStreaming` ORs this name, so the composer
+   * renders only Stop with the textarea disabled, and `isConversationBusy` follows it, so
+   * `selectAnswerableAskUserToolCallIds` returns an empty set — the REMAINING question becomes
+   * permanently unanswerable and the conversation cannot be sent to. The 15s safety timeout
+   * deliberately does not clear the name (it only releases the editing-store hold), and Stop
+   * resolves to an abort against a conversation with nothing running, which reports silently.
+   *
+   * So a caller that knows no send happened says so.
+   */
+  releasePendingSend: () => void;
+  /**
    * The conversation the in-flight send was made in, or null. This is the pendingSend key —
    * the only name the client holds during the submitted window, and what Stop aborts by there
    * (see decideStopAction).
@@ -151,5 +170,14 @@ export function useSendHandoff(
     }
   }, [conversationId]);
 
-  return { wrapSend, pendingSendConversationId };
+  const releasePendingSend = useCallback(() => {
+    if (hasPendingSendRef.current && conversationId) {
+      hasPendingSendRef.current = false;
+      useEditingStore.getState().endPendingSend(conversationId);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    }
+    setPendingSendConversationId(null);
+  }, [conversationId]);
+
+  return { wrapSend, pendingSendConversationId, releasePendingSend };
 }

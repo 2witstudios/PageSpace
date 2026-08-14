@@ -382,7 +382,7 @@ const GlobalAssistantView: React.FC = () => {
   // Hand off to OUR OWN stream, never merely "a stream exists": on a shared conversation a
   // remote user's live stream would otherwise end our pendingSend the instant we clicked send,
   // leaving the submitted window — the one it exists to cover — unprotected.
-  const { wrapSend, pendingSendConversationId } = useSendHandoff(
+  const { wrapSend, pendingSendConversationId, releasePendingSend } = useSendHandoff(
     currentConversationId,
     status,
     activeStream?.isOwn === true,
@@ -795,6 +795,7 @@ const GlobalAssistantView: React.FC = () => {
     isConversationBusy: effectiveIsStreaming,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody: buildRequestBody,
   });
 

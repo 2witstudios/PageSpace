@@ -378,7 +378,7 @@ const SidebarChatTab: React.FC = () => {
   // STORE ENTRY appearing, not useChat's status (leaf 5.7).
   // OUR OWN stream, not merely "a stream exists" — a remote stream on a shared conversation
   // must not end a pendingSend it has nothing to do with.
-  const { wrapSend, pendingSendConversationId } = useSendHandoff(
+  const { wrapSend, pendingSendConversationId, releasePendingSend } = useSendHandoff(
     currentConversationId,
     status,
     activeStream?.isOwn === true,
@@ -726,6 +726,7 @@ const SidebarChatTab: React.FC = () => {
     isConversationBusy: displayIsStreaming,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody: useCallback(
       () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
       [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],

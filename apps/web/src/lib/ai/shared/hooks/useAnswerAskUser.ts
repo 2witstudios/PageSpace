@@ -11,7 +11,7 @@ type AddToolResultFn = (args: {
   output: unknown;
   conversationId: string;
   options?: { body?: Record<string, unknown> };
-}) => void | PromiseLike<void>;
+}) => PromiseLike<{ dispatched: boolean }>;
 
 export interface UseAnswerAskUserOptions {
   conversationId: string | null;
@@ -21,6 +21,14 @@ export interface UseAnswerAskUserOptions {
   isConversationBusy: boolean;
   addToolResult: AddToolResultFn;
   wrapSend: <T>(sendFn: () => T) => T | undefined;
+  /**
+   * `useSendHandoff.releasePendingSend`. Called on every path that registers a pendingSend and
+   * then does NOT send — answering one of several questions on a turn, or losing the
+   * `claimAnswering` race. Without it the name is never cleared, and the conversation wedges:
+   * composer stuck on Stop, and the remaining question unanswerable because
+   * `isConversationBusy` stays true.
+   */
+  releasePendingSend: () => void;
   /** Builds the per-request body (chatId/conversationId/provider/etc) for this surface. */
   buildBody: () => Record<string, unknown> | Promise<Record<string, unknown>>;
 }
@@ -65,6 +73,7 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
     isConversationBusy,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody,
   } = options;
 
@@ -92,7 +101,12 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       // indefinitely — nothing would ever reach the try/finally that clears them (PR 6 review,
       // CodeRabbit, Critical).
       wrapSend(async () => {
-        if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) return;
+        if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) {
+          // Lost the race to a co-mounted surface (or a double-click). `wrapSend` has already
+          // registered a pendingSend for a send that will not happen.
+          releasePendingSend();
+          return;
+        }
 
         const messageId = stableMessages[stableMessages.length - 1]?.id;
         if (conversationId && messageId) {
@@ -106,13 +120,17 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
           // where useChat's internal array was empty and `hydrateTransportBeforeReinvoke` had
           // to copy the snapshot in before every re-invocation.
           const body = await buildBody();
-          await addToolResult({
+          const { dispatched } = await addToolResult({
             tool: ASK_USER_TOOL_NAME,
             toolCallId,
             output,
             conversationId: conversationId!,
             options: { body },
           });
+          // A turn with several questions resumes only once every one is answered, so this
+          // answer may have recorded a patch and sent nothing. The pendingSend must go either
+          // way, or the REMAINING question becomes unanswerable.
+          if (!dispatched) releasePendingSend();
         } catch (err) {
           if (conversationId && messageId) {
             conversationMessagesActions.revertAskUserAnswer(conversationId, { messageId, toolCallId });
@@ -123,7 +141,15 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
         }
       });
     },
-    [answerableToolCallIds, stableMessages, conversationId, wrapSend, buildBody, addToolResult],
+    [
+      answerableToolCallIds,
+      stableMessages,
+      conversationId,
+      wrapSend,
+      releasePendingSend,
+      buildBody,
+      addToolResult,
+    ],
   );
 
   return { answerableToolCallIds, submitAnswers };

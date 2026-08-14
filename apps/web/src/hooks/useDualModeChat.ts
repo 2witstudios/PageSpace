@@ -25,14 +25,20 @@ export interface UseDualModeChatReturn {
   globalStatus: ChatSessionStatus;
   /** Agent mode status. */
   agentStatus: ChatSessionStatus;
-  /** Add a client-side tool result (mode-selected) — used by ask_user answers */
+  /**
+   * Add a client-side tool result (mode-selected) — used by ask_user answers.
+   *
+   * Reports whether it DISPATCHED: a turn with several questions resumes only once every one is
+   * answered, and a caller holding a pendingSend needs to know. See
+   * `useSendHandoff.releasePendingSend`.
+   */
   addToolResult: (args: {
     tool: string;
     toolCallId: string;
     output: unknown;
     conversationId: string;
     options?: { body?: Record<string, unknown> };
-  }) => Promise<void>;
+  }) => Promise<{ dispatched: boolean }>;
 }
 
 /** One mode's binding. Both modes take the same shape; only their endpoint and ids differ. */

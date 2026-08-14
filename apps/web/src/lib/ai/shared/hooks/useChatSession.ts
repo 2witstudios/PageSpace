@@ -142,14 +142,21 @@ export interface UseChatSessionResult {
   ) => Promise<void>;
   /** Re-run the last turn. Same admission semantics as `sendMessage`. */
   regenerate: (conversationId: string, options?: ChatSessionSendOptions) => Promise<void>;
-  /** Record a client-side tool result and, when the turn is answerable, resume automatically. */
+  /**
+   * Record a client-side tool result and, when the turn is answerable, resume automatically.
+   *
+   * Reports whether it actually DISPATCHED. A turn with several `ask_user` questions resumes
+   * only once every one is answered, so answering the first records a patch and sends nothing —
+   * and a caller holding a pendingSend against that send needs to know, or the conversation
+   * wedges. See `useSendHandoff.releasePendingSend`.
+   */
   addToolResult: (args: {
     tool: string;
     toolCallId: string;
     output: unknown;
     conversationId: string;
     options?: ChatSessionSendOptions;
-  }) => Promise<void>;
+  }) => Promise<{ dispatched: boolean }>;
   /** The current conversation's send state. */
   status: ChatSessionStatus;
   /** The current conversation's send error. */
@@ -406,7 +413,7 @@ export const useChatSession = ({
       output: unknown;
       conversationId: string;
       options?: ChatSessionSendOptions;
-    }): Promise<void> => {
+    }): Promise<{ dispatched: boolean }> => {
       patchesRef.current = [
         ...patchesRef.current.filter((patch) => patch.toolCallId !== toolCallId),
         { toolCallId, output },
@@ -418,9 +425,10 @@ export const useChatSession = ({
       // the same predicate the SDK's `sendAutomaticallyWhen` ran, now explicit. It is not the
       // stock `lastAssistantMessageIsCompleteWithToolCalls`, because every PageSpace turn ends
       // with the executed `finish` tool and that helper would loop forever.
-      if (!askUserAnswersComplete({ messages: patched })) return;
+      if (!askUserAnswersComplete({ messages: patched })) return { dispatched: false };
 
       await dispatch(targetConversationId, { ...(options?.body ?? {}) }, patched);
+      return { dispatched: true };
     },
     [composeMessages, dispatch],
   );

@@ -22,8 +22,9 @@ const baseOptions = (overrides: Partial<UseAnswerAskUserOptions> = {}): UseAnswe
   conversationId: 'conv-1',
   renderedMessages: [askUserMessage('m1', 'tc1')],
   isConversationBusy: false,
-  addToolResult: vi.fn().mockResolvedValue(undefined),
+  addToolResult: vi.fn().mockResolvedValue({ dispatched: true }),
   wrapSend: (sendFn) => sendFn(),
+  releasePendingSend: vi.fn(),
   buildBody: () => ({}),
   ...overrides,
 });
@@ -112,4 +113,68 @@ describe('useAnswerAskUser', () => {
   // `useChatSession` has no shared instance and no single-body limit — a resume is simply a
   // `fetch` alongside whatever else is in flight — so the handoff is deleted rather than
   // moved, and there is no refusal path left to have behaviour. The cases go with it.
+});
+
+describe('a pendingSend that will never become a stream must be released', () => {
+  // `useSendHandoff`'s clearing effect is keyed on [isStreamLive, status, conversationId], and a
+  // wrapped callback that returns WITHOUT dispatching moves none of them — so the name sticks
+  // for the life of the mount. The composer then renders only Stop, and `isConversationBusy`
+  // keeps the REMAINING question unanswerable. Both non-dispatching paths must say so.
+
+  it('given the answer did not resume the turn, releases the pendingSend', async () => {
+    // A turn with several ask_user questions resumes only once every one is answered, so
+    // answering the first records a patch and sends nothing.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: false });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(addToolResult).toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
+  });
+
+  it('given the answer DID resume the turn, does not release it', async () => {
+    // The stream is coming; the pendingSend hands off to the store entry as designed.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+  });
+
+  it('given the claimAnswering race is LOST, releases without sending', async () => {
+    // A co-mounted surface (or a double-click) got there first. `wrapSend` has already
+    // registered a pendingSend for a send that will not happen.
+    const releasePendingSend = vi.fn();
+    const addToolResult = vi.fn().mockResolvedValue({ dispatched: true });
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, releasePendingSend })),
+    );
+
+    // The handler a co-mounted surface bound from a render BEFORE any claim landed — which is
+    // what the race actually is. Claiming first instead would make the id unanswerable and the
+    // callback would bail at the render-time guard, never registering a pendingSend at all.
+    const submitFromEarlierRender = result.current.submitAnswers;
+    act(() => {
+      useAskUserAnsweringStore.getState().claimAnswering('tc1');
+    });
+
+    await act(async () => {
+      submitFromEarlierRender('tc1', { answers: ['yes'] } as never);
+    });
+
+    expect(addToolResult).not.toHaveBeenCalled();
+    expect(releasePendingSend).toHaveBeenCalled();
+  });
 });
