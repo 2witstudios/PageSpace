@@ -63,7 +63,7 @@ const {
     mockSetStreamParts: vi.fn(),
     mockRemoveStream: vi.fn(),
     mockClearPageStreams: vi.fn(),
-    mockConsumeStreamJoin: vi.fn().mockResolvedValue(undefined),
+    mockConsumeStreamJoin: vi.fn().mockResolvedValue({ aborted: false }),
     mockAbortActiveStreamByMessageId: vi.fn().mockResolvedValue({ aborted: true, reason: '' }),
     mockClearActiveStreamId: vi.fn(),
     mockGetBrowserSessionId: vi.fn(() => SESSION_ID_LOCAL),
@@ -209,7 +209,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     mockFetchWithAuth.mockImplementation(defaultFetch);
     mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
     mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
-    mockConsumeStreamJoin.mockResolvedValue(undefined);
+    mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
   });
 
   const renderProvider = () =>
@@ -356,7 +356,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     );
     mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
     mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
-    mockConsumeStreamJoin.mockResolvedValue(undefined);
+    mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
   });
 
   const renderProvider = () =>
@@ -558,7 +558,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     mockFetchWithAuth.mockImplementation(defaultFetch);
     mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
     mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
-    mockConsumeStreamJoin.mockResolvedValue(undefined);
+    mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
     // Wire addStream/removeStream to the in-memory map so onStreamComplete lookups work
     mockAddStream.mockImplementation((stream: { messageId: string; conversationId: string; isOwn: boolean; pageId: string; triggeredBy: { userId: string; displayName: string } }) => {
       mockStreams.set(stream.messageId, { ...stream, parts: [] });
@@ -646,7 +646,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     });
 
     let pendingResolve!: () => void;
-    mockConsumeStreamJoin.mockReturnValueOnce(new Promise((res) => { pendingResolve = () => res(undefined); }));
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise((res) => { pendingResolve = () => res({ aborted: false }); }));
 
     renderProvider();
 
@@ -683,7 +683,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     });
 
     let resolveJoin!: () => void;
-    mockConsumeStreamJoin.mockReturnValueOnce(new Promise((res) => { resolveJoin = () => res(undefined); }));
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise((res) => { resolveJoin = () => res({ aborted: false }); }));
 
     const { result } = renderProvider();
 
@@ -728,6 +728,10 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       'msg-remote',
       expect.any(AbortSignal),
       expect.any(Function),
+      // The cursor. A join is `fromSeq`-addressed now, and the argument is asserted rather
+      // than ignored: `toHaveBeenCalledWith` matches the FULL argument list, so leaving it
+      // out does not loosen the assertion — it fails it.
+      0,
     );
     // A cross-tab stream is recorded as NOT ours. That single fact is what keeps it from
     // lighting up this tab's Stop button (selectActiveStream reports isOwn:false, and the
@@ -756,7 +760,11 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     });
 
     expect(mockAddStream).not.toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-self' }));
-    expect(mockConsumeStreamJoin).not.toHaveBeenCalledWith('msg-self', expect.anything(), expect.anything());
+    // Asserted on the messageId alone, not on a full argument list. A `not.toHaveBeenCalledWith`
+    // whose arity is stale passes for the WRONG reason — it stops matching the real call, so it
+    // would go on reporting "never called" however loudly the call happened. That is exactly what
+    // this line did once the join grew its `fromSeq` cursor.
+    expect(mockConsumeStreamJoin.mock.calls.map((call) => call[0])).not.toContain('msg-self');
   });
 
   // The reload case: browserSessionId lives in sessionStorage and survives a reload,
@@ -779,7 +787,9 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     expect(mockAddStream).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'msg-self', isOwn: true }),
     );
-    expect(mockConsumeStreamJoin).toHaveBeenCalledWith('msg-self', expect.anything(), expect.anything());
+    expect(mockConsumeStreamJoin).toHaveBeenCalledWith(
+      'msg-self', expect.anything(), expect.anything(), 0,
+    );
   });
 
   // AC6 — channel filter
@@ -1043,7 +1053,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     let resolveJoin!: () => void;
     mockConsumeStreamJoin.mockImplementationOnce(
       (_id: string, _signal: AbortSignal) =>
-        new Promise<undefined>((res) => { resolveJoin = () => res(undefined); }),
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
     );
 
     const { unmount } = renderProvider();
@@ -1117,7 +1127,7 @@ describe('GlobalChatProvider — editing-store registration', () => {
     mockFetchWithAuth.mockImplementation(defaultFetch);
     mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
     mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
-    mockConsumeStreamJoin.mockResolvedValue(undefined);
+    mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
   });
 
   // THE contract this must protect (repo CLAUDE.md): a streaming registration gates SWR
