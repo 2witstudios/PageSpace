@@ -267,19 +267,32 @@ describe('cleanupAbandonedStreamFrames', () => {
     );
   });
 
-  it('given_abandonedFrames_cutoffIsAFullDayBack_soADelayedRecoveryStillFindsItsFrames', async () => {
+  it('given_abandonedFrames_cutoffIsExactlyOneDayBack_soADelayedRecoveryStillFindsItsFrames', async () => {
     // A dead stream is materialized well inside two hours, but only when something LOOKS —
     // a poll, the next send, a Stop. That trigger can be arbitrarily delayed, so the window
     // has to outlast a user who closes the tab and comes back tomorrow.
-    const { db, captured } = createMockDb([]);
-    const before = Date.now();
+    //
+    // FROZEN CLOCK, so this pins the constant exactly instead of bracketing it. The first
+    // version of this test read the clock BEFORE the call and asserted `before - cutoff >=
+    // 24h` — but the sweep derives its cutoff from a LATER `Date.now()`, so that quantity is
+    // `24h - elapsed` and the assertion only held while elapsed rounded to 0ms. It passed
+    // locally and would have flaked in CI (review finding — coderabbitai, PR #2409). A
+    // bracket around a real clock would fix the flake; freezing the clock also makes the
+    // assertion say what it means.
+    vi.useFakeTimers();
+    try {
+      const now = new Date('2026-08-14T12:00:00.000Z');
+      vi.setSystemTime(now);
+      const { db, captured } = createMockDb([]);
 
-    await cleanupAbandonedStreamFrames(db);
+      await cleanupAbandonedStreamFrames(db);
 
-    const cutoff = (captured.condition as { val: Date }).val.getTime();
-    const ageMs = before - cutoff;
-    expect(ageMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
-    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
+      const cutoff = (captured.condition as { val: Date }).val;
+      expect(cutoff.toISOString()).toBe('2026-08-13T12:00:00.000Z');
+      expect(now.getTime() - cutoff.getTime()).toBe(24 * 60 * 60 * 1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

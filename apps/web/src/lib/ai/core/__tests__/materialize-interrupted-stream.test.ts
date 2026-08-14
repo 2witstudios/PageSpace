@@ -904,6 +904,56 @@ describe('materializeInterruptedStream — durable frame log', () => {
     });
   });
 
+  it('given a frame log SHORTER than the checkpoint, prefers the richer snapshot', async () => {
+    // "The log exists" is not "the log is longer". The writer gives up at its first failed
+    // batch and at its durable-byte ceiling, leaving a valid but short contiguous prefix,
+    // while the checkpoint fold carries on independently from memory. Preferring the log
+    // unconditionally would materialize the truncated one.
+    mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN.slice(0, 2))]);
+
+    await materializeInterruptedStream(
+      pageRow({ parts: [textPart('a far more complete snapshot')], rawPartsCount: 900 }),
+    );
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a 2-frame durable log against a snapshot reflecting 900 frames',
+      should: 'materialize the snapshot — the log stopped early and is not the fuller record',
+      actual: persistedText(values),
+      expected: 'a far more complete snapshot',
+    });
+  });
+
+  it('given a frame log at least as long as the checkpoint, prefers the log', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
+
+    await materializeInterruptedStream(
+      pageRow({ parts: [textPart('the staler snapshot')], rawPartsCount: RICH_TURN.length }),
+    );
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a log and a snapshot that reach equally far',
+      should: 'fold the log — equal reach means equal content, and the log is the unfolded original',
+      actual: persistedText(values),
+      expected: 'I found three invoices.',
+    });
+  });
+
+  it('given a row that does not project rawPartsCount, trusts the log rather than crashing', async () => {
+    mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart('snapshot')], rawPartsCount: undefined }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a caller that omitted the comparison column',
+      should: 'degrade to preferring the log, not to a crash',
+      actual: persistedText(values),
+      expected: 'I found three invoices.',
+    });
+  });
+
   it('given a frame-log read that fails, falls back to the parts snapshot rather than losing the reply', async () => {
     mockFrameSelectOrderBy.mockRejectedValue(new Error('frames table unreachable'));
 

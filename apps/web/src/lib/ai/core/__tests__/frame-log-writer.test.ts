@@ -321,6 +321,53 @@ describe('startFrameLogWriter — error paths end the writer', () => {
     });
   });
 
+  it('given a channel that ALREADY finished, leaves no interval ticking behind it', async () => {
+    // `channel.subscribe` ends synchronously for a finished channel, so `onEnd` -> `close()`
+    // -> `terminate()` all run before `startFrameLogWriter` returns. With the interval armed
+    // after the subscription, `terminate()` would have found it still null, the timer would
+    // then be created with nobody owning it, and every later `terminate()` would return early
+    // on `stopped` — a 200ms tick retaining this writer for the life of the process.
+    //
+    // The window is real: `createStreamLifecycle` opens the channel, then awaits the sessions
+    // INSERT and `consumePendingAbort` before starting the writer, and a takeover landing in
+    // that gap finishes the channel.
+    vi.useFakeTimers();
+    try {
+      const channel = openStreamChannel({ messageId: 'msg-dead-on-arrival' });
+      channel.finish(false);
+
+      startFrameLogWriter({ messageId: 'msg-dead-on-arrival', conversationId: 'conv-1', channel });
+      await settle();
+
+      assert({
+        given: 'a writer started on a channel that had already finished',
+        should: 'leave zero timers pending',
+        actual: vi.getTimerCount(),
+        expected: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given an ordinary close(), leaves no interval ticking behind it either', async () => {
+    vi.useFakeTimers();
+    try {
+      const { channel, writer } = start('msg-clean-close');
+      channel.append(textDelta('a'));
+      await writer.close();
+
+      assert({
+        given: 'a writer closed the ordinary way',
+        should: 'clear its flush interval',
+        actual: vi.getTimerCount(),
+        expected: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('given close(), stops accepting further frames', async () => {
     const { channel, writer } = start();
     await writer.close();

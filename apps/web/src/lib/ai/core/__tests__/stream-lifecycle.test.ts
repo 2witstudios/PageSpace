@@ -1065,25 +1065,33 @@ describe('createStreamLifecycle', () => {
  * skipped as an orphan, so the reply does not shorten; it VANISHES.
  *
  * The lifecycle now folds each frame as it arrives, before eviction can reach it.
+ *
+ * DRIVEN THROUGH THE RING'S FRAME-COUNT CAP, not its byte cap, because that is the dimension
+ * a real reply reaches: a long agent run emits tens of thousands of small deltas, which cost
+ * the fold almost nothing (they accumulate INTO one text part) while filling the ring's
+ * 50,000-frame budget. The byte dimension is where `MAX_FOLD_BYTES` lives instead — covered
+ * separately below.
  */
 describe('createStreamLifecycle — checkpoint survives ring eviction', () => {
   beforeEach(resetStreamLifecycleMocks);
   afterEach(finishTrackedLifecycles);
 
-  /**
-   * One frame big enough to blow the channel's 24MB ring on its own, so everything appended
-   * before it is evicted. A `data-*` frame rather than a giant text delta, so the eviction is
-   * the only thing under test — the assertion reads a small text part, not a 25MB string.
-   * It is also a durability boundary, so it flushes a checkpoint immediately.
-   */
-  const evictingFrame = chunk({ type: 'data-bulk', id: 'bulk-1', data: { blob: 'x'.repeat(25 * 1024 * 1024) } });
+  /** One past the channel's DEFAULT_MAX_MEMORY_FRAMES, so the oldest frames are evicted. */
+  const RING_FRAME_CAP = 50_000;
+  const OPENING_TEXT = 'the beginning of the reply';
+
+  /** Open a text part, write recognizable text, then bury it under an evicting flood. */
+  const floodPastRingCap = (handle: { channel: { append: (c: UIMessageChunk) => void } }) => {
+    handle.channel.append(textStart);
+    handle.channel.append(textDelta(OPENING_TEXT));
+    for (let i = 0; i < RING_FRAME_CAP; i += 1) handle.channel.append(textDelta('x'));
+  };
 
   it('given a reply whose opening frames were evicted, should still persist them in the snapshot', async () => {
     const handle = await createStreamLifecycle(params());
 
-    handle.channel.append(textStart);
-    handle.channel.append(textDelta('the beginning of the reply'));
-    handle.channel.append(evictingFrame);
+    floodPastRingCap(handle);
+    handle.channel.append(toolBoundary);
     await flushMicrotasks();
     await flushMicrotasks();
 
@@ -1091,36 +1099,96 @@ describe('createStreamLifecycle — checkpoint survives ring eviction', () => {
     expect(handle.channel.firstAvailableSeq).toBeGreaterThan(0);
 
     const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { parts: { type: string; text?: string }[] };
-    expect(persisted.parts.find((p) => p.type === 'text')?.text).toBe('the beginning of the reply');
+    const text = persisted.parts.find((p) => p.type === 'text')?.text ?? '';
+    expect(text.startsWith(OPENING_TEXT)).toBe(true);
   });
 
-  it('given evicted frames, should count them in rawPartsCount rather than reporting only what survived in memory', async () => {
+  it('given evicted frames, should count them all in rawPartsCount rather than only what survived in memory', async () => {
     const handle = await createStreamLifecycle(params());
 
-    handle.channel.append(textStart);
-    handle.channel.append(textDelta('a'));
-    handle.channel.append(evictingFrame);
+    floodPastRingCap(handle);
+    handle.channel.append(toolBoundary);
     await flushMicrotasks();
     await flushMicrotasks();
 
     const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { rawPartsCount: number };
-    // Three frames were folded; the ring holds one. The count describes the SNAPSHOT, so it
-    // must be the folded total — an under-count makes an old client re-apply text it has
-    // already rendered.
-    expect(persisted.rawPartsCount).toBe(3);
-    expect(handle.channel.getFrames().length).toBeLessThan(3);
+    // Every frame was folded; the ring holds only its cap. The count describes the SNAPSHOT,
+    // so it must be the folded total — an under-count makes an old client re-apply text it
+    // has already rendered.
+    expect(persisted.rawPartsCount).toBe(RING_FRAME_CAP + 3);
+    expect(handle.channel.getFrames().length).toBeLessThan(RING_FRAME_CAP + 3);
   });
 
   it('given evicted frames, getParts() should return the whole reply, not the ring\'s remainder', async () => {
     const handle = await createStreamLifecycle(params());
 
-    handle.channel.append(textStart);
-    handle.channel.append(textDelta('survives eviction'));
-    handle.channel.append(evictingFrame);
+    floodPastRingCap(handle);
     await flushMicrotasks();
 
     const parts = await handle.getParts();
-    expect(parts.find((p) => p.type === 'text')).toMatchObject({ text: 'survives eviction' });
+    const text = (parts.find((p) => p.type === 'text') as { text?: string } | undefined)?.text ?? '';
+    expect(text.startsWith(OPENING_TEXT)).toBe(true);
+  });
+});
+
+/**
+ * The running fold is BOUNDED. It holds the turn's reduction for the generation's lifetime,
+ * which is what stops eviction truncating the snapshot — but an accumulator with no ceiling is
+ * a worse failure than the truncation it fixes, because it can OOM the worker and take the
+ * whole generation down (review finding — chatgpt-codex-connector, PR #2409).
+ */
+describe('createStreamLifecycle — the checkpoint fold is bounded', () => {
+  beforeEach(resetStreamLifecycleMocks);
+  afterEach(finishTrackedLifecycles);
+
+  /** One frame large enough to blow the 24MB fold budget on its own. */
+  const hugeFrame = chunk({ type: 'text-delta', id: 't1', delta: 'x'.repeat(25 * 1024 * 1024) });
+
+  it('given a payload past the fold budget, should stop folding rather than grow without bound', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    handle.channel.append(textStart);
+    handle.channel.append(textDelta('kept'));
+    handle.channel.append(hugeFrame);
+    handle.channel.append(toolBoundary);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as {
+      parts: { type: string; text?: string }[];
+      rawPartsCount: number;
+    };
+    // The frames before the cap are kept — the snapshot stays a valid PREFIX, never an
+    // orphaned tail — and nothing from the cap onward is absorbed.
+    expect(persisted.parts.find((p) => p.type === 'text')?.text).toBe('kept');
+    expect(persisted.rawPartsCount).toBe(2);
+  });
+
+  it('given the fold capped, should say so once rather than fail silently', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    handle.channel.append(textStart);
+    handle.channel.append(hugeFrame);
+    handle.channel.append(textDelta('after the cap'));
+    await flushMicrotasks();
+
+    const capWarnings = mockLoggerWarn.mock.calls.filter(([msg]) =>
+      String(msg).includes('checkpoint fold hit its memory cap'));
+    expect(capWarnings).toHaveLength(1);
+  });
+
+  it('given an ordinary reply, should not cap — the budget must not bite a normal turn', async () => {
+    const handle = await createStreamLifecycle(params());
+
+    writeText(handle, 'an ordinary reply');
+    handle.channel.append(toolBoundary);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(mockLoggerWarn.mock.calls.filter(([msg]) =>
+      String(msg).includes('checkpoint fold hit its memory cap'))).toHaveLength(0);
+    const persisted = mockUpdateSet.mock.calls.at(-1)?.[0] as { parts: { type: string; text?: string }[] };
+    expect(persisted.parts.find((p) => p.type === 'text')?.text).toBe('an ordinary reply');
   });
 });
 
@@ -1155,6 +1223,62 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     // failed and nothing was persisted at all, which is exactly the case the durable log
     // exists for; deleting here would throw away the only copy of the reply.
     const handle = await createStreamLifecycle(params());
+    handle.finish(false);
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).not.toHaveBeenCalled();
+  });
+
+  it('given a confirmed terminal write but no finish() yet, should NOT release', async () => {
+    // execute-end persists the buffered snapshot and `onFinish` then refines it. Releasing on
+    // the first of those discards a tail the pump may still be forwarding into the channel
+    // while that write is in flight.
+    const handle = await createStreamLifecycle(params());
+    handle.confirmTerminalWrite('msg-1');
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).not.toHaveBeenCalled();
+  });
+
+  it('given a confirmed terminal write and then finish(), should release', async () => {
+    const handle = await createStreamLifecycle(params());
+    handle.confirmTerminalWrite('msg-1');
+    handle.finish(false);
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-1');
+  });
+
+  it('given finish() FIRST and the confirmation afterwards, should still release', async () => {
+    // The abort ordering: `onAbort` finishes the lifecycle immediately, and execute-end /
+    // onFinish persist afterwards. The gate closes on whichever half arrives last.
+    const handle = await createStreamLifecycle(params());
+    handle.finish(true);
+    await flushMicrotasks();
+    expect(mockReleaseFrames).not.toHaveBeenCalled();
+
+    handle.confirmTerminalWrite('msg-1');
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-1');
+  });
+
+  it('given several terminal writes on one turn, should release exactly once', async () => {
+    const handle = await createStreamLifecycle(params());
+    handle.confirmTerminalWrite('msg-1');
+    handle.confirmTerminalWrite('msg-1');
+    handle.finish(false);
+    handle.confirmTerminalWrite('msg-1');
+    await flushMicrotasks();
+
+    expect(mockReleaseFrames).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a confirmation for another message, should ignore it', async () => {
+    // The route helper that confirms is shared with writes that have no frame log — the help
+    // responder's own message, for one. A foreign id must not arm this generation's release.
+    const handle = await createStreamLifecycle(params());
+    handle.confirmTerminalWrite('some-other-message');
     handle.finish(false);
     await flushMicrotasks();
 

@@ -64,17 +64,8 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * The epilogue (stream construction, `onFinish`, terminal persist, hold
  * settle, telemetry) is where most of it lives and is the extraction that
  * would pay first; see the entry's docblock.
- *
- * RAISED 163 -> 164 for the durable frame log's retention hook: both strategies
- * import `releaseFramesForMessage` to release a generation's frames once their
- * own terminal assistant write is confirmed, and the import statement is the
- * one byte-identical line. Recorded rather than worked around because the
- * ratchet is asking the right question and the honest answer is "yes, both
- * files need this symbol" — the duplication that would actually be worth
- * extracting is the `saveTerminal*AssistantMessage` wrapper each one wraps it
- * in, which is the epilogue extraction named above.
  */
-const RECORDED_IDENTICAL_LINES = 164;
+const RECORDED_IDENTICAL_LINES = 163;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

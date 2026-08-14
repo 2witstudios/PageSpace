@@ -11,7 +11,7 @@ import {
   streamChannelRegistry,
   type UIMessagePart,
 } from '@/lib/ai/core/stream-channel-registry';
-import type { StreamChannel } from '@/lib/ai/core/stream-channel';
+import { estimateFrameBytes, type StreamChannel } from '@/lib/ai/core/stream-channel';
 import { createPartsFolder } from '@/lib/ai/streams/foldChunksToParts';
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
@@ -64,6 +64,30 @@ export interface StreamLifecycleHandle {
    * `parsePartialJson`. Was `getBufferedParts(): UIMessagePart[]`.
    */
   getParts: () => Promise<UIMessagePart[]>;
+  /**
+   * Record that a TERMINAL `messages` row for this generation has been durably written.
+   *
+   * The frame log's retention gate. Frames are the only copy of a reply nothing else has
+   * saved, so they may not be deleted until something else has — but "a terminal write
+   * happened" is not on its own the right moment to delete either, because a turn performs
+   * SEVERAL of them: execute-end persists the buffered snapshot, and `onFinish` then refines
+   * that row with the SDK's richer `responseMessage`. Releasing at the first one throws away
+   * the frames while `messages` still holds only the earlier, shorter snapshot — and the pump
+   * can still be forwarding that turn's final frames while execute-end's write is in flight,
+   * so the tail it discards is real (review finding — chatgpt-codex-connector, PR #2409).
+   *
+   * So this only ARMS the release. The delete happens when this and `finish()` have both
+   * occurred, in whichever order they occur — `finish()` is the last thing every turn does,
+   * after the refinement, and on the abort path it runs first and the confirmation arrives
+   * afterwards. A turn where no terminal write is ever confirmed (the pump failed; nothing
+   * was persisted at all) never releases, which is exactly the case the log exists for.
+   *
+   * Takes the messageId it is confirming and ignores anything that is not this generation's,
+   * so a route helper shared with non-stream writes (the help responder) cannot arm it.
+   *
+   * Idempotent — a turn confirms once per terminal write and there are up to three.
+   */
+  confirmTerminalWrite: (messageId: string) => void;
   /**
    * True when a pending-abort intent was consumed immediately after INSERT time (#2028 item 1).
    * The row was updated to 'aborted' directly; the caller should abort the controller so
@@ -120,6 +144,34 @@ const HEARTBEAT_INTERVAL_MS = 20 * 1000;
  * backwards, calling the checkpoint beat a mitigation. It was the hole.)
  */
 const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
+
+/**
+ * Ceiling on what the running checkpoint fold may hold in memory.
+ *
+ * The fold below keeps this turn's reduction for the generation's lifetime — that is what
+ * makes ring eviction stop truncating the snapshot. Left unbounded it is an accumulator with
+ * no ceiling at all, which is worse than the truncation it fixes: an agent loop emitting
+ * multi-megabyte tool results across many steps could grow it past anything the ring would
+ * have held and OOM the worker, taking the whole generation with it (review finding —
+ * chatgpt-codex-connector, PR #2409).
+ *
+ * SET TO THE RING'S OWN BYTE BUDGET, deliberately, so this fold can never cost materially
+ * more memory than the buffer it reads from — the process's footprint is what it was before
+ * the fold became incremental.
+ *
+ * IT DOES NOT GIVE BACK THE BUG IT FIXED, because the ring's two caps bite in different
+ * places. The dimension that actually truncated long replies is the ring's 50,000-FRAME cap,
+ * reached by a long agent run's thousands of small text deltas — and those fold into a single
+ * accumulating text part, costing this budget almost nothing. Only genuinely huge payloads
+ * reach the byte cap, and there the durable frame log is the complete record and the
+ * materializer already prefers whichever of the two reaches further (see `recoverParts`).
+ *
+ * Past the cap the fold STOPS rather than evicting, so `parts` stays a valid, coherent PREFIX
+ * of the message. That is strictly better than what the ring does to a snapshot: eviction
+ * drops a part's opening frame and orphans every delta after it, so the content does not
+ * shorten, it disappears.
+ */
+const MAX_FOLD_BYTES = 24 * 1024 * 1024;
 
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
@@ -276,6 +328,9 @@ export const createStreamLifecycle = async (
       finish: noop,
       channel,
       getParts: async () => [],
+      // Nothing was recorded and the frames were already released above, so there is nothing
+      // for a confirmation to arm.
+      confirmTerminalWrite: noop,
       preAborted: true,
     };
   }
@@ -314,6 +369,15 @@ export const createStreamLifecycle = async (
   const frameLog = startFrameLogWriter({ messageId, conversationId, channel });
 
   let finished = false;
+  /**
+   * A terminal `messages` row for this generation has been durably written.
+   *
+   * Half of the frame log's release gate; `finished` is the other half. See
+   * `confirmTerminalWrite` on the handle for why BOTH are required and why neither alone is
+   * the right moment.
+   */
+  let terminalWriteConfirmed = false;
+  let framesReleased = false;
   // True when the in-memory buffer holds content not yet reflected in the last checkpoint
   // write — decideCheckpoint's dirty gate.
   let dirty = false;
@@ -349,7 +413,23 @@ export const createStreamLifecycle = async (
   const folder = createPartsFolder();
   let foldChain: Promise<void> = Promise.resolve();
   let foldedFrames = 0;
+  let foldedBytes = 0;
+  let foldCapped = false;
   const foldFrame = (chunk: UIMessageChunk): void => {
+    // Measured on the way in, with the channel's own estimator, so the two budgets cannot
+    // disagree about what a frame costs. Checked BEFORE the push so the cap bounds what the
+    // folder holds rather than discovering it one frame too late.
+    if (foldCapped) return;
+    foldedBytes += estimateFrameBytes(chunk);
+    if (foldedBytes > MAX_FOLD_BYTES) {
+      foldCapped = true;
+      loggers.ai.warn('stream-lifecycle: checkpoint fold hit its memory cap — snapshot is a prefix', {
+        messageId,
+        foldedFrames,
+        foldedBytes,
+      });
+      return;
+    }
     foldChain = foldChain
       .then(async () => {
         await folder.push(chunk);
@@ -499,6 +579,33 @@ export const createStreamLifecycle = async (
   // Never hold the process open for a checkpoint tick.
   checkpointInterval.unref?.();
 
+  /**
+   * Delete the durable frames — but only once BOTH halves of the gate are closed.
+   *
+   * `terminalWriteConfirmed` proves a durable `messages` row exists, so the frames are no
+   * longer the only copy of the reply. `finished` proves no more of this turn's terminal
+   * writes are coming, so the row that exists is the LAST and richest one rather than
+   * execute-end's earlier snapshot. Releasing on either alone loses content: on the
+   * confirmation alone, the refined `onFinish` write has not happened yet and the pump may
+   * still be forwarding the tail; on `finished` alone, the pump-failure path deletes a log
+   * that nothing ever persisted.
+   *
+   * Fire-and-forget and idempotent. Never awaited by `finish()`, which must stay synchronous.
+   */
+  const maybeReleaseFrames = (): void => {
+    if (framesReleased || !terminalWriteConfirmed || !finished) return;
+    framesReleased = true;
+    void releaseFramesForMessage(messageId);
+  };
+
+  const confirmTerminalWrite = (writtenMessageId: string): void => {
+    // Ignore a confirmation for anything but this generation's own assistant message. The
+    // route helper that calls this is shared with writes that have no frame log at all.
+    if (writtenMessageId !== messageId) return;
+    terminalWriteConfirmed = true;
+    maybeReleaseFrames();
+  };
+
   const finish = (aborted: boolean): void => {
     if (finished) return;
     finished = true;
@@ -508,12 +615,15 @@ export const createStreamLifecycle = async (
     const priorPersist = persistInFlight;
 
     // Flush the frame log's tail rather than let it die with the process. NOT a delete: the
-    // frames are released only once a terminal message write is CONFIRMED (see
-    // `releaseFramesForMessage`), and finish() runs on paths where no such write happened at
-    // all — the pump failing is the clearest one, and it is precisely the case the durable log
-    // exists for. Closing the channel below ends this writer's subscription too, so this is
-    // belt to that braces; both are idempotent.
+    // frames are released only once a terminal message write is CONFIRMED, and finish() runs on
+    // paths where no such write happened at all — the pump failing is the clearest one, and it
+    // is precisely the case the durable log exists for. Closing the channel below ends this
+    // writer's subscription too, so this is belt to that braces; both are idempotent.
     void frameLog.close();
+    // The other half of the release gate just closed. If a terminal write was already
+    // confirmed, this is the moment the frames stop being the only copy of the reply; if not,
+    // they are kept for recovery and the retention backstop.
+    maybeReleaseFrames();
 
     try {
       streamChannelRegistry.close(messageId, aborted);
@@ -595,5 +705,5 @@ export const createStreamLifecycle = async (
     return folder.parts;
   };
 
-  return { finish, channel, getParts, preAborted: false };
+  return { finish, channel, getParts, confirmTerminalWrite, preAborted: false };
 };

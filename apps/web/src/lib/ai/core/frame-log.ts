@@ -49,10 +49,17 @@ export interface FrameBatch {
  * frame), which is right for a hot-path budget and wrong for a column whose whole job is to
  * say how much durable storage this stream is using. One serialization per BATCH is
  * affordable; one per frame — on every token — would not be.
+ *
+ * And it is measured in UTF-8 BYTES, not string length. `String.prototype.length` counts
+ * UTF-16 code units, which equals the byte count only for ASCII: an accented Latin character
+ * costs 2 bytes, most CJK 3, an emoji 4, and each of those counts as 1 (or 2) code units. A
+ * column named `byte_size` that silently undercounts every non-English reply by up to 3x is
+ * not a storage metric, it is a misleading one — and this is the number a future per-stream
+ * durable quota would be enforced from (review finding — coderabbitai, PR #2409).
  */
 export const appendFrameBatch = async (batch: FrameBatch): Promise<boolean> => {
   try {
-    const byteSize = JSON.stringify(batch.frames).length;
+    const byteSize = Buffer.byteLength(JSON.stringify(batch.frames), 'utf8');
     await db.insert(aiStreamFrames).values({
       messageId: batch.messageId,
       conversationId: batch.conversationId,

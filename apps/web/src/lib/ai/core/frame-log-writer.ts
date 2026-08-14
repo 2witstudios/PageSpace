@@ -273,6 +273,30 @@ export const startFrameLogWriter = ({
 
   writers.set(messageId, self);
 
+  // ARMED BEFORE THE SUBSCRIPTION, and the order is load-bearing.
+  //
+  // `channel.subscribe` can call `onEnd` SYNCHRONOUSLY — for a channel that has already
+  // finished, and for a `fromSeq` the ring no longer holds. That reaches `self.close()`, and
+  // therefore `terminate()`, before `subscribe` has even returned. With the interval created
+  // afterwards, `terminate()` would have found it still `null`, this line would then arm a
+  // timer nobody owns, and every later `terminate()` would return early on `stopped` — a
+  // 200ms tick retaining this closure for the life of the process.
+  //
+  // The window is real: `createStreamLifecycle` opens the channel, then awaits the sessions
+  // INSERT and `consumePendingAbort` before starting this writer, and a takeover landing in
+  // that gap finishes the channel. Creating the timer first makes `terminate()` able to clear
+  // it in every ordering, rather than adding a guard that a future reordering could defeat
+  // (review finding — coderabbitai, PR #2409).
+  //
+  // Independent of the frame flow, for the same reason the checkpoint has its own interval: a
+  // stream that goes quiet mid-turn (a long tool call after its last text delta) would
+  // otherwise hold that delta in memory until the tool returned. Unref'd — a durability
+  // flush must never hold the process open. A tick with nothing pending is a no-op.
+  interval = setInterval(() => {
+    maybeFlush(false, Date.now());
+  }, FRAME_FLUSH_INTERVAL_MS);
+  interval.unref?.();
+
   unsubscribe = channel.subscribe({
     fromSeq: 0,
     onFrame: (frame) => {
@@ -288,15 +312,6 @@ export const startFrameLogWriter = ({
       void self.close();
     },
   });
-
-  // Independent of the frame flow, for the same reason the checkpoint has its own interval: a
-  // stream that goes quiet mid-turn (a long tool call after its last text delta) would
-  // otherwise hold that delta in memory until the tool returned. Unref'd — a durability
-  // flush must never hold the process open.
-  interval = setInterval(() => {
-    maybeFlush(false, Date.now());
-  }, FRAME_FLUSH_INTERVAL_MS);
-  interval.unref?.();
 
   return self;
 };

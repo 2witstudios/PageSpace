@@ -33,9 +33,18 @@ export interface MaterializableStreamRow {
    *  (NOT NULL there) — the same field the normal save path already uses. */
   userId: string;
   /** The last debounced parts snapshot — possibly stale by up to one checkpoint interval,
-   *  never by more (see PR 1's time-based cadence). This is the only content a dead process
-   *  leaves behind; there is no live buffer to fall back to. */
+   *  never by more (see PR 1's time-based cadence). The fallback when the durable frame log
+   *  cannot serve this message, and — see `recoverParts` — sometimes the RICHER of the two. */
   parts: unknown[];
+  /**
+   * How many frames that `parts` snapshot reflects. The comparable measure to the frame log's
+   * own length, and the only thing that can decide which of the two records is further along.
+   *
+   * Optional so a caller that does not project the column degrades to "trust the frame log"
+   * (0) rather than to a crash — the same defensive shape `lastHeartbeatAt` uses in
+   * stream-liveness.ts. Every in-tree caller passes it.
+   */
+  rawPartsCount?: number;
   /** The stream's actual start time. Used ONLY as the `createdAt` for the defensive
    *  insert-if-missing branch below (the placeholder row should already exist per PR 2, but a
    *  failed placeholder insert is the one case this function must still degrade gracefully
@@ -146,10 +155,35 @@ const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: s
  * snapshot is the only content there is. A `null`/`[]` distinction is load-bearing here:
  * treating "no frames" as "an empty reply" would materialize emptiness over a snapshot that
  * had content.
+ *
+ * BUT "THE LOG EXISTS" IS NOT "THE LOG IS LONGER", and an unconditional preference was a real
+ * truncation bug (review finding — chatgpt-codex-connector, PR #2409). The two records are
+ * written by INDEPENDENT mechanisms that stop for independent reasons: the writer gives up at
+ * its first failed batch and at its durable-byte ceiling, leaving a valid but short contiguous
+ * prefix, while the checkpoint fold carries on from memory. Preferring a 100-frame log over a
+ * 5000-frame snapshot would silently materialize a truncated reply — the very failure this
+ * leaf exists to prevent, introduced by its own fix.
+ *
+ * So they are COMPARED, on the one measure both express in the same unit: frames. The log's
+ * length is its contiguous prefix; the snapshot's is `rawPartsCount`, which is exactly why
+ * that column counts raw frames rather than merged parts. Ties go to the log — equal length
+ * means equal content, and the log is the losslessly-folded original rather than a snapshot
+ * that has already been through a fold.
  */
 const recoverParts = async (row: MaterializableStreamRow): Promise<UIMessagePart[]> => {
   const frames = await readFrames(row.messageId);
   if (frames === null) return row.parts as UIMessagePart[];
+
+  const snapshotFrames = row.rawPartsCount ?? 0;
+  if (frames.length < snapshotFrames) {
+    loggers.ai.warn('materializeInterruptedStream: frame log is shorter than the checkpoint — using the snapshot', {
+      messageId: row.messageId,
+      loggedFrames: frames.length,
+      snapshotFrames,
+    });
+    return row.parts as UIMessagePart[];
+  }
+
   return foldChunksToParts(frames);
 };
 

@@ -41,7 +41,6 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
 import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
@@ -252,15 +251,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         return row?.isActive === true;
       },
     });
-    // The reply is now durably in `messages`, so this generation's raw frames are storage
-    // rather than the only copy of it — release them. Gated on `saved` deliberately: this is
-    // the "only after the write is confirmed" half of the frame log's retention contract, and
-    // a save the conversation-deleted guard declined must leave the log alone (the retention
-    // backstop reclaims it). Scoped to assistant writes because nothing else has a frame log;
-    // that keeps a user message's save from paying for a DELETE that can only ever match zero
-    // rows. Fire-and-forget — it never rejects, and a terminal write must not fail on a
-    // cleanup.
-    if (saved && args.role === 'assistant') void releaseFramesForMessage(args.messageId);
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it — see the identical gate in page-chat-turn.ts, and
+    // `confirmTerminalWrite`'s docblock for why the first terminal write of a turn is the
+    // wrong moment to delete.
+    if (saved && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
     return saved;
   };
   try {

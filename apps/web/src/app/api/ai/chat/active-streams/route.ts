@@ -179,6 +179,7 @@ export async function GET(request: Request) {
         conversationId: row.conversationId,
         userId: row.userId,
         parts: row.parts,
+        rawPartsCount: row.rawPartsCount,
         startedAt: row.startedAt,
       });
     }

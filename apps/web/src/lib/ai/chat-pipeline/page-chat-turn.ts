@@ -48,7 +48,6 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
 import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
@@ -320,15 +319,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       },
     });
     if (persisted && mentionNotify) mentionNotified = true;
-    // The reply is now durably in `messages`, so this generation's raw frames are storage
-    // rather than the only copy of it — release them. Gated on `persisted` deliberately: this
-    // is the "only after the write is confirmed" half of the frame log's retention contract,
-    // and a save the conversation-deleted guard declined must leave the log alone (the
-    // retention backstop reclaims it). Scoped to assistant writes because nothing else has a
-    // frame log; that keeps a user message's save from paying for a DELETE that can only ever
-    // match zero rows. Fire-and-forget — it never rejects, and a terminal write must not fail
-    // on a cleanup.
-    if (persisted && args.role === 'assistant') void releaseFramesForMessage(args.messageId);
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it: a turn writes terminally more than once (execute-end persists the
+    // buffered snapshot, `onFinish` then refines it), and deleting on the first would discard
+    // a tail the pump may still have been forwarding. The lifecycle releases once this and
+    // `finish()` have both happened. Gated on `persisted` because a save the
+    // conversation-deleted guard declined is not a durable row.
+    if (persisted && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
   };
   // Captured by the inner catch (createUIMessageStream construction failure) before it calls
   // lifecycle.finish().

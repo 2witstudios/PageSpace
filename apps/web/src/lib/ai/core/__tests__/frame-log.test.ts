@@ -89,10 +89,30 @@ describe('appendFrameBatch', () => {
     const values = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
     assert({
       given: 'a written batch',
-      should: 'record the serialized length of the frames array itself',
+      should: 'record the serialized size of the frames array itself',
       actual: values.byteSize,
-      expected: JSON.stringify(batch.frames).length,
+      expected: Buffer.byteLength(JSON.stringify(batch.frames), 'utf8'),
     });
+  });
+
+  it('measures byteSize in UTF-8 BYTES, not UTF-16 code units', async () => {
+    // `String.prototype.length` equals the byte count only for ASCII. A column named
+    // `byte_size` that undercounts every non-English reply is a misleading storage metric,
+    // and it is the number a future durable quota would be enforced from.
+    const multibyte = {
+      messageId: 'msg-1',
+      conversationId: 'conv-1',
+      fromSeq: 0,
+      frames: [chunk({ type: 'text-delta', id: 't1', delta: '\u754c\ud83d\ude00\u00e9' })],
+    };
+
+    await appendFrameBatch(multibyte);
+
+    const values = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
+    const serialized = JSON.stringify(multibyte.frames);
+    expect(values.byteSize).toBe(Buffer.byteLength(serialized, 'utf8'));
+    // …and that is genuinely larger than the code-unit count, so this assertion has teeth.
+    expect(values.byteSize as number).toBeGreaterThan(serialized.length);
   });
 
   it('given the insert throws, reports failure instead of taking down the generation', async () => {
