@@ -345,6 +345,20 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   ai_stream_sessions:
     'A per-instance STREAMING CHECKPOINT, not a durable record: `parts` is the debounced replay buffer a reconnecting client resumes from, and a completed turn is committed to `messages`, which the bundle carries. Every other column names SOURCE-instance runtime — `stream_id` (the in-process abort-registry key, UNIQUE-indexed, so a carried duplicate also collides), `browser_session_id`, `last_heartbeat_at`, `abort_requested_at`, `raw_parts_count` (a replay cursor with no live multicast to count against). Carrying a `status = streaming` row would manufacture a phantom live stream in the tenant that no worker will ever finish and no abort can reach.',
 
+  /**
+   * Excluded for the same reason as `ai_stream_sessions`, and it has to be: it is
+   * the successor to that table's `parts` column, so a decision that differed
+   * would carry the same content the row above is excluded for refusing.
+   *
+   * The Art 15 export DOES carry this one too
+   * (`packages/lib/src/compliance/export/gdpr-export-coverage.ts`), the same
+   * deliberate asymmetry the note above `ai_stream_sessions` describes — "every
+   * byte about you that exists" and "the state a working instance should be
+   * reconstituted from" are different questions.
+   */
+  ai_stream_frames:
+    'The append-only FRAME LOG of a generation in flight — the durable form of `ai_stream_sessions.parts`, and excluded for the identical reason. Its rows exist only between a stream starting and its assistant message being committed, at which point they are deleted; a completed turn lives in `messages`, which the bundle carries. So a row present at export time is by definition a turn the SOURCE instance was midway through, and no worker in the tenant will ever finish it. Its `message_id` also references an assistant placeholder that the exporting instance wrote best-effort, so carried frames can arrive naming a message the bundle has no row for.',
+
   /*
    * The four `agent_workspace_pane_*` / `_layout_*` tables used to be excluded
    * here, on the grounds that ARRANGEMENT was not worth the bundle weight.
