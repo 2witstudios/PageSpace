@@ -328,6 +328,119 @@ describe('foldChunksToParts — differential against the AI SDK reduction', () =
     expect(parts[0]).toMatchObject({ type: 'dynamic-tool', state: 'output-error' });
   });
 
+  it('given a DYNAMIC tool that errors on output, should match the SDK (keeps its own toolName)', async () => {
+    // The output-error path reads the tool's name back off the invocation, and a dynamic
+    // part carries it in a different place than a static one (`toolName` vs the `tool-`
+    // prefix of `type`). The existing dynamic case ends in output-AVAILABLE and the
+    // existing output-error case is static, so neither crosses this branch.
+    const parts = await expectMatchesSdk([
+      chunk({
+        type: 'tool-input-start',
+        toolCallId: 'mcp1',
+        toolName: 'mcp__weather',
+        dynamic: true,
+      }),
+      chunk({
+        type: 'tool-input-available',
+        toolCallId: 'mcp1',
+        toolName: 'mcp__weather',
+        input: { city: 'Chicago' },
+        dynamic: true,
+      }),
+      chunk({ type: 'tool-output-error', toolCallId: 'mcp1', errorText: 'upstream 503' }),
+    ]);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      type: 'dynamic-tool',
+      toolName: 'mcp__weather',
+      state: 'output-error',
+      errorText: 'upstream 503',
+    });
+  });
+
+  it('given title and toolMetadata arriving on a LATER frame, should match the SDK (carried onto the existing part)', async () => {
+    // The display fields are optional on every tool frame, so they can arrive on the
+    // input-available rather than the input-start — the update path has to take them, and
+    // only when they are present. Both are also asserted to SURVIVE the output frame that
+    // does not resend them, which is what makes them part identity rather than per-frame.
+    const parts = await expectMatchesSdk([
+      chunk({ type: 'tool-input-start', toolCallId: 'tc1', toolName: 'search' }),
+      chunk({
+        type: 'tool-input-available',
+        toolCallId: 'tc1',
+        toolName: 'search',
+        input: { q: 'x' },
+        title: 'Searching the drive',
+        toolMetadata: { surface: 'page' },
+      }),
+      chunk({ type: 'tool-output-available', toolCallId: 'tc1', output: { hits: 3 } }),
+    ]);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      type: 'tool-search',
+      state: 'output-available',
+      title: 'Searching the drive',
+      toolMetadata: { surface: 'page' },
+    });
+  });
+
+  it('given toolMetadata on the frame that CREATES the part, should match the SDK', async () => {
+    // The push path, not the update path — no `tool-input-start` opened this one.
+    const parts = await expectMatchesSdk([
+      chunk({
+        type: 'tool-input-available',
+        toolCallId: 'tc2',
+        toolName: 'search',
+        input: { q: 'y' },
+        toolMetadata: { surface: 'global' },
+      }),
+    ]);
+
+    expect(parts[0]).toMatchObject({ toolMetadata: { surface: 'global' } });
+  });
+
+  it('given a file part carrying providerMetadata, should match the SDK', async () => {
+    const parts = await expectMatchesSdk([
+      chunk({
+        type: 'file',
+        mediaType: 'image/png',
+        url: 'https://example.test/a.png',
+        providerMetadata: { openai: { imageId: 'img_1' } },
+      }),
+    ]);
+
+    expect(parts[0]).toMatchObject({
+      type: 'file',
+      mediaType: 'image/png',
+      providerMetadata: { openai: { imageId: 'img_1' } },
+    });
+  });
+
+  it('given providerMetadata on a CALL-state frame that creates the part, should match the SDK', async () => {
+    // Two branches meet here and only together: the part is PUSHED rather than updated
+    // (no `tool-input-start` opened it first), and the state is a call rather than a
+    // result — so the metadata lands under `callProviderMetadata`. The existing metadata
+    // cases all update a part that already exists, or carry a result state.
+    const parts = await expectMatchesSdk([
+      chunk({
+        type: 'tool-input-available',
+        toolCallId: 'tc-meta',
+        toolName: 'search',
+        input: { q: 'x' },
+        providerMetadata: { openai: { cachedTokens: 12 } },
+      }),
+    ]);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      type: 'tool-search',
+      state: 'input-available',
+      callProviderMetadata: { openai: { cachedTokens: 12 } },
+    });
+  });
+
   it('given a tool approval request then denial, should match the SDK', async () => {
     await expectMatchesSdk([
       chunk({ type: 'tool-input-start', toolCallId: 'tc1', toolName: 'delete_page' }),
@@ -411,6 +524,19 @@ describe('foldChunksToParts — differential against the AI SDK reduction', () =
     expect(parts[0]).toMatchObject({ data: { pct: 90 } });
   });
 
+  it('given data parts with NO id, should match the SDK (each appends; none replaces)', async () => {
+    // `id` is optional on a data frame. Without one there is nothing to match against, so
+    // every frame is a new part — the opposite of the same-id case above, and the branch
+    // the same-id test cannot reach.
+    const parts = await expectMatchesSdk([
+      chunk({ type: 'data-progress', data: { pct: 10 } }),
+      chunk({ type: 'data-progress', data: { pct: 90 } }),
+    ]);
+
+    expect(parts).toHaveLength(2);
+    expect(parts.map((part) => (part as { data: { pct: number } }).data.pct)).toEqual([10, 90]);
+  });
+
   it('given a transient data part, should match the SDK (never becomes content)', async () => {
     const parts = await expectMatchesSdk([
       chunk({ type: 'data-notice', id: 'n1', data: { text: 'ephemeral' }, transient: true }),
@@ -484,9 +610,20 @@ describe('foldChunksToParts — deliberate divergences and invariants', () => {
    * the SDK side rejects the input by design.
    */
   it('given a log starting mid-stream, should skip orphaned frames rather than throw', async () => {
+    // EVERY frame type that closes over something opened earlier is listed here, because
+    // this is exactly what a log that begins mid-stream contains: the tail of parts whose
+    // opening frames were evicted. The SDK's own reduction THROWS on several of these
+    // (`getToolInvocation`); skipping them is the deliberate divergence, and it is only
+    // worth anything if it holds for all of them rather than the two we happened to try.
     const parts = await foldChunksToParts([
       chunk({ type: 'text-delta', id: 'gone', delta: 'orphan' }),
+      chunk({ type: 'text-end', id: 'gone' }),
+      chunk({ type: 'reasoning-delta', id: 'gone-r', delta: 'orphan' }),
+      chunk({ type: 'reasoning-end', id: 'gone-r' }),
+      chunk({ type: 'tool-input-delta', toolCallId: 'gone', inputTextDelta: '{"a":' }),
       chunk({ type: 'tool-output-available', toolCallId: 'gone', output: {} }),
+      chunk({ type: 'tool-output-error', toolCallId: 'gone', errorText: 'nope' }),
+      chunk({ type: 'tool-output-denied', toolCallId: 'gone' }),
       chunk({ type: 'tool-approval-request', toolCallId: 'gone', approvalId: 'a1' }),
       chunk({ type: 'text-start', id: 't1' }),
       chunk({ type: 'text-delta', id: 't1', delta: 'survivor' }),
@@ -495,6 +632,23 @@ describe('foldChunksToParts — deliberate divergences and invariants', () => {
 
     expect(parts).toEqual([
       { type: 'text', text: 'survivor', state: 'done', providerMetadata: undefined },
+    ]);
+  });
+
+  it('given a frame type the fold does not know, should ignore it rather than treat it as data', async () => {
+    // The default case is where `data-*` parts are handled, so it is also where any FUTURE
+    // SDK frame lands. Anything not prefixed `data-` has no part to contribute, and must
+    // not be pushed as one — a forward-compatibility guarantee, since a newer server can
+    // stream a frame this build has never heard of.
+    const parts = await foldChunksToParts([
+      chunk({ type: 'some-future-frame', payload: { whatever: true } }),
+      chunk({ type: 'text-start', id: 't1' }),
+      chunk({ type: 'text-delta', id: 't1', delta: 'kept' }),
+      chunk({ type: 'text-end', id: 't1' }),
+    ]);
+
+    expect(parts).toEqual([
+      { type: 'text', text: 'kept', state: 'done', providerMetadata: undefined },
     ]);
   });
 
