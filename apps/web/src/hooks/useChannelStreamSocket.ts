@@ -456,6 +456,12 @@ export function useChannelStreamSocket(
             // exists to refuse. The server can only answer that cursor honestly once the
             // durable frame log backs it; until then the DB checkpoint is the complete view
             // and the live channel is not.
+            //
+            // The catch branch below pairs `!hadSeededSnapshot` with `deliveredSeq === 0`;
+            // here the seed is the only thing that can be on screen, because `overflow` is
+            // raised at SUBSCRIBE time (`subscribe` refuses a cursor below
+            // `firstAvailableSeq` and ends immediately; eviction never ends an already-live
+            // subscriber), so nothing has been delivered by definition.
             if (!fallBackToDatabase({ canPoll: true }) && !hadSeededSnapshot) {
               removeStream(messageId);
             }

@@ -1,6 +1,6 @@
 import { createUIMessageStreamResponse, type UIMessageChunk } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { pumpSdkStreamToChannel } from '@/lib/ai/core/pump-sdk-stream';
+import { pumpSdkStreamToChannel, type PumpResult } from '@/lib/ai/core/pump-sdk-stream';
 import { STREAM_ID_HEADER, removeStream } from '@/lib/ai/core/stream-abort-registry';
 import type { StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 
@@ -109,18 +109,21 @@ const terminalizeOnPumpFailure = ({
   lifecycle,
   streamId,
 }: {
-  pump: ReturnType<typeof pumpSdkStreamToChannel>;
+  pump: Promise<PumpResult>;
   lifecycle: StreamLifecycleHandle;
   streamId: string;
 }): void => {
   const terminalize = (error: unknown): void => {
+    // Cleanup BEFORE the log. This function exists to be the last thing standing between a
+    // failed generation and an indefinite hang, so the two calls that end it must not sit
+    // downstream of anything that could throw first — including a logger.
+    removeStream({ streamId });
+    lifecycle.finish(false);
     loggers.ai.error(
-      'pumpAndRespond: SDK pump failed — finishing the lifecycle the SDK never will',
+      'pumpAndRespond: SDK pump failed — finished the lifecycle the SDK never will',
       error instanceof Error ? error : new Error(String(error)),
       { messageId: lifecycle.channel.messageId, streamId },
     );
-    removeStream({ streamId });
-    lifecycle.finish(false);
   };
 
   // Two-argument `then` rather than `.then().catch()`: the rejection handler must cover the
