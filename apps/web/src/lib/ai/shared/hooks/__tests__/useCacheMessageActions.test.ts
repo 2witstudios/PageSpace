@@ -36,7 +36,6 @@ const baseOptions = (
     { mode: 'confirmed', message: userMsg('u1') },
     { mode: 'confirmed', message: assistantMsg('a1') },
   ],
-  isOwnSendLive: false,
   regenerate: vi.fn(),
   ...overrides,
 });
@@ -79,7 +78,6 @@ describe('useCacheMessageActions handleRetry', () => {
             { mode: 'confirmed', message: userMsg('u1') },
             { mode: 'streaming', message: assistantMsg('a1') },
           ],
-          isOwnSendLive: true,
         }),
       ),
     );

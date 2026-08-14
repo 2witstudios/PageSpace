@@ -151,16 +151,20 @@ interface Session {
   /** Aborts the cross-instance poll fallback, when one is running. */
   pollController: AbortController | null;
   /**
-   * Monotonic write counter for the POLL fallback's writes.
+   * The highest seq this session has written to the store, by EITHER writer.
    *
    * `applySetStreamParts` drops any write whose seq is not strictly greater than the stored
-   * one, so this must only ever rise — a counter that stalled or reset would have its writes
-   * silently swallowed and the bubble would freeze on stale content. It lives on the session
-   * rather than in the poll closure simply because that is where the session's other
-   * per-stream bookkeeping lives; there is exactly one fallback per session, so the two are
-   * equivalent in reach.
+   * one, so a single shared watermark is the only thing that keeps the two writers from
+   * silencing each other. The live join writes `seq + 1` off the wire; the poll fallback
+   * increments from here.
+   *
+   * It was a poll-only counter starting at 0, and that was a real freeze: when the join
+   * delivers folded frames and THEN hands over to the fallback (a `resumeFromSeq` after
+   * content has already landed), the store watermark is already at N while the fallback
+   * emitted 1, 2, 3… — every one of them dropped, so the bubble sat frozen on the last
+   * live frame until the poll count climbed past N (review: coderabbitai on PR #2410).
    */
-  pollSeq: number;
+  lastWrittenSeq: number;
   /** The join delivered at least one folded write — i.e. what we hold is authoritative. */
   delivered: boolean;
   /** How many independent announcements referenced this stream. Diagnostic; never gates teardown. */
@@ -318,8 +322,9 @@ const fallBackToDatabase = (
     messageId,
     pollController.signal,
     (parts) => {
-      session.pollSeq += 1;
-      store().setStreamParts(messageId, parts, session.pollSeq);
+      // Continues from wherever the LIVE join left the watermark — see `lastWrittenSeq`.
+      session.lastWrittenSeq += 1;
+      store().setStreamParts(messageId, parts, session.lastWrittenSeq);
     },
     () => {
       // The row is gone from `/active-streams`: the stream finished, or this 404 was never a
@@ -355,7 +360,7 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
     descriptor,
     controller: new AbortController(),
     pollController: null,
-    pollSeq: 0,
+    lastWrittenSeq: 0,
     delivered: false,
     refs: 1,
     // An unparseable timestamp must not make an entry IMMORTAL (NaN fails every comparison,
@@ -382,13 +387,14 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
     parts: descriptor.seedParts ?? [],
   });
 
-  const hadSeed = (descriptor.seedParts?.length ?? 0) > 0;
-
   consumeStreamJoin(
     descriptor.messageId,
     session.controller.signal,
     (parts, seq) => {
       session.delivered = true;
+      // Record the watermark as well as writing it, so a poll fallback taking over later
+      // resumes ABOVE the live frames instead of underneath them.
+      session.lastWrittenSeq = Math.max(session.lastWrittenSeq, seq + 1);
       store().setStreamParts(descriptor.messageId, parts, seq + 1);
     },
     descriptor.fromSeq ?? 0,
@@ -424,16 +430,32 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
       const polling = fallBackToDatabase(session, {
         canPoll: error instanceof StreamJoinError && error.status === 404,
       });
-      if (!polling && !hadSeed && !session.delivered) {
-        // Nothing seeded, nothing delivered, and nothing left to poll — there is no content
-        // to preserve. A seeded snapshot, by contrast, is usually the only surviving copy of
-        // the partial reply (the originator's process died, so its channel 404s), and
-        // removing it here would undo the restore that just happened.
+      if (!polling) {
+        // NOTHING IS COMING. The join failed for a reason polling cannot survive (a 403 is not
+        // a liveness gap; a 500 is not either) and no fallback started, so this session will
+        // never receive another frame or another signal.
+        //
+        // It MUST end here, unconditionally. It used to end only when nothing had been seeded
+        // or delivered — the idea being that a partial snapshot on screen was worth keeping.
+        // That reasoning inverted the cost: a session that never ends is a store entry that
+        // never ends, `deriveStreamingRegistrations` derives the editing-store registration
+        // from those entries, and that registration suppresses SWR revalidation AND
+        // auth-token refresh APP-WIDE. So preserving one truncated bubble froze data refresh
+        // across the entire application until the hour-long expiry sweep — which drops it
+        // WITHOUT notifying anyone, so the reply never got reloaded either (review:
+        // coderabbitai on PR #2410).
+        //
+        // `joinFailed: true` is what makes ending safe: it tells consumers we hold no
+        // authoritative copy, so they reload the durably-persisted message rather than trust
+        // the partial one being dropped.
         endSession(descriptor.messageId, {
           conversationId: descriptor.conversationId,
           channelId: descriptor.channelId,
           joinFailed: true,
         });
+        if (!session.controller.signal.aborted) {
+          console.error('[streamSessionRegistry] stream join error', error);
+        }
         return;
       }
       if (!session.controller.signal.aborted) {

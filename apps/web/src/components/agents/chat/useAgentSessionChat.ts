@@ -20,7 +20,7 @@
  * live stream entry — see that module for why a per-surface registration
  * would only risk two owners disagreeing about when to end it.
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import type { UIMessage } from 'ai';
 import { toast } from 'sonner';
@@ -144,12 +144,6 @@ export function useAgentSessionChat({
 
   const renderedMessages = useRenderedMessages(agent.id, conversationId);
   const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
-  // The SETTLED view — live synth rows excluded. This is what the send shell composes its
-  // outbound messages from, and what every action reasons over.
-  const stableMessages = useMemo(
-    () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
-    [renderedMessages],
-  );
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(agent.id, conversationId);
@@ -248,16 +242,11 @@ export function useAgentSessionChat({
     pendingSendConversationId,
   });
 
-  // No raw chat status in this any more: `displayIsStreaming` already ORs the pending send
-  // with the own store entry, which covers the submitted window AND every stream the old
-  // status could not see (bootstrapped, remote, cross-instance).
-  const isOwnSendLive = displayIsStreaming;
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: agent.id,
     conversationId,
     renderedMessages,
-    isOwnSendLive,
     // Adapts the shell's explicit-conversation `regenerate` to the action hook's
     // conversation-less one. The id is bound HERE, where it is unambiguous, rather than being
     // inferred inside a shared `Chat` from whatever the surface last touched — which is how a

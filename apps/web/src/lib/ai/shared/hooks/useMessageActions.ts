@@ -36,13 +36,6 @@ interface UseMessageActionsOptions {
    * Optional callback when edit version changes (for forcing re-renders)
    */
   onEditVersionChange?: () => void;
-  /**
-   * Is THIS surface's own stream live for `conversationId` right now?
-   *
-   * Passed in because this hook is surface-agnostic and cannot read it. It gates the one write
-   * here that replaces the WHOLE messages array (the post-edit reconcile refetch) — see its use.
-   */
-  isOwnStreamLive?: boolean;
 }
 
 interface UseMessageActionsResult {
@@ -68,15 +61,11 @@ export function useMessageActions({
   messages,
   regenerate,
   onEditVersionChange,
-  isOwnStreamLive = false,
 }: UseMessageActionsOptions): UseMessageActionsResult {
   const isAgentMode = Boolean(agentId);
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
-  // Read after an await, so a ref rather than the captured prop.
-  const isOwnStreamLiveRef = useRef(isOwnStreamLive);
-  isOwnStreamLiveRef.current = isOwnStreamLive;
 
   // Edit a message
   const handleEdit = useCallback(

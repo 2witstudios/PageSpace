@@ -64,7 +64,7 @@
  *    local one.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -265,25 +265,45 @@ export const useChatSession = ({
           throw new Error(cause.message, { cause });
         }
 
-        const envelope = await readAdmissionEnvelope(response);
+        const admission = await readAdmissionEnvelope(response);
 
-        if (envelope) {
-          // DETACHED. The generation is already running and already recording; this opens the
-          // one subscription that will follow it, owned by the module rather than by whatever
+        // EVERY outcome is handled, and two of the three used to fall off the end of an
+        // `if/else if` into `setSendState(null)` — reporting a clean send that started no
+        // generation and rendered nothing (review: coderabbitai on PR #2410). A send that
+        // admitted nothing is a FAILED send, and the user must see that rather than a
+        // composer that quietly clears.
+        if (admission.kind === 'malformed') {
+          // The server claimed an envelope and sent something else, so `response.json()` has
+          // already consumed the body — there is no legacy stream left to fall back to even
+          // if we wanted one.
+          throw new Error(`Stream admission failed: ${admission.reason}`);
+        }
+
+        if (admission.kind === 'detached') {
+          // The generation is already running and already recording; this opens the one
+          // subscription that will follow it, owned by the module rather than by whatever
           // component happens to be mounted. The messageId comes from the envelope and is
           // never inferred from a frame.
           openStreamSession({
-            messageId: envelope.messageId,
-            conversationId: envelope.conversationId,
-            channelId: envelope.channelId,
+            messageId: admission.envelope.messageId,
+            conversationId: admission.envelope.conversationId,
+            channelId: admission.envelope.channelId,
             triggeredBy: identity,
             isOwn: true,
-            startedAt: envelope.startedAt,
+            startedAt: admission.envelope.startedAt,
           });
-        } else if (channel) {
-          // LEGACY (old server). Fold the body into the same store entry, with the same
-          // replace semantics. See `legacy-stream-body.ts` for why reading the messageId off
-          // the `start` frame is sound HERE and not on a mid-seq join.
+        } else {
+          // LEGACY (old server), body untouched. Fold it into the same store entry with the
+          // same replace semantics. See `legacy-stream-body.ts` for why reading the messageId
+          // off the `start` frame is sound HERE and not on a mid-seq join.
+          if (!channel) {
+            // Nothing to file the stream under: the store partitions by channel, so a legacy
+            // body with no channel could be read but never rendered, and the reply would be
+            // lost in silence. Fail loudly instead — a surface reaching here is misconfigured.
+            throw new Error(
+              'Stream admission failed: the server streamed a body but this surface has no channel to render it on',
+            );
+          }
           const store = usePendingStreamsStore.getState();
           await consumeLegacyStreamBody(response, {
             onStart: (messageId) => {

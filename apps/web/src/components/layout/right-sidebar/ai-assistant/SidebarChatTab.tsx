@@ -423,12 +423,7 @@ const SidebarChatTab: React.FC = () => {
   // Shared store-first message actions (F2/F9): actions reason over SETTLED rows
   // only — a synthesized live-stream row must never reach retry/delete's
   // server-side DELETEs (the live bubble's verb is Stop).
-  // `displayIsStreaming` already ORs the pending send with the own store entry, which covers
-  // the submitted window AND every stream a raw chat status could not see.
-  const isOwnSendLive = displayIsStreaming;
   // Read after an await (resume runs async), so a ref rather than the captured value.
-  const isOwnSendLiveRef = useRef(isOwnSendLive);
-  isOwnSendLiveRef.current = isOwnSendLive;
   // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
   // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit) — AskUser
   // answerability and resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
@@ -441,7 +436,6 @@ const SidebarChatTab: React.FC = () => {
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
-    isOwnSendLive,
     // Adapts the shell's explicit-conversation `regenerate` to the action hook's
     // conversation-less one. Binding the id HERE is what makes a Retry unambiguous.
     regenerate: (opts?: { body?: Record<string, unknown> }) => {

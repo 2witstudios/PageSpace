@@ -702,7 +702,10 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     // how "send a message and leave" lost the reply: a generation's visible life was scoped to
     // a React effect. The subscription is the module's now, so unmount detaches listeners and
     // touches no stream — no controller aborted, no store entry dropped, no claim released.
-    renderProvider();
+    // The SAME instance that receives the event is the one unmounted — a second render here
+    // would leave the recording provider mounted and assert nothing about it (and leak it into
+    // the rest of the file).
+    const { unmount } = renderProvider();
     await waitFor(() => expect(mockSocket._handlerCount('chat:stream_start')).toBeGreaterThan(0));
 
     act(() => {
@@ -715,7 +718,6 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       });
     });
 
-    const { unmount } = renderProvider();
     unmount();
 
     expect(mockClearPageStreams).not.toHaveBeenCalled();

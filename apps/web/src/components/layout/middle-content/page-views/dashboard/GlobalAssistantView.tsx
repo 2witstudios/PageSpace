@@ -394,18 +394,12 @@ const GlobalAssistantView: React.FC = () => {
   // unnecessary); what remains is the resume handler's "had a turn in flight" record —
   // conversation-scoped, so a stream still running against a conversation the user left
   // cannot trigger a regenerate for the one they are now looking at.
-  const isOwnAgentStreamForCurrentConversation = agentActiveStream?.isOwn === true;
-  const isOwnGlobalStreamForCurrentConversation = globalActiveStream?.isOwn === true;
-  // "Is this mode's own send live?" — the pending send OR its own store entry. There are no
-  // transport arrays left to guard, so this no longer needs a third input: the store entry is
-  // no longer absent during a store wipe (nothing wipes it — the registry owns it at module
-  // scope), and the submitted window is exactly what `pendingSendConversationId` covers.
-  const agentSendLive =
-    isOwnAgentStreamForCurrentConversation ||
-    (pendingSendConversationId !== null && pendingSendConversationId === agentConversationId);
-  const globalSendLive =
-    isOwnGlobalStreamForCurrentConversation ||
-    (pendingSendConversationId !== null && pendingSendConversationId === globalConversationId);
+  // NO PER-MODE LIVENESS FLAGS. A pair of them fed `isOwnSendLive`, which fed
+  // `useCacheMessageActions` -> `useMessageActions.isOwnStreamLive`, whose only reader was the
+  // post-edit reconcile refetch — and that refetch is deleted (there is no transport array left
+  // for it to replace). The whole chain was dead weight, so it goes rather than being kept
+  // "in case" (review: coderabbitai on PR #2410). What the surface still needs is
+  // `effectiveIsStreaming` below, scoped to the conversation actually on screen.
 
   // Streaming for THE CONVERSATION ON SCREEN. `isStreaming` (useChat's status) alone is wrong in
   // both directions: it is true for the OLD conversation's still-in-flight request after a switch
@@ -509,10 +503,7 @@ const GlobalAssistantView: React.FC = () => {
   // SETTLED rows only; the live bubble's verb is Stop, and a synthesized
   // streaming row must never reach retry/delete's server-side DELETEs).
   // ============================================
-  const isOwnSendLive = selectedAgent ? agentSendLive : globalSendLive;
   // Read after an await (resume runs async), so a ref rather than the captured value.
-  const isOwnSendLiveRef = useRef(isOwnSendLive);
-  isOwnSendLiveRef.current = isOwnSendLive;
   // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
   // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit, same class as the
   // AskUser fix above) — resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
@@ -525,7 +516,6 @@ const GlobalAssistantView: React.FC = () => {
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
-    isOwnSendLive,
     // Adapts the shell's explicit-conversation `regenerate` to the action hook's
     // conversation-less one. Binding the id HERE is what makes a Retry unambiguous — it used
     // to be inferred inside a shared `Chat` from whatever the surface had last touched, which

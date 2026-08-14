@@ -228,14 +228,18 @@ describe('endings', () => {
     expect(ends[0]?.joinFailed).toBe(true);
   });
 
-  it('given a failed join over a SEEDED snapshot, keeps the snapshot rendered', async () => {
-    // The snapshot is usually the only surviving copy of the partial reply (the originator's
-    // process died, so its channel 404s). Removing it would undo the restore that just happened.
-    consumeStreamJoin.mockRejectedValue(new StreamJoinError('gone', 500));
+  it('given a POLLABLE failure over a SEEDED snapshot, keeps the snapshot rendered', async () => {
+    // The snapshot is the only surviving copy of the partial reply while polling catches up
+    // (the originator's process died, so its channel 404s). Removing it here would undo the
+    // restore that just happened — and unlike the non-pollable case below, something IS
+    // coming, so the entry is not stranded.
+    consumeStreamJoin.mockRejectedValue(new StreamJoinError('cross-instance', 404));
+    startStreamJoinPollFallback.mockImplementation(() => {});
 
     openStreamSession(descriptor({ seedParts: [{ type: 'text', text: 'partial' }] }));
     await settle();
 
+    expect(startStreamJoinPollFallback).toHaveBeenCalled();
     expect(store().streams.get('msg-1')?.parts).toEqual([{ type: 'text', text: 'partial' }]);
   });
 });
@@ -380,6 +384,97 @@ describe('the poll fallback — the near-live view when the channel cannot serve
     expect(ends).toHaveLength(1);
     expect(ends[0]).toMatchObject({ messageId: 'msg-1', conversationId: 'conv-1', channelId: 'page-1', joinFailed: true });
     expect(store().streams.has('msg-1')).toBe(false);
+  });
+});
+
+describe('the seq watermark is shared by BOTH writers', () => {
+  it('given the join delivered frames and THEN hands over to the poll fallback, the first poll write still lands', async () => {
+    // coderabbitai on PR #2410. The poll counter used to start at 0 while the live join had
+    // already pushed the store watermark to N — so the fallback emitted 1, 2, 3…, every one
+    // was dropped by `applySetStreamParts`, and the bubble sat frozen on the last live frame
+    // until the poll count climbed past N.
+    let deliver!: (parts: unknown[], seq: number) => void;
+    let resolveJoin!: (r: { aborted: boolean; resumeFromSeq?: number }) => void;
+    consumeStreamJoin.mockImplementation(
+      (_id: string, _sig: AbortSignal, onParts: (p: unknown[], s: number) => void) => {
+        deliver = onParts;
+        return new Promise((res) => { resolveJoin = res; });
+      },
+    );
+    startStreamJoinPollFallback.mockImplementation(() => {});
+
+    openStreamSession(descriptor());
+    // The live join lands several frames first.
+    deliver([{ type: 'text', text: 'live 1' }], 40);
+    deliver([{ type: 'text', text: 'live 2' }], 41);
+    const liveSeq = store().streams.get('msg-1')!.lastSeq!;
+    expect(liveSeq).toBe(42);
+
+    // Then the cursor ages out and the fallback takes over.
+    resolveJoin({ aborted: false, resumeFromSeq: 99 });
+    await settle();
+
+    const onParts = startStreamJoinPollFallback.mock.calls[0][3] as (p: unknown[]) => void;
+    onParts([{ type: 'text', text: 'polled' }]);
+
+    expect(
+      store().streams.get('msg-1')!.parts,
+      'the first polled write must not be swallowed under the live watermark',
+    ).toEqual([{ type: 'text', text: 'polled' }]);
+    expect(store().streams.get('msg-1')!.lastSeq).toBeGreaterThan(liveSeq);
+  });
+});
+
+describe('a join failure that cannot be polled must still END the session', () => {
+  it('given a 500 AFTER frames were delivered, ends it rather than stranding the entry', async () => {
+    // coderabbitai on PR #2410. This used to end only when nothing had been seeded or
+    // delivered, on the theory that a partial bubble was worth preserving. But a session that
+    // never ends is a store entry that never ends, and `deriveStreamingRegistrations` turns
+    // those into an editing-store registration that suppresses SWR revalidation AND auth-token
+    // refresh APP-WIDE — so one truncated bubble froze data refresh across the whole app until
+    // the hour-long sweep, which drops it WITHOUT notifying anyone.
+    let deliver!: (parts: unknown[], seq: number) => void;
+    let rejectJoin!: (e: unknown) => void;
+    consumeStreamJoin.mockImplementation(
+      (_id: string, _sig: AbortSignal, onParts: (p: unknown[], s: number) => void) => {
+        deliver = onParts;
+        return new Promise((_res, rej) => { rejectJoin = rej; });
+      },
+    );
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    openStreamSession(descriptor());
+    deliver([{ type: 'text', text: 'partial' }], 0);
+    rejectJoin(new StreamJoinError('server error', 500));
+    await settle();
+
+    expect(startStreamJoinPollFallback, 'a 500 is not a liveness gap').not.toHaveBeenCalled();
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ messageId: 'msg-1', joinFailed: true });
+    expect(
+      store().streams.has('msg-1'),
+      'the entry must go, or it suppresses SWR app-wide forever',
+    ).toBe(false);
+    errorSpy.mockRestore();
+  });
+
+  it('given a 403 over a SEEDED snapshot, still ends it', async () => {
+    // Same reasoning: the seeded snapshot is not worth an app-wide refresh freeze, and
+    // `joinFailed: true` tells consumers to reload the durably-persisted message anyway.
+    consumeStreamJoin.mockRejectedValue(new StreamJoinError('forbidden', 403));
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    openStreamSession(descriptor({ seedParts: [{ type: 'text', text: 'restored' }] }));
+    await settle();
+
+    expect(ends).toHaveLength(1);
+    expect(ends[0]?.joinFailed).toBe(true);
+    expect(store().streams.has('msg-1')).toBe(false);
+    errorSpy.mockRestore();
   });
 });
 

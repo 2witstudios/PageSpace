@@ -49,25 +49,31 @@ describe('wantsDetachedStream — the server never volunteers the envelope', () 
   });
 });
 
-describe('readAdmissionEnvelope — null means "fall through to the legacy body"', () => {
-  it('given a well-formed envelope, returns it', async () => {
-    expect(await readAdmissionEnvelope(envelopeResponse(validEnvelope))).toEqual(validEnvelope);
+describe('readAdmissionEnvelope — three outcomes, because two of them are not "null"', () => {
+  // A nullable return conflated "untouched legacy body, go read it" with "claimed to be an
+  // envelope and was not, so the body is already spent". The caller handled both the same way
+  // and hit `TypeError: Invalid state: ReadableStream is locked` — or, with no channel,
+  // silently reported a clean send that started nothing (review: coderabbitai on PR #2410).
+
+  it('given a well-formed envelope, reports detached with the envelope', async () => {
+    const read = await readAdmissionEnvelope(envelopeResponse(validEnvelope));
+    expect(read).toEqual({ kind: 'detached', envelope: validEnvelope });
   });
 
-  it('given an SSE response from an OLD SERVER, returns null and leaves the body readable', async () => {
-    // The case that makes the client safe to deploy FIRST. Null is the caller's instruction to
-    // read the body — so this must not have consumed it.
-    const sse = new Response('data: {"type":"start","messageId":"msg-1"}\n', {
+  it('given an SSE response from an OLD SERVER, reports legacy and leaves the body READABLE', async () => {
+    // The case that makes the client safe to deploy FIRST — and the guarantee the caller's
+    // fallback rests on: `kind: 'legacy'` always means the body was never touched.
+    const sse = new Response('data: {"type":"start","messageId":"msg-1"}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     });
 
-    expect(await readAdmissionEnvelope(sse)).toBeNull();
+    expect(await readAdmissionEnvelope(sse)).toEqual({ kind: 'legacy' });
     expect(sse.bodyUsed).toBe(false);
     await expect(sse.text()).resolves.toContain('msg-1');
   });
 
-  it('given an ERROR body that happens to be JSON, returns null rather than a fake admission', async () => {
+  it('given an ERROR body that happens to be JSON, reports legacy without touching it', async () => {
     // Why the content type is bespoke rather than `application/json`. A client that treated any
     // JSON as an envelope would read a 500's `{ error }` as an admission and then subscribe to
     // a stream that does not exist — hanging on a join that 404s instead of surfacing the error.
@@ -75,15 +81,27 @@ describe('readAdmissionEnvelope — null means "fall through to the legacy body"
       status: 500,
       headers: { 'content-type': 'application/json' },
     });
-    expect(await readAdmissionEnvelope(errorBody)).toBeNull();
+    const read = await readAdmissionEnvelope(errorBody);
+    expect(read).toEqual({ kind: 'legacy' });
+    expect(errorBody.bodyUsed, 'a non-envelope body must survive for the caller').toBe(false);
   });
 
-  it('given the envelope content type but unparseable bytes, returns null', async () => {
+  it('given the envelope content type but unparseable bytes, reports MALFORMED — not legacy', async () => {
+    // The distinction that matters: this body IS spent, so telling the caller "legacy" would
+    // send it to read a locked stream.
     const broken = new Response('not json at all', {
       status: 200,
       headers: { 'content-type': ADMISSION_ENVELOPE_CONTENT_TYPE },
     });
-    expect(await readAdmissionEnvelope(broken)).toBeNull();
+    const read = await readAdmissionEnvelope(broken);
+    expect(read.kind).toBe('malformed');
+    expect(broken.bodyUsed).toBe(true);
+  });
+
+  it('given the envelope content type but a missing field, reports MALFORMED', async () => {
+    const partial = envelopeResponse({ ...validEnvelope, messageId: undefined });
+    const read = await readAdmissionEnvelope(partial);
+    expect(read.kind).toBe('malformed');
   });
 });
 

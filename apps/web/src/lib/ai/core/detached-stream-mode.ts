@@ -38,10 +38,10 @@
  * to work:
  *
  *   - NEW CLIENT, OLD SERVER. The old server does not know the header and answers
- *     `text/event-stream` as it always did. `readAdmissionEnvelope` returns null on any
- *     response that is not the JSON envelope, and the caller falls through to reading the
- *     body — i.e. exactly the legacy path. This is what makes the client safe to deploy
- *     FIRST.
+ *     `text/event-stream` as it always did. `readAdmissionEnvelope` reports `kind: 'legacy'`
+ *     for any response that is not the JSON envelope — and, crucially, without having touched
+ *     the body — so the caller reads it as a stream exactly as before. This is what makes the
+ *     client safe to deploy FIRST.
  *   - OLD CLIENT, NEW SERVER. The old client sends no `X-Stream-Mode`, so
  *     `wantsDetachedStream` is false and the server keeps streaming the body. An old tab
  *     left open across a deploy is unaffected.
@@ -116,33 +116,50 @@ export const wantsDetachedStream = (headers: Headers): boolean =>
   headers.get(STREAM_MODE_HEADER)?.trim().toLowerCase() === STREAM_MODE_DETACHED;
 
 /**
- * Is this response an admission envelope, and if so, what does it say?
+ * What a response turned out to be — and, critically, whether its body is still readable.
  *
- * Returns null for ANYTHING else — an SSE body from an old server, an error, a proxy's HTML
- * interstitial, a JSON object missing a field. Null is the caller's instruction to fall
- * through to the legacy body path, so being strict here is what makes the fallback safe:
- * a half-parsed envelope would send the client off to join a stream nobody admitted.
+ * A plain `StreamAdmissionEnvelope | null` was WRONG here, and the reason is worth stating
+ * because it is the kind of thing a nullable return hides by construction. Null conflated two
+ * outcomes with opposite handling:
  *
- * Does NOT consume the response body unless the content type matches, so the caller can
- * still read it as a stream on the null path.
+ *   - an untouched SSE body from an old server, which the caller MUST read; and
+ *   - a response that claimed to be an envelope and was not — where `response.json()` has
+ *     already consumed the body, so reading it again throws `TypeError: Invalid state:
+ *     ReadableStream is locked`, or (worse) silently succeeds at nothing when the caller has
+ *     no channel to fall back onto.
+ *
+ * Discriminating them makes the difference impossible to miss (review: coderabbitai on PR
+ * #2410).
  */
-export const readAdmissionEnvelope = async (
-  response: Response,
-): Promise<StreamAdmissionEnvelope | null> => {
+export type AdmissionRead =
+  | { kind: 'detached'; envelope: StreamAdmissionEnvelope }
+  /** Not an envelope, and the body was never touched — safe to read as a legacy stream. */
+  | { kind: 'legacy' }
+  /** Claimed to be an envelope and was not. The body is spent; this send has failed. */
+  | { kind: 'malformed'; reason: string };
+
+/**
+ * Classify a response from the send endpoint.
+ *
+ * Does NOT touch the body unless the content type claims an envelope, so `kind: 'legacy'`
+ * always means "still readable" — that guarantee is what the caller's fallback rests on.
+ */
+export const readAdmissionEnvelope = async (response: Response): Promise<AdmissionRead> => {
   const contentType = response.headers.get('content-type') ?? '';
-  if (!contentType.includes(ADMISSION_ENVELOPE_CONTENT_TYPE)) return null;
+  if (!contentType.includes(ADMISSION_ENVELOPE_CONTENT_TYPE)) return { kind: 'legacy' };
 
   let parsed: unknown;
   try {
     parsed = await response.json();
   } catch {
-    // The server claimed an envelope and sent something unparseable. Treating this as
-    // "legacy body" is wrong (the body is spent) and treating it as an envelope is worse.
-    // Null, and the caller reports a failed send — which is the truth.
-    return null;
+    return { kind: 'malformed', reason: 'admission envelope was not valid JSON' };
   }
 
-  return parseAdmissionEnvelope(parsed);
+  const envelope = parseAdmissionEnvelope(parsed);
+  if (!envelope) {
+    return { kind: 'malformed', reason: 'admission envelope was missing a required field' };
+  }
+  return { kind: 'detached', envelope };
 };
 
 /**

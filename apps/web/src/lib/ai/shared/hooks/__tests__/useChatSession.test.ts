@@ -39,8 +39,17 @@ const envelope = (overrides: Record<string, unknown> = {}) =>
     { status: 200, headers: { 'content-type': ADMISSION_ENVELOPE_CONTENT_TYPE } },
   );
 
-const sseResponse = (body: string) =>
-  new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+/**
+ * A legacy body in REAL SSE framing: every `data:` record is terminated by a blank line.
+ *
+ * The fixture used single `\n` separators, which the parser also happens to accept — so it
+ * never exercised the framing the server actually emits (review: coderabbitai on PR #2410).
+ */
+const sseResponse = (records: string[]) =>
+  new Response(records.map((r) => `data: ${r}\n\n`).join(''), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
 
 const userMessage = (text: string): UIMessage =>
   ({ id: `u-${text}`, role: 'user', parts: [{ type: 'text', text }] }) as UIMessage;
@@ -105,11 +114,11 @@ describe('useChatSession — the send', () => {
   it('given an OLD SERVER answering text/event-stream, falls through to the legacy body', async () => {
     // What makes this client safe to deploy FIRST.
     fetchWithAuth.mockResolvedValue(
-      sseResponse(
-        'data: {"type":"start","messageId":"msg-legacy"}\n'
-          + 'data: {"type":"text-start","id":"t1"}\n'
-          + 'data: {"type":"text-delta","id":"t1","delta":"hello"}\n',
-      ),
+      sseResponse([
+        '{"type":"start","messageId":"msg-legacy"}',
+        '{"type":"text-start","id":"t1"}',
+        '{"type":"text-delta","id":"t1","delta":"hello"}',
+      ]),
     );
     const { result } = mount();
 
@@ -145,6 +154,47 @@ describe('useChatSession — the send', () => {
     expect(onError).toHaveBeenCalled();
     await waitFor(() => expect(result.current.status).toBe('error'));
     expect(result.current.error).toBeInstanceOf(Error);
+  });
+
+  it('given a MALFORMED admission envelope, fails the send instead of reporting success', async () => {
+    // The body is already spent by `response.json()`, so there is no legacy stream to fall back
+    // to. Before this, the send fell off the end of an if/else into `setSendState(null)` — a
+    // clean-looking send that started no generation and rendered nothing (review: coderabbitai
+    // on PR #2410).
+    fetchWithAuth.mockResolvedValue(
+      new Response('not json', {
+        status: 200,
+        headers: { 'content-type': ADMISSION_ENVELOPE_CONTENT_TYPE },
+      }),
+    );
+    const onError = vi.fn();
+    const { result } = mount({ onError });
+
+    await act(async () => {
+      await expect(result.current.sendMessage(userMessage('hi'), 'conv-1')).rejects.toThrow(
+        /admission/i,
+      );
+    });
+
+    expect(openStreamSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.status).toBe('error'));
+  });
+
+  it('given a legacy body but NO channel to render it on, fails loudly rather than silently', async () => {
+    // The store partitions by channel, so a legacy body with no channel could be read but never
+    // rendered — the reply would be lost in silence. A surface reaching here is misconfigured.
+    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"start","messageId":"msg-legacy"}']));
+    const onError = vi.fn();
+    const { result } = mount({ channelId: null, onError });
+
+    await act(async () => {
+      await expect(result.current.sendMessage(userMessage('hi'), 'conv-1')).rejects.toThrow(
+        /channel/i,
+      );
+    });
+
+    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
+    await waitFor(() => expect(result.current.status).toBe('error'));
   });
 
   it('sends the base messages plus the new one', async () => {

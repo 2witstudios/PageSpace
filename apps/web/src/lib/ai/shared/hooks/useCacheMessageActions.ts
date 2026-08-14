@@ -34,14 +34,6 @@ export interface UseCacheMessageActionsOptions {
   conversationId: string | null;
   /** The full rendered list (selectRenderedMessages output, mode included). */
   renderedMessages: RenderedMessage[];
-  /**
-   * Is THIS surface's own send live right now (a pending send, or an own store entry)?
-   *
-   * Only reaches `useMessageActions`' post-edit reconcile refetch now. It no longer gates any
-   * transport-array write, because there is no transport array: `useChatSession` composes its
-   * outbound messages from the store's settled view at call time.
-   */
-  isOwnSendLive: boolean;
   regenerate: (options?: { body?: Record<string, unknown> }) => void;
 }
 
@@ -76,7 +68,6 @@ export function useCacheMessageActions({
   agentId,
   conversationId,
   renderedMessages,
-  isOwnSendLive,
   regenerate,
 }: UseCacheMessageActionsOptions): UseCacheMessageActionsResult {
   const stableMessages = useMemo(
@@ -93,7 +84,6 @@ export function useCacheMessageActions({
     conversationId,
     messages: stableMessages,
     regenerate,
-    isOwnStreamLive: isOwnSendLive,
   });
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {

@@ -24,7 +24,7 @@
  * Returns the exact `UseAgentSessionChatReturn` shape so the one presentation
  * (`SessionChatView`) renders either without knowing which pipeline it's on.
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import type { UIMessage } from 'ai';
 import { toast } from 'sonner';
@@ -147,12 +147,6 @@ export function useAssistantSessionChat({
 
   const renderedMessages = useRenderedMessages(channelId ?? '', conversationId);
   const messages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
-  // The SETTLED view — live synth rows excluded. This is what the send shell composes its
-  // outbound messages from, and what every action reasons over.
-  const stableMessages = useMemo(
-    () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
-    [renderedMessages],
-  );
   const loadState = useConversationLoadState(conversationId);
 
   const activeStream = useConversationActiveStream(channelId, conversationId);
@@ -250,10 +244,6 @@ export function useAssistantSessionChat({
     pendingSendConversationId,
   });
 
-  // No raw chat status in this any more: `displayIsStreaming` already ORs the pending send
-  // with the own store entry, which covers the submitted window AND every stream the old
-  // status could not see (bootstrapped, remote, cross-instance).
-  const isOwnSendLive = displayIsStreaming;
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     // null = global mode — the cache actions' own dual-pipeline switch, the
@@ -261,7 +251,6 @@ export function useAssistantSessionChat({
     agentId: null,
     conversationId,
     renderedMessages,
-    isOwnSendLive,
     // Adapts the shell's explicit-conversation `regenerate` to the action hook's
     // conversation-less one. The id is bound HERE, where it is unambiguous, rather than being
     // inferred inside a shared `Chat` from whatever the surface last touched.

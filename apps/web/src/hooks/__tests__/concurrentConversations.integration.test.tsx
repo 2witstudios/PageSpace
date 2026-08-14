@@ -26,7 +26,11 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 
 const fetchWithAuth = vi.fn();
-const consumeStreamJoin = vi.fn();
+// Typed from the real export, so a change to the join's signature fails COMPILATION here
+// rather than leaving a mock that silently no longer matches its subject (review:
+// coderabbitai on PR #2410). The `unknown[]` spread it replaced accepted anything forever.
+const consumeStreamJoin =
+  vi.fn<typeof import('@/lib/ai/core/stream-join-client').consumeStreamJoin>();
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuth(...args),
@@ -40,7 +44,11 @@ vi.mock('@/lib/ai/core/stream-join-client', async () => {
   const actual = await vi.importActual<typeof import('@/lib/ai/core/stream-join-client')>(
     '@/lib/ai/core/stream-join-client',
   );
-  return { ...actual, consumeStreamJoin: (...args: unknown[]) => consumeStreamJoin(...args) };
+  return {
+    ...actual,
+    consumeStreamJoin: (...args: Parameters<typeof actual.consumeStreamJoin>) =>
+      consumeStreamJoin(...args),
+  };
 });
 
 import {
@@ -78,7 +86,10 @@ const forConversation = (conversationId: string) =>
   [...streams().values()].filter((s) => s.conversationId === conversationId);
 
 /** Per-messageId frame delivery, so a test can drive two streams independently. */
-const deliverers = new Map<string, (parts: unknown[], seq: number) => void>();
+type JoinOnParts = Parameters<
+  typeof import('@/lib/ai/core/stream-join-client').consumeStreamJoin
+>[2];
+const deliverers = new Map<string, JoinOnParts>();
 const resolvers = new Map<string, (result: { aborted: boolean }) => void>();
 
 const mountShell = (conversationId: string) =>
@@ -101,12 +112,10 @@ beforeEach(() => {
   resetStreamSessionRegistry();
   usePendingStreamsStore.setState({ streams: new Map() });
 
-  consumeStreamJoin.mockImplementation(
-    (messageId: string, _signal: AbortSignal, onParts: (p: unknown[], s: number) => void) => {
-      deliverers.set(messageId, onParts);
-      return new Promise((resolve) => resolvers.set(messageId, resolve));
-    },
-  );
+  consumeStreamJoin.mockImplementation((messageId, _signal, onParts) => {
+    deliverers.set(messageId, onParts);
+    return new Promise((resolve) => resolvers.set(messageId, resolve));
+  });
 });
 
 afterEach(() => {
