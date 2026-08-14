@@ -319,6 +319,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       },
     });
     if (persisted && mentionNotify) mentionNotified = true;
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it: a turn writes terminally more than once (execute-end persists the
+    // buffered snapshot, `onFinish` then refines it), and deleting on the first would discard
+    // a tail the pump may still have been forwarding. The lifecycle releases once this and
+    // `finish()` have both happened. Gated on `persisted` because a save the
+    // conversation-deleted guard declined is not a durable row.
+    if (persisted && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
   };
   // Captured by the inner catch (createUIMessageStream construction failure) before it calls
   // lifecycle.finish().

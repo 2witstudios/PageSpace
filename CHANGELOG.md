@@ -75,6 +75,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
   attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
   from any of them. A colleague's reply on a shared page is still correctly not yours to stop.
+- **A long reply interrupted by a restart comes back whole, beginning included** — when the server
+  that was writing a reply went away mid-sentence (a deploy, a crash, a machine moving), what you
+  got back afterwards was rebuilt from a periodic snapshot rather than from the reply itself. For
+  short answers that was close enough. For a long one it was not: the snapshot was assembled from a
+  buffer that discards its oldest content once a reply runs past a certain length, and because the
+  discarded part included the marker that opens a paragraph, everything after it was dropped too.
+  The reply did not come back shortened — the text disappeared entirely, leaving a stub that looked
+  like the assistant had barely started.
+
+  The reply is now written down as it is produced, so recovering one is a matter of reading it back
+  rather than reconstructing it: the beginning survives however long the answer ran, and what
+  returns is at most a fraction of a second behind what was on your screen instead of a second or
+  more. Tool calls and reasoning steps come back in the same shape they were rendered in. Nothing
+  changes for a reply that finishes normally — the record is deleted the moment the finished message
+  is safely saved, and a reply that never had a chance to save is the one case it is kept for.
 
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.

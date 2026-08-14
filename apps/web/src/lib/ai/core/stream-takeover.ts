@@ -81,6 +81,10 @@ export const takeOverConversationStreams = async ({
         // same query as everything else here and there are at most a handful of in-flight rows
         // per conversation.
         parts: aiStreamSessions.parts,
+        // How many frames that snapshot reflects. Rides the same query for the same reason,
+        // and is what lets the materializer tell a SHORT durable frame log (a writer that
+        // gave up early) from a complete one — see `recoverParts`.
+        rawPartsCount: aiStreamSessions.rawPartsCount,
       })
       .from(aiStreamSessions)
       .where(and(
@@ -164,6 +168,7 @@ export const takeOverConversationStreams = async ({
           conversationId,
           userId: row.userId,
           parts: row.parts,
+          rawPartsCount: row.rawPartsCount,
           startedAt: row.startedAt,
         });
         return ok ? messageId : null;

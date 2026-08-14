@@ -69,6 +69,9 @@ const fakeLifecycle = (): {
       channel.finish(aborted);
     },
     getParts: async () => [],
+    // Unused here: this module never persists a message, so it never confirms one. Present
+    // only to satisfy the handle's shape.
+    confirmTerminalWrite: () => {},
     preAborted: false,
   };
   return { handle, finishCalls, channel };
