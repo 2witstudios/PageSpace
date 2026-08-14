@@ -528,6 +528,91 @@ describe('late continuations after the session is already gone', () => {
   });
 });
 
+describe('a snapshot cannot speak about what started after it', () => {
+  it('given a session opened DURING the bootstrap round trip, reconcile leaves it alone', async () => {
+    // Review finding. `/active-streams` answers about the world as it was when the query ran.
+    // A send landing mid-round-trip was reported as already-finished by the answer to a
+    // question asked before it started: join aborted, entry dropped, reply dead mid-generation.
+    // `bootstrapGeneration` does not cover this — it orders bootstrap responses against each
+    // other, not against sessions opened in between.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    const snapshotTakenAt = Date.now();
+    // The user sends AFTER the query was issued.
+    await new Promise((r) => setTimeout(r, 2));
+    openStreamSession(descriptor({ messageId: 'msg-late' }));
+
+    // ...and the stale snapshot (which of course does not list it) comes back.
+    reconcileChannelSessions('page-1', new Set(), { snapshotTakenAt });
+
+    expect(store().streams.has('msg-late'), 'the snapshot predates it').toBe(true);
+    expect(ends).toEqual([]);
+  });
+
+  it('given a session opened BEFORE the snapshot and absent from it, still reconciles it away', async () => {
+    // The guard must bound reconciliation, not disable it.
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor({ messageId: 'msg-early' }));
+    await new Promise((r) => setTimeout(r, 2));
+    const snapshotTakenAt = Date.now();
+
+    reconcileChannelSessions('page-1', new Set(), { snapshotTakenAt });
+
+    expect(store().streams.has('msg-early')).toBe(false);
+    expect(ends.map((e) => e.messageId)).toEqual(['msg-early']);
+  });
+});
+
+describe('a stale join continuation must not end a RE-OPENED session', () => {
+  it('given the messageId was torn down and re-opened, the old continuation is ignored', async () => {
+    // Review finding. `consumeStreamJoin` RESOLVES on abort rather than rejecting, so an old
+    // continuation still settles after a teardown. Guarding on `sessions.has(messageId)` — key
+    // presence — let it end the NEW session for the same id: fresh join aborted, entry dropped,
+    // and consumers told the stream COMPLETED with an authoritative copy that was just deleted.
+    // The guard is now on session IDENTITY.
+    const resolvers: ((r: { aborted: boolean }) => void)[] = [];
+    consumeStreamJoin.mockImplementation(
+      () => new Promise((res) => { resolvers.push(res as (r: { aborted: boolean }) => void); }),
+    );
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());          // session #1
+    closeChannelSessions('page-1');           // torn down; #1's promise still pending
+    openStreamSession(descriptor());          // session #2, SAME messageId
+    expect(consumeStreamJoin).toHaveBeenCalledTimes(2);
+
+    // #1's continuation finally settles.
+    resolvers[0]({ aborted: false });
+    await settle();
+
+    expect(ends, 'the stale continuation must not report a completion').toEqual([]);
+    expect(store().streams.has('msg-1'), 'session #2 is untouched').toBe(true);
+  });
+
+  it('given the same for a REJECTED continuation, it is also ignored', async () => {
+    const rejecters: ((e: unknown) => void)[] = [];
+    consumeStreamJoin.mockImplementation(
+      () => new Promise((_res, rej) => { rejecters.push(rej); }),
+    );
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    closeChannelSessions('page-1');
+    openStreamSession(descriptor());
+
+    rejecters[0](new StreamJoinError('stale', 500));
+    await settle();
+
+    expect(ends).toEqual([]);
+    expect(store().streams.has('msg-1')).toBe(true);
+  });
+});
+
 describe('listener hygiene', () => {
   it('given one listener throws, still delivers to the others', async () => {
     // A consumer throwing must never strand the others, or the session's own teardown.

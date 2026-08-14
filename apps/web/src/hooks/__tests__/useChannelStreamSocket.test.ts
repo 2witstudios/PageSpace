@@ -382,7 +382,9 @@ describe('bootstrap', () => {
       expect(reconcileChannelSessions).toHaveBeenCalledWith(
         CHANNEL,
         new Set(['msg-live']),
-        undefined,
+        // No conversation narrowing here, but ALWAYS a snapshot time — a bootstrap's answer
+        // cannot speak about a stream that started during its round trip.
+        expect.objectContaining({ snapshotTakenAt: expect.any(Number) }),
       ),
     );
   });
@@ -401,9 +403,11 @@ describe('bootstrap', () => {
     mount(undefined, 'conv-scoped');
 
     await waitFor(() => expect(reconcileChannelSessions).toHaveBeenCalled());
-    expect(reconcileChannelSessions).toHaveBeenCalledWith(CHANNEL, expect.any(Set), {
-      conversationId: 'conv-scoped',
-    });
+    expect(reconcileChannelSessions).toHaveBeenCalledWith(
+      CHANNEL,
+      expect.any(Set),
+      expect.objectContaining({ conversationId: 'conv-scoped' }),
+    );
   });
 
   it('given NO narrowing, reconciles channel-wide', async () => {
@@ -412,7 +416,9 @@ describe('bootstrap', () => {
     mount();
 
     await waitFor(() => expect(reconcileChannelSessions).toHaveBeenCalled());
-    expect(reconcileChannelSessions).toHaveBeenCalledWith(CHANNEL, expect.any(Set), undefined);
+    const scope = reconcileChannelSessions.mock.calls[0][2] as Record<string, unknown>;
+    expect(scope).not.toHaveProperty('conversationId');
+    expect(scope.snapshotTakenAt).toEqual(expect.any(Number));
   });
 
   it('given a failed bootstrap, does not reconcile — a missing answer is not "nothing is live"', async () => {

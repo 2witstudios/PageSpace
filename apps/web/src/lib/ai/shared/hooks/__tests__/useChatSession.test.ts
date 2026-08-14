@@ -111,28 +111,48 @@ describe('useChatSession — the send', () => {
     );
   });
 
-  it('given an OLD SERVER answering text/event-stream, falls through to the legacy body', async () => {
-    // What makes this client safe to deploy FIRST.
-    fetchWithAuth.mockResolvedValue(
-      sseResponse([
-        '{"type":"start","messageId":"msg-legacy"}',
-        '{"type":"text-start","id":"t1"}',
-        '{"type":"text-delta","id":"t1","delta":"hello"}',
-      ]),
-    );
+  it('given an OLD SERVER answering text/event-stream, RELEASES the body and writes nothing', async () => {
+    // What makes this client safe to deploy FIRST — but not by reading the body.
+    //
+    // The old server broadcasts `chat:stream_start` and serves `/stream-join`, so
+    // `useChannelStreamSocket` already opens a registry session for this messageId and
+    // subscribes to it. Reading the body as well made this tab TWO writers on one store entry
+    // with independent counters, and `applySetStreamParts` silently drops whichever falls
+    // behind (review finding). So the shell cancels the body and leaves rendering to the
+    // socket, exactly as for a remote or bootstrapped stream.
+    const body = sseResponse([
+      '{"type":"start","messageId":"msg-legacy"}',
+      '{"type":"text-delta","id":"t1","delta":"hello"}',
+    ]);
+    fetchWithAuth.mockResolvedValue(body);
     const { result } = mount();
 
     await act(async () => {
       await result.current.sendMessage(userMessage('hi'), 'conv-1');
     });
 
-    // No session is opened — there is no channel to subscribe to on an old server.
-    expect(openStreamSession).not.toHaveBeenCalled();
-    // But the reply still renders, folded into the same store entry with the same semantics.
-    const entry = usePendingStreamsStore.getState().streams.get('msg-legacy');
-    expect(entry).toBeDefined();
-    expect(entry!.conversationId).toBe('conv-1');
-    expect(JSON.stringify(entry!.parts)).toContain('hello');
+    expect(openStreamSession, 'no envelope, so no send-driven session').not.toHaveBeenCalled();
+    expect(
+      usePendingStreamsStore.getState().streams.size,
+      'the shell must not become a second writer',
+    ).toBe(0);
+    expect(body.bodyUsed || body.body?.locked, 'the body is released, not left dangling').toBeTruthy();
+  });
+
+  it('given an old server, the send still RESOLVES at admission rather than at end-of-stream', async () => {
+    // Reading the body meant `dispatch` awaited the whole generation: `status` stayed
+    // 'submitted' throughout, and a mid-stream failure rejected the send — which rolls back the
+    // user's own message via `rollbackOptimisticSendOnFailure`, even though the server had
+    // persisted it and the generation was still running.
+    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"start","messageId":"msg-legacy"}']));
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current.sendMessage(userMessage('hi'), 'conv-1');
+    });
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.error).toBeUndefined();
   });
 
   it('given a non-ok response, throws a typed cause and reports an error status', async () => {
@@ -177,23 +197,6 @@ describe('useChatSession — the send', () => {
     });
 
     expect(openStreamSession).not.toHaveBeenCalled();
-    await waitFor(() => expect(result.current.status).toBe('error'));
-  });
-
-  it('given a legacy body but NO channel to render it on, fails loudly rather than silently', async () => {
-    // The store partitions by channel, so a legacy body with no channel could be read but never
-    // rendered — the reply would be lost in silence. A surface reaching here is misconfigured.
-    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"start","messageId":"msg-legacy"}']));
-    const onError = vi.fn();
-    const { result } = mount({ channelId: null, onError });
-
-    await act(async () => {
-      await expect(result.current.sendMessage(userMessage('hi'), 'conv-1')).rejects.toThrow(
-        /channel/i,
-      );
-    });
-
-    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
     await waitFor(() => expect(result.current.status).toBe('error'));
   });
 

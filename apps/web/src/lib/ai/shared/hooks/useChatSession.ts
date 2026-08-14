@@ -76,9 +76,7 @@ import {
   STREAM_MODE_HEADER,
   readAdmissionEnvelope,
 } from '@/lib/ai/core/detached-stream-mode';
-import { consumeLegacyStreamBody } from '@/lib/ai/core/legacy-stream-body';
 import { openStreamSession } from '@/lib/ai/streams/streamSessionRegistry';
-import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 
 /** The status vocabulary the surfaces already speak, kept so their branches do not churn. */
@@ -96,8 +94,12 @@ export interface UseChatSessionOptions {
    * The socket room the server broadcasts this generation's lifecycle on.
    *
    * NOT interchangeable with `conversationId`: in agent mode the channel is the AGENT's page
-   * id while the conversation is one of several on it. It is the store's partition key, so a
-   * wrong value here files the stream under a channel no surface is watching.
+   * id while the conversation is one of several on it.
+   *
+   * The shell no longer reads it — the admission envelope carries the authoritative channel,
+   * and the legacy path leaves rendering to the socket entirely. It stays in the options so a
+   * surface still has to state which channel it belongs to (forgetting it was a real bug once,
+   * and the value is what every surrounding hook keys on).
    */
   channelId: string | null;
   /** The conversation currently on screen — what `status` and `error` report on. */
@@ -171,7 +173,6 @@ interface ToolPatch {
 
 export const useChatSession = ({
   api,
-  channelId,
   conversationId,
   triggeredBy,
   getBaseMessages,
@@ -184,8 +185,6 @@ export const useChatSession = ({
   // captured value is the stale-copy bug rather than a style preference.
   const getBaseMessagesRef = useRef(getBaseMessages);
   getBaseMessagesRef.current = getBaseMessages;
-  const channelIdRef = useRef(channelId);
-  channelIdRef.current = channelId;
   const triggeredByRef = useRef(triggeredBy);
   triggeredByRef.current = triggeredBy;
   const apiRef = useRef(api);
@@ -239,7 +238,6 @@ export const useChatSession = ({
     async (targetConversationId: string, body: Record<string, unknown>, messagesForRequest: UIMessage[]): Promise<void> => {
       setSendState(targetConversationId, { status: 'submitted' });
 
-      const channel = channelIdRef.current;
       const identity = triggeredByRef.current;
 
       try {
@@ -293,33 +291,32 @@ export const useChatSession = ({
             startedAt: admission.envelope.startedAt,
           });
         } else {
-          // LEGACY (old server), body untouched. Fold it into the same store entry with the
-          // same replace semantics. See `legacy-stream-body.ts` for why reading the messageId
-          // off the `start` frame is sound HERE and not on a mid-seq join.
-          if (!channel) {
-            // Nothing to file the stream under: the store partitions by channel, so a legacy
-            // body with no channel could be read but never rendered, and the reply would be
-            // lost in silence. Fail loudly instead — a surface reaching here is misconfigured.
-            throw new Error(
-              'Stream admission failed: the server streamed a body but this surface has no channel to render it on',
-            );
-          }
-          const store = usePendingStreamsStore.getState();
-          await consumeLegacyStreamBody(response, {
-            onStart: (messageId) => {
-              store.addStream({
-                messageId,
-                pageId: channel,
-                conversationId: targetConversationId,
-                triggeredBy: identity,
-                isOwn: true,
-                startedAt: new Date().toISOString(),
-              });
-            },
-            onParts: (messageId, parts, seq) => {
-              store.setStreamParts(messageId, parts, seq);
-            },
-          });
+          // ── OLD SERVER: RELEASE THE BODY AND LET THE SOCKET RENDER IT ──────────────────
+          //
+          // The brief for this work said to "fall through to the legacy body". Reading it is
+          // what a client did before this change, and it is WRONG here — not as a style
+          // preference, but because the old server does two things this client now also
+          // reacts to. `createStreamLifecycle` broadcasts `chat:stream_start` (before the POST
+          // even returns), and `/api/ai/chat/stream-join/[messageId]` exists and works. So
+          // `useChannelStreamSocket` ALREADY opens a registry session for this exact
+          // messageId and subscribes to it.
+          //
+          // Reading the body as well made this tab TWO writers on one store entry, with
+          // independent counters — the registry's server-derived seq versus a local frame
+          // count — and `applySetStreamParts` silently drops whichever falls behind. When the
+          // join's end sentinel landed first it removed the entry outright, and the remaining
+          // body writes no-op'd against a messageId the store no longer had, so the tail of
+          // the reply never rendered. It also created the only store entry in the client with
+          // no registry session behind it: the expiry sweep iterates sessions, so nothing
+          // could ever reclaim it, and a `chat:stream_complete` without a conversationId left
+          // a phantom streaming bubble — and a wedged composer — in that conversation until a
+          // reload.
+          //
+          // The old `consumingChannels` mark is what used to keep these two apart. Deleting it
+          // is only sound because nobody reads a body; so on the one path that still could,
+          // this client doesn't. Cancelling detaches subscriber #0 cleanly and stops nothing:
+          // the pump owns the SDK stream, which is the whole point of PR #2408.
+          void response.body?.cancel();
         }
 
         setSendState(targetConversationId, null);

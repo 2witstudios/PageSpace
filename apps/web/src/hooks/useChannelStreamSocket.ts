@@ -218,6 +218,10 @@ export function useChannelStreamSocket(
 
     const runBootstrap = async () => {
       const generation = (bootstrapGeneration += 1);
+      // Stamped BEFORE the request leaves. `/active-streams` answers about the world as it was
+      // when the query ran, so anything that starts during the round trip is outside what this
+      // answer can speak about — see `ReconcileScope.snapshotTakenAt`.
+      const snapshotTakenAt = Date.now();
       try {
         const conversationScope = bootstrapConversationId
           ? `&conversationId=${encodeURIComponent(bootstrapConversationId)}`
@@ -264,7 +268,10 @@ export function useChannelStreamSocket(
           reconcileChannelSessions(
             channel,
             new Set((data.streams ?? []).map((stream) => stream.messageId)),
-            bootstrapConversationId ? { conversationId: bootstrapConversationId } : undefined,
+            {
+              ...(bootstrapConversationId ? { conversationId: bootstrapConversationId } : {}),
+              snapshotTakenAt,
+            },
           );
         }
       } catch (err) {

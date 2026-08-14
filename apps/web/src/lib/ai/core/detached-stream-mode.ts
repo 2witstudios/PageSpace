@@ -216,10 +216,20 @@ export const synthesizeStartChunk = (envelope: StreamAdmissionEnvelope): UIMessa
 /**
  * Whether this build asks for detached streams. Read ONCE — see the module docblock.
  *
- * Opt-OUT rather than opt-in. The legacy body path is the thing being removed, so the
- * default has to be the new behaviour or the change never actually ships; the escape hatch
- * exists so a deployment that hits an unforeseen proxy problem can fall back without a
- * rollback. `'0'` and `'false'` are both accepted because operators write both.
+ * Opt-OUT rather than opt-in: the default has to be the new behaviour or the change never
+ * actually ships. `'0'` and `'false'` are both accepted because operators write both.
+ *
+ * BUILD-TIME, NOT RUNTIME. `NEXT_PUBLIC_*` is inlined into the client bundle at build time, so
+ * flipping this needs a rebuild and redeploy — it is NOT a hot kill switch, and an earlier
+ * version of this comment wrongly sold it as one ("fall back without a rollback", which would
+ * in fact be more work than the rollback). What it is good for is pinning a build to the
+ * socket-driven path deliberately.
+ *
+ * Turning it off does not restore the old body-reading client: nothing reads a response body
+ * any more. It only stops the send from opening its own session off an admission envelope, so
+ * rendering falls to `chat:stream_start` and the registry, exactly as it does for a remote or
+ * bootstrapped stream. See the legacy branch in `useChatSession` for why reading the body is
+ * not an option.
  */
 const detachedDisabled = (process.env.NEXT_PUBLIC_DETACHED_STREAMS ?? '').trim().toLowerCase();
 export const DETACHED_STREAM_ENABLED =

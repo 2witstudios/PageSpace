@@ -48,11 +48,20 @@
  * "nothing ever told us it ended" is a real state, not a hypothetical.
  *
  * Under the old mount-scoped design that state self-healed: the next unmount cleared the
- * store. Under this one it would not, and the consequence is worse than a stale bubble —
- * `deriveStreamingRegistrations` derives the editing-store streaming registration from the
- * store, and that registration suppresses SWR revalidation AND auth-token refresh APP-WIDE.
- * A stranded entry would therefore freeze data refresh across the entire application, for
- * the rest of the session, over one lost socket event.
+ * store. Under this one it would not, and the consequence is that the CONVERSATION WEDGES.
+ * `displayIsStreaming` is derived from the store entry, so the composer keeps rendering Stop
+ * instead of Send and the user cannot send in that conversation again; `isConversationBusy`
+ * follows it, so an `ask_user` prompt there becomes unanswerable. A phantom bubble with a Stop
+ * button sits above it, permanently.
+ *
+ * (An earlier draft of this comment claimed a stranded entry suppresses SWR revalidation and
+ * auth-token refresh app-wide. It does not, and the correction matters because the claim was
+ * being used to justify design decisions. `deriveStreamingRegistrations` does open an
+ * editing-store session of type `'ai-streaming'` — but every SWR `isPaused()` call site asks
+ * `isAnyEditing()`, which deliberately matches only `'document' | 'form'`, and the queries that
+ * DO count streaming sessions (`isAnyActive` via `isEditingActive` / `shouldDeferAuthRefresh`)
+ * have no production callers. See `deriveStreamingRegistrations.ts`, whose own docblock states
+ * the same thing and is where this came from.)
  *
  * So entries expire on their own `startedAt`, swept on an interval. `STREAM_MAX_LIFETIME_MS`
  * is deliberately the SAME horizon the server's channel registry, abort registry and
@@ -171,6 +180,14 @@ interface Session {
   refs: number;
   /** Millis since epoch, parsed from `startedAt` once, for the expiry sweep. */
   startedAtMs: number;
+  /**
+   * When THIS CLIENT opened the session, on the client's own clock.
+   *
+   * Distinct from `startedAtMs` (the server's start time) and deliberately not derived from
+   * it: this is compared against the moment a bootstrap request was issued, which is also a
+   * client timestamp, so the two are on the same clock and immune to server skew.
+   */
+  openedAtMs: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -369,6 +386,7 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
     // treat an unusable start time as "starting now", so the entry gets a full horizon and
     // is still swept eventually.
     startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : Date.now(),
+    openedAtMs: Date.now(),
   };
   sessions.set(descriptor.messageId, session);
   ensureSweep();
@@ -400,7 +418,14 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
     descriptor.fromSeq ?? 0,
   )
     .then((result) => {
-      if (!sessions.has(descriptor.messageId)) return;
+      // IDENTITY, not key presence. `consumeStreamJoin` RESOLVES on abort rather than rejecting,
+      // so after any teardown this continuation still settles a few microtasks later — and if
+      // anything re-opened the same messageId in that window (two bootstraps in flight, or the
+      // send's envelope landing after a stream_start-opened session was reconciled away), a
+      // `sessions.has(...)` check passes and this stale continuation ends somebody else's live
+      // session: fresh join aborted, entry dropped, consumers told the stream COMPLETED with an
+      // authoritative copy that was just deleted (review finding).
+      if (sessions.get(descriptor.messageId) !== session) return;
 
       if (result.resumeFromSeq !== undefined) {
         // RESEED FROM THIS SEQ — never a completion. See `fallBackToDatabase`. Deliberately
@@ -425,16 +450,18 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
       });
     })
     .catch((error: unknown) => {
-      // Reaching here with the session still present means a GENUINE join failure. Two things
-      // rule out the alternatives: a teardown removes the session from `sessions` (so the
-      // guard above returns), and `consumeStreamJoin` RESOLVES with `{ aborted: true }` rather
-      // than rejecting when its own signal fires. So there is no "was this just a
-      // cancellation?" question to ask, and no guard on the log.
+      // Reaching here with THIS session still registered means a GENUINE join failure. Two
+      // things rule out the alternatives: a teardown removes the session from `sessions`, and
+      // `consumeStreamJoin` RESOLVES with `{ aborted: true }` rather than rejecting when its
+      // own signal fires. So there is no "was this just a cancellation?" question to ask, and
+      // no guard on the log.
+      //
+      // Identity rather than key presence, for the same reason as the resolve path above.
       //
       // Logged BEFORE the teardown below, which is the part that was wrong: `endSession`
       // aborts the session's controller, so an `if (!controller.signal.aborted)` check placed
       // after it could never be true and the error was never reported.
-      if (!sessions.has(descriptor.messageId)) return;
+      if (sessions.get(descriptor.messageId) !== session) return;
       console.error('[streamSessionRegistry] stream join error', error);
 
       const polling = fallBackToDatabase(session, {
@@ -448,12 +475,12 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
         // It MUST end here, unconditionally. It used to end only when nothing had been seeded
         // or delivered — the idea being that a partial snapshot on screen was worth keeping.
         // That reasoning inverted the cost: a session that never ends is a store entry that
-        // never ends, `deriveStreamingRegistrations` derives the editing-store registration
-        // from those entries, and that registration suppresses SWR revalidation AND
-        // auth-token refresh APP-WIDE. So preserving one truncated bubble froze data refresh
-        // across the entire application until the hour-long expiry sweep — which drops it
-        // WITHOUT notifying anyone, so the reply never got reloaded either (review:
-        // coderabbitai on PR #2410).
+        // never ends, and a live store entry WEDGES ITS CONVERSATION. `displayIsStreaming`
+        // derives from it, so the composer shows Stop instead of Send and the user cannot send
+        // there again; `isConversationBusy` follows, so `ask_user` becomes unanswerable. All to
+        // preserve a truncated bubble, until the hour-long expiry sweep drops it WITHOUT
+        // notifying anyone — so the reply was never reloaded either (review: coderabbitai on
+        // PR #2410).
         //
         // `joinFailed: true` is what makes ending safe: it tells consumers we hold no
         // authoritative copy, so they reload the durably-persisted message rather than trust
@@ -556,16 +583,34 @@ export const closeChannelSessions = (channelId: string): void => {
  *
  * So the scope must match the QUESTION that was asked. A caller that narrowed its bootstrap
  * must narrow its reconcile identically; only an unscoped, channel-wide snapshot may reconcile
- * channel-wide.
+ * channel-wide — and `snapshotTakenAt` bounds it in TIME as well as in subject.
  */
+export interface ReconcileScope {
+  /** Set when the bootstrap narrowed its `/active-streams` query to one conversation. */
+  conversationId?: string;
+  /**
+   * When the request that produced `liveMessageIds` was ISSUED (client clock).
+   *
+   * Sessions opened at or after this instant are skipped: the snapshot predates them, so its
+   * silence about them means nothing.
+   */
+  snapshotTakenAt?: number;
+}
 export const reconcileChannelSessions = (
   channelId: string,
   liveMessageIds: ReadonlySet<string>,
-  scope?: { conversationId: string },
+  scope?: ReconcileScope,
 ): void => {
   for (const [messageId, session] of [...sessions.entries()]) {
     if (session.descriptor.channelId !== channelId) continue;
-    if (scope && session.descriptor.conversationId !== scope.conversationId) continue;
+    if (scope?.conversationId && session.descriptor.conversationId !== scope.conversationId) continue;
+    // A snapshot cannot speak about a stream that did not exist when it was taken. Without
+    // this, a send landing DURING a bootstrap's round trip was reported as already-finished by
+    // the answer to a question asked before it started: the join aborted, the entry dropped,
+    // and the reply died mid-generation (review finding). `bootstrapGeneration` does not cover
+    // this — it orders bootstrap responses against each other, not against sessions opened in
+    // between.
+    if (scope?.snapshotTakenAt !== undefined && session.openedAtMs >= scope.snapshotTakenAt) continue;
     if (liveMessageIds.has(messageId)) continue;
     endSession(messageId, {
       conversationId: session.descriptor.conversationId,

@@ -3,10 +3,22 @@ import type { PendingStreamsMap } from '@/stores/pendingStreams/applyAddStream';
 /**
  * Which conversations must currently hold an editing-store streaming registration.
  *
- * THE CONTRACT BEING PROTECTED (repo CLAUDE.md): a streaming registration gates SWR
- * revalidation AND auth-token refresh. It must be continuous from the send CLICK through the
- * stream's end, or a revalidation lands mid-stream and clobbers the very content this epic
- * exists to keep on screen.
+ * THE CONTRACT BEING PROTECTED (repo CLAUDE.md): a streaming registration must be continuous
+ * from the send CLICK through the stream's end, so nothing lands mid-stream and clobbers the
+ * very content this epic exists to keep on screen.
+ *
+ * WHAT IT ACTUALLY GATES TODAY, stated precisely because the previous wording here was wrong
+ * and was being cited elsewhere as justification. This opens an editing-store session of type
+ * `'ai-streaming'`. Every SWR `isPaused()` call site asks `isAnyEditing()`, which deliberately
+ * matches only `'document' | 'form'` — so a streaming registration does NOT pause SWR. The
+ * queries that DO count every session type (`isAnyActive`, via the `isEditingActive` and
+ * `shouldDeferAuthRefresh` wrappers) currently have no production callers, so it does not
+ * defer auth refresh either.
+ *
+ * What it does do is make the conversation read as busy — which is load-bearing for the UI
+ * (Stop vs Send, `isConversationBusy`) and is why continuity still matters. The wiring for the
+ * SWR/auth half exists and is one call site away from being real; the description should match
+ * the code until then.
  *
  * WHY BOTH INPUTS.
  *
