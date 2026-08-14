@@ -100,6 +100,7 @@ export const AI_PRICING = {
   'openai/gpt-oss-20b': { input: 0.03, output: 0.14 },
 
   // OpenRouter - Google (source: openrouter.ai/api/v1/models)
+  'google/gemini-3.7-flash': { input: 0.375, output: 1.875 },
   'google/gemini-3.6-flash': { input: 1.50, output: 7.50 },
   'google/gemini-3.5-flash-lite': { input: 0.30, output: 2.50 },
   'google/gemini-3.5-flash': { input: 1.50, output: 9.00 },
@@ -140,6 +141,8 @@ export const AI_PRICING = {
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
   // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
+  // GLM-5.3 rates unpublished at launch (2026-08-14); GLM-5.2 rates as placeholder.
+  'glm-5.3':     { input: 1.40, output: 4.40 },
   'glm-5.2':     { input: 1.40, output: 4.40 },
   'glm-5.1':     { input: 1.40, output: 4.40 },
   'glm-5-turbo': { input: 1.20, output: 4.00 },
@@ -410,6 +413,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-oss-20b': 131072,
 
   // OpenRouter Models - Google
+  'google/gemini-3.7-flash': 1048576,
   'google/gemini-3.6-flash': 1048576,
   'google/gemini-3.5-flash-lite': 1048576,
   'google/gemini-3.5-flash': 1048576,
@@ -451,6 +455,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/devstral-small': 128000,
 
   // Z.ai GLM direct — GLM Coder Plan supported models only
+  'glm-5.3':     1000000,
   'glm-5.2':     1000000,
   'glm-5.1':     202752,
   'glm-5-turbo': 202752,
