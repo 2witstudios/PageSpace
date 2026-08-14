@@ -111,40 +111,46 @@ describe('useChatSession — the send', () => {
     );
   });
 
-  it('given an OLD SERVER answering text/event-stream, RELEASES the body and writes nothing', async () => {
-    // What makes this client safe to deploy FIRST — but not by reading the body.
+  it('given an OLD SERVER, announces the session from the start frame — no gap, no second writer', async () => {
+    // What makes this client safe to deploy FIRST, and the shape matters in both directions.
     //
-    // The old server broadcasts `chat:stream_start` and serves `/stream-join`, so
-    // `useChannelStreamSocket` already opens a registry session for this messageId and
-    // subscribes to it. Reading the body as well made this tab TWO writers on one store entry
-    // with independent counters, and `applySetStreamParts` silently drops whichever falls
-    // behind (review finding). So the shell cancels the body and leaves rendering to the
-    // socket, exactly as for a remote or bootstrapped stream.
-    const body = sseResponse([
-      '{"type":"start","messageId":"msg-legacy"}',
-      '{"type":"text-delta","id":"t1","delta":"hello"}',
-    ]);
-    fetchWithAuth.mockResolvedValue(body);
+    // Reading the WHOLE body made the tab a second writer racing the socket's own join for one
+    // store entry. Reading NONE of it left a gap: the send resolved, `useSendHandoff` cleared
+    // its pendingSend against a store with no entry, and the composer flipped back to Send with
+    // nothing on screen until a best-effort broadcast arrived. So: read to the `start` frame,
+    // announce, release.
+    fetchWithAuth.mockResolvedValue(
+      sseResponse([
+        '{"type":"start","messageId":"msg-legacy"}',
+        '{"type":"text-delta","id":"t1","delta":"hello"}',
+      ]),
+    );
     const { result } = mount();
 
     await act(async () => {
       await result.current.sendMessage(userMessage('hi'), 'conv-1');
     });
 
-    expect(openStreamSession, 'no envelope, so no send-driven session').not.toHaveBeenCalled();
-    expect(
-      usePendingStreamsStore.getState().streams.size,
-      'the shell must not become a second writer',
-    ).toBe(0);
-    expect(body.bodyUsed || body.body?.locked, 'the body is released, not left dangling').toBeTruthy();
+    // Announced by the SEND, from the id the server named — not left to `chat:stream_start`.
+    expect(openStreamSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'msg-legacy',
+        conversationId: 'conv-1',
+        channelId: 'page-1',
+        isOwn: true,
+      }),
+    );
+    // And exactly once: the socket event that follows is idempotent at the registry.
+    expect(openStreamSession).toHaveBeenCalledTimes(1);
   });
 
-  it('given an old server, the send still RESOLVES at admission rather than at end-of-stream', async () => {
-    // Reading the body meant `dispatch` awaited the whole generation: `status` stayed
+  it('given an old server, the send resolves at admission rather than at end-of-stream', async () => {
+    // Draining the body meant `dispatch` awaited the whole generation: `status` stayed
     // 'submitted' throughout, and a mid-stream failure rejected the send — which rolls back the
-    // user's own message via `rollbackOptimisticSendOnFailure`, even though the server had
-    // persisted it and the generation was still running.
-    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"start","messageId":"msg-legacy"}']));
+    // user's own message, even though the server had persisted it and was still generating.
+    fetchWithAuth.mockResolvedValue(
+      sseResponse(['{"type":"start","messageId":"msg-legacy"}']),
+    );
     const { result } = mount();
 
     await act(async () => {
@@ -153,6 +159,36 @@ describe('useChatSession — the send', () => {
 
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.error).toBeUndefined();
+  });
+
+  it('given an old server whose body never names the message, FAILS the send', async () => {
+    // A provider auth failure or truncated response. Nothing was admitted, so reporting success
+    // would clear the composer and render nothing.
+    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"error","errorText":"boom"}']));
+    const { result } = mount();
+
+    await act(async () => {
+      await expect(result.current.sendMessage(userMessage('hi'), 'conv-1')).rejects.toThrow(
+        /never named/i,
+      );
+    });
+
+    expect(openStreamSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.status).toBe('error'));
+  });
+
+  it('given an old server but NO channel to file the stream under, fails loudly', async () => {
+    // The store partitions by channel; a stream filed nowhere is invisible.
+    fetchWithAuth.mockResolvedValue(sseResponse(['{"type":"start","messageId":"msg-legacy"}']));
+    const { result } = mount({ channelId: null });
+
+    await act(async () => {
+      await expect(result.current.sendMessage(userMessage('hi'), 'conv-1')).rejects.toThrow(
+        /channel/i,
+      );
+    });
+
+    expect(openStreamSession).not.toHaveBeenCalled();
   });
 
   it('given a non-ok response, throws a typed cause and reports an error status', async () => {

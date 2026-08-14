@@ -40,8 +40,10 @@
  *   - NEW CLIENT, OLD SERVER. The old server does not know the header and answers
  *     `text/event-stream` as it always did. `readAdmissionEnvelope` reports `kind: 'legacy'`
  *     for any response that is not the JSON envelope — and, crucially, without having touched
- *     the body — so the caller reads it as a stream exactly as before. This is what makes the
- *     client safe to deploy FIRST.
+ *     the body — so the caller can still read it. It reads only as far as the `start` frame, to
+ *     learn the messageId the envelope would otherwise have stated, and then releases the body
+ *     to the socket-driven registry (see `legacy-stream-start.ts` for why not more and not
+ *     less). This is what makes the client safe to deploy FIRST.
  *   - OLD CLIENT, NEW SERVER. The old client sends no `X-Stream-Mode`, so
  *     `wantsDetachedStream` is false and the server keeps streaming the body. An old tab
  *     left open across a deploy is unaffected.
@@ -133,7 +135,13 @@ export const wantsDetachedStream = (headers: Headers): boolean =>
  */
 export type AdmissionRead =
   | { kind: 'detached'; envelope: StreamAdmissionEnvelope }
-  /** Not an envelope, and the body was never touched — safe to read as a legacy stream. */
+  /**
+   * Not an envelope, and the body was never touched.
+   *
+   * The caller reads it only far enough to learn the server-issued messageId from the `start`
+   * frame, then cancels — reading it to completion would make the tab a second writer racing
+   * the socket's own join. See `legacy-stream-start.ts`.
+   */
   | { kind: 'legacy' }
   /** Claimed to be an envelope and was not. The body is spent; this send has failed. */
   | { kind: 'malformed'; reason: string };
@@ -225,11 +233,11 @@ export const synthesizeStartChunk = (envelope: StreamAdmissionEnvelope): UIMessa
  * in fact be more work than the rollback). What it is good for is pinning a build to the
  * socket-driven path deliberately.
  *
- * Turning it off does not restore the old body-reading client: nothing reads a response body
- * any more. It only stops the send from opening its own session off an admission envelope, so
- * rendering falls to `chat:stream_start` and the registry, exactly as it does for a remote or
- * bootstrapped stream. See the legacy branch in `useChatSession` for why reading the body is
- * not an option.
+ * Turning it off routes every send down the legacy branch: the shell reads the response only
+ * as far as its `start` frame, announces the session itself from that messageId, and cancels.
+ * Rendering is then identical to the detached path — one registry subscription, announced by
+ * the send rather than by an envelope — so the mode is a genuine fallback rather than a
+ * degraded one.
  */
 const detachedDisabled = (process.env.NEXT_PUBLIC_DETACHED_STREAMS ?? '').trim().toLowerCase();
 export const DETACHED_STREAM_ENABLED =

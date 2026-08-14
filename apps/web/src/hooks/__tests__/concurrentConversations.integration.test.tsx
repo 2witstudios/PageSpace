@@ -297,6 +297,58 @@ describe('sentence 4 — navigate away and back keeps full fidelity', () => {
   });
 });
 
+describe('sentence 5 — a hard reload, as close as code can reach', () => {
+  it('given fresh module state, a bootstrap reseeds the stream and it keeps rendering', async () => {
+    // A hard reload is: module state gone, store gone, then `/active-streams` replays what is
+    // still running. This simulates exactly that — `resetStreamSessionRegistry()` plus an empty
+    // store IS the post-reload condition — and then drives the real registry through the same
+    // `openStreamSession` call the socket hook makes from a bootstrap row.
+    //
+    // What it CANNOT reach is the browser half: an actual navigation, and the SDK's own
+    // rehydration. Sentence 5 stays unverified end to end for that reason; this pins the
+    // mechanism it depends on.
+    fetchWithAuth.mockResolvedValue(envelope('msg-A', 'conv-A'));
+    const { result, unmount } = mountShell('conv-A');
+    await act(async () => {
+      await result.current.sendMessage(userMessage('u-a'), 'conv-A');
+    });
+    act(() => deliverers.get('msg-A')!([{ type: 'text', text: 'before the reload' }], 3));
+
+    // ---- the reload ----
+    unmount();
+    resetStreamSessionRegistry();
+    usePendingStreamsStore.setState({ streams: new Map() });
+    deliverers.clear();
+    expect(forConversation('conv-A')).toHaveLength(0);
+
+    // ---- what the bootstrap does on the way back up ----
+    const { openStreamSession } = await import('@/lib/ai/streams/streamSessionRegistry');
+    act(() => {
+      openStreamSession({
+        messageId: 'msg-A',
+        conversationId: 'conv-A',
+        channelId: CHANNEL,
+        triggeredBy: IDENTITY,
+        // Still the user's own stream after a reload — ownership is a USER question, and
+        // `browserSessionId` (which survives in sessionStorage) is not what decides it.
+        isOwn: true,
+        startedAt: new Date().toISOString(),
+        seedParts: [{ type: 'text', text: 'before the reload' }],
+      });
+    });
+
+    // The persisted snapshot renders immediately rather than a blank bubble...
+    expect(forConversation('conv-A')[0].parts).toEqual([
+      { type: 'text', text: 'before the reload' },
+    ]);
+    expect(forConversation('conv-A')[0].isOwn).toBe(true);
+
+    // ...and the re-opened join carries on from there.
+    act(() => deliverers.get('msg-A')!([{ type: 'text', text: 'and after it' }], 4));
+    expect(forConversation('conv-A')[0].parts).toEqual([{ type: 'text', text: 'and after it' }]);
+  });
+});
+
 describe('the completion ordering the render path depends on', () => {
   it('drops the entry only AFTER listeners have seen it, so the reply never blinks out', async () => {
     fetchWithAuth.mockResolvedValue(envelope('msg-A', 'conv-A'));

@@ -429,6 +429,47 @@ describe('bootstrap', () => {
     expect(reconcileChannelSessions).not.toHaveBeenCalled();
   });
 
+  it('given a SUPERSEDED bootstrap response, opens nothing from it', async () => {
+    // A stale answer may list a stream that has since finished — and a session opened from it
+    // carries a fresh `openedAtMs`, which makes the NEXT bootstrap's time guard skip it as
+    // "started after the snapshot". The entry could then never be reconciled away, and a live
+    // store entry wedges its conversation (review finding).
+    let resolveFirst!: (v: unknown) => void;
+    mockFetchWithAuth
+      .mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }))
+      .mockResolvedValue({ ok: true, json: async () => ({ streams: [] }) });
+
+    const { result } = mount();
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(1));
+
+    // A second bootstrap starts and finishes while the first is still in flight.
+    await act(async () => {
+      result.current.rejoinActiveStreams();
+    });
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(2));
+
+    // Now the FIRST (superseded) response lands, listing a stream.
+    await act(async () => {
+      resolveFirst({
+        ok: true,
+        json: async () => ({
+          streams: [
+            {
+              messageId: 'msg-stale',
+              conversationId: 'conv-1',
+              triggeredBy: { userId: LOCAL_USER_ID, displayName: 'Ada', browserSessionId: LOCAL_SESSION },
+            },
+          ],
+        }),
+      });
+    });
+
+    expect(
+      openStreamSession,
+      'a superseded run must not open sessions, only skip its reconcile',
+    ).not.toHaveBeenCalled();
+  });
+
   it('re-runs on a socket reconnect, so events emitted while away are not lost', async () => {
     mockConnectionStatus = 'connected';
     const { rerender } = mount();

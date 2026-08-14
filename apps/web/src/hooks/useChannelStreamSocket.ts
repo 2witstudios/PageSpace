@@ -235,6 +235,13 @@ export function useChannelStreamSocket(
         const data = (await res.json()) as { streams?: ActiveStreamRow[] };
         if (cancelled) return;
 
+        // A SUPERSEDED run must not open sessions either, not just skip its reconcile. Its
+        // answer is stale, so a stream it lists may already have finished — and a session
+        // opened from it carries a fresh `openedAtMs`, which makes the NEXT bootstrap's time
+        // guard skip it as "started after the snapshot". The entry could then never be
+        // reconciled away, and a live store entry wedges its conversation (review finding).
+        if (generation !== bootstrapGeneration) return;
+
         for (const stream of data.streams ?? []) {
           // `isValidPartFrame` applies the same wire-trust gate the live path applies. Nothing
           // else: the snapshot is ALREADY the finished reduction — the server writes
@@ -264,16 +271,17 @@ export function useChannelStreamSocket(
         // set the response lists ONE conversation's streams, so reconciling channel-wide
         // against it reports every sibling conversation as finished — mounting conversation A
         // would tear down conversation B mid-generation. See `reconcileChannelSessions`.
-        if (generation === bootstrapGeneration) {
-          reconcileChannelSessions(
-            channel,
-            new Set((data.streams ?? []).map((stream) => stream.messageId)),
-            {
-              ...(bootstrapConversationId ? { conversationId: bootstrapConversationId } : {}),
-              snapshotTakenAt,
-            },
-          );
-        }
+        //
+        // Unconditional: the supersession check now happens above, before any session is
+        // opened, so reaching here means this run is still the newest.
+        reconcileChannelSessions(
+          channel,
+          new Set((data.streams ?? []).map((stream) => stream.messageId)),
+          {
+            ...(bootstrapConversationId ? { conversationId: bootstrapConversationId } : {}),
+            snapshotTakenAt,
+          },
+        );
       } catch (err) {
         if (cancelled) return;
         console.warn('[useChannelStreamSocket] bootstrap failed', err);

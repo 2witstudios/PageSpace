@@ -7,18 +7,19 @@ import type { PendingStreamsMap } from '@/stores/pendingStreams/applyAddStream';
  * from the send CLICK through the stream's end, so nothing lands mid-stream and clobbers the
  * very content this epic exists to keep on screen.
  *
- * WHAT IT ACTUALLY GATES TODAY, stated precisely because the previous wording here was wrong
- * and was being cited elsewhere as justification. This opens an editing-store session of type
- * `'ai-streaming'`. Every SWR `isPaused()` call site asks `isAnyEditing()`, which deliberately
- * matches only `'document' | 'form'` — so a streaming registration does NOT pause SWR. The
- * queries that DO count every session type (`isAnyActive`, via the `isEditingActive` and
- * `shouldDeferAuthRefresh` wrappers) currently have no production callers, so it does not
- * defer auth refresh either.
+ * WHAT IT ACTUALLY GATES TODAY, enumerated because the previous wording here was wrong and was
+ * being cited elsewhere as justification — and because my first correction of it was wrong too:
  *
- * What it does do is make the conversation read as busy — which is load-bearing for the UI
- * (Stop vs Send, `isConversationBusy`) and is why continuity still matters. The wiring for the
- * SWR/auth half exists and is one call site away from being real; the description should match
- * the code until then.
+ *   - SWR revalidation: NO. Every `isPaused()` call site asks `isAnyEditing()`, which
+ *     deliberately matches only `'document' | 'form'`.
+ *   - Auth-token refresh: NO. `shouldDeferAuthRefresh` (= `isAnyActive`) has no callers.
+ *   - The global quick-create shortcut: YES, app-wide. `QuickCreatePalette` gates its key
+ *     binding on `!isEditingActive()`, which IS `isAnyActive` and counts every session type.
+ *   - The conversation's own UI: YES — `displayIsStreaming` and `isConversationBusy` derive
+ *     from the same entries, which is why continuity from the send CLICK still matters.
+ *
+ * The SWR/auth wiring exists and is one call site away from being real. The description should
+ * match the code until then.
  *
  * WHY BOTH INPUTS.
  *

@@ -48,20 +48,25 @@
  * "nothing ever told us it ended" is a real state, not a hypothetical.
  *
  * Under the old mount-scoped design that state self-healed: the next unmount cleared the
- * store. Under this one it would not, and the consequence is that the CONVERSATION WEDGES.
- * `displayIsStreaming` is derived from the store entry, so the composer keeps rendering Stop
- * instead of Send and the user cannot send in that conversation again; `isConversationBusy`
- * follows it, so an `ask_user` prompt there becomes unanswerable. A phantom bubble with a Stop
- * button sits above it, permanently.
+ * store. Under this one it would not.
  *
- * (An earlier draft of this comment claimed a stranded entry suppresses SWR revalidation and
- * auth-token refresh app-wide. It does not, and the correction matters because the claim was
- * being used to justify design decisions. `deriveStreamingRegistrations` does open an
- * editing-store session of type `'ai-streaming'` — but every SWR `isPaused()` call site asks
- * `isAnyEditing()`, which deliberately matches only `'document' | 'form'`, and the queries that
- * DO count streaming sessions (`isAnyActive` via `isEditingActive` / `shouldDeferAuthRefresh`)
- * have no production callers. See `deriveStreamingRegistrations.ts`, whose own docblock states
- * the same thing and is where this came from.)
+ * WHAT A STRANDED ENTRY ACTUALLY COSTS, enumerated rather than summarised — I have now had
+ * this wrong twice, in opposite directions, and each time the wrong version was used to
+ * justify a design decision:
+ *
+ *   - SWR revalidation: NOT suppressed. Every `isPaused()` call site asks `isAnyEditing()`,
+ *     which deliberately matches only `'document' | 'form'`.
+ *   - Auth-token refresh: NOT deferred. `shouldDeferAuthRefresh` (= `isAnyActive`) has no
+ *     production callers.
+ *   - The global quick-create shortcut: DISABLED, app-wide and permanently.
+ *     `QuickCreatePalette` gates its key binding on `!isEditingActive()`, which IS `isAnyActive`
+ *     and counts every session type including `'ai-streaming'`.
+ *   - The conversation itself: WEDGED. `displayIsStreaming` derives from the entry, so the
+ *     composer keeps rendering Stop instead of Send and the user cannot send there again;
+ *     `isConversationBusy` follows, so an `ask_user` prompt becomes unanswerable.
+ *
+ * The last one is the reason this matters most to a user, and the third is the app-wide effect
+ * that does exist. See `useStreamingRegistration.ts`, which performs the registration.
  *
  * So entries expire on their own `startedAt`, swept on an interval. `STREAM_MAX_LIFETIME_MS`
  * is deliberately the SAME horizon the server's channel registry, abort registry and
