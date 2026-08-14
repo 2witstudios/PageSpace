@@ -136,14 +136,23 @@ export const deleteFrames = async (messageId: string): Promise<boolean> => {
  * fan `materializeInterruptedStream` out with `Promise.all` over every dead row an instance
  * left behind — "potentially dozens" by their own docblocks — and each call now reads and
  * folds a whole log rather than one already-capped `parts` blob. Without a ceiling here, a
- * mass recovery's peak memory is dozens x the per-stream durable budget, which is how a
- * recovery sweep turns one dead instance into two.
+ * mass recovery's peak is dozens x the per-stream durable budget, which is how a recovery
+ * sweep turns one dead instance into two (review finding — adversarial pass).
  *
- * The ceiling is the LIVE fold's, so recovering a stream costs no more memory than generating
- * it did, and a reader can never reconstruct more than a live client could have held. Past it
- * the walk stops and returns the prefix — which composes correctly with `recoverParts`, since
- * a truncated read simply reaches less far than the `parts` snapshot and loses the comparison
- * to it (review finding — adversarial pass).
+ * The ceiling is the LIVE fold's, so recovering a stream costs no more than generating it did,
+ * and a reader can never reconstruct more than a live client could have held. Past it the walk
+ * stops and returns the prefix — which composes correctly with `recoverParts`, since a
+ * truncated read simply reaches less far than the `parts` snapshot and loses the comparison
+ * to it.
+ *
+ * WHAT IT DOES AND DOES NOT BOUND, stated precisely rather than left to be assumed. It bounds
+ * what this function RETAINS and what the caller then FOLDS — the dominant cost, since the fold
+ * allocates a part per frame family, reconstructs partial JSON, and grows a string. It does NOT
+ * bound the SELECT: the driver has already materialized this message's rows by the time the
+ * walk starts, so the transient floor is one message's whole log. That is capped in turn by the
+ * writer's own `MAX_DURABLE_BYTES`, which is the honest residual — bounding it tightly would
+ * need a cumulative-sum window function or a streaming cursor, and neither is worth the
+ * machinery against a per-message cap that already holds.
  *
  * NEVER THROWS: a read failure returns `null`, degrading to the `parts` fallback rather than
  * failing a crash recovery that had a usable snapshot all along.
