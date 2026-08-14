@@ -170,6 +170,17 @@ const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
  * of the message. That is strictly better than what the ring does to a snapshot: eviction
  * drops a part's opening frame and orphans every delta after it, so the content does not
  * shorten, it disappears.
+ *
+ * `getParts()` reads the same fold, so the execute-end persist's payload is bounded by this
+ * too. Also not a regression: that call used to fold the ring, so it was bounded by the ring's
+ * caps and degraded to an ORPHANED TAIL rather than a prefix. And it is the fallback path —
+ * `onFinish` persists the SDK's own `responseMessage`, which this budget does not touch.
+ *
+ * Measured with the channel's exported `estimateFrameBytes` rather than a second estimator, so
+ * the ring's budget and this one cannot disagree about what a frame costs. It runs per frame,
+ * but its expensive branch (`JSON.stringify`) is only reached by frames carrying neither
+ * `delta` nor `text` — the handful of structural and tool-output frames in a turn, against
+ * thousands of deltas that cost a string length.
  */
 const MAX_FOLD_BYTES = 24 * 1024 * 1024;
 

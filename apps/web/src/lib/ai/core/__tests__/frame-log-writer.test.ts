@@ -368,6 +368,37 @@ describe('startFrameLogWriter — error paths end the writer', () => {
     }
   });
 
+  it('given the per-stream durable budget exhausted, stops writing and says so', async () => {
+    // The log becomes a PREFIX past the budget rather than growing without bound. Driven with
+    // frames the channel's estimator cannot serialize (a circular payload), which it charges a
+    // deliberately large flat amount — so this exhausts a 64MB budget in ~64 cheap frames
+    // instead of allocating 64MB of test strings. `data-` frames are durability boundaries, so
+    // each one flushes on arrival.
+    const circular = (): UIMessageChunk => {
+      const frame: Record<string, unknown> = { type: 'data-bulk' };
+      frame.self = frame;
+      return frame as unknown as UIMessageChunk;
+    };
+
+    const { channel } = start('msg-budget');
+    const APPENDED = 80;
+    for (let i = 0; i < APPENDED; i += 1) {
+      channel.append(circular());
+      await settle();
+    }
+
+    const writes = mockAppendFrameBatch.mock.calls.length;
+    assert({
+      given: 'a stream whose frames exceed the per-stream durable budget',
+      should: 'stop writing partway and warn, rather than growing the log without bound',
+      actual: {
+        stoppedEarly: writes > 0 && writes < APPENDED,
+        warned: mockLoggerWarn.mock.calls.some(([msg]) => String(msg).includes('durable budget exhausted')),
+      },
+      expected: { stoppedEarly: true, warned: true },
+    });
+  });
+
   it('given close(), stops accepting further frames', async () => {
     const { channel, writer } = start();
     await writer.close();
