@@ -19,14 +19,36 @@ describe('readLegacyStreamStart', () => {
   it('STOPS at the start frame rather than draining the reply', async () => {
     // The whole point: reading on would make the caller a second writer racing the socket's
     // own join for the same store entry.
-    const body = sse([
-      '{"type":"start","messageId":"msg-legacy"}',
-      '{"type":"text-delta","id":"t1","delta":"a"}',
-      '{"type":"text-delta","id":"t1","delta":"b"}',
-    ]);
-    await readLegacyStreamStart(body);
-    // The body is released, not drained to completion.
-    expect(body.bodyUsed || body.body?.locked).toBeTruthy();
+    //
+    // Asserted on the SOURCE, not on `bodyUsed`/`locked` — those are true after ANY read, so an
+    // implementation that drained the whole response would pass just as happily (review:
+    // coderabbitai on PR #2410). What has to be observable is that the later frames were never
+    // pulled and that the source was cancelled.
+    const encoder = new TextEncoder();
+    const frames = [
+      'data: {"type":"start","messageId":"msg-legacy"}\n\n',
+      'data: {"type":"text-delta","id":"t1","delta":"a"}\n\n',
+      'data: {"type":"text-delta","id":"t1","delta":"b"}\n\n',
+    ];
+    let pulls = 0;
+    let cancelled = false;
+    const body = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulls >= frames.length) return controller.close();
+          controller.enqueue(encoder.encode(frames[pulls]));
+          pulls += 1;
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+
+    expect(await readLegacyStreamStart(body)).toBe('msg-legacy');
+    expect(pulls, 'only the start frame should have been pulled').toBe(1);
+    expect(cancelled, 'the source must be cancelled, not left dangling').toBe(true);
   });
 
   it('given a body that ENDS without a start frame, returns undefined', async () => {
