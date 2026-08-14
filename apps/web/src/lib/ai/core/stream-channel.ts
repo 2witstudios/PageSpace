@@ -182,10 +182,16 @@ const DEFAULT_MAX_PENDING_BYTES = 16 * 1024 * 1024;
  * what it says. `JSON.stringify` can throw on a circular payload; an unmeasurable frame is
  * charged a deliberately large amount so it counts AGAINST the budget rather than slipping
  * under it.
+ *
+ * EXPORTED for the durable frame log's batch budget (`frame-log-writer.ts`), which needs the
+ * same hot-path-cheap estimate for the same reason and must not grow a second one that
+ * charges tool outputs differently. It is an ESTIMATE and only ever gates a budget — where
+ * the frame log records a size it means to be true (`ai_stream_frames.byte_size`), it
+ * serializes the batch once and measures it exactly instead.
  */
 const UNMEASURABLE_FRAME_BYTES = 1024 * 1024;
 
-const estimateFrameBytes = (chunk: UIMessageChunk): number => {
+export const estimateFrameBytes = (chunk: UIMessageChunk): number => {
   const delta = (chunk as { delta?: unknown }).delta;
   if (typeof delta === 'string') return delta.length + 64;
   const text = (chunk as { text?: unknown }).text;

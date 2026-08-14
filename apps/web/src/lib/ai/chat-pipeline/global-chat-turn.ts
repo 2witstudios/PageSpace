@@ -251,6 +251,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         return row?.isActive === true;
       },
     });
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it — see the identical gate in page-chat-turn.ts, and
+    // `confirmTerminalWrite`'s docblock for why the first terminal write of a turn is the
+    // wrong moment to delete.
+    if (saved && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
     return saved;
   };
   try {
