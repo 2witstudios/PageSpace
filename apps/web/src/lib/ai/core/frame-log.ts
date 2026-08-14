@@ -223,10 +223,14 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
   if (lastWantedSeq < 0) return null;
 
   // PASS 2 — the payload for exactly those rows.
-  let rows: { fromSeq: number; frames: unknown[] }[];
+  let rows: { fromSeq: number; frameCount: number; frames: unknown[] }[];
   try {
     rows = await db
-      .select({ fromSeq: aiStreamFrames.fromSeq, frames: aiStreamFrames.frames })
+      .select({
+        fromSeq: aiStreamFrames.fromSeq,
+        frameCount: aiStreamFrames.frameCount,
+        frames: aiStreamFrames.frames,
+      })
       .from(aiStreamFrames)
       .where(and(
         eq(aiStreamFrames.messageId, messageId),
@@ -241,8 +245,28 @@ export const readFrames = async (messageId: string): Promise<UIMessageChunk[] | 
     return null;
   }
 
+  // PASS 2 RE-WALKS CONTIGUITY, rather than trusting the pass above to still describe the
+  // table. Correctness must not depend on two queries agreeing: between them a release or the
+  // retention backstop can delete this message's rows wholesale, and — were a messageId ever
+  // re-registered — a successor could replace them with its own generation's. Re-deriving the
+  // prefix here makes pass 1 purely a decision about HOW MUCH to fetch, and leaves this walk
+  // the single authority on what is contiguous. A vanished log then yields `null` (fall back
+  // to `parts`) and a replaced one yields ITS valid prefix, instead of either silently
+  // producing a spliced message.
   const frames: UIMessageChunk[] = [];
-  for (const row of rows) frames.push(...(row.frames as UIMessageChunk[]));
+  let seq = 0;
+  for (const row of rows) {
+    if (row.fromSeq !== seq) {
+      loggers.ai.warn('frame-log: log changed between the index and payload reads — truncating', {
+        messageId,
+        expectedSeq: seq,
+        foundSeq: row.fromSeq,
+      });
+      break;
+    }
+    frames.push(...(row.frames as UIMessageChunk[]));
+    seq = row.fromSeq + row.frameCount;
+  }
 
   return frames.length > 0 ? frames : null;
 };

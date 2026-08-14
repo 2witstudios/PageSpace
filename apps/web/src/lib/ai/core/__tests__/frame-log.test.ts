@@ -292,6 +292,54 @@ describe('readFrames', () => {
     });
   });
 
+  it('given the log VANISHES between the two reads, returns null rather than a partial message', async () => {
+    // A release or the retention backstop can delete this message's rows between the index
+    // pass and the payload pass. Correctness must not depend on the two agreeing.
+    let call = 0;
+    mockSelectOrderBy.mockImplementation(async () => {
+      call += 1;
+      return call === 1
+        ? [frameRow(0, [{ type: 'text-start', id: 't1' }]), frameRow(1, [{ type: 'text-delta', id: 't1', delta: 'x' }])]
+        : [];
+    });
+
+    assert({
+      given: 'a log deleted between the index read and the payload read',
+      should: 'return null so the caller falls back to the parts snapshot',
+      actual: await readFrames('msg-1'),
+      expected: null,
+    });
+  });
+
+  it('given the log is REPLACED between the two reads, returns the replacement\'s own prefix', async () => {
+    // Were a messageId ever re-registered, the payload pass could see a successor's rows. The
+    // walk re-derives contiguity from them rather than assuming the index pass still describes
+    // the table, so the result is a valid prefix of whatever is actually there — never a
+    // splice of two generations.
+    let call = 0;
+    mockSelectOrderBy.mockImplementation(async () => {
+      call += 1;
+      return call === 1
+        ? [
+            frameRow(0, [{ type: 'text-start', id: 't1' }]),
+            frameRow(1, [{ type: 'text-delta', id: 't1', delta: 'old' }]),
+            frameRow(2, [{ type: 'text-delta', id: 't1', delta: 'older' }]),
+          ]
+        : [
+            frameRow(0, [{ type: 'text-start', id: 't1' }]),
+            // seq 1 is missing from the replacement.
+            frameRow(2, [{ type: 'text-delta', id: 't1', delta: 'new' }]),
+          ];
+    });
+
+    assert({
+      given: 'a payload read whose rows are no longer contiguous',
+      should: 'truncate at the hole rather than concatenate across it',
+      actual: (await readFrames('msg-1'))?.map((f) => f.type),
+      expected: ['text-start'],
+    });
+  });
+
   it('given the read throws, returns null so a recovery degrades to the parts snapshot', async () => {
     mockSelectOrderBy.mockRejectedValue(new Error('frames table unreachable'));
 
