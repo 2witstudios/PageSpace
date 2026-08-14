@@ -12,23 +12,15 @@ export type StopAction =
 /**
  * Decides what a Stop click should name, for every surface.
  *
- * WHY THE LOCAL STOP IS NOT PART OF THIS DECISION.
+ * THERE IS NO LOCAL STOP TO DECIDE ABOUT ANY MORE.
  *
- * Callers call `rawStop()` (useChat's own stop) before applying this result — the same order
- * AiChatView already uses, and for the reason useChatStop's docblock gives: the local stop is
- * synchronous and purely local, while the server abort can now WAIT seconds to find out whether
- * a cross-instance owner actually stopped the generation. Running the local stop first gives
- * instant UI feedback and guarantees it strictly harder than a `finally` would.
+ * Callers used to run `rawStop()` — useChat's own stop — before applying this result, for
+ * "instant UI feedback" while the server abort round-tripped. `useStopStream` even had to
+ * decide WHETHER to run it, because one shared `Chat` meant a Stop on conversation A could
+ * abort conversation B's live local read. Both are gone: this client reads no response body,
+ * so there is no local fetch to cancel and no gate to get right.
  *
- * It used to be UNCONDITIONAL, because `stop()` on an idle useChat is a no-op and the chat could
- * not be busy with anything but the conversation being stopped. Conversation-scoped consuming
- * (the dual-stream fix) broke that: the same chat instance can be locally consuming conversation
- * B's stream while conversation A's handed-off stream renders via the socket on this surface, and
- * a Stop on A must not abort B's live local fetch. `useStopStream` gates `rawStop` on the
- * mirror's latched conversation for exactly that case; the SERVER-side decision below is
- * unchanged — it names streams by store entry / send-time conversation, never by the local fetch.
- *
- * AND CANCELLING THE FETCH STOPS NOTHING ANYWAY. Streams are deliberately server-owned and
+ * CANCELLING A FETCH STOPS NOTHING ANYWAY. Streams are deliberately server-owned and
  * survive a client disconnect — that is the architecture. So a Stop that names nothing on the
  * server is a Stop that did nothing: the button flips back to Send while the generation keeps
  * running its write tools and keeps billing. Every branch below exists to make sure Stop can
@@ -77,33 +69,3 @@ export const decideStopAction = ({
   // surfaces do not offer a Stop button for someone else's stream. Don't invent a name.
   return { type: 'none' };
 };
-
-/**
- * Should Stop also abort THIS surface's local `useChat` fetch?
- *
- * With conversation-scoped consuming (the dual-stream fix), one chat instance can be locally
- * consuming conversation B's stream while conversation A's handed-off stream renders via the
- * socket on the same surface. A Stop pressed on A must not cancel B's live local read — that
- * would send B dark mid-token (its generation continues server-side, unwatched).
- *
- * `localSendConversationId` is the own-stream mirror's latch: which conversation the local fetch
- * belongs to, or undefined when the chat is idle (where rawStop is a harmless no-op — absence
- * never suppresses a wanted local stop). An EMPTY-STRING latch is the mirror's
- * `currentConversationId ?? ''` placeholder from a surface whose identity had not resolved; no
- * real send can be made without a conversation id, so it is treated as no latch — withholding
- * the local stop on its account would be withholding it on garbage. The same rule is applied by
- * `useConversationSendHandoff` when deciding whether a handoff is needed at all.
- */
-export const shouldRunLocalStop = ({
-  localSendConversationId,
-  targetConversationId,
-}: {
-  /** The mode-selected mirror's latched conversation, or undefined when idle. */
-  localSendConversationId: string | undefined;
-  /** The conversation on screen — the one being stopped. */
-  targetConversationId: string | null;
-}): boolean =>
-  localSendConversationId === undefined ||
-  localSendConversationId === '' ||
-  targetConversationId === null ||
-  localSendConversationId === targetConversationId;

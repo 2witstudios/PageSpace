@@ -1,26 +1,27 @@
 /**
- * Client-side Stream Abort Management
+ * THE DELIBERATE STOP — the only thing in this client that stops a generation.
  *
- * Tracks active streams and provides explicit abort functionality.
- * Works with the server-side abort registry to enable user-initiated stop
- * while allowing streams to complete on accidental disconnects.
+ * Both functions here POST to `/api/ai/abort`, which is the ONE mechanism that reaches the
+ * server-side abort registry. Nothing else in the app may stop a stream: streams are
+ * server-owned and survive client disconnect by design, so cancelling a local fetch ends only
+ * this tab's view of a run that keeps generating, keeps calling write tools, and keeps
+ * billing. `only-a-deliberate-stop.test.ts` is the source-level tripwire that keeps it that
+ * way.
  *
- * Usage:
- * 1. Use createStreamTrackingFetch() to create a fetch wrapper
- * 2. Pass the wrapper to DefaultChatTransport
- * 3. Call abortActiveStream() when user clicks stop
+ * `createStreamTrackingFetch` USED TO LIVE HERE and is gone with the detached transport. It
+ * wrapped every POST to mark the channel as "being consumed by this browser context" for as
+ * long as the response body was being read — the one signal that stopped the originating tab
+ * from ALSO joining its own stream off the socket and rendering every token twice. Under
+ * detached mode no tab reads a body: the sender's own send and the socket event both open the
+ * same session, keyed by the same messageId, through an idempotent registry. The double-render
+ * it guarded against is now impossible rather than prevented, so the mark, its refcounting
+ * (`consumingChannels`), and the body-sniffing that scoped it to a conversation
+ * (`extractConversationIdFromBody`) are all deleted rather than ported.
  */
 
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getBrowserSessionId } from './browser-session-id';
-import {
-  markChannelConsuming,
-  unmarkChannelConsuming,
-} from '@/lib/ai/streams/consumingChannels';
-import { extractConversationIdFromBody } from '@/lib/ai/streams/extractConversationIdFromBody';
 import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
-import { toErrorCause } from '@/lib/ai/shared/toErrorCause';
 
 /**
  * What the server says happened.
@@ -157,140 +158,3 @@ export const abortActiveStreamByMessageId = async ({
     return NETWORK_FAILURE;
   }
 };
-
-/**
- * Re-wraps a streaming response so `onDone` fires exactly once, when the body is
- * genuinely finished — closed, errored, or cancelled. `fetch` resolving only tells
- * us the headers landed; the tokens are still arriving after that.
- */
-const withBodyCompletion = (response: Response, onDone: () => void): Response => {
-  const body = response.body;
-  if (!body) {
-    onDone();
-    return response;
-  }
-
-  let done = false;
-  const finishOnce = () => {
-    if (done) return;
-    done = true;
-    onDone();
-  };
-
-  const reader = body.getReader();
-  const tracked = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done: streamDone, value } = await reader.read();
-        if (streamDone) {
-          finishOnce();
-          controller.close();
-          return;
-        }
-        controller.enqueue(value);
-      } catch (error) {
-        finishOnce();
-        controller.error(error);
-      }
-    },
-    cancel(reason) {
-      finishOnce();
-      return reader.cancel(reason);
-    },
-  });
-
-  return new Response(tracked, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-};
-
-/**
- * Create a fetch wrapper that tracks streamId from response headers
- * Use this with DefaultChatTransport
- *
- * `channelId` (the socket room the server broadcasts this stream's lifecycle on —
- * NOT the same value as `chatId`, which is a transport-local key) is marked as
- * "being consumed by this browser context" for exactly as long as this client is
- * reading tokens off the response body. That is the one signal that makes the
- * client's own `chat:stream_start` uninteresting; without it we'd render every
- * token twice. See `consumingChannels.ts` for why this replaces the old
- * `browserSessionId` check.
- */
-export const createStreamTrackingFetch = ({
-  getChannelId,
-}: {
-  /**
-   * Resolved AT CALL TIME, not at construction. This is not a style choice.
-   *
-   * useChat only rebuilds its `Chat` when its `id` changes (@ai-sdk/react:
-   * `shouldRecreateChat`), and every surface here passes a CONSTANT id. The `Chat` binds
-   * `this.transport` once in its constructor and calls `this.transport.sendMessages()`
-   * forever after — so the first transport a surface ever builds is the only one it will
-   * ever use, and every later one is constructed and thrown away.
-   *
-   * Baking `channelId` into this closure therefore froze it at whatever agent the surface
-   * happened to start with: after an agent switch the wrong channel got marked as consuming, so
-   * the tab failed to recognise its OWN stream on the socket, joined its own multicast, and
-   * rendered the reply twice.
-   *
-   * (`getChatId` is gone with the activeStreams map — PR 5A, leaf 5.5.8. It had the same
-   * staleness bug, with a worse consequence: the abort silently named nothing and the server
-   * kept billing.)
-   */
-  getChannelId: () => string | undefined;
-}): typeof fetch => {
-  return async (url, options) => {
-    const channelId = getChannelId();
-    const urlString = url instanceof Request ? url.url : url.toString();
-    const merged = new Headers(options?.headers);
-    merged.set('X-Browser-Session-Id', getBrowserSessionId());
-    const headers = Object.fromEntries(merged.entries());
-
-    // Scopes the consuming mark to the conversation this POST actually targets, read from the
-    // request body — NOT from a live getter, which the SDK's auto-resend would read after the
-    // surface has moved (see extractConversationIdFromBody). Undefined falls back to the
-    // channel-wide sentinel mark (pre-scoping semantics, conservative).
-    const conversationId = extractConversationIdFromBody(options?.body);
-
-    // Marked BEFORE the request leaves, so it can never lose the race against the
-    // server's broadcastAiStreamStart (which is why this is not derived from the
-    // X-Stream-Id response header).
-    if (channelId) markChannelConsuming(channelId, conversationId);
-
-    let response: Response;
-    try {
-      response = await fetchWithAuth(urlString, { ...options, headers });
-    } catch (error) {
-      if (channelId) unmarkChannelConsuming(channelId, conversationId);
-      throw error;
-    }
-
-    // NOTE: the X-Stream-Id response header is no longer read here. It fed the activeStreams map,
-    // whose only consumer was an abort-by-chatId path that could not work in the windows that
-    // mattered (see the map's deletion note above). The server still sends it.
-
-    if (!response.ok) {
-      if (channelId) unmarkChannelConsuming(channelId, conversationId);
-      // Epic leaf 6.5: read the body ONCE here (where httpStatus + the real JSON are both in
-      // hand) and throw a typed cause rather than letting the SDK construct a bare
-      // `new Error(await response.text())` from a re-read of the same body. `response.clone()`
-      // is required — the SDK's own transport still expects to be able to read a body if it
-      // ever got the Response itself, but throwing here means it never does; kept only for
-      // defense (a future SDK version that inspects the response before the fetch promise even
-      // resolves would otherwise see an already-consumed stream).
-      const body = await response.clone().json().catch(() => undefined);
-      const cause = toErrorCause(response.status, body);
-      throw new Error(cause.message, { cause });
-    }
-
-    if (!channelId) return response;
-
-    const consumedChannelId = channelId;
-    return withBodyCompletion(response, () => {
-      unmarkChannelConsuming(consumedChannelId, conversationId);
-    });
-  };
-};
-

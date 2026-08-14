@@ -3,10 +3,23 @@ import type { PendingStreamsMap } from '@/stores/pendingStreams/applyAddStream';
 /**
  * Which conversations must currently hold an editing-store streaming registration.
  *
- * THE CONTRACT BEING PROTECTED (repo CLAUDE.md): a streaming registration gates SWR
- * revalidation AND auth-token refresh. It must be continuous from the send CLICK through the
- * stream's end, or a revalidation lands mid-stream and clobbers the very content this epic
- * exists to keep on screen.
+ * THE CONTRACT BEING PROTECTED (repo CLAUDE.md): a streaming registration must be continuous
+ * from the send CLICK through the stream's end, so nothing lands mid-stream and clobbers the
+ * very content this epic exists to keep on screen.
+ *
+ * WHAT IT ACTUALLY GATES TODAY, enumerated because the previous wording here was wrong and was
+ * being cited elsewhere as justification — and because my first correction of it was wrong too:
+ *
+ *   - SWR revalidation: NO. Every `isPaused()` call site asks `isAnyEditing()`, which
+ *     deliberately matches only `'document' | 'form'`.
+ *   - Auth-token refresh: NO. `shouldDeferAuthRefresh` (= `isAnyActive`) has no callers.
+ *   - The global quick-create shortcut: YES, app-wide. `QuickCreatePalette` gates its key
+ *     binding on `!isEditingActive()`, which IS `isAnyActive` and counts every session type.
+ *   - The conversation's own UI: YES — `displayIsStreaming` and `isConversationBusy` derive
+ *     from the same entries, which is why continuity from the send CLICK still matters.
+ *
+ * The SWR/auth wiring exists and is one call site away from being real. The description should
+ * match the code until then.
  *
  * WHY BOTH INPUTS.
  *
