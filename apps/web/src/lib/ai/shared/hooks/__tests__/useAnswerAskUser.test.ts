@@ -22,11 +22,9 @@ const baseOptions = (overrides: Partial<UseAnswerAskUserOptions> = {}): UseAnswe
   conversationId: 'conv-1',
   renderedMessages: [askUserMessage('m1', 'tc1')],
   isConversationBusy: false,
-  setMessages: vi.fn(),
   addToolResult: vi.fn().mockResolvedValue(undefined),
   wrapSend: (sendFn) => sendFn(),
   buildBody: () => ({}),
-  prepareSend: vi.fn().mockResolvedValue(true),
   ...overrides,
 });
 
@@ -103,45 +101,15 @@ describe('useAnswerAskUser', () => {
 
   // Answering re-invokes the chat (addToolResult auto-resend) — with a shared chat instance it
   // must go through the cross-conversation handoff like every other send path (dual-stream fix).
-  it('given a refused handoff, should patch nothing, send nothing, and release the claim', async () => {
-    const applyAskUserAnswerSpy = vi.spyOn(conversationMessagesActions, 'applyAskUserAnswer');
-    const addToolResult = vi.fn().mockResolvedValue(undefined);
-    const prepareSend = vi.fn().mockResolvedValue(false);
-    const { result } = renderHook(() =>
-      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
-    );
-
-    await act(async () => {
-      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(prepareSend).toHaveBeenCalledWith('conv-1');
-    expect(applyAskUserAnswerSpy).not.toHaveBeenCalled();
-    expect(addToolResult).not.toHaveBeenCalled();
-    // The claim mutex is released — a later answer attempt is not wedged.
-    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
-    applyAskUserAnswerSpy.mockRestore();
-  });
-
-  it('given a confirmed handoff, should proceed through patch and send exactly as before', async () => {
-    const addToolResult = vi.fn().mockResolvedValue(undefined);
-    const prepareSend = vi.fn().mockResolvedValue(true);
-    const { result } = renderHook(() =>
-      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
-    );
-
-    await act(async () => {
-      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(prepareSend).toHaveBeenCalledWith('conv-1');
-    expect(addToolResult).toHaveBeenCalledTimes(1);
-    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
-  });
+  // TWO HANDOFF CASES WERE HERE ('given a refused handoff…', 'given a confirmed handoff…').
+  //
+  // They pinned `useConversationSendHandoff`, which existed because the AI SDK's `Chat` could
+  // not consume two response bodies at once: answering a question re-invokes the chat, and with
+  // one shared instance per surface the question's conversation could be ON SCREEN while the
+  // chat was still consuming ANOTHER conversation's stream. A refusal meant the user's click
+  // did nothing but raise a toast.
+  //
+  // `useChatSession` has no shared instance and no single-body limit — a resume is simply a
+  // `fetch` alongside whatever else is in flight — so the handoff is deleted rather than
+  // moved, and there is no refusal path left to have behaviour. The cases go with it.
 });

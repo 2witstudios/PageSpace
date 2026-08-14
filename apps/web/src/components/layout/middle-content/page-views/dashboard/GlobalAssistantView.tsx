@@ -41,7 +41,6 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import type { UIMessage } from 'ai';
-import { toast } from 'sonner';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -524,7 +523,6 @@ const GlobalAssistantView: React.FC = () => {
   const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
   effectiveIsStreamingRef.current = effectiveIsStreaming;
 
-  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
@@ -639,8 +637,11 @@ const GlobalAssistantView: React.FC = () => {
   // slot was still ours), and their cleanups, which fired on every 'ready' render and so ran for
   // the entire life of a bootstrapped stream.
   //
-  // This is Elliott rail 11: no effect may copy state between stateful containers. The mirror
-  // above is the one sanctioned exception, and it is TRANSITIONAL.
+  // This is Elliott rail 11: no effect may copy state between stateful containers. The
+  // own-stream mirror above was the one sanctioned exception to it — and it is now deleted
+  // too, so the rail holds here without exception. `useChatSession` opens the store entry
+  // itself from the admission envelope, which means the fact was never copied at all: there is
+  // one container, and everything reads it.
 
   // NO load-on-select effects (PR 5B, leaf 5.2): loads commit straight to the
   // conversation cache (dashboard store loaders / GlobalChatContext), and rendering

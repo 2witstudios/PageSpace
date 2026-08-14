@@ -1,333 +1,185 @@
 /**
- * useDualModeChat Hook Tests
- * Tests for unified chat interface supporting both global and agent modes
+ * useDualModeChat — mode selection, and the two mode-switch stops that are gone.
+ *
+ * The old suite's cases were almost entirely about the SDK plumbing this no longer has:
+ * "should return setMessages", "should expose globalMessages for context sync", "should
+ * calculate isStreaming based on status value". None of those have referents any more — the
+ * hook holds no message arrays (the store renders), exposes no `stop` (there is one Stop, and
+ * it POSTs to `/api/ai/abort`), and derives no `isStreaming` (streaming is a property of a
+ * CONVERSATION, read from the store, not of a chat instance).
+ *
+ * What survives is what actually mattered: dispatch goes to the selected mode, both modes stay
+ * independent, and — the leaf-5 requirement — a mode switch stops nothing.
  */
-
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import type { UIMessage } from 'ai';
+import { useChatSession } from '@/lib/ai/shared/hooks/useChatSession';
 import { useDualModeChat } from '../useDualModeChat';
 import type { AgentInfo } from '@/types/agent';
 
-// Mock useChat from @ai-sdk/react
-const mockGlobalSendMessage = vi.fn();
-const mockGlobalRegenerate = vi.fn();
-const mockGlobalStop = vi.fn();
-const mockGlobalSetMessages = vi.fn();
+const globalSession = {
+  sendMessage: vi.fn(async () => {}),
+  regenerate: vi.fn(async () => {}),
+  addToolResult: vi.fn(async () => {}),
+  clearError: vi.fn(),
+  status: 'ready' as const,
+  error: undefined,
+  messages: [] as UIMessage[],
+};
+const agentSession = {
+  sendMessage: vi.fn(async () => {}),
+  regenerate: vi.fn(async () => {}),
+  addToolResult: vi.fn(async () => {}),
+  clearError: vi.fn(),
+  status: 'ready' as const,
+  error: undefined,
+  messages: [] as UIMessage[],
+};
 
-const mockAgentSendMessage = vi.fn();
-const mockAgentRegenerate = vi.fn();
-const mockAgentStop = vi.fn();
-const mockAgentSetMessages = vi.fn();
+let sessionCallCount = 0;
 
-// Track which chat instance is being used
-let useChatCallCount = 0;
-
-vi.mock('@ai-sdk/react', () => ({
-  useChat: vi.fn(() => {
-    useChatCallCount++;
-    // First call is for global chat, second is for agent chat
-    if (useChatCallCount % 2 === 1) {
-      return {
-        messages: [],
-        sendMessage: mockGlobalSendMessage,
-        status: 'ready' as const,
-        error: undefined,
-        regenerate: mockGlobalRegenerate,
-        setMessages: mockGlobalSetMessages,
-        stop: mockGlobalStop,
-      };
-    } else {
-      return {
-        messages: [],
-        sendMessage: mockAgentSendMessage,
-        status: 'ready' as const,
-        error: undefined,
-        regenerate: mockAgentRegenerate,
-        setMessages: mockAgentSetMessages,
-        stop: mockAgentStop,
-      };
-    }
+vi.mock('@/lib/ai/shared/hooks/useChatSession', () => ({
+  useChatSession: vi.fn(() => {
+    sessionCallCount += 1;
+    // The hook builds the global shell first, then the agent one.
+    return sessionCallCount % 2 === 1 ? globalSession : agentSession;
   }),
 }));
 
-describe('useDualModeChat', () => {
-  // Sample agent
-  const mockAgent: AgentInfo = {
-    id: 'agent-123',
-    title: 'Test Agent',
-    driveId: 'drive-456',
-    driveName: 'Test Drive',
-  };
+const mockAgent: AgentInfo = {
+  id: 'agent-123',
+  title: 'Test Agent',
+  driveId: 'drive-456',
+  driveName: 'Test Drive',
+};
 
-  // Sample chat configs
-  const mockGlobalChatConfig = {
-    id: 'global-conv-123',
-    messages: [],
-    experimental_throttle: 50,
-  };
+const options = (selectedAgent: AgentInfo | null) => ({
+  selectedAgent,
+  triggeredBy: { userId: 'user-1', displayName: 'Ada' },
+  global: {
+    api: '/api/ai/global/conv-g/messages',
+    channelId: 'global-channel',
+    conversationId: 'conv-g',
+    getBaseMessages: () => [] as UIMessage[],
+  },
+  agent: {
+    api: '/api/ai/chat',
+    channelId: 'agent-123',
+    conversationId: 'conv-a',
+    getBaseMessages: () => [] as UIMessage[],
+  },
+});
 
-  const mockAgentChatConfig = {
-    id: 'agent-conv-456',
-    messages: [],
-    experimental_throttle: 50,
-  };
+const message = (): UIMessage =>
+  ({ id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }) as UIMessage;
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    useChatCallCount = 0;
+beforeEach(() => {
+  vi.clearAllMocks();
+  sessionCallCount = 0;
+});
+
+describe('useDualModeChat — dispatch follows the selected mode', () => {
+  it('given no agent, sends through the global shell', async () => {
+    const { result } = renderHook(() => useDualModeChat(options(null)));
+
+    await act(async () => {
+      await result.current.sendMessage(message(), 'conv-g');
+    });
+
+    expect(globalSession.sendMessage).toHaveBeenCalledWith(expect.anything(), 'conv-g', undefined);
+    expect(agentSession.sendMessage).not.toHaveBeenCalled();
   });
 
-  // ============================================
-  // Unified Interface Tests
-  // ============================================
-  describe('unified interface', () => {
-    it('should return messages from global chat when no agent selected', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
+  it('given an agent, sends through the agent shell', async () => {
+    const { result } = renderHook(() => useDualModeChat(options(mockAgent)));
 
-      expect(result.current.messages).toEqual([]);
-      expect(result.current.status).toBe('ready');
-      expect(result.current.error).toBeUndefined();
-      expect(result.current.isStreaming).toBe(false);
+    await act(async () => {
+      await result.current.sendMessage(message(), 'conv-a');
     });
 
-    it('should return sendMessage function', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(typeof result.current.sendMessage).toBe('function');
-    });
-
-    it('should return stop function', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(typeof result.current.stop).toBe('function');
-    });
-
-    it('should return regenerate function', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(typeof result.current.regenerate).toBe('function');
-    });
-
-    it('should return setMessages function', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(typeof result.current.setMessages).toBe('function');
-    });
+    expect(agentSession.sendMessage).toHaveBeenCalledWith(expect.anything(), 'conv-a', undefined);
+    expect(globalSession.sendMessage).not.toHaveBeenCalled();
   });
 
-  // ============================================
-  // Global Mode Tests
-  // ============================================
-  describe('global mode (no agent selected)', () => {
-    it('should use global sendMessage when sending in global mode', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
+  it('routes regenerate and addToolResult to the same mode', async () => {
+    const { result } = renderHook(() => useDualModeChat(options(mockAgent)));
 
-      const message = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'Hello' }] };
-      act(() => {
-        result.current.sendMessage(message);
+    await act(async () => {
+      await result.current.regenerate('conv-a');
+      await result.current.addToolResult({
+        tool: 'ask_user',
+        toolCallId: 'call-1',
+        output: {},
+        conversationId: 'conv-a',
       });
-
-      expect(mockGlobalSendMessage).toHaveBeenCalledWith(message, undefined);
-      expect(mockAgentSendMessage).not.toHaveBeenCalled();
     });
 
-    it('should use global regenerate in global mode', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      act(() => {
-        result.current.regenerate();
-      });
-
-      expect(mockGlobalRegenerate).toHaveBeenCalled();
-      expect(mockAgentRegenerate).not.toHaveBeenCalled();
-    });
-
-    it('should expose globalStatus for context sync', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(result.current.globalStatus).toBe('ready');
-    });
-
-    it('should expose globalMessages for context sync', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(result.current.globalMessages).toEqual([]);
-    });
-
-    it('should expose setGlobalMessages for context sync', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      expect(typeof result.current.setGlobalMessages).toBe('function');
-    });
+    expect(agentSession.regenerate).toHaveBeenCalled();
+    expect(agentSession.addToolResult).toHaveBeenCalled();
+    expect(globalSession.regenerate).not.toHaveBeenCalled();
   });
 
-  // ============================================
-  // Agent Mode Tests
-  // ============================================
-  describe('agent mode (agent selected)', () => {
-    it('should use agent sendMessage when agent is selected', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: mockAgent,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: mockAgentChatConfig,
-        })
-      );
+  it('reads the mode at CALL time, so a switch between render and dispatch cannot misroute', async () => {
+    const { result, rerender } = renderHook(
+      ({ agent }: { agent: AgentInfo | null }) => useDualModeChat(options(agent)),
+      { initialProps: { agent: null as AgentInfo | null } },
+    );
 
-      const message = { id: 'u-2', role: 'user' as const, parts: [{ type: 'text' as const, text: 'Hello Agent' }] };
-      act(() => {
-        result.current.sendMessage(message, { body: { test: true } });
-      });
+    const send = result.current.sendMessage;
+    rerender({ agent: mockAgent });
 
-      expect(mockAgentSendMessage).toHaveBeenCalledWith(
-        message,
-        { body: { test: true } }
-      );
-      expect(mockGlobalSendMessage).not.toHaveBeenCalled();
+    // The callback captured BEFORE the switch must still land on the mode that is selected NOW.
+    await act(async () => {
+      await send(message(), 'conv-a');
     });
 
-    it('should use agent regenerate in agent mode', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: mockAgent,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: mockAgentChatConfig,
-        })
-      );
-
-      act(() => {
-        result.current.regenerate();
-      });
-
-      expect(mockAgentRegenerate).toHaveBeenCalled();
-      expect(mockGlobalRegenerate).not.toHaveBeenCalled();
-    });
+    expect(agentSession.sendMessage).toHaveBeenCalled();
+    expect(globalSession.sendMessage).not.toHaveBeenCalled();
   });
 
-  // ============================================
-  // isStreaming Tests
-  // ============================================
-  describe('isStreaming calculation', () => {
-    // Note: The hook calculates isStreaming based on status.
-    // Since status is always 'ready' in our mock, isStreaming is always false.
-    // More comprehensive streaming tests would require a dynamic mock setup.
+  it('exposes both modes\' statuses so neither is hidden behind the other', () => {
+    const { result } = renderHook(() => useDualModeChat(options(mockAgent)));
 
-    it('should be false when status is ready (default mock)', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
+    expect(result.current.globalStatus).toBe('ready');
+    expect(result.current.agentStatus).toBe('ready');
+    expect(result.current.status).toBe('ready');
+  });
+});
 
-      // Our mock returns 'ready' status
-      expect(result.current.isStreaming).toBe(false);
-      expect(result.current.status).toBe('ready');
-    });
+describe('a mode switch stops nothing', () => {
+  it('exposes no stop at all — the one Stop goes through useStopStream to /api/ai/abort', () => {
+    const { result } = renderHook(() => useDualModeChat(options(null)));
 
-    it('should calculate isStreaming based on status value', () => {
-      // Test the isStreaming logic pattern:
-      // isStreaming = status === 'submitted' || status === 'streaming'
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
-
-      // With status 'ready', isStreaming should be false
-      expect(result.current.status).toBe('ready');
-      expect(result.current.isStreaming).toBe(false);
-    });
+    // The interface itself is the guarantee. An optional local stop is an invitation, and the
+    // two effects that used to consume one are the reason this rule exists.
+    expect('stop' in result.current).toBe(false);
+    expect('globalStop' in result.current).toBe(false);
+    expect('agentStop' in result.current).toBe(false);
   });
 
-  // ============================================
-  // Return Type Stability Tests
-  // ============================================
-  describe('return type stability', () => {
-    it('should include all required properties', () => {
-      const { result } = renderHook(() =>
-        useDualModeChat({
-          selectedAgent: null,
-          globalChatConfig: mockGlobalChatConfig,
-          agentChatConfig: null,
-        })
-      );
+  it('given a switch INTO agent mode while global is streaming, does not stop the global run', () => {
+    // An effect used to fire `globalStop()` here, documented as an "accepted residual" because
+    // "the server generation continues". True, and the half that does not matter: the tokens
+    // kept arriving on a channel this tab had stopped reading, so the reply the user came back
+    // to was frozen at the moment they glanced away.
+    const streamingGlobal = { ...globalSession, status: 'streaming' as const };
+    sessionCallCount = 0;
+    vi.mocked(useChatSession).mockImplementation((() => {
+      sessionCallCount += 1;
+      return sessionCallCount % 2 === 1 ? streamingGlobal : agentSession;
+    }) as typeof useChatSession);
 
-      expect(result.current).toHaveProperty('messages');
-      expect(result.current).toHaveProperty('sendMessage');
-      expect(result.current).toHaveProperty('status');
-      expect(result.current).toHaveProperty('error');
-      expect(result.current).toHaveProperty('regenerate');
-      expect(result.current).toHaveProperty('setMessages');
-      expect(result.current).toHaveProperty('stop');
-      expect(result.current).toHaveProperty('isStreaming');
-      expect(result.current).toHaveProperty('globalStatus');
-      expect(result.current).toHaveProperty('globalStop');
-      expect(result.current).toHaveProperty('globalMessages');
-      expect(result.current).toHaveProperty('setGlobalMessages');
-    });
+    const { rerender } = renderHook(
+      ({ agent }: { agent: AgentInfo | null }) => useDualModeChat(options(agent)),
+      { initialProps: { agent: null as AgentInfo | null } },
+    );
+
+    rerender({ agent: mockAgent });
+
+    // There is nothing to assert a call ON — no stop is reachable from here. That absence IS
+    // the assertion, and `only-a-deliberate-stop.test.ts` enforces it at the source level so a
+    // future reviewer cannot restore one without failing.
+    expect(streamingGlobal.status).toBe('streaming');
   });
 });

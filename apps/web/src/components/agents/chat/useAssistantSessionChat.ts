@@ -136,7 +136,7 @@ export function useAssistantSessionChat({
   // events for this conversation land in the store regardless of which pane
   // (or none) is looking. Its rejoin is the recovery hook the send handoff
   // needs.
-  const { rejoinGlobalStream } = useGlobalChatConversation();
+  useGlobalChatConversation();
 
   // The CONVERSATION plane, though, is this pane's own (Agent-Session SSoT
   // epic, Phase 2): join `conv:<id>`, hold the rev watermark, apply the

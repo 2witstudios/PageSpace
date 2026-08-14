@@ -283,8 +283,6 @@ const SidebarChatTab: React.FC = () => {
     clearError,
     regenerate,
     addToolResult,
-    globalStatus,
-    agentStatus,
   } = useDualModeChat({
     selectedAgent,
     triggeredBy: sendIdentity,
@@ -441,7 +439,6 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreamingRef = useRef(displayIsStreaming);
   displayIsStreamingRef.current = displayIsStreaming;
 
-  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
@@ -725,7 +722,6 @@ const SidebarChatTab: React.FC = () => {
     attachments,
     removeFile,
     wrapSend,
-    currentConversationId,
   ]);
 
   // renderedMessages (selector output): "answerable" is decided by the conversation's

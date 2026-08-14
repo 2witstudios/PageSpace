@@ -137,7 +137,7 @@ export function useAgentSessionChat({
     (id: string) => loadAgentConversationMessages(agent.id, id),
     [agent.id],
   );
-  const { rejoinActiveStreams } = useAgentChannelMultiplayer({
+  useAgentChannelMultiplayer({
     selectedAgent: agent,
     agentConversationId: conversationId,
     loadConversation,
@@ -254,9 +254,6 @@ export function useAgentSessionChat({
   // with the own store entry, which covers the submitted window AND every stream the old
   // status could not see (bootstrapped, remote, cross-instance).
   const isOwnSendLive = displayIsStreaming;
-  const isOwnSendLiveRef = useRef(isOwnSendLive);
-  isOwnSendLiveRef.current = isOwnSendLive;
-  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: agent.id,

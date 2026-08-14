@@ -1,7 +1,6 @@
 'use client';
 
 import React, { createContext, useContext, ReactNode, useReducer, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';

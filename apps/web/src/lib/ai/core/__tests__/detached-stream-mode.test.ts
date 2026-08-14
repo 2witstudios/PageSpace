@@ -10,7 +10,10 @@ import {
 } from '../detached-stream-mode';
 
 const validEnvelope = {
-  mode: STREAM_MODE_DETACHED,
+  // `as const` so `mode` keeps its literal type — the envelope interface pins it to
+  // 'detached', which is what makes an unrecognised mode a compile error rather than a
+  // runtime surprise.
+  mode: STREAM_MODE_DETACHED as typeof STREAM_MODE_DETACHED,
   messageId: 'msg-1',
   conversationId: 'conv-1',
   channelId: 'page-1',
