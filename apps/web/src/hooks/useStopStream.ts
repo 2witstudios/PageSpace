@@ -3,6 +3,7 @@ import {
   abortActiveStreamByConversation,
   abortActiveStreamByMessageId,
   reportAbortOutcome,
+  type AbortResult,
 } from '@/lib/ai/core/client';
 import { ABORT_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
 import { decideStopAction } from '@/lib/ai/streams/decideStopAction';
@@ -84,15 +85,19 @@ export interface UseStopStreamResult {
  * while an agent is still calling write tools and still billing is the dishonesty that got
  * `rawStop` deleted.
  *
- * It clears on three paths, and only these:
- *   - the socket landing — observed as the stop TARGET disappearing (the store entry removed,
- *     the pendingSend resolved). That is the authority, read rather than duplicated.
- *   - an error reaching the abort endpoint.
+ * It is keyed to the CONVERSATION it was pressed for, and clears on four paths:
+ *   - the socket landing — observed as that conversation's stop target disappearing (the store
+ *     entry removed, the pendingSend resolved). That is the authority, read rather than
+ *     duplicated.
+ *   - the conversation being switched away from. These surfaces keep one hook instance across a
+ *     switch, so a Stop on A must not disable B's Stop button.
+ *   - any abort outcome that is not a confirmed `aborted` — see `releaseUnlessAbortConfirmed`.
  *   - `STOPPING_FEEDBACK_TIMEOUT_MS`, so a socket that never arrives cannot wedge the button.
  *
- * It also covers the outcome that is silent BY DESIGN and had no feedback whatsoever:
- * 'not_found' — Stop pressed a beat after the reply ended — where the "Stopping…" state
- * resolving is the acknowledgement the deliberately-quiet outcome code cannot give.
+ * Between them they also cover the outcome that is silent BY DESIGN and had no feedback
+ * whatsoever: 'not_found' — Stop pressed a beat after the reply ended — where the "Stopping…"
+ * state appearing and then resolving is the acknowledgement the deliberately-quiet outcome code
+ * cannot give.
  */
 export const useStopStream = ({
   activeStream,
@@ -103,7 +108,22 @@ export const useStopStream = ({
   /** `useSendHandoff`'s in-flight pendingSend key — the conversation captured AT SEND. */
   pendingSendConversationId: string | null;
 }): UseStopStreamResult => {
-  const [isStopping, setIsStopping] = useState(false);
+  // WHICH CONVERSATION a Stop names — not merely WHETHER one is nameable.
+  //
+  // This was a boolean (`hasStopTarget`) and that was a bug: these surfaces keep ONE hook
+  // instance across a conversation switch, so stopping A and then switching to B — which has
+  // its own stream running — left the boolean true, the effect never fired, and B rendered a
+  // disabled "Stopping…" button for a Stop nobody asked for, until the backstop expired. The
+  // identity is what distinguishes the two, so the identity is what is tracked.
+  //
+  // Keyed by CONVERSATION rather than by messageId, because a Stop pressed in the TTFB window
+  // names a conversation and only later acquires a messageId: keying on the message would make
+  // the target "change" mid-abort and drop the affordance the moment the stream entry appeared.
+  // Both branches of `decideStopAction` resolve to this same conversation, in the same order.
+  const stopTargetConversationId =
+    activeStream?.isOwn === true ? activeStream.conversationId : pendingSendConversationId;
+
+  const [stoppingConversationId, setStoppingConversationId] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearStopping = useCallback(() => {
@@ -111,66 +131,94 @@ export const useStopStream = ({
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-    setIsStopping(false);
+    setStoppingConversationId(null);
   }, []);
 
-  // Is there still anything for this Stop to be stopping? Exactly the two things
-  // `decideStopAction` can name — our own live store entry, and the in-flight send's captured
-  // conversation. When BOTH are gone the stream has been torn down, which on the abort path
-  // happens because `chat:stream_complete` landed and removed the entry. So this IS the socket
-  // landing, observed through the one place a live stream is recorded rather than by
-  // second-guessing it with a socket subscription of our own.
-  const hasStopTarget = activeStream?.isOwn === true || pendingSendConversationId !== null;
+  // DERIVED, never stored: the affordance belongs to the conversation whose Stop was pressed, so
+  // it can only show while that conversation is still the one on screen AND still has something
+  // to stop. A mismatch is either the socket landing (the entry is gone) or a conversation
+  // switch (the target is somebody else) — neither is a state this button may survive.
+  const isStopping =
+    stoppingConversationId !== null && stoppingConversationId === stopTargetConversationId;
 
-  // `isStopping` is in the deps, not just `hasStopTarget`, and that is load-bearing: on an
-  // already-finished stream there is no target at the moment of the click, so a
-  // `[hasStopTarget]`-only effect never re-runs and the affordance hangs until the backstop.
-  // Depending on the flag itself means the very act of raising it schedules its own resolution.
+  // Deriving above already makes the render honest a frame earlier than any effect could; this
+  // is the cleanup half — it releases the backstop timer and the stored identity once they can
+  // no longer describe anything.
   useEffect(() => {
-    if (isStopping && !hasStopTarget) clearStopping();
-  }, [isStopping, hasStopTarget, clearStopping]);
+    if (stoppingConversationId !== null && stoppingConversationId !== stopTargetConversationId) {
+      clearStopping();
+    }
+  }, [stoppingConversationId, stopTargetConversationId, clearStopping]);
 
-  // Unmount (and conversation switch, which unmounts the surface's chat) must not leave a timer
-  // holding a setState on a dead hook.
+  // Unmount must not leave a timer holding a setState on a dead hook.
   useEffect(() => () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
+
+  /**
+   * Hold the affordance ONLY on a positive confirmation that a stop is on its way.
+   *
+   * The abort helpers do not throw on failure — they resolve `{ code: 'unconfirmed' }` (see
+   * NETWORK_FAILURE in stream-abort-client), which made the catch below unreachable for exactly
+   * the case that most needs releasing: the user has just been TOLD the generation may still be
+   * running and still billing, and the one control that could stop it was disabled for the whole
+   * backstop. `not_found` is the mirror image — the server says nothing is running, so there is
+   * nothing to be stopping. Only `aborted` means teardown is genuinely inbound, and only it
+   * keeps waiting on `chat:stream_complete`.
+   */
+  const releaseUnlessAbortConfirmed = useCallback((result: AbortResult) => {
+    if (result.code !== 'aborted') clearStopping();
+  }, [clearStopping]);
 
   const handleStop = useCallback(async () => {
     // FIRST, synchronously, before any await: the click has to change the screen within a frame.
     // Says "stopping", never "stopped" — see the docblock. Nothing else here touches the
     // rendered stream.
-    setIsStopping(true);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      timeoutRef.current = null;
-      setIsStopping(false);
-    }, STOPPING_FEEDBACK_TIMEOUT_MS);
+    //
+    // Nothing to name means nothing to claim: with no target there is no conversation to key the
+    // affordance to, so it is never raised rather than raised and instantly withdrawn.
+    if (stopTargetConversationId !== null) {
+      setStoppingConversationId(stopTargetConversationId);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        timeoutRef.current = null;
+        setStoppingConversationId(null);
+      }, STOPPING_FEEDBACK_TIMEOUT_MS);
+    }
 
     const action = decideStopAction({ activeStream, pendingSendConversationId });
 
     try {
       if (action.type === 'abortByMessageId') {
-        reportAbortOutcome(await abortActiveStreamByMessageId({ messageId: action.messageId }));
+        const result = await abortActiveStreamByMessageId({ messageId: action.messageId });
+        reportAbortOutcome(result);
+        releaseUnlessAbortConfirmed(result);
         return;
       }
       if (action.type === 'abortByConversation') {
-        reportAbortOutcome(
-          await abortActiveStreamByConversation({ conversationId: action.conversationId }),
-        );
+        const result = await abortActiveStreamByConversation({
+          conversationId: action.conversationId,
+        });
+        reportAbortOutcome(result);
+        releaseUnlessAbortConfirmed(result);
         return;
       }
       // 'none' — nothing live and nothing sent. Deliberately silent: there is nothing to report
-      // and nothing to name. The stopping state releases itself on the next render, because
-      // 'none' is returned for exactly the state in which `hasStopTarget` is already false.
+      // and nothing to name, and nothing was raised above either.
     } catch (error) {
-      // The abort helpers swallow network failure into an 'unconfirmed' AbortResult, so this is
-      // the unexpected-throw path. Whatever it was, no socket is coming for it: release the
-      // affordance now rather than making the user wait out the backstop.
+      // Kept for a genuinely unexpected throw (the helpers swallow network failure into
+      // 'unconfirmed', which `releaseUnlessAbortConfirmed` handles). No socket is coming for it:
+      // release now rather than making the user wait out the backstop.
       clearStopping();
       throw error;
     }
-  }, [activeStream, pendingSendConversationId, clearStopping]);
+  }, [
+    activeStream,
+    pendingSendConversationId,
+    stopTargetConversationId,
+    releaseUnlessAbortConfirmed,
+    clearStopping,
+  ]);
 
   return { handleStop, isStopping };
 };

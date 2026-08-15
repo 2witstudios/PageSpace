@@ -6,21 +6,29 @@ import { conversationMessagesActions } from '@/hooks/conversationMessagesActions
 
 // vi.mock factories are hoisted above module-scope declarations — a plain `let` here would
 // throw a TDZ ReferenceError at transform time. vi.hoisted lifts this state alongside the mock.
-const mockState = vi.hoisted(() => ({
-  handleRetryBaseResolve: undefined as (() => void) | undefined,
-  handleRetryBase: undefined as ReturnType<typeof vi.fn> | undefined,
-}));
+const mockState = vi.hoisted(() => {
+  const state = {
+    handleRetryBaseResolve: undefined as (() => void) | undefined,
+    handleRetryBase: undefined as ReturnType<typeof vi.fn> | undefined,
+  };
+  // ONE spy for the life of the file, not a fresh one per render. The hook re-renders (and
+  // re-invokes this factory) on every prop change, so a spy created inside it silently reset
+  // its own call count mid-test — which is invisible until a test spans a re-render.
+  //
+  // A real regenerate's underlying Promise resolves only once the new stream finishes
+  // (ai SDK makeRequest reads the response to completion) — held open here so the test
+  // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
+  state.handleRetryBase = vi.fn(
+    () => new Promise<void>((resolve) => { state.handleRetryBaseResolve = resolve; }),
+  );
+  return state;
+});
 
 vi.mock('../useMessageActions', () => ({
   useMessageActions: () => ({
     handleEdit: vi.fn(),
     handleDelete: vi.fn(),
-    // A real regenerate's underlying Promise resolves only once the new stream finishes
-    // (ai SDK makeRequest reads the response to completion) — held open here so the test
-    // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
-    handleRetry: (mockState.handleRetryBase = vi.fn(
-      () => new Promise<void>((resolve) => { mockState.handleRetryBaseResolve = resolve; }),
-    )),
+    handleRetry: mockState.handleRetryBase,
   }),
 }));
 
@@ -163,6 +171,36 @@ describe('useCacheMessageActions handleRetry', () => {
 
     expect(wrapSendCalls).toBe(1);
     expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The dashboard and sidebar keep ONE instance of this hook across a conversation switch, and
+  // concurrent sends in different conversations are supported by design. A single boolean latch
+  // let a retry still awaiting A's DELETEs silently swallow a Retry click in B.
+  it('given a retry in flight for one conversation, should not block a retry in another', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const wrapSend = <T,>(sendFn: () => T): T => sendFn();
+
+    const { result, rerender } = renderHook(
+      ({ conversationId }: { conversationId: string }) =>
+        useCacheMessageActions(baseOptions({ wrapSend, conversationId })),
+      { initialProps: { conversationId: 'conv-1' } },
+    );
+    mockState.handleRetryBase?.mockClear();
+
+    // A's retry is in flight — handleRetryBase's promise is held open, so the latch is still set.
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // Same hook instance, conversation B now on screen.
+    rerender({ conversationId: 'conv-2' });
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(2);
 
     mockState.handleRetryBaseResolve?.();
     applyDeleteSpy.mockRestore();

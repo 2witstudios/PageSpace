@@ -126,11 +126,20 @@ export function useCacheMessageActions({
   // state-derived — planRetry's live-stream check, the button's `retryDisabled` — and state only
   // settles after a render, so a double-click lands both handlers inside the same await window
   // and fires TWO regenerations, billed twice.
-  const retryInFlightRef = useRef(false);
+  //
+  // A SET KEYED BY CONVERSATION, not a boolean. The dashboard and sidebar keep one instance of
+  // this hook across a conversation switch, and concurrent sends in different conversations are
+  // supported by design — so a single flag let a retry still awaiting A's DELETEs silently
+  // swallow a Retry click in B, for as long as A's requests took to settle. What must be
+  // suppressed is a duplicate retry of the SAME conversation, which is what the key names.
+  const retryInFlightConversationsRef = useRef<Set<string>>(new Set());
 
   const handleRetry = useCallback(async () => {
-    if (retryInFlightRef.current) return;
-    retryInFlightRef.current = true;
+    // `conversationId` is null only before identity resolves, where handleRetryBase no-ops
+    // anyway; one shared sentinel for that case cannot collide with a real cuid.
+    const retryKey = conversationId ?? '\u0000no-conversation';
+    if (retryInFlightConversationsRef.current.has(retryKey)) return;
+    retryInFlightConversationsRef.current.add(retryKey);
     try {
       // planRetry is the guard: it plans nothing (no ids, no lastUserMessage) while a
       // stream is live anywhere in the rendered list, so an in-flight run can never be
@@ -156,7 +165,7 @@ export function useCacheMessageActions({
       // offers Stop within a frame, same as a send.
       await wrapSend(() => handleRetryBase());
     } finally {
-      retryInFlightRef.current = false;
+      retryInFlightConversationsRef.current.delete(retryKey);
     }
   }, [renderedMessages, handleRetryBase, conversationId, wrapSend]);
 

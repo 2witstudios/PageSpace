@@ -211,18 +211,57 @@ describe('useStopStream — isStopping', () => {
 
   // 'not_found' is deliberately silent (a benign race, and a toast would train users to ignore
   // the real one), so a Stop pressed a beat after the reply finished produced NO feedback at
-  // all. That press only reaches the user while the composer still shows Stop — i.e. the entry
-  // is still live locally — and there the stopping state IS the acknowledgement.
-  it('given the server reports not_found, should still acknowledge the click', async () => {
+  // all. The affordance appearing and then releasing IS the acknowledgement — and it must
+  // RELEASE, not hold: the server has just said nothing is running, so there is nothing to be
+  // stopping, and holding would disable the button for the whole backstop over a no-op.
+  it('given the server reports not_found, should acknowledge the click and then release', async () => {
     abortByMessageId.mockResolvedValue({ aborted: false, code: 'not_found', reason: 'no stream' });
     const { result } = renderStop({ activeStream: OWN_STREAM });
 
-    await act(async () => { await result.current.handleStop(); });
-
+    act(() => { void result.current.handleStop(); });
     expect(result.current.isStopping).toBe(true);
+
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.isStopping).toBe(false);
     expect(reportAbortOutcome).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'not_found' }),
     );
+  });
+
+  // The helpers never throw on network failure — they resolve 'unconfirmed' (NETWORK_FAILURE),
+  // which made the catch path unreachable for the case that most needs releasing: the user has
+  // just been told the generation may still be running and billing, and the only control that
+  // could stop it was disabled for the whole backstop.
+  it('given an unconfirmed abort, should release so the user can immediately try again', async () => {
+    abortByMessageId.mockResolvedValue({ aborted: false, code: 'unconfirmed', reason: 'no response' });
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    act(() => { void result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // THE P1. These surfaces keep ONE hook instance across a conversation switch. Stopping A and
+  // then switching to B — which has its own stream running — must not disable B's Stop button
+  // for a Stop nobody asked for.
+  it('given a switch to another conversation with its own live stream, should not claim to be stopping it', async () => {
+    const { result, rerender } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // Same surface, same hook instance, different conversation — and B is streaming, so the
+    // boolean "is anything stoppable?" this replaced stayed true here.
+    rerender({
+      activeStream: { messageId: 'msg-b', conversationId: 'conv-2', isOwn: true } as ActiveStream,
+      pendingSendConversationId: null,
+    });
+
+    expect(result.current.isStopping).toBe(false);
   });
 
   // Nothing live and nothing sent: the composer is showing SEND, so this is unreachable by
