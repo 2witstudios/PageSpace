@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
-import { isCanonicalBinding, isMacPlatform, keyFromCode, migrateLegacyBinding } from '@/lib/hotkeys/binding';
+import {
+  hasModifier,
+  isCanonicalBinding,
+  isMacPlatform,
+  keyFromCode,
+  migrateLegacyBinding,
+} from '@/lib/hotkeys/binding';
 
 interface HotkeyBinding {
   hotkeyId: string;
@@ -47,7 +53,21 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
 
     for (const { hotkeyId, binding } of bindings) {
       // An empty binding means "disabled" and is intentional.
-      if (binding === '' || isCanonicalBinding(binding)) {
+      if (binding === '') {
+        map.set(hotkeyId, binding);
+        continue;
+      }
+
+      // The old capture widget accepted a bare key, so a stored "N" is a real
+      // possibility — and it fires against the global listeners while the user
+      // is just reading. Both the widget and the API now refuse these; reset
+      // the ones already saved rather than honouring them.
+      if (!hasModifier(binding)) {
+        wasReset.push(hotkeyId);
+        continue;
+      }
+
+      if (isCanonicalBinding(binding)) {
         map.set(hotkeyId, binding);
         continue;
       }

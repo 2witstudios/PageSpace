@@ -94,6 +94,18 @@ describe('useHotkeyStore', () => {
       expect(matchesKeyEvent(getEffectiveBinding('editing.find'), event)).toBe(true);
     });
 
+    it('given a stored bare key, should reset it rather than let it fire while browsing', () => {
+      // The old capture widget had no modifier guard, so a plain "N" could be
+      // saved. It is canonical, but it would fire while the user is reading.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'N' },
+      ]);
+
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+      expect(useHotkeyStore.getState().migratedBindings).toEqual([]);
+    });
+
     it('given a re-saved binding, should clear its reset notice', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },

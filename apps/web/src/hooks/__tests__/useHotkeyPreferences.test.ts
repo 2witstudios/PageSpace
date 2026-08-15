@@ -68,6 +68,15 @@ describe('useHotkeyPreferences', () => {
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
   });
 
+  it('given a stored bare key, should delete the row', async () => {
+    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'N' }] };
+
+    renderHook(() => useHotkeyPreferences());
+
+    expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
+    expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+  });
+
   it('given only valid bindings, should write nothing', async () => {
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+P' }] };
 
