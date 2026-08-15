@@ -52,6 +52,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
+  endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered
+  every valid request to a page agent with a generic "Failed to process chat request. Please try
+  again," and trying again never helped. A call without a `conversation_id` is documented as
+  stateless — you send the messages, the agent replies, nothing is kept — but the endpoint was
+  trying to file both halves of it away regardless, under a thread that had never been opened. That
+  save failed every time, before the agent said a word. Those calls now keep nothing, as promised,
+  and answer normally. Passing a `conversation_id` is still what makes a thread durable, and that
+  path was never affected — nor was asking the same agent through the app.
 - **Confirming a CLI login by email now actually finishes the login** — running `pagespace login`
   without a passkey sends a confirmation email, and clicking its link used to land on a page saying
   "Confirmed | You can return to the tab where you started this action" while the tab you started in
