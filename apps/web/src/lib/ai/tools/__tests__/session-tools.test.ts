@@ -994,6 +994,22 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     expect(sent.success).toBe(true);
   });
 
+  it('an UNSCOPED caller reaches a GLOBAL-assistant worker, which has no drive at all', async () => {
+    // The asymmetry that is easy to get backwards: `null` means "no drive", so
+    // an unscoped credential admits it (this is the case the whole epic set out
+    // to enable — the SDK/CLI driving the global assistant), while a scoped one
+    // never can, because there is no drive for a drive-scope to have granted.
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive(null)) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
   it('the BOUND workspace is held to the ceiling too — a binding can point outside it', async () => {
     // `spawn_session` takes an explicit `workspace` id, so a conversation driven
     // by an agent page in drive A can be bound to a workspace in drive B. The
