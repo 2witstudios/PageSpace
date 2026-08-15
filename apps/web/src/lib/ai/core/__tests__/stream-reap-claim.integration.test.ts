@@ -276,7 +276,7 @@ describe('reap claim — the fence, against a live owner', () => {
     // Simulate the TTL expiring and a second sweep winning it.
     await db
       .update(aiStreamSessions)
-      .set({ reapClaimedAt: sql`date_trunc('milliseconds', now() + interval '1 second')` })
+      .set({ reapClaimedAt: sql`date_trunc('milliseconds', (now() at time zone 'utc') + interval '1 second')` })
       .where(eq(aiStreamSessions.messageId, 'msg-stolen'));
 
     const matched = stale === null ? -1 : await fencedSettle(stale);

@@ -121,11 +121,56 @@ describe('claimDeadStream — the predicate', () => {
     // rejected, forever. This assertion is the cheap guard; the real one is
     // `stream-reap-claim.integration.test.ts`, which runs the round trip against a real
     // database (review finding — chatgpt-codex-connector, PR #2419).
+    const token = (mockUpdateSet.mock.calls[0][0] as {
+      reapClaimedAt: { sqlText?: string; values?: { sqlText?: string }[] };
+    }).reapClaimedAt;
     assert({
       given: 'a claim attempt',
-      should: 'write reap_claimed_at from now(), truncated to a precision the driver can carry',
-      actual: (mockUpdateSet.mock.calls[0][0] as { reapClaimedAt: { sqlText?: string } }).reapClaimedAt.sqlText,
-      expected: "date_trunc('milliseconds', now())",
+      should: 'write reap_claimed_at from the database clock, truncated to a precision the driver can carry',
+      actual: {
+        truncated: token.sqlText,
+        clock: token.values?.[0]?.sqlText,
+      },
+      expected: {
+        truncated: "date_trunc('milliseconds', ?)",
+        clock: "(now() at time zone 'utc')",
+      },
+    });
+  });
+
+  it('reads the database clock as UTC, matching how these columns are written', async () => {
+    await claimDeadStream({ messageId: 'msg-1' });
+
+    // THE TIMEZONE CONVENTION, pinned because nothing else can catch it breaking. These columns
+    // are `timestamp WITHOUT time zone` and Drizzle writes JS `Date`s into them as UTC
+    // wall-clock, while `now()` is a `timestamptz` that resolves through the SESSION's TimeZone.
+    // A bare `now()` therefore means something different per database setting: BEHIND UTC and
+    // nothing is ever stale, so the reap silently never runs; AHEAD of UTC and live rows look
+    // stale by hours, so the reaper destroys generating streams — with the fence agreeing,
+    // because it reads the same skewed clock.
+    //
+    // CI and production are both UTC, which hides it completely — verified by running the
+    // integration suite against an America/Chicago Postgres, where 13 of its 16 cases failed
+    // before this and all 16 pass after. Same convention and same reasoning as `dbNow()` in
+    // packages/lib/src/services/broadcast/record-adapter.ts.
+    const where = conds(mockUpdateWhere.mock.calls[0][0]);
+    const stale = where.find((c) => c.values?.[0] === 'ai_stream_sessions.last_heartbeat_at');
+    const ttl = (where.find((c) => c.or !== undefined)?.or as Cond[])?.[1];
+    const clockOf = (c: Cond | undefined) => (c?.values?.[1] as { sqlText?: string } | undefined)?.sqlText;
+
+    assert({
+      given: 'every comparison the claim makes against the database clock',
+      should: "read it as UTC, never as a bare now() the session's TimeZone can redefine",
+      actual: {
+        staleness: clockOf(stale),
+        claimTtl: clockOf(ttl),
+        anyBareNow: where.some((c) => c.sqlText?.includes('now()')),
+      },
+      expected: {
+        staleness: "(now() at time zone 'utc')",
+        claimTtl: "(now() at time zone 'utc')",
+        anyBareNow: false,
+      },
     });
   });
 
@@ -148,10 +193,10 @@ describe('claimDeadStream — the predicate', () => {
     const stale = conds(mockUpdateWhere.mock.calls[0][0]).find((c) => c.values?.[0] === 'ai_stream_sessions.last_heartbeat_at');
     assert({
       given: 'the claiming UPDATE',
-      should: 'compare last_heartbeat_at against now() minus the stale window, in SQL',
+      should: 'compare last_heartbeat_at against the database clock minus the stale window, in SQL',
       actual: {
-        comparesToNow: stale?.sqlText?.includes('now()') ?? false,
-        seconds: (stale?.values?.[1] as { values?: unknown[] } | undefined)?.values?.[0],
+        comparesToNow: (stale?.values?.[1] as { sqlText?: string } | undefined)?.sqlText?.includes('now()') ?? false,
+        seconds: (stale?.values?.[2] as { values?: unknown[] } | undefined)?.values?.[0],
       },
       expected: { comparesToNow: true, seconds: STREAM_HEARTBEAT_STALE_MS / 1000 },
     });
@@ -164,7 +209,7 @@ describe('claimDeadStream — the predicate', () => {
     assert({
       given: 'a caller-supplied staleness horizon',
       should: 'build the interval from it',
-      actual: (stale?.values?.[1] as { values?: unknown[] } | undefined)?.values?.[0],
+      actual: (stale?.values?.[2] as { values?: unknown[] } | undefined)?.values?.[0],
       expected: 30,
     });
   });
@@ -181,7 +226,7 @@ describe('claimDeadStream — the predicate', () => {
       should: 'accept an unclaimed row OR one whose claim is older than the TTL',
       actual: {
         unclaimed: alternatives?.[0]?.isNull,
-        ttlSeconds: ((alternatives?.[1] as Cond)?.values?.[1] as { values?: unknown[] } | undefined)?.values?.[0],
+        ttlSeconds: ((alternatives?.[1] as Cond)?.values?.[2] as { values?: unknown[] } | undefined)?.values?.[0],
       },
       expected: {
         unclaimed: 'ai_stream_sessions.reap_claimed_at',
