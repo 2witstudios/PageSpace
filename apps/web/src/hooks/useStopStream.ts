@@ -129,9 +129,17 @@ export const useStopStream = ({
   // a stale snapshot of a Stop that may since have been superseded.
   const stoppingConversationIdRef = useRef<string | null>(null);
 
+  // Raising is ref + state + backstop, always together — one call site so the mirror and the
+  // timer cannot drift out of step with the state they describe.
   const raiseStopping = useCallback((conversationId: string) => {
     stoppingConversationIdRef.current = conversationId;
     setStoppingConversationId(conversationId);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      timeoutRef.current = null;
+      stoppingConversationIdRef.current = null;
+      setStoppingConversationId(null);
+    }, STOPPING_FEEDBACK_TIMEOUT_MS);
   }, []);
 
   const clearStopping = useCallback(() => {
@@ -203,36 +211,24 @@ export const useStopStream = ({
     //
     // Nothing to name means nothing to claim: with no target there is no conversation to key the
     // affordance to, so it is never raised rather than raised and instantly withdrawn.
+    // Captured, not re-read: everything after the await must act on the conversation this Stop
+    // was pressed for, which by then may no longer be the one on screen.
     const stoppedConversationId = stopTargetConversationId;
-    if (stoppedConversationId !== null) {
-      raiseStopping(stoppedConversationId);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      timeoutRef.current = setTimeout(() => {
-        timeoutRef.current = null;
-        stoppingConversationIdRef.current = null;
-        setStoppingConversationId(null);
-      }, STOPPING_FEEDBACK_TIMEOUT_MS);
-    }
+    if (stoppedConversationId !== null) raiseStopping(stoppedConversationId);
 
     const action = decideStopAction({ activeStream, pendingSendConversationId });
 
+    // 'none' — nothing live and nothing sent. Deliberately silent: there is nothing to report
+    // and nothing to name, and nothing was raised above either.
+    if (action.type === 'none') return;
+
     try {
-      if (action.type === 'abortByMessageId') {
-        const result = await abortActiveStreamByMessageId({ messageId: action.messageId });
-        reportAbortOutcome(result);
-        releaseUnlessAbortConfirmed(result, stoppedConversationId);
-        return;
-      }
-      if (action.type === 'abortByConversation') {
-        const result = await abortActiveStreamByConversation({
-          conversationId: action.conversationId,
-        });
-        reportAbortOutcome(result);
-        releaseUnlessAbortConfirmed(result, stoppedConversationId);
-        return;
-      }
-      // 'none' — nothing live and nothing sent. Deliberately silent: there is nothing to report
-      // and nothing to name, and nothing was raised above either.
+      const result = action.type === 'abortByMessageId'
+        ? await abortActiveStreamByMessageId({ messageId: action.messageId })
+        : await abortActiveStreamByConversation({ conversationId: action.conversationId });
+
+      reportAbortOutcome(result);
+      releaseUnlessAbortConfirmed(result, stoppedConversationId);
     } catch (error) {
       // Kept for a genuinely unexpected throw (the helpers swallow network failure into
       // 'unconfirmed', which `releaseUnlessAbortConfirmed` handles). No socket is coming for it:
