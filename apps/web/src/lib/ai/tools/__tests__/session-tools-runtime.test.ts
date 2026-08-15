@@ -546,7 +546,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     expect(mockListSessions).not.toHaveBeenCalled();
   });
 
-  test('worker titles are NOT redacted on the tool surface — every row an agent may address it may also name', async () => {
+  test('worker titles route through the ONE redaction rule, which is ALSO the addressability rule: own and deliberately-shared titles, "(private thread)" for another member\'s private one', async () => {
     mockGetDriveIdsForUser.mockResolvedValue(['drive-member']);
     mockResolveDriveMembership.mockResolvedValue('member');
     mockListSessions.mockResolvedValue([sharedSession]);
@@ -567,31 +567,32 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
 
     expect(shared).toHaveLength(1);
+    // The COUNT is honest — every row survives redaction.
     expect(shared[0].workers).toHaveLength(3);
-    // Every worker in a workspace the caller reaches through drive membership
-    // is addressable by send/read/kill_session, so withholding another member's
-    // title left an agent with several indistinguishable "(private thread)" rows
-    // and no basis to choose between ids it was allowed to use. The rule that
-    // replaced the redaction is the drive's: reach the workspace, see its work.
-    expect(shared[0].workers.map((w) => w.name)).toEqual(['my research', 'team notes', 'their secret']);
+    expect(shared[0].workers.map((w) => w.name)).toEqual(['my research', 'team notes', '(private thread)']);
+    // The real title never leaks anywhere in the redacted entry.
+    expect(JSON.stringify(shared[0])).not.toContain('their secret');
+    // Activity time survives redaction — the orchestration signal.
     expect(shared[0].workers[2].lastActiveAt).toBe('2026-08-01T12:00:00.000Z');
   });
 
-  test('the shared HTTP/sidebar listing still redacts — this decision changed the TOOL surface only', async () => {
-    // The redaction module is deliberately left intact and still consumed by
-    // `workspace-node-runtime.ts`. Gutting it would have silently widened a
-    // surface nobody asked about.
-    const { redactConversationTitleForViewer } = await import(
-      '@pagespace/lib/agent-workspaces/redact-conversation-listing'
-    );
+  test('the redaction marker and unaddressability are the SAME predicate — a redacted row is one the verbs refuse', async () => {
+    // The invariant that keeps this listing honest to an agent: it must never
+    // print a name for a row the verbs would refuse, nor redact one they would
+    // accept. Both read `isConversationVisibleToViewer`, so this pins the two
+    // never being computed separately again.
+    const { isConversationVisibleToViewer, redactConversationTitleForViewer, PRIVATE_THREAD_REDACTION } =
+      await import('@pagespace/lib/agent-workspaces/redact-conversation-listing');
 
-    expect(
-      redactConversationTitleForViewer({
+    for (const isShared of [true, false]) {
+      const input = {
         viewerId: VIEWER,
         workspaceOwnerId: OTHER_OWNER,
-        conversation: { ownerId: OTHER_OWNER, isShared: false, title: 'their secret' },
-      }),
-    ).toBe('(private thread)');
+        conversation: { ownerId: OTHER_OWNER, isShared, title: 'their secret' },
+      };
+      const named = redactConversationTitleForViewer(input) !== PRIVATE_THREAD_REDACTION;
+      expect(named).toBe(isConversationVisibleToViewer(input));
+    }
   });
 
   test('the member-visible set carries its own explicit bound (100, newest activity first) — unlike the own set, nothing structural caps it', async () => {

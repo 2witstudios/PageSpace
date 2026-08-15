@@ -46,6 +46,8 @@ const OWN_WORKER = {
   name: 'worker',
   workspaceId: WORKSPACE_ID,
   isClosed: false,
+  isShared: false,
+  workspaceOwnerId: null,
 };
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {

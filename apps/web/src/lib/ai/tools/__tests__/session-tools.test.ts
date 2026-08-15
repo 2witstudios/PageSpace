@@ -44,6 +44,8 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       name: 'worker',
       workspaceId: WORKSPACE_ID,
       isClosed: false,
+      isShared: false,
+      workspaceOwnerId: null,
     })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
@@ -143,6 +145,7 @@ describe('list_sessions', () => {
     expect(deps.listWorkspaceWorkers).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       callerConversationId: CALLER_CONVERSATION,
+      callerUserId: USER_ID,
     });
     // The caller's own workspace is excluded from BOTH cross-workspace lists
     // — it is already the top-level detail view (and a caller spawned into a
@@ -371,6 +374,8 @@ describe('send_session', () => {
         name: '',
         workspaceId: WORKSPACE_ID,
         isClosed: false,
+        isShared: false,
+        workspaceOwnerId: null,
       })),
       // Reach is the DRIVE's decision now, so a foreign row only reads as
       // nonexistent when that decision says no.
@@ -407,9 +412,14 @@ describe('cross-member reach: a drive member addresses another member\'s worker'
     name: 'their worker',
     workspaceId: 'shared-workspace',
     isClosed: false,
+    // DELIBERATELY SHARED by its owner. Drive membership opens the workspace;
+    // this flag is what opens the thread. Without it the rows below are
+    // unreachable — pinned by the last two tests in this block.
+    isShared: true,
+    workspaceOwnerId: 'other-member',
   };
 
-  /** Reachable through the drive, but owned by someone else. */
+  /** Owned by someone else, reachable: drive admits the workspace AND the thread is shared. */
   function reachableForeignDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     return makeDeps({
       findWorker: vi.fn(async () => FOREIGN_WORKER),
@@ -520,6 +530,55 @@ describe('cross-member reach: a drive member addresses another member\'s worker'
     expect(sent).not.toHaveProperty('reason');
     expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
   });
+  it('an UNSHARED foreign worker reads as nonexistent even with full drive access', async () => {
+    // THE OPT-IN. Drive membership opens the working context, not every private
+    // conversation inside it. This is the same predicate that prints
+    // "(private thread)" for this row in list_sessions — one rule, so an agent
+    // can address exactly the rows it can name.
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, isShared: false })),
+    });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 'conv-theirs', input: 'x' } : { sessionId: 'conv-theirs' };
+      const refused = await run(tools[verb], input, contextOptions());
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions());
+      // Indistinguishable from a row that does not exist — a member learns
+      // nothing about a colleague's private thread from the refusal.
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('the WORKSPACE owner reaches an unshared thread inside their own workspace', async () => {
+    // They are the tenant of that working context, and the listing already shows
+    // them every title in it — the same third arm of the predicate.
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({
+        ...FOREIGN_WORKER,
+        isShared: false,
+        workspaceOwnerId: USER_ID,
+      })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('an unresolvable workspace owner fails CLOSED rather than opening every thread', async () => {
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, isShared: false, workspaceOwnerId: null })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(false);
+  });
 });
 
 describe('worker verbs are RESOURCE-addressed — REACH is the gate, the calling surface is not (issue #2335 product decision, superseding #2262 finding 1\'s workspace confinement)', () => {
@@ -538,6 +597,8 @@ describe('worker verbs are RESOURCE-addressed — REACH is the gate, the calling
     name: 'worker elsewhere',
     workspaceId: 'another-of-my-workspaces',
     isClosed: false,
+    isShared: false,
+    workspaceOwnerId: null,
   };
 
   it('the caller\'s own worker in ANOTHER workspace is addressable — send/read/kill all reach it', async () => {

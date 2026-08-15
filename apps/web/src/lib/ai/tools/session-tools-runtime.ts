@@ -41,6 +41,7 @@ import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/wor
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   AGENT_DISPATCH_SIGNATURE_HEADER,
@@ -302,31 +303,31 @@ export async function dispatchThroughChatPipeline(input: {
  * else is running there is the same visibility a human teammate has glancing
  * at the sidebar.
  *
- * TITLES ARE NO LONGER REDACTED ON THIS SURFACE, and this paragraph is kept
- * rather than deleted because it used to say the opposite, and the reversal is a
- * DECISION rather than a drift. It used to read: titles follow
- * `redactConversationTitleForViewer`, and "TRANSCRIPT content stays owner-gated
- * either way — `read_session` still requires ownership, so seeing a sibling
- * listed here grants no access to what it said."
+ * TITLES follow the one listing redaction rule
+ * (`redactConversationTitleForViewer` — full rule documented on
+ * `listSessionConversationsBulk`): the workspace's owner sees them all; a
+ * caller listing a workspace they do NOT own (their conversation was spawned
+ * into a shared one) sees `(private thread)` for siblings that are neither
+ * theirs nor deliberately shared.
  *
- * Both halves changed together, deliberately. Worker verbs now authorize through
- * the drive (`decideAgentSessionAccess`), so a member CAN read a sibling's
- * transcript — which makes the redaction worse than useless: it withheld the
- * label while the content behind it was reachable, leaving an agent unable to
- * tell which of several `(private thread)` rows it should address. The rule that
- * replaced it is the drive's: if you may work in this workspace, you may see and
- * address what is running in it.
- *
- * The shared module still exists and is NOT gutted —
- * `workspace-node-runtime.ts` keeps using it for the HTTP/sidebar listing, which
- * this decision does not touch.
+ * THAT RULE IS ALSO THE ADDRESSABILITY RULE NOW. It used to be strictly weaker
+ * than the verbs' gate — this note read "TRANSCRIPT content stays owner-gated
+ * either way" — and once the verbs widened from ownership to drive membership,
+ * leaving it that way would have shown an agent `(private thread)` for a row it
+ * could nonetheless message and read. So the verbs consult the SAME predicate
+ * (`isConversationVisibleToViewer`): a foreign worker is addressable exactly
+ * when its title is legible here. A thread stays private until its owner shares
+ * it, and "seeing a sibling listed here grants no access to what it said" stays
+ * true for every redacted row.
  */
 async function listWorkspaceWorkers({
   workspaceId,
   callerConversationId,
+  callerUserId,
 }: {
   workspaceId: string;
   callerConversationId: string;
+  callerUserId: string;
 }): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
   const [row, workerRows, shells] = await Promise.all([
@@ -368,10 +369,14 @@ async function listWorkspaceWorkers({
     sandbox: row ? deriveSandboxStatus(row) : 'none',
     workers: workerRows.map((worker) => ({
       sessionId: worker.conversationId,
-      // Unredacted: reaching this listing already means drive access to the
-      // workspace, and the verbs will address these rows by id — a label the
-      // caller cannot read is a label they cannot pick from.
-      name: worker.title ?? '',
+      name:
+        redactConversationTitleForViewer({
+          viewerId: callerUserId,
+          // A vanished workspace row (FK-nulled edge) has no owner to grant
+          // through — the empty id matches nobody, so the rule fails CLOSED.
+          workspaceOwnerId: row?.ownerId ?? '',
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
       agent:
         worker.type === 'page' && worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
@@ -530,14 +535,11 @@ const MAX_MEMBER_VISIBLE_WORKSPACES = 100;
  * real gate beats a hand-rolled narrower query that could drift from it).
  *
  * Worker rows come from the same `listSessionConversationsBulk` primitive as
- * every other listing, with titles UNREDACTED. They used to be routed through
- * `redactConversationTitleForViewer`, so another member's private thread kept
- * its row (agent + activity — the orchestration signal) as `(private thread)`.
- * That rested on a premise this epic reversed: foreign workers were not
- * addressable, so the row existed for awareness only and a label added nothing.
- * They ARE addressable now — reach is the drive's decision — so withholding the
- * label leaves an agent staring at several identical `(private thread)` rows
- * with no way to choose between ids it is allowed to use.
+ * every other listing, with titles routed through the ONE redaction rule
+ * (`redactConversationTitleForViewer`): the caller sees their own and
+ * deliberately-shared titles; another member's private thread keeps its row
+ * (agent + activity — the orchestration signal) as `(private thread)`, and is
+ * not addressable by the verbs either — same predicate, one answer.
  * Bounded by {@link MAX_MEMBER_VISIBLE_WORKSPACES} (see its doc).
  */
 async function listSharedWorkspaces({
@@ -605,7 +607,12 @@ async function listSharedWorkspaces({
     sandbox: session.sandboxStatus,
     workers: (workersBySession.get(session.workspaceId) ?? []).map((worker) => ({
       sessionId: worker.conversationId,
-      name: worker.title ?? '',
+      name:
+        redactConversationTitleForViewer({
+          viewerId: userId,
+          workspaceOwnerId: session.ownerId,
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
       agent:
         worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
@@ -881,6 +888,18 @@ async function recoverMintedWorkspaceAfterThrow(
   return 'not_bound';
 }
 
+/**
+ * A workspace's owner, for the one gate that needs it: a caller who OWNS the
+ * workspace sees and addresses every thread in it, including other members'
+ * private ones (they are the tenant of that working context). Read through the
+ * same session store the rest of the runtime uses.
+ */
+async function getWorkspaceOwnerId(workspaceId: string): Promise<string | null> {
+  const store = await getAgentSessionStore();
+  const row = await store.findById(workspaceId);
+  return row?.ownerId ?? null;
+}
+
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
@@ -939,6 +958,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // closed thread therefore fails the `workspaceId` gate first; this stays
         // so the answer keeps its own name rather than becoming "never had one".
         isClosed: membership === null,
+        // The two facts `isConversationVisibleToViewer` needs to decide whether
+        // a NON-owner may address this worker. Carried on the row rather than
+        // re-read at the gate so the verbs and the listing weigh the same
+        // values, not merely the same rule.
+        isShared: conversation.isShared,
+        workspaceOwnerId: membership ? (await getWorkspaceOwnerId(membership.workspaceId)) : null,
       };
     },
 

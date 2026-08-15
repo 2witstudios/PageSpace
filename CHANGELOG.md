@@ -13,11 +13,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   covered a spoken conversation, a scheduled run, and anything driven from an API key — so the same
   sentence worked when typed and failed when spoken. It now works the same way from every one of
   them, including from the SDK, the CLI, and other tools you have connected to your account.
-- **Agents in a shared drive can work with each other's agents** — a worker running in a workspace
-  you share through drive membership can now be messaged and read, not merely seen in a list, and
-  its name is shown rather than hidden behind "(private thread)". A message you send runs with YOUR
-  permissions, never the other person's, so reaching someone's worker never gives you their access.
-  Stopping someone else's running worker still needs owner or admin rights on the drive.
+- **Agents in a shared drive can work with each other's shared agents** — a worker a teammate
+  deliberately shared can now be messaged and read, not merely seen in a list. Their private threads
+  stay private: a worker still shown as "(private thread)" is not addressable, and asking for it
+  answers exactly as if it did not exist. A message you send runs with YOUR permissions, never the
+  other person's, so reaching someone's worker never gives you their access. Stopping someone else's
+  running worker still needs owner or admin rights on the drive.
 - **A microphone in the top bar, on every page, that talks to whichever assistant you are already
   looking at** — there is no separate voice screen and nothing to set up first. Press it on a page
   and the assistant sidebar opens in voice mode, talking to the agent you had selected there; press

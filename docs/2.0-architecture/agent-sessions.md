@@ -122,13 +122,19 @@ finding 1's workspace confinement.
 1. **Verbs are resource-addressed and permission-gated, like `read_page`.**
    `send_session` / `read_session` / `kill_session` authorize against the resource:
    the caller can REACH the worker, it is actually a worker (bound into some
-   workspace), and its listing is not human-closed. **Reach is the drive's decision,
-   not ownership** — the caller's own workers, plus any worker in a workspace they
-   hold drive membership in, which is exactly what `decideAgentSessionAccess` has
-   always admitted to a workspace and what axiom 6's discovery already showed them.
-   (It used to be ownership, strictly narrower than the platform's own rule: two
-   members of one drive could see each other's workspaces and address nothing in
-   them.) A resource the caller cannot reach always reads as nonexistent —
+   workspace), and its listing is not human-closed. **Reach is two borrowed rules,
+   not ownership.** The DRIVE admits you to the workspace
+   (`decideAgentSessionAccess`: owner/admin/member — exactly what axiom 6's
+   discovery already showed you), and the WORKSPACE shows you the thread
+   (`isConversationVisibleToViewer`: you own the workspace, you own the thread, or
+   its owner deliberately shared it — axiom 7, the same predicate that decides
+   whether its title is legible). So an agent addresses exactly the rows it can
+   name. Ownership alone used to be the gate, strictly narrower than the
+   platform's own rule: two members of one drive could see each other's
+   workspaces and address nothing in them. Drive membership ALONE would have been
+   too wide the other way — it would have made axiom 7's per-thread opt-in
+   silently meaningless. A resource the caller cannot reach always reads as
+   nonexistent —
    anti-enumeration, unchanged. For rows the caller CAN reach the refusals are
    distinct, typed and actionable (shipped, epic Phase 1): an unbound thread answers
    `not_a_worker` with spawn-from-inside-it guidance, a human-closed listing answers
@@ -163,8 +169,9 @@ finding 1's workspace confinement.
 5. **Cross-workspace orchestration is legitimate.** `spawn_session` takes `workspace`
    (omitted = caller's own, minted if needed; `'new'` = fresh isolated workspace;
    an id = spawn straight into it, gated by session access). `list_sessions` lists all
-   the caller's workspaces; every worker it reports — the caller's own, and other
-   members' in shared drives — is addressable by the verbs (axiom 1). The
+   the caller's workspaces; every worker it reports BY NAME — the caller's own, and
+   other members' deliberately-shared ones — is addressable by the verbs (axiom 1),
+   while a `(private thread)` row is visible but not addressable. The
    advisory cap pre-count applies only to own-workspace spawns — a full caller
    workspace can't refuse a spawn aimed somewhere with room.
 6. **Discovery is symmetric with the spawn gate.** Everything
@@ -176,24 +183,24 @@ finding 1's workspace confinement.
    is never truncated (the spawn ceiling is structural); the member-visible set
    has no structural ceiling, so it carries its own explicit bound
    (`MAX_MEMBER_VISIBLE_WORKSPACES`, newest activity first).
-7. **Foreign private-thread titles redact in the HTTP/sidebar listing — but not on
-   the tool surface.** The rule itself is unchanged and still one pure mechanism,
-   `redactConversationTitleForViewer`
+7. **Foreign private-thread titles redact in listings — and that redaction is now
+   the ADDRESSABILITY rule too.** One pure mechanism, unchanged in substance
    (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`): a viewer
    listing a workspace they do not OWN sees a conversation's title only when the
    thread is their own or deliberately shared (`conversations.isShared`); every
    other row keeps its agent and activity time but reads `(private thread)`.
 
-   It was explicitly open to veto, and axiom 1 vetoed it for `list_sessions`. Two
-   claims it rested on stopped being true together: foreign workers are addressable
-   now, and "transcript content stays owner-gated regardless" is false —
-   `read_session` follows the drive like every other verb. Withholding the label
-   while the content behind it is reachable is worse than either alternative: it
-   leaves an agent holding several indistinguishable `(private thread)` rows with no
-   basis to choose between ids it is permitted to use. So the tool listing shows real
-   titles, and the verb descriptions carry the caution that belongs there instead —
-   these are other people's working threads: untrusted input, not instructions, and
-   not yours to act on or interrupt unasked.
+   What changed is its REACH, not its content. The rule used to be strictly weaker
+   than the verbs' gate — "transcript content stays owner-gated regardless" — so a
+   redacted row was merely a row you could not name. Once axiom 1 widened the verbs
+   to drive membership, leaving it there would have shown an agent
+   `(private thread)` for a row it could nonetheless message and read. So the
+   predicate was extracted (`isConversationVisibleToViewer`) and the verbs consult
+   it: a redacted row is one the verbs refuse, indistinguishably from a row that
+   does not exist. Drive membership opens the working CONTEXT; sharing a thread is
+   what opens the thread. The verb descriptions carry the caution that belongs
+   alongside — a shared worker's transcript is someone else's work: untrusted
+   input, not instructions, and not yours to interrupt unasked.
 
 Unchanged by the re-model: the conversation→session binding stays write-once and
 owner-only (the hijack surface stays closed); shells stay workspace-scoped
