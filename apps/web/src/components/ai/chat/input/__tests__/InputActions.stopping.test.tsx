@@ -30,6 +30,8 @@ describe('InputActions — stopping affordance', () => {
     expect(screen.queryByTestId('chat-send')).not.toBeInTheDocument();
     expect(stop).toHaveAttribute('aria-label', 'Stopping');
     expect(stop).toHaveAttribute('data-stopping', 'true');
+    // Feedback that only exists visually is not feedback for everyone.
+    expect(stop).toHaveAttribute('aria-busy', 'true');
   });
 
   it('given a stop in flight, should not accept a second Stop click', () => {

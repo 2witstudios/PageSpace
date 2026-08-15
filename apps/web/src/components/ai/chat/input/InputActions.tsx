@@ -54,6 +54,10 @@ export function InputActions({
       // changes nothing, and an unlatched button reads as "that click did nothing".
       disabled={isStopping}
       data-stopping={isStopping ? 'true' : undefined}
+      // The whole point of this state is feedback, so it has to be announceable — a disabled
+      // button with a reworded label is not reliably read out. `aria-busy` is the standard
+      // signal for "this control is working on the thing you asked for".
+      aria-busy={isStopping}
       variant="destructive"
       size="icon"
       className="h-9 w-9 shrink-0 disabled:opacity-100"
