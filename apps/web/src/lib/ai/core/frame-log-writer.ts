@@ -7,6 +7,7 @@ import {
   shouldFlushFrames,
   FRAME_FLUSH_INTERVAL_MS,
 } from '@/lib/ai/core/frame-log-batching';
+import { isReapClaimStillHeld, type ReapClaim } from '@/lib/ai/core/stream-reap-claim';
 
 /**
  * The durable frame log's WRITER: one per generation, subscribed to that generation's
@@ -387,6 +388,27 @@ export const startFrameLogWriter = ({
 };
 
 /**
+ * What entitles a by-name release to destroy this log. REQUIRED, and required for a reason.
+ *
+ * There are exactly two things that can license a delete-by-messageId, and neither of them is
+ * "the caller believes the stream is over":
+ *
+ *   - `own-superseded-attempt` — the caller IS this messageId's generation path and is
+ *     discarding an attempt it superseded itself (the pre-abort branch of
+ *     `createStreamLifecycle`). Same process, same request, no other party involved.
+ *   - `reap-claim` — the caller won an atomic reap claim on the session row, and the claim is
+ *     still verifiable at delete time. See `stream-reap-claim.ts`.
+ *
+ * Making it a required parameter rather than an optional one is the whole design. This function
+ * used to take a messageId alone, so every caller was implicitly asserting a right it had no
+ * way to demonstrate — and a future caller could acquire that right by writing one line. The
+ * type is now the thing that stops it.
+ */
+export type FrameReleaseFence =
+  | { kind: 'own-superseded-attempt' }
+  | { kind: 'reap-claim'; claim: ReapClaim };
+
+/**
  * Release a message's durable frames BY NAME — for a caller that holds no writer.
  *
  * The crash-recovery path (`materializeInterruptedStream`) and the pre-abort cleanup, both of
@@ -408,20 +430,44 @@ export const startFrameLogWriter = ({
  * poll judges them all provably dead and reaps them — on the very instance that is still
  * generating them.
  *
- * So a live local writer wins. The frames stay, and the generation's own lifecycle releases
- * them when it finishes (or the retention backstop does). The cost of being wrong in this
- * direction is a log that lives a little longer than it needed to; in the other direction it
- * is a reply with no durable copy.
+ * ── THE `writers` CHECK IS NOT ENOUGH AT N>1, AND THAT IS WHY THE FENCE EXISTS ───────────────
+ *
+ * `writers` is process-local. On the instance that is generating, it holds an entry and the
+ * refusal below fires. On EVERY OTHER instance it is empty — so the exact same reap, landing on
+ * a peer, sailed straight through this guard and deleted a live generation's log. The guard was
+ * never wrong; it was just answering a question ("is it mine?") that stopped being the same as
+ * the question that matters ("is it anyone's?") the moment there was more than one machine.
+ *
+ * So the local check stays — it is the cheapest possible answer and it is authoritative when it
+ * fires — and a `reap-claim` fence answers the cross-instance half by re-verifying, against
+ * Postgres, that the claim this caller won is still held. Both must pass.
+ *
+ * A refused delete logs `warn` rather than staying silent: in production a nonzero count of
+ * either refusal is a REAL near-miss on live content, and the only way anyone learns the N>1
+ * reap race is firing is if the near-misses are visible.
  *
  * Never throws: it is called from persistence paths whose success must not depend on a
  * cleanup, and the retention backstop reclaims anything a failure here leaves behind.
  */
-export const releaseFramesForMessage = async (messageId: string): Promise<void> => {
+export const releaseFramesForMessage = async (
+  messageId: string,
+  fence: FrameReleaseFence,
+): Promise<void> => {
   if (writers.has(messageId)) {
     loggers.ai.warn('frame-log: release by name refused — this process is still generating that message', {
       messageId,
+      fence: fence.kind,
     });
     return;
   }
+
+  if (fence.kind === 'reap-claim' && !(await isReapClaimStillHeld(fence.claim))) {
+    loggers.ai.warn('frame-log: release by name refused — the reap claim no longer holds', {
+      messageId,
+      claimedAt: fence.claim.claimedAt.toISOString(),
+    });
+    return;
+  }
+
   await deleteFrames(messageId);
 };

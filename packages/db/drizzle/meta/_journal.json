@@ -1828,6 +1828,13 @@
       "when": 1786826281689,
       "tag": "0260_slow_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 261,
+      "version": "7",
+      "when": 1786832941822,
+      "tag": "0261_bored_santa_claus",
+      "breakpoints": true
     }
   ]
 }

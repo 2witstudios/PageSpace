@@ -17,6 +17,8 @@ const {
   mockLoggerWarn,
   mockFrameSelectOrderBy,
   mockDeleteWhere,
+  mockClaimDeadStream,
+  mockIsReapClaimStillHeld,
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockInsertValues: vi.fn(),
@@ -36,6 +38,8 @@ const {
   // the seq-contiguity rule that decides what a recovery actually folds lives there.
   mockFrameSelectOrderBy: vi.fn(),
   mockDeleteWhere: vi.fn(),
+  mockClaimDeadStream: vi.fn(),
+  mockIsReapClaimStillHeld: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -115,6 +119,8 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
   aiStreamSessions: {
     messageId: 'ai_stream_sessions.message_id',
     status: 'ai_stream_sessions.status',
+    reapClaimedAt: 'ai_stream_sessions.reap_claimed_at',
+    lastHeartbeatAt: 'ai_stream_sessions.last_heartbeat_at',
   },
   aiStreamFrames: {
     messageId: 'ai_stream_frames.message_id',
@@ -137,6 +143,23 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     rev: 'conversations.rev',
   },
 }));
+
+/**
+ * The reap claim — mocked at its two DB-touching functions ONLY.
+ *
+ * `reapClaimFence` stays REAL, and that is the point: it is the predicate every destructive
+ * write below carries, so the cases asserting on the settle's WHERE clause must see the
+ * clauses the production code actually builds. `claimDeadStream` and `isReapClaimStillHeld`
+ * are the statements themselves; `stream-reap-claim.test.ts` covers those.
+ */
+vi.mock('../stream-reap-claim', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../stream-reap-claim')>();
+  return {
+    ...actual,
+    claimDeadStream: mockClaimDeadStream,
+    isReapClaimStillHeld: mockIsReapClaimStillHeld,
+  };
+});
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -175,7 +198,8 @@ vi.mock('@/lib/repositories/message-repository', async (importOriginal) => {
   };
 });
 
-import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
+import { materializeInterruptedStream } from '../materialize-interrupted-stream';
+import type { ReapClaim } from '../stream-reap-claim';
 import type { UIMessagePart } from '../stream-channel-registry';
 
 const textPart = (text: string): UIMessagePart => ({ type: 'text', text }) as UIMessagePart;
@@ -191,26 +215,47 @@ const toolCallPart = (): UIMessagePart =>
   }) as UIMessagePart;
 
 const STREAM_STARTED_AT = new Date('2026-07-15T00:00:00.000Z');
+const HEARTBEAT_AT_CLAIM = new Date('2026-07-15T00:01:00.000Z');
+const CLAIMED_AT = new Date('2026-07-15T00:05:00.000Z');
 
-const pageRow = (over: Partial<MaterializableStreamRow> = {}): MaterializableStreamRow => ({
+const pageRow = (over: Partial<ReapClaim> = {}): ReapClaim => ({
   messageId: 'msg-1',
+  claimedAt: CLAIMED_AT,
+  heartbeatAtClaim: HEARTBEAT_AT_CLAIM,
   channelId: 'page-abc123',
   conversationId: 'conv-1',
   userId: 'user-a',
   parts: [textPart('partial reply')],
+  rawPartsCount: 0,
   startedAt: STREAM_STARTED_AT,
   ...over,
 });
 
-const globalRow = (over: Partial<MaterializableStreamRow> = {}): MaterializableStreamRow => ({
+const globalRow = (over: Partial<ReapClaim> = {}): ReapClaim => ({
   messageId: 'msg-2',
+  claimedAt: CLAIMED_AT,
+  heartbeatAtClaim: HEARTBEAT_AT_CLAIM,
   channelId: 'user:user-a:global',
   conversationId: 'conv-2',
   userId: 'user-a',
   startedAt: STREAM_STARTED_AT,
   parts: [textPart('partial global reply')],
+  rawPartsCount: 0,
   ...over,
 });
+
+/**
+ * Drive the materializer with a given claimed row.
+ *
+ * The production entry point takes a messageId and CLAIMS the row itself — one statement that
+ * is both the read and the fence (see stream-reap-claim.ts). These cases are about what happens
+ * with a won claim, so the claim is stubbed and the row it returns is the case's input. The
+ * "no claim" cases call `materializeInterruptedStream` directly.
+ */
+const materialize = async (row: ReapClaim): Promise<boolean> => {
+  mockClaimDeadStream.mockResolvedValue(row);
+  return materializeInterruptedStream({ messageId: row.messageId });
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -238,11 +283,14 @@ beforeEach(() => {
   // `parts` fallback exactly as it did, and the frame path is opted into per-test.
   mockFrameSelectOrderBy.mockResolvedValue([]);
   mockDeleteWhere.mockResolvedValue(undefined);
+  // The frame release re-verifies the claim before deleting. Held by default; the case that
+  // matters overrides it.
+  mockIsReapClaimStillHeld.mockResolvedValue(true);
 });
 
 describe('materializeInterruptedStream — table routing', () => {
   it('given a page-chat channelId, writes to messages with no human author', async () => {
-    await materializeInterruptedStream(pageRow({ channelId: 'page-abc123' }));
+    await materialize(pageRow({ channelId: 'page-abc123' }));
 
     // Both kinds of channel land in `messages` — one table since PR 15
     // dropped `chat_messages`. The routing that survives is in the VALUES, not
@@ -265,7 +313,7 @@ describe('materializeInterruptedStream — table routing', () => {
   });
 
   it('given a global-assistant channelId, writes to messages with the row owner as userId', async () => {
-    await materializeInterruptedStream(globalRow({ channelId: 'user:user-a:global', userId: 'user-a' }));
+    await materialize(globalRow({ channelId: 'user:user-a:global', userId: 'user-a' }));
 
     assert({
       given: 'a provably-dead global-assistant stream row',
@@ -287,7 +335,7 @@ describe('materializeInterruptedStream — table routing', () => {
   // reprocessed") — a message reparented into a different conversation before this sweep ran
   // must not be left pointing at a stale conversationId after materialization.
   it('re-syncs conversationId on the conflict update, same as the normal terminal-write path', async () => {
-    await materializeInterruptedStream(pageRow({ conversationId: 'conv-fresh' }));
+    await materialize(pageRow({ conversationId: 'conv-fresh' }));
 
     const setClause = mockOnConflictDoUpdate.mock.calls[0][0].set;
     assert({
@@ -302,7 +350,7 @@ describe('materializeInterruptedStream — table routing', () => {
   // row no backfill re-derives — so a second INSERT appearing here would be a
   // resurrected legacy writer silently forking the record.
   it('writes the materialized page reply ONCE, to the one message table', async () => {
-    await materializeInterruptedStream(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
+    await materialize(pageRow({ channelId: 'page-abc123', conversationId: 'conv-1' }));
 
     assert({
       given: 'a materialized page-chat reply',
@@ -336,7 +384,7 @@ describe('materializeInterruptedStream — table routing', () => {
   it('given the CAS wrote nothing, writes nothing else either', async () => {
     mockReturning.mockResolvedValue([]);
 
-    await materializeInterruptedStream(pageRow());
+    await materialize(pageRow());
 
     assert({
       given: 'a materialization whose compare-and-swap matched no streaming row',
@@ -349,7 +397,7 @@ describe('materializeInterruptedStream — table routing', () => {
   // Unchanged by the merge: the global assistant's table has always been
   // `messages`, and a duplicate insert would be a real bug.
   it('given a global-assistant row, writes messages exactly once', async () => {
-    await materializeInterruptedStream(globalRow());
+    await materialize(globalRow());
 
     assert({
       given: 'a materialized global-assistant reply',
@@ -368,7 +416,7 @@ describe('materializeInterruptedStream — content from the parts snapshot', () 
   // materialized reply with tool calls/file parts would silently degrade to flat text forever
   // (it's a terminal write — no later pass ever fixes it).
   it('builds message content via the same structured-content pipeline execute-end/onFinish use, not plain concatenated text', async () => {
-    await materializeInterruptedStream(pageRow({ parts: [textPart('Hello'), textPart(' world')] }));
+    await materialize(pageRow({ parts: [textPart('Hello'), textPart(' world')] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     const parsed = JSON.parse(values.content as string);
@@ -381,7 +429,7 @@ describe('materializeInterruptedStream — content from the parts snapshot', () 
   });
 
   it('given parts that include a tool call, serializes toolCalls/toolResults as JSON rather than leaving them null', async () => {
-    await materializeInterruptedStream(pageRow({ parts: [textPart('Here'), toolCallPart()] }));
+    await materialize(pageRow({ parts: [textPart('Here'), toolCallPart()] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -393,7 +441,7 @@ describe('materializeInterruptedStream — content from the parts snapshot', () 
   });
 
   it('given no parts at all, still writes an interrupted row with empty content', async () => {
-    await materializeInterruptedStream(pageRow({ parts: [] }));
+    await materialize(pageRow({ parts: [] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -416,7 +464,7 @@ describe('materializeInterruptedStream — the #2022 invariant (compare-and-swap
   };
 
   it('the onConflictDoUpdate guard requires the row to still be streaming', async () => {
-    await materializeInterruptedStream(pageRow());
+    await materialize(pageRow());
 
     assert({
       given: 'any materialization attempt',
@@ -474,7 +522,7 @@ describe('materializeInterruptedStream — the #2022 invariant (compare-and-swap
 describe('materializeInterruptedStream — the defensive insert-if-missing path', () => {
   it('uses the stream\'s actual start time, not reap time, as createdAt for a newly-inserted row', async () => {
     const startedAt = new Date('2026-07-15T01:23:45.000Z');
-    await materializeInterruptedStream(pageRow({ startedAt }));
+    await materialize(pageRow({ startedAt }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -488,11 +536,11 @@ describe('materializeInterruptedStream — the defensive insert-if-missing path'
 
 describe('materializeInterruptedStream — settling the session row', () => {
   it('reports true when both the message write and the session settle succeed', async () => {
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
+    await expect(materialize(pageRow())).resolves.toBe(true);
   });
 
   it('settles ai_stream_sessions terminal only after the message write succeeds', async () => {
-    await materializeInterruptedStream(pageRow({ messageId: 'msg-settle' }));
+    await materialize(pageRow({ messageId: 'msg-settle' }));
 
     const written = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
     assert({
@@ -502,26 +550,58 @@ describe('materializeInterruptedStream — settling the session row', () => {
       expected: { status: 'aborted', parts: [], rawPartsCount: 0, abortRequestedAt: null },
     });
 
-    const conds = (mockUpdateWhere.mock.calls[0][0] as { conds: Array<{ field?: string; value?: unknown }> }).conds;
+    const conds = (mockUpdateWhere.mock.calls[0][0] as { conds: Array<{ field?: string; value?: unknown; lteValue?: unknown }> }).conds;
     assert({
       given: 'the session-row settle write',
       should: 'only ever touch a row still marked streaming',
       actual: conds.find((c) => c.field === 'ai_stream_sessions.status')?.value,
       expected: 'streaming',
     });
+
+    // THE FENCE. `status='streaming'` alone cannot stop this write reaching a LIVE stream — a
+    // live owner has not changed its status, so a misjudging reaper wins that CAS every time.
+    // These two clauses are the ones that can say no, and losing either silently re-opens the
+    // N>1 race: the settle writes `aborted, parts: []` over a running generation, which then
+    // vanishes from /active-streams, cannot be joined, and cannot be Stopped.
+    assert({
+      given: 'the session-row settle write',
+      should: 'carry the reap claim token and the heartbeat-at-claim bound',
+      actual: {
+        claim: conds.find((c) => c.field === 'ai_stream_sessions.reap_claimed_at')?.value,
+        heartbeatBound: conds.find((c) => c.field === 'ai_stream_sessions.last_heartbeat_at')?.lteValue,
+      },
+      expected: { claim: CLAIMED_AT, heartbeatBound: HEARTBEAT_AT_CLAIM },
+    });
   });
 
-  // The conditional UPDATE (`WHERE messageId = X AND status = 'streaming'`) does NOT throw when
-  // it matches zero rows — it succeeds and changes nothing. That happens when a concurrent reap
-  // (another instance's takeover, or a second sweep racing this one) already settled this exact
-  // row first. Reporting `true` here would credit THIS call with settling a row someone else
-  // already handled, and — more importantly — would mask the case where the row was never
-  // settled by anyone (see the `rowCount: 0` semantics matching compaction-repository.ts's own
-  // conditional-update pattern).
-  it('reports false when the session-row update matches zero rows (a concurrent reap already settled it)', async () => {
+  it('given no claim (the row settled itself, or a peer holds it), does nothing at all', async () => {
+    mockClaimDeadStream.mockResolvedValue(null);
+
+    const settled = await materializeInterruptedStream({ messageId: 'msg-unclaimable' });
+
+    assert({
+      given: 'a reap that could not win the claim',
+      should: 'write no message, settle no row, and report false',
+      actual: {
+        settled,
+        messageWrites: mockInsert.mock.calls.length,
+        sessionWrites: mockUpdateSet.mock.calls.length,
+      },
+      expected: { settled: false, messageWrites: 0, sessionWrites: 0 },
+    });
+  });
+
+  // The fenced UPDATE does NOT throw when it matches zero rows — it succeeds and changes
+  // nothing. Two things produce that, and both are correct outcomes: the row already left
+  // 'streaming' by another path, or the FENCE said no (the claim was superseded, or the owner
+  // beat again between the claim committing and this write and was never dead at all).
+  // Reporting `true` would credit this call with a settle that never happened, and would mask
+  // the case that most needs the next sweep to retry (see the `rowCount: 0` semantics matching
+  // compaction-repository.ts's own conditional-update pattern).
+  it('reports false when the session-row update matches zero rows (already settled, or fenced off)', async () => {
     mockUpdateWhere.mockResolvedValue({ rowCount: 0 });
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
     // The message write still succeeded and is not itself an error — only the session-settle
     // half is "unsettled", so this is not a warn-worthy failure the way a thrown error is.
     expect(mockLoggerWarn).not.toHaveBeenCalled();
@@ -530,13 +610,13 @@ describe('materializeInterruptedStream — settling the session row', () => {
   it('defensively treats a missing rowCount (driver/mock returns undefined) as zero, not as settled', async () => {
     mockUpdateWhere.mockResolvedValue({});
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
   });
 
   it('does not settle the session row when the message write fails', async () => {
     mockReturning.mockRejectedValue(new Error('db down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
 
     expect(mockUpdateSet).not.toHaveBeenCalled();
     assert({
@@ -550,14 +630,14 @@ describe('materializeInterruptedStream — settling the session row', () => {
   it('logs but does not throw when the session-row settle itself fails, and reports false (not truly reconciled)', async () => {
     mockUpdateWhere.mockRejectedValue(new Error('db down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalled();
   });
 
   it('logs a non-Error message-write rejection without throwing, and reports false', async () => {
     mockReturning.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ error: 'unknown' }),
@@ -567,7 +647,7 @@ describe('materializeInterruptedStream — settling the session row', () => {
   it('logs a non-Error session-settle rejection without throwing, and reports false', async () => {
     mockUpdateWhere.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ error: 'unknown' }),
@@ -577,7 +657,7 @@ describe('materializeInterruptedStream — settling the session row', () => {
 
 describe('materializeInterruptedStream — broadcast', () => {
   it('broadcasts stream_complete with aborted:true after a successful materialization', async () => {
-    await materializeInterruptedStream(pageRow({ messageId: 'msg-3', channelId: 'page-xyz', conversationId: 'conv-3' }));
+    await materialize(pageRow({ messageId: 'msg-3', channelId: 'page-xyz', conversationId: 'conv-3' }));
 
     assert({
       given: 'a materialized interrupted stream',
@@ -590,7 +670,7 @@ describe('materializeInterruptedStream — broadcast', () => {
   it('does not broadcast when the message write failed (nothing was actually materialized)', async () => {
     mockReturning.mockRejectedValue(new Error('db down'));
 
-    await materializeInterruptedStream(pageRow());
+    await materialize(pageRow());
 
     expect(mockBroadcastAiStreamComplete).not.toHaveBeenCalled();
   });
@@ -598,7 +678,7 @@ describe('materializeInterruptedStream — broadcast', () => {
   it('logs but does not throw when the broadcast itself fails — a broadcast failure alone does not undo an otherwise-successful materialization', async () => {
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
+    await expect(materialize(pageRow())).resolves.toBe(true);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining('broadcast failed'),
       expect.objectContaining({ error: 'socket down' }),
@@ -608,7 +688,7 @@ describe('materializeInterruptedStream — broadcast', () => {
   it('logs a non-Error broadcast rejection without throwing', async () => {
     mockBroadcastAiStreamComplete.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
+    await expect(materialize(pageRow())).resolves.toBe(true);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining('broadcast failed'),
       expect.objectContaining({ error: 'unknown' }),
@@ -621,7 +701,7 @@ describe('materializeInterruptedStream — never throws', () => {
     mockUpdateWhere.mockRejectedValue(new Error('db down'));
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    await expect(materialize(pageRow())).resolves.toBe(false);
   });
 });
 
@@ -655,7 +735,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given a materialized page-chat reply in a shared conversation, fires notifyMentionedUsers exactly once with the finalize path\'s own argument shape', async () => {
     gateLookups();
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).toHaveBeenCalledTimes(1);
@@ -674,7 +754,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   });
 
   it('given a global-assistant row, never notifies and never even runs the page/conversation lookups (global conversations have no page mention surface)', async () => {
-    await materializeInterruptedStream(globalRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(globalRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -685,7 +765,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
     gateLookups();
     mockReturning.mockResolvedValue([]);
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -695,7 +775,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
     gateLookups();
     mockReturning.mockRejectedValue(new Error('db down'));
 
-    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(false);
+    await expect(materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(false);
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -704,7 +784,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given an empty recovered reply (no parts survived), does not notify — mirrors the finalize path\'s content.trim() gate', async () => {
     gateLookups();
 
-    await materializeInterruptedStream(pageRow({ parts: [] }));
+    await materialize(pageRow({ parts: [] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -714,7 +794,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given the page row is gone or trashed (findById filters both), does not notify', async () => {
     gateLookups({ page: null });
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -723,7 +803,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given the conversation row is missing, fails closed and does not notify — same as the route treating a missing row as private', async () => {
     gateLookups({ conversation: null });
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -732,7 +812,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given the conversation is not shared, does not notify — a private conversation\'s reply must not page other drive members', async () => {
     gateLookups({ conversation: { isShared: false } });
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -741,7 +821,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given the gate lookup rejects, warns (best-effort, operator-visible) and the materialization result is unaffected', async () => {
     mockFindPageById.mockRejectedValue(new Error('lookup down'));
 
-    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await expect(materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
@@ -754,7 +834,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   it('given the gate lookup rejects with a non-Error value, still warns without throwing', async () => {
     mockFindPageById.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await expect(materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
     await flushNotify();
 
     expect(mockLoggerWarn).toHaveBeenCalledWith(
@@ -767,7 +847,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
     gateLookups();
     mockNotifyMentionedUsers.mockRejectedValue(new Error('notify boom'));
 
-    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await expect(materialize(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
     await flushNotify();
 
     expect(mockLoggerWarn).toHaveBeenCalledWith(
@@ -782,7 +862,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
 // leaving the recovered conversation sorted stale in the history list.
 describe('materializeInterruptedStream — conversations.lastMessageAt recompute (#2153)', () => {
   it('given a global-assistant row, recomputes the conversation lastMessageAt after the message upsert', async () => {
-    await materializeInterruptedStream(globalRow({ conversationId: 'conv-2' }));
+    await materialize(globalRow({ conversationId: 'conv-2' }));
 
     assert({
       given: 'a materialized global-assistant reply',
@@ -793,7 +873,7 @@ describe('materializeInterruptedStream — conversations.lastMessageAt recompute
   });
 
   it('given a page-chat row, does not touch the global conversations table', async () => {
-    await materializeInterruptedStream(pageRow());
+    await materialize(pageRow());
 
     assert({
       given: 'a materialized page-chat reply',
@@ -806,7 +886,7 @@ describe('materializeInterruptedStream — conversations.lastMessageAt recompute
   it('a recompute failure degrades like a failed message write — row left retryable, session not settled', async () => {
     mockRecomputeLastMessageAt.mockRejectedValueOnce(new Error('recompute down'));
 
-    const settled = await materializeInterruptedStream(globalRow());
+    const settled = await materialize(globalRow());
 
     assert({
       given: 'a lastMessageAt recompute that throws mid-materialization',
@@ -867,7 +947,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
       frameRow(4, RICH_TURN.slice(4)),
     ]);
 
-    await materializeInterruptedStream(
+    await materialize(
       pageRow({ parts: [textPart('a much staler debounced snapshot')] }),
     );
 
@@ -883,7 +963,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
   it('given a frame log, preserves the fidelity a live client saw — reasoning and tool parts, not just text', async () => {
     mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
 
-    await materializeInterruptedStream(pageRow({ parts: [] }));
+    await materialize(pageRow({ parts: [] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     const persisted = JSON.parse(values.content as string) as { textParts?: unknown[] };
@@ -905,7 +985,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
   it('given NO frame log (a stream started by an older worker), falls back to the parts snapshot', async () => {
     mockFrameSelectOrderBy.mockResolvedValue([]);
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+    await materialize(pageRow({ parts: [textPart('the debounced snapshot')] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -923,7 +1003,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
     // unconditionally would materialize the truncated one.
     mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN.slice(0, 2))]);
 
-    await materializeInterruptedStream(
+    await materialize(
       pageRow({ parts: [textPart('a far more complete snapshot')], rawPartsCount: 900 }),
     );
 
@@ -939,7 +1019,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
   it('given a frame log at least as long as the checkpoint, prefers the log', async () => {
     mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
 
-    await materializeInterruptedStream(
+    await materialize(
       pageRow({ parts: [textPart('the staler snapshot')], rawPartsCount: RICH_TURN.length }),
     );
 
@@ -955,7 +1035,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
   it('given a row that does not project rawPartsCount, trusts the log rather than crashing', async () => {
     mockFrameSelectOrderBy.mockResolvedValue([frameRow(0, RICH_TURN)]);
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart('snapshot')], rawPartsCount: undefined }));
+    await materialize(pageRow({ parts: [textPart('snapshot')], rawPartsCount: undefined }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -969,7 +1049,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
   it('given a frame-log read that fails, falls back to the parts snapshot rather than losing the reply', async () => {
     mockFrameSelectOrderBy.mockRejectedValue(new Error('frames table unreachable'));
 
-    const settled = await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+    const settled = await materialize(pageRow({ parts: [textPart('the debounced snapshot')] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -991,7 +1071,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
       frameRow(3, [{ type: 'text-delta', id: 't1', delta: ' AFTER the gap' }]),
     ]);
 
-    await materializeInterruptedStream(pageRow({ parts: [] }));
+    await materialize(pageRow({ parts: [] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -1007,7 +1087,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
       frameRow(7, [{ type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'orphan tail' }]),
     ]);
 
-    await materializeInterruptedStream(pageRow({ parts: [textPart('the debounced snapshot')] }));
+    await materialize(pageRow({ parts: [textPart('the debounced snapshot')] }));
 
     const values = mockInsertValues.mock.calls[0][0];
     assert({
@@ -1028,7 +1108,7 @@ describe('materializeInterruptedStream — durable frame log', () => {
  */
 describe('materializeInterruptedStream — frame retention', () => {
   it('given a confirmed message write, releases that message\'s frames', async () => {
-    await materializeInterruptedStream(pageRow({ messageId: 'msg-released' }));
+    await materialize(pageRow({ messageId: 'msg-released' }));
 
     assert({
       given: 'a materialization whose message write succeeded',
@@ -1041,7 +1121,7 @@ describe('materializeInterruptedStream — frame retention', () => {
   it('given a FAILED message write, leaves the frames alone so the next sweep can still recover', async () => {
     mockReturning.mockRejectedValueOnce(new Error('message write failed'));
 
-    const settled = await materializeInterruptedStream(pageRow());
+    const settled = await materialize(pageRow());
 
     assert({
       given: 'a materialization whose message write threw',
@@ -1051,10 +1131,34 @@ describe('materializeInterruptedStream — frame retention', () => {
     });
   });
 
+  it('releases the frames under the REAP CLAIM, not by bare messageId', async () => {
+    await materialize(pageRow({ messageId: 'msg-fenced' }));
+
+    assert({
+      given: 'a materialization releasing its message\'s frames',
+      should: 'verify the claim it holds before deleting — the local `writers` check is empty on every instance but the generator\'s',
+      actual: mockIsReapClaimStillHeld.mock.calls.map(([c]) => (c as ReapClaim).messageId),
+      expected: ['msg-fenced'],
+    });
+  });
+
+  it('given a claim that no longer holds, does not delete the frames', async () => {
+    mockIsReapClaimStillHeld.mockResolvedValue(false);
+
+    await materialize(pageRow({ messageId: 'msg-still-generating' }));
+
+    assert({
+      given: 'a reap whose claim was superseded before the frame delete ran',
+      should: 'leave the frame log intact — it belongs to a generation that is still writing it',
+      actual: mockDeleteWhere.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   it('given a frame delete that fails, still settles the session row', async () => {
     mockDeleteWhere.mockRejectedValue(new Error('delete failed'));
 
-    const settled = await materializeInterruptedStream(pageRow());
+    const settled = await materialize(pageRow());
 
     assert({
       given: 'a retention delete that throws after a confirmed message write',

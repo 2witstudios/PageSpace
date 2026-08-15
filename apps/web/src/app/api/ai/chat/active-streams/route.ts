@@ -173,15 +173,11 @@ export async function GET(request: Request) {
     for (const row of authorized) {
       if (isStreamRowLive(row, now)) continue;
       if (!isProvablyDead(row, now)) continue;
-      void materializeInterruptedStream({
-        messageId: row.messageId,
-        channelId,
-        conversationId: row.conversationId,
-        userId: row.userId,
-        parts: row.parts,
-        rawPartsCount: row.rawPartsCount,
-        startedAt: row.startedAt,
-      });
+      // messageId only: the materializer takes an atomic reap claim on the row and acts on what
+      // that claim returns. This route's own copy of the row is up to a request old and — at
+      // N>1 — was judged dead against THIS instance's clock, which is precisely the pair of
+      // weaknesses the claim's WHERE clause re-checks on Postgres's. See stream-reap-claim.ts.
+      void materializeInterruptedStream({ messageId: row.messageId });
     }
 
     return NextResponse.json({

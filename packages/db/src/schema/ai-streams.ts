@@ -119,6 +119,36 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   // anyone holding a messageId. (The one deliberate exception, `markAbortRequestedAsOwner`, is
   // the takeover path, and it is documented at its definition.)
   abortRequestedAt: timestamp('abort_requested_at', { mode: 'date' }),
+
+  // THE REAP FENCE. Which instance is currently allowed to destroy this row's content.
+  //
+  // Reaping a dead stream is two destructive writes — settle the row to 'aborted' with
+  // `parts: []`, and DELETE the durable frame log — and until this column existed the only
+  // thing standing between them and a LIVE generation was a process-local Map
+  // (`frame-log-writer.ts`'s `writers`) plus a liveness predicate evaluated against the
+  // READING instance's clock. Both fail at N>1. The Map is empty on every instance but the
+  // generator's, so instance B's reap sails past the refusal that exists to stop it; and two
+  // machines' clocks drift, so B can compute "provably dead" for a row A is still beating on.
+  // The result is not a cosmetic race: A's frames are destroyed mid-generation, B settles the
+  // row to 'aborted', and the live stream becomes invisible to /active-streams, unjoinable,
+  // and un-Stoppable (`markAbortRequested` carries `eq(status,'streaming')`) — while it keeps
+  // calling tools and keeps billing.
+  //
+  // So the eligibility decision is moved INTO a WHERE clause that Postgres evaluates at write
+  // time: ONE clock, ONE statement, and the check and the act are the same act. See
+  // `claimDeadStream` (apps/web/src/lib/ai/core/stream-reap-claim.ts). The winner's
+  // `reap_claimed_at` value is its token, and every destructive write it then issues carries
+  // that value as a predicate — so a claim that was superseded (or a heartbeat that landed in
+  // between) makes the write match zero rows instead of landing on a live stream.
+  //
+  // NULLABLE AND SELF-EXPIRING. A crashed reaper must not wedge the row forever, so a claim
+  // older than REAP_CLAIM_TTL_MS is re-claimable by the next sweep. The row deliberately stays
+  // 'streaming' for the whole reap, which is what makes that retry possible.
+  //
+  // NOT an owner token, and a previous design that made it one was wrong: the reap only fires
+  // once the claimant has already concluded the owner is dead, so recording who the owner WAS
+  // tells the claimant nothing it did not already believe.
+  reapClaimedAt: timestamp('reap_claimed_at', { mode: 'date' }),
 }, (table) => ({
   channelStatusIdx: index('ai_stream_sessions_channel_status_idx').on(table.channelId, table.status),
   // Per-conversation in-flight lookup for the takeover guard in POST /api/ai/chat.

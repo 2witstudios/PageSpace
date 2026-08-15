@@ -1,10 +1,11 @@
 import { describe, it, beforeEach, afterEach, vi } from 'vitest';
 import { assert } from './riteway';
 
-const { mockAppendFrameBatch, mockDeleteFrames, mockLoggerWarn } = vi.hoisted(() => ({
+const { mockAppendFrameBatch, mockDeleteFrames, mockLoggerWarn, mockIsReapClaimStillHeld } = vi.hoisted(() => ({
   mockAppendFrameBatch: vi.fn(),
   mockDeleteFrames: vi.fn(),
   mockLoggerWarn: vi.fn(),
+  mockIsReapClaimStillHeld: vi.fn(),
 }));
 
 /**
@@ -19,6 +20,15 @@ vi.mock('../frame-log', () => ({
   deleteFrames: mockDeleteFrames,
 }));
 
+/**
+ * The reap claim's DB verification. Mocked at the module boundary because these cases are about
+ * what the RELEASE does with the answer, not about the SQL that produces it — `stream-reap-claim`
+ * has its own suite for the predicate.
+ */
+vi.mock('../stream-reap-claim', () => ({
+  isReapClaimStillHeld: mockIsReapClaimStillHeld,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
@@ -26,6 +36,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import type { UIMessageChunk } from 'ai';
 import { openStreamChannel } from '../stream-channel';
 import { startFrameLogWriter, releaseFramesForMessage } from '../frame-log-writer';
+import type { ReapClaim } from '../stream-reap-claim';
 import { FRAME_FLUSH_MAX_FRAMES, FRAME_FLUSH_INTERVAL_MS } from '../frame-log-batching';
 
 const chunk = (value: unknown): UIMessageChunk => value as UIMessageChunk;
@@ -452,11 +463,28 @@ describe('startFrameLogWriter — error paths end the writer', () => {
   });
 });
 
+const claim = (messageId: string): ReapClaim => ({
+  messageId,
+  claimedAt: new Date('2026-08-15T00:02:00.000Z'),
+  heartbeatAtClaim: new Date('2026-08-15T00:00:00.000Z'),
+  channelId: 'page-abc',
+  conversationId: 'conv-1',
+  userId: 'user-a',
+  parts: [],
+  rawPartsCount: 0,
+  startedAt: new Date('2026-08-15T00:00:00.000Z'),
+});
+
+const REAP = (messageId: string) => ({ kind: 'reap-claim' as const, claim: claim(messageId) });
+const OWN = { kind: 'own-superseded-attempt' as const };
+
 describe('releaseFramesForMessage — the BY-NAME release, for callers holding no writer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAppendFrameBatch.mockResolvedValue(true);
     mockDeleteFrames.mockResolvedValue(true);
+    // Default: the claim still holds. The cases that matter override it.
+    mockIsReapClaimStillHeld.mockResolvedValue(true);
   });
 
   it('given a LIVE local writer, refuses to delete', async () => {
@@ -472,7 +500,7 @@ describe('releaseFramesForMessage — the BY-NAME release, for callers holding n
 
     mockDeleteFrames.mockClear();
     mockAppendFrameBatch.mockClear();
-    await releaseFramesForMessage('msg-still-live');
+    await releaseFramesForMessage('msg-still-live', REAP('msg-still-live'));
 
     assert({
       given: 'a by-name release for a message this process is still generating',
@@ -493,7 +521,7 @@ describe('releaseFramesForMessage — the BY-NAME release, for callers holding n
   });
 
   it('given no local writer (the owning process died elsewhere), deletes', async () => {
-    await releaseFramesForMessage('msg-not-ours');
+    await releaseFramesForMessage('msg-not-ours', REAP('msg-not-ours'));
 
     assert({
       given: 'a messageId this process never generated',
@@ -508,13 +536,82 @@ describe('releaseFramesForMessage — the BY-NAME release, for callers holding n
     await writer.close();
 
     mockDeleteFrames.mockClear();
-    await releaseFramesForMessage('msg-finished');
+    await releaseFramesForMessage('msg-finished', REAP('msg-finished'));
 
     assert({
       given: 'a by-name release after the generation ended normally',
       should: 'delete — the writer left the registry when it stopped being able to write',
       actual: mockDeleteFrames.mock.calls.map(([id]) => id),
       expected: ['msg-finished'],
+    });
+  });
+
+  // ── THE CROSS-INSTANCE HALF ────────────────────────────────────────────────────────────────
+  //
+  // The `writers` check above is process-local, so on every instance BUT the generator's it is
+  // empty and passes. These cases cover what stands in for it there.
+
+  it('given a reap claim that no longer holds, refuses to delete', async () => {
+    mockIsReapClaimStillHeld.mockResolvedValue(false);
+
+    await releaseFramesForMessage('msg-elsewhere', REAP('msg-elsewhere'));
+
+    assert({
+      given: 'a by-name release whose reap claim was superseded (or whose owner beat again)',
+      should: 'delete nothing — on a peer instance this is the ONLY thing between the reap and a live generation\'s log',
+      actual: mockDeleteFrames.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('warns when a release is fenced off, rather than failing silently', async () => {
+    mockIsReapClaimStillHeld.mockResolvedValue(false);
+
+    await releaseFramesForMessage('msg-elsewhere', REAP('msg-elsewhere'));
+
+    assert({
+      given: 'a fenced-off by-name release',
+      should: 'warn — any nonzero count of these in production is a real near-miss on live content',
+      actual: mockLoggerWarn.mock.calls.some(([message]) =>
+        typeof message === 'string' && message.includes('the reap claim no longer holds')),
+      expected: true,
+    });
+  });
+
+  it('given an own-superseded-attempt fence, does not consult the claim at all', async () => {
+    // The pre-abort branch of `createStreamLifecycle`: same process, same request, discarding an
+    // attempt it superseded itself. Its row's heartbeat is seconds old, so a reap claim would
+    // (correctly) refuse — asking for one would make the lifecycle unable to clean up after
+    // itself.
+    await releaseFramesForMessage('msg-pre-aborted', OWN);
+
+    assert({
+      given: 'the generation path discarding its own superseded attempt',
+      should: 'delete without a claim check',
+      actual: {
+        deleted: mockDeleteFrames.mock.calls.map(([id]) => id),
+        claimChecks: mockIsReapClaimStillHeld.mock.calls.length,
+      },
+      expected: { deleted: ['msg-pre-aborted'], claimChecks: 0 },
+    });
+  });
+
+  it('given a LIVE local writer, refuses BEFORE paying for a claim check', async () => {
+    // The local check is the cheapest possible answer and it is authoritative when it fires, so
+    // it must come first: a reap landing on the generating instance costs one Map lookup, not a
+    // round trip.
+    const { channel } = start('msg-local-live');
+    channel.append(toolBoundary);
+    await settle();
+    mockIsReapClaimStillHeld.mockClear();
+
+    await releaseFramesForMessage('msg-local-live', REAP('msg-local-live'));
+
+    assert({
+      given: 'a by-name release for a message this process is still generating',
+      should: 'refuse on the local writer without querying the claim',
+      actual: mockIsReapClaimStillHeld.mock.calls.length,
+      expected: 0,
     });
   });
 });

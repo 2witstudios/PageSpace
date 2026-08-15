@@ -1322,7 +1322,11 @@ describe('createStreamLifecycle — durable frame log wiring', () => {
     await createStreamLifecycle(params({ messageId: 'msg-preaborted' }));
     await flushMicrotasks();
 
-    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-preaborted');
+    // `own-superseded-attempt`, not a reap claim: this is the generation path itself discarding
+    // an attempt it superseded moments ago, in the same request. Its row's heartbeat is seconds
+    // old, so a reap claim would (correctly) refuse and the lifecycle could not clean up after
+    // itself.
+    expect(mockReleaseFrames).toHaveBeenCalledWith('msg-preaborted', { kind: 'own-superseded-attempt' });
   });
 
   it('given a pre-aborted stream, should not start a frame-log writer for a generation that never runs', async () => {
