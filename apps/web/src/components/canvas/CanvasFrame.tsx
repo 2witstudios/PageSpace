@@ -36,8 +36,18 @@ interface CanvasFrameProps {
  * the logged-in app (full session compromise), reading cookies and calling the
  * API with the viewer's session. Likewise no `allow-top-navigation*`, so the
  * frame can never navigate the app's own tab. Guarded by CanvasFrame.test.ts.
+ *
+ * `allow-forms` is present so a canvas <form> behaves here the way it does once
+ * published; without it the author's form silently does nothing while they build
+ * it. It grants no new reach: `form-action` is the actual control, and it is
+ * already `'none'` with no app origin configured, the app origin alone in
+ * baseline mode, and — in site mode — no wider than the `connect-src https:`
+ * that mode already grants.
+ *
+ * Must stay identical to `PREVIEW_SANDBOX_TOKENS` (the response-header twin that
+ * covers direct navigation); a drift guard test asserts it.
  */
-export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 
 /**
  * True if the top-level document has a currently-active (transient) user

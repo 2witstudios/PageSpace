@@ -39,7 +39,7 @@
  * receives this same header and is re-sandboxed, while an external link still
  * opens as a normal working tab.
  */
-export const PREVIEW_SANDBOX_TOKENS = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+export const PREVIEW_SANDBOX_TOKENS = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 
 export function buildPreviewResponseHeaders(csp: string): Readonly<Record<string, string>> | null {
   const policy = csp.trim();

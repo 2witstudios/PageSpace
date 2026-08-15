@@ -157,6 +157,39 @@ describe('GET /api/canvas/[pageId]/preview', () => {
     expect(csp).toMatch(/connect-src[^;]*\bhttps:/);
   });
 
+  /**
+   * Publishing scopes `form-action`/`connect-src` to the app origin so a canvas
+   * <form> can reach the public forms endpoint. The preview must compute the
+   * same policy from the same env, or an author's form silently does nothing
+   * while they build and then works once published.
+   */
+  it('given an app origin in the environment, should scope the preview policy to it too', async () => {
+    const previous = process.env.WEB_APP_URL;
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+    try {
+      const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
+      expect(csp).toContain("form-action 'self' https://app.pagespace.ai");
+      expect(csp).toContain('connect-src https://app.pagespace.ai');
+    } finally {
+      if (previous === undefined) delete process.env.WEB_APP_URL;
+      else process.env.WEB_APP_URL = previous;
+    }
+  });
+
+  it('given no app origin configured, should keep form submission closed', async () => {
+    const prevWeb = process.env.WEB_APP_URL;
+    const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.WEB_APP_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    try {
+      const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
+      expect(csp).toContain("form-action 'none'");
+    } finally {
+      if (prevWeb !== undefined) process.env.WEB_APP_URL = prevWeb;
+      if (prevPublic !== undefined) process.env.NEXT_PUBLIC_APP_URL = prevPublic;
+    }
+  });
+
   it('given a non-siteMode page, should serve the baseline policy', async () => {
     const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
 

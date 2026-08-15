@@ -111,10 +111,19 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  // Same policy the published artifact carries, chosen by the same flag, so the
-  // two cannot drift.
+  // Same policy the published artifact carries, chosen by the same flag and
+  // resolved from the same environment, so the two cannot drift.
+  //
+  // `formActionOrigin` matters even though this is only a preview: publishing
+  // scopes `form-action`/`connect-src` to the app origin so a canvas <form> can
+  // reach the public forms endpoint, and computing it differently here is how an
+  // author ends up with a form that silently does nothing while they build it
+  // and then works once published. Resolved exactly as `publishCanvasPage` does.
+  // Site mode needs no origin — `buildSiteCsp` already permits `form-action`
+  // and `connect-src` to any https host.
+  const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   const headers = buildPreviewResponseHeaders(
-    page.siteMode ? buildSiteCsp() : buildBaselineCsp(),
+    page.siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin),
   );
 
   // FAIL CLOSED. This route runs under middleware `skipCSP`, so the app does not

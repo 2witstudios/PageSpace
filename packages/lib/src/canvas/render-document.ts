@@ -460,9 +460,17 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
   // `cspOverride` still wins: the publish pipelines for DOCUMENT/CODE/SHEET pages
   // pass an explicit `script-src 'none'` policy and must never be widened by a
   // stray siteMode flag on the page they render from.
+  // An explicit override is a whole-contract switch, not merely a different
+  // header. A pipeline asking for `script-src 'none'` is asking for a
+  // locked-down document, so site mode must yield on BOTH halves it controls —
+  // the policy and the CSS sanitizer. Relaxing only the header while still
+  // preserving external `url()`/`@import` would leave author styles able to
+  // reach arbitrary hosts, the exact tracking/exfiltration channel the
+  // document pipeline's sanitizer exists to close.
+  const siteModeApplies = Boolean(siteMode) && !cspOverride;
   const csp = cspOverride ?? (siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin));
 
-  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce, siteMode);
+  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce, siteModeApplies);
   const rawTitle = title && title.trim() ? title : 'Untitled';
   const safeTitle = escapeHtml(rawTitle);
   const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');

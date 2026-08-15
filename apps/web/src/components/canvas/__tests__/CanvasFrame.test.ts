@@ -51,6 +51,12 @@ describe('CANVAS_IFRAME_SANDBOX', () => {
     expect(CANVAS_IFRAME_SANDBOX.split(/\s+/)).not.toContain('allow-same-origin');
   });
 
+  it('given the canvas iframe sandbox, should allow forms so a canvas <form> behaves as it will once published', () => {
+    // form-action is the actual control (see the constant's doc); this token
+    // only decides whether the form is submittable at all.
+    expect(CANVAS_IFRAME_SANDBOX.split(/\s+/)).toContain('allow-forms');
+  });
+
   it('given the canvas iframe sandbox, should run author JS in an opaque origin and allow new-tab links', () => {
     const tokens = CANVAS_IFRAME_SANDBOX.split(/\s+/);
     expect(tokens).toContain('allow-scripts');
