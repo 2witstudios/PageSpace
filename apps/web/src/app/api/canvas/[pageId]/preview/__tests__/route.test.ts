@@ -41,6 +41,10 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 const request = () => new Request('http://localhost/api/canvas/page-1/preview');
 const context = (pageId = 'page-1') => ({ params: Promise.resolve({ pageId }) });
 
+/** A CSP as its list of whole directives, so two policies compare exactly. */
+const directivesOf = (policy: string) =>
+  policy.split(';').map((directive) => directive.trim()).filter(Boolean);
+
 const canvasPage = (over: Record<string, unknown> = {}) => ({
   id: 'page-1',
   title: 'Welcome',
@@ -228,8 +232,12 @@ describe('GET /api/canvas/[pageId]/preview', () => {
       expect(meta).not.toBe('');
       // The header adds embedding/sandbox directives a <meta> cannot carry; every
       // directive the meta DOES declare must appear in the header unchanged.
-      for (const directive of meta.split(';').map((d) => d.trim()).filter(Boolean)) {
-        expect(header).toContain(directive);
+      // Compared whole, not as a substring: `connect-src https://app.pagespace.ai`
+      // is a substring of `connect-src https://app.pagespace.ai.evil`, so a
+      // substring check would call a widened header identical.
+      const headerDirectives = directivesOf(header);
+      for (const directive of directivesOf(meta)) {
+        expect(headerDirectives).toContain(directive);
       }
     } finally {
       if (previous === undefined) delete process.env.WEB_APP_URL;

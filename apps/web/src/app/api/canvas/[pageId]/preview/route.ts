@@ -158,6 +158,13 @@ export async function GET(
     // of every policy delivered, so a header that permits `form-action` while
     // the meta still says `'none'` is inert. Ignored under siteMode, which
     // permits any https origin without needing one.
+    //
+    // Passing the already-built policy as `cspOverride` would make the two
+    // identical by construction, but an override is a whole-contract switch:
+    // it also turns OFF site mode's CSS handling, rewriting the external
+    // `url()`/`@import` values a site-mode page is allowed to keep. Same
+    // inputs, two calls — held together by the meta/header invariant test in
+    // this route's suite.
     formActionOrigin,
   });
 
