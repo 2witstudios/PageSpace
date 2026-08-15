@@ -1,44 +1,76 @@
 import { create } from 'zustand';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
-import { isCanonicalBinding, isMacPlatform, keyFromCode } from '@/lib/hotkeys/binding';
+import { isCanonicalBinding, isMacPlatform, keyFromCode, migrateLegacyBinding } from '@/lib/hotkeys/binding';
 
 interface HotkeyBinding {
   hotkeyId: string;
   binding: string;
 }
 
+/** A stored binding rewritten into the canonical form, to be persisted. */
+interface MigratedBinding {
+  hotkeyId: string;
+  binding: string;
+}
+
 interface HotkeyState {
   userBindings: Map<string, string>;
-  /** Hotkey IDs whose stored binding was stale and got dropped on load. */
-  invalidBindings: string[];
+  /**
+   * Hotkey IDs whose stored binding could not be salvaged and fell back to the
+   * default. Kept until the user re-binds or dismisses it, so the notice
+   * survives the cleanup that removes the row.
+   */
+  resetHotkeys: string[];
+  /** Bindings rewritten on load; the caller persists these. */
+  migratedBindings: MigratedBinding[];
   loaded: boolean;
   setUserBindings: (bindings: HotkeyBinding[]) => void;
   updateBinding: (hotkeyId: string, binding: string) => void;
   removeBinding: (hotkeyId: string) => void;
+  clearMigratedBindings: () => void;
+  dismissResetNotice: () => void;
   reset: () => void;
 }
 
 export const useHotkeyStore = create<HotkeyState>((set) => ({
   userBindings: new Map(),
-  invalidBindings: [],
+  resetHotkeys: [],
+  migratedBindings: [],
   loaded: false,
 
   setUserBindings: (bindings) => {
     const map = new Map<string, string>();
-    const invalid: string[] = [];
+    const wasReset: string[] = [];
+    const migrated: MigratedBinding[] = [];
 
     for (const { hotkeyId, binding } of bindings) {
-      // An empty binding means "disabled" and is intentional. Anything else that
-      // isn't canonical was written by the old capture code and can never match
-      // a real key event — drop it so the default takes over again.
-      if (binding !== '' && !isCanonicalBinding(binding)) {
-        invalid.push(hotkeyId);
+      // An empty binding means "disabled" and is intentional.
+      if (binding === '' || isCanonicalBinding(binding)) {
+        map.set(hotkeyId, binding);
         continue;
       }
-      map.set(hotkeyId, binding);
+
+      // Written by the old `e.key` capture. Shifted punctuation ("Ctrl+Shift+?")
+      // used to match and is rewritten to the physical key it stands for; a
+      // binding that could never match (an Option-composed letter) is dropped so
+      // the default takes over.
+      const rewritten = migrateLegacyBinding(binding);
+      if (rewritten) {
+        map.set(hotkeyId, rewritten);
+        migrated.push({ hotkeyId, binding: rewritten });
+      } else {
+        wasReset.push(hotkeyId);
+      }
     }
 
-    set({ userBindings: map, invalidBindings: invalid, loaded: true });
+    set((state) => ({
+      userBindings: map,
+      // Accumulate: cleanup removes the row, so a later load sees nothing wrong
+      // and would otherwise erase the notice before the user ever reads it.
+      resetHotkeys: [...new Set([...state.resetHotkeys, ...wasReset])],
+      migratedBindings: migrated,
+      loaded: true,
+    }));
   },
 
   updateBinding: (hotkeyId, binding) => {
@@ -47,7 +79,8 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
       newMap.set(hotkeyId, binding);
       return {
         userBindings: newMap,
-        invalidBindings: state.invalidBindings.filter((id) => id !== hotkeyId),
+        // The user has set this one again — the notice has served its purpose.
+        resetHotkeys: state.resetHotkeys.filter((id) => id !== hotkeyId),
       };
     });
   },
@@ -56,15 +89,20 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
     set((state) => {
       const newMap = new Map(state.userBindings);
       newMap.delete(hotkeyId);
-      return {
-        userBindings: newMap,
-        invalidBindings: state.invalidBindings.filter((id) => id !== hotkeyId),
-      };
+      return { userBindings: newMap };
     });
   },
 
+  clearMigratedBindings: () => {
+    set({ migratedBindings: [] });
+  },
+
+  dismissResetNotice: () => {
+    set({ resetHotkeys: [] });
+  },
+
   reset: () => {
-    set({ userBindings: new Map(), invalidBindings: [], loaded: false });
+    set({ userBindings: new Map(), resetHotkeys: [], migratedBindings: [], loaded: false });
   },
 }));
 
@@ -85,9 +123,15 @@ export function getEffectiveBinding(hotkeyId: string): string {
   return resolvePlatformBinding(definition.defaultBinding);
 }
 
-/** Rewrite `Meta` to `Ctrl` in a default binding when not on a Mac. */
-export function resolvePlatformBinding(binding: string): string {
-  if (!binding || isMacPlatform()) return binding;
+/**
+ * Rewrite `Meta` to `Ctrl` in a default binding when not on a Mac.
+ *
+ * `isMac` is explicit for render paths: the server has no `navigator`, so
+ * detecting the platform during render would produce different markup on the
+ * server and the client. Callers that render pass the post-mount value.
+ */
+export function resolvePlatformBinding(binding: string, isMac = isMacPlatform()): string {
+  if (!binding || isMac) return binding;
   if (!binding.startsWith('Meta+')) return binding;
   return `Ctrl+${binding.slice('Meta+'.length)}`;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { ArrowLeft, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,23 +9,27 @@ import { useHotkeyPreferences, updateHotkeyPreference, deleteHotkeyPreference } 
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
 import { getEffectiveBinding, resolvePlatformBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
-import {
-  RESERVED_BINDINGS,
-  formatBindingForDisplay,
-  isMacPlatform,
-} from '@/lib/hotkeys/binding';
+import { RESERVED_BINDINGS, formatBindingForDisplay } from '@/lib/hotkeys/binding';
+import { useIsMac } from '@/hooks/useIsMac';
 import { toast } from 'sonner';
 
 export default function HotkeysSettingsPage() {
   const router = useRouter();
   const { isLoading, mutate } = useHotkeyPreferences();
   const userBindings = useHotkeyStore((s) => s.userBindings);
-  const invalidBindings = useHotkeyStore((s) => s.invalidBindings);
+  const resetHotkeys = useHotkeyStore((s) => s.resetHotkeys);
+  const dismissResetNotice = useHotkeyStore((s) => s.dismissResetNotice);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const isMac = useMemo(() => isMacPlatform(), []);
+  const isMac = useIsMac();
 
   const hotkeysByCategory = getHotkeysByCategory();
   const categories = Object.keys(hotkeysByCategory) as HotkeyCategory[];
+
+  // Name the shortcuts in the notice — "one shortcut" leaves the user hunting.
+  const resetLabels = resetHotkeys
+    .map((id) => HOTKEY_REGISTRY.find((h) => h.id === id)?.label ?? id)
+    .map((label) => `"${label}"`)
+    .join(', ');
 
   function detectConflict(hotkeyId: string, newBinding: string): string | null {
     if (!newBinding) return null;
@@ -92,12 +96,17 @@ export default function HotkeysSettingsPage() {
         <p className="text-muted-foreground">
           Customize keyboard shortcuts for common actions. Click a shortcut to edit it.
         </p>
-        {invalidBindings.length > 0 && (
-          <p className="mt-3 text-sm text-muted-foreground">
-            {invalidBindings.length === 1 ? 'One shortcut was' : `${invalidBindings.length} shortcuts were`}{' '}
-            saved in a format that could never be triggered and {invalidBindings.length === 1 ? 'has' : 'have'}{' '}
-            been restored to the default. Set {invalidBindings.length === 1 ? 'it' : 'them'} again below.
-          </p>
+        {resetHotkeys.length > 0 && (
+          <div className="mt-3 flex items-start gap-3 rounded-md border bg-muted/50 px-3 py-2">
+            <p className="flex-1 text-sm text-muted-foreground">
+              {resetLabels} {resetHotkeys.length === 1 ? 'was' : 'were'} saved in a format that could
+              never be triggered, so {resetHotkeys.length === 1 ? 'it has' : 'they have'} been restored
+              to the default. Set {resetHotkeys.length === 1 ? 'it' : 'them'} again below.
+            </p>
+            <Button variant="ghost" size="sm" onClick={dismissResetNotice}>
+              Dismiss
+            </Button>
+          </div>
         )}
       </div>
 
@@ -124,7 +133,7 @@ export default function HotkeysSettingsPage() {
                       const isCustomized = userBindings.has(hotkey.id);
                       const effectiveBinding = isCustomized
                         ? userBindings.get(hotkey.id)!
-                        : resolvePlatformBinding(hotkey.defaultBinding);
+                        : resolvePlatformBinding(hotkey.defaultBinding, isMac);
 
                       return (
                         <div

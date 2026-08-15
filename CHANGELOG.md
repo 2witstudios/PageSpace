@@ -115,7 +115,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
   choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
   agree on what a key is called. Shortcuts already saved in the broken form are detected on load,
-  put back to their default, and flagged in Settings → Keyboard Shortcuts so you can set them again.
+  put back to their default, and named in Settings → Keyboard Shortcuts so you can set them again. A
+  shortcut saved in the old form that *did* work — one using a shifted key like Ctrl+Shift+? — is
+  carried over rather than reset, so you keep it.
 - **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
   but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
 - **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃

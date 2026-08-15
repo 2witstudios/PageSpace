@@ -51,25 +51,71 @@ describe('useHotkeyStore', () => {
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-      expect(useHotkeyStore.getState().invalidBindings).toContain('pages.quick-create');
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+      expect(useHotkeyStore.getState().migratedBindings).toEqual([]);
     });
 
-    it('given a valid binding, should keep it and report nothing invalid', () => {
+    it('given a valid binding, should keep it and report nothing reset', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+P' },
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+P');
-      expect(useHotkeyStore.getState().invalidBindings).toEqual([]);
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
-    it('given a re-saved binding, should clear it from invalidBindings', () => {
+    it('given a legacy shifted-punctuation binding, should migrate it rather than reset it', () => {
+      // "Ctrl+Shift+?" worked under the old matcher — it must not be discarded.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' },
+      ]);
+
+      expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+/');
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+      expect(useHotkeyStore.getState().migratedBindings).toEqual([
+        { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+/' },
+      ]);
+    });
+
+    it('given a migrated binding, should still match the same physical keys', () => {
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' },
+      ]);
+
+      const event = {
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false,
+        shiftKey: true,
+        key: '?',
+        code: 'Slash',
+      } as KeyboardEvent;
+
+      expect(matchesKeyEvent(getEffectiveBinding('editing.find'), event)).toBe(true);
+    });
+
+    it('given a re-saved binding, should clear its reset notice', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);
       useHotkeyStore.getState().updateBinding('pages.quick-create', 'Alt+P');
 
-      expect(useHotkeyStore.getState().invalidBindings).toEqual([]);
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+    });
+
+    it('given cleanup that removes the row, should keep the notice until dismissed', () => {
+      // The reviewer's case: cleanup deletes the row, so the next load sees
+      // nothing wrong. The notice must survive that or the user is never told.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+      useHotkeyStore.getState().removeBinding('pages.quick-create');
+      useHotkeyStore.getState().setUserBindings([]);
+
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+
+      useHotkeyStore.getState().dismissResetNotice();
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
   });
 

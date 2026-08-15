@@ -5,6 +5,7 @@ import {
   hasModifier,
   isCanonicalBinding,
   keyFromCode,
+  migrateLegacyBinding,
 } from '../binding';
 import { HOTKEY_REGISTRY } from '../registry';
 
@@ -106,6 +107,35 @@ describe('hasModifier', () => {
 
   it('given a modified key, should return true', () => {
     expect(hasModifier('Meta+K')).toBe(true);
+  });
+});
+
+describe('migrateLegacyBinding', () => {
+  it('given a shifted punctuation binding that used to work, should map it to the physical key', () => {
+    expect(migrateLegacyBinding('Ctrl+Shift+?')).toBe('Ctrl+Shift+/');
+    expect(migrateLegacyBinding('Ctrl+Shift+_')).toBe('Ctrl+Shift+-');
+    expect(migrateLegacyBinding('Meta+Shift+{')).toBe('Meta+Shift+[');
+  });
+
+  it('given a shifted digit binding, should map it to the digit', () => {
+    expect(migrateLegacyBinding('Ctrl+Shift+!')).toBe('Ctrl+Shift+1');
+  });
+
+  it('given a legacy space binding, should map it to Space', () => {
+    expect(migrateLegacyBinding('Ctrl+ ')).toBe('Ctrl+Space');
+  });
+
+  it('given an already-canonical binding, should return it unchanged', () => {
+    expect(migrateLegacyBinding('Meta+K')).toBe('Meta+K');
+  });
+
+  it('given an Option-composed binding that never matched, should return null', () => {
+    expect(migrateLegacyBinding('Alt+Π')).toBeNull();
+    expect(migrateLegacyBinding('Alt+†')).toBeNull();
+  });
+
+  it('given an empty binding, should return null', () => {
+    expect(migrateLegacyBinding('')).toBeNull();
   });
 });
 

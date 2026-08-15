@@ -1,14 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import {
-  eventToBinding,
-  formatBindingForDisplay,
-  hasModifier,
-  isMacPlatform,
-} from '@/lib/hotkeys/binding';
+import { eventToBinding, formatBindingForDisplay, hasModifier } from '@/lib/hotkeys/binding';
+import { useIsMac } from '@/hooks/useIsMac';
 
 interface HotkeyInputProps {
   initialValue: string;
@@ -21,7 +17,7 @@ export function HotkeyInput({ initialValue, onSave, onCancel }: HotkeyInputProps
   const [isCapturing, setIsCapturing] = useState(true);
   const [hint, setHint] = useState<string | null>(null);
   const inputRef = useRef<HTMLDivElement>(null);
-  const isMac = useMemo(() => isMacPlatform(), []);
+  const isMac = useIsMac();
 
   useEffect(() => {
     if (!isCapturing) return;

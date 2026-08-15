@@ -147,6 +147,59 @@ export function hasModifier(binding: string): boolean {
 }
 
 /**
+ * Characters the old `e.key`-based capture recorded for a shifted key, mapped
+ * back to the unshifted key in the same physical position (US layout).
+ */
+const UNSHIFTED_BY_SHIFTED_CHAR: Record<string, string> = {
+  '!': '1',
+  '@': '2',
+  '#': '3',
+  $: '4',
+  '%': '5',
+  '^': '6',
+  '&': '7',
+  '*': '8',
+  '(': '9',
+  ')': '0',
+  _: '-',
+  '+': '=',
+  '{': '[',
+  '}': ']',
+  ':': ';',
+  '"': "'",
+  '<': ',',
+  '>': '.',
+  '?': '/',
+  '|': '\\',
+  '~': '`',
+  ' ': 'Space',
+};
+
+/**
+ * Translate a binding written by the old `e.key`-based capture into the
+ * canonical form, when the old form was one that actually worked.
+ *
+ * A shifted punctuation or digit key (`Ctrl+Shift+?`) matched fine under the
+ * previous matcher because it also compared `e.key`, so those bindings are
+ * migrated rather than discarded. A binding holding a character no key press
+ * can produce in canonical form — an Option-composed letter like `Alt+Π` — was
+ * never matchable and cannot be recovered; those return null.
+ */
+export function migrateLegacyBinding(binding: string): string | null {
+  if (!binding) return null;
+  if (isCanonicalBinding(binding)) return binding;
+
+  const parts = binding.split('+');
+  if (parts.some((p) => p === '')) return null;
+
+  const key = parts[parts.length - 1];
+  const migratedKey = UNSHIFTED_BY_SHIFTED_CHAR[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+  const migrated = [...parts.slice(0, -1), migratedKey].join('+');
+
+  return isCanonicalBinding(migrated) ? migrated : null;
+}
+
+/**
  * Combinations the browser or OS claims before the page sees them. Saving one
  * is allowed (some users remap at the OS level) but warned about, because the
  * shortcut will usually appear to do nothing.

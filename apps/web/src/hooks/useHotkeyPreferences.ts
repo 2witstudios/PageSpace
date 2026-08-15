@@ -36,14 +36,27 @@ export function useHotkeyPreferences() {
 
     setUserBindings(data.preferences);
 
-    // Bindings written by the old capture code can never match a key event and
-    // still shadow the default, leaving the shortcut dead. The store drops them
-    // on load; clean up the rows so this only happens once.
-    const invalid = useHotkeyStore.getState().invalidBindings;
-    for (const hotkeyId of invalid) {
-      void deleteHotkeyPreference(hotkeyId).catch(() => {
-        // Best-effort cleanup — the store already fell back to the default.
+    // Bindings written by the old capture code no longer match what the runtime
+    // compares against. The store has already rewritten the salvageable ones and
+    // dropped the rest; persist both outcomes so this happens only once.
+    const { userBindings, migratedBindings, clearMigratedBindings } = useHotkeyStore.getState();
+
+    for (const { hotkeyId, binding } of migratedBindings) {
+      void updateHotkeyPreference(hotkeyId, binding).catch(() => {
+        // Best-effort — the store is already using the rewritten binding.
       });
+    }
+    if (migratedBindings.length > 0) clearMigratedBindings();
+
+    // Anything in this payload the store refused to keep was unmatchable. Derive
+    // it from the payload rather than the accumulated notice list, so a later
+    // revalidation does not re-delete rows that are already gone.
+    for (const { hotkeyId } of data.preferences) {
+      if (!userBindings.has(hotkeyId)) {
+        void deleteHotkeyPreference(hotkeyId).catch(() => {
+          // Best-effort cleanup — the store already fell back to the default.
+        });
+      }
     }
   }, [data, setUserBindings]);
 
