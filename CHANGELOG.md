@@ -52,6 +52,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Confirming a CLI login by email now actually finishes the login** — running `pagespace login`
+  without a passkey sends a confirmation email, and clicking its link used to land on a page saying
+  "Confirmed | You can return to the tab where you started this action" while the tab you started in
+  sat there doing nothing until the CLI gave up five minutes later. The confirmation link now sends
+  you back to the consent screen you came from, which completes the login on its own. (The address
+  the CLI listens on was being carried inside the consent page's own URL, and an over-cautious
+  safety check mistook it for a redirect to somewhere else and quietly threw the return address
+  away.) The same check also stripped the destination when you opened a CLI login link while signed
+  out, so signing in dumped you on a blank sign-in screen instead of the consent page — that is
+  fixed too.
 - **You can send a message, open another chat, send a second one, and trust the first finishes** —
   every chat surface shared one connection to the AI, so a second message could not be sent while
   the first was still answering. What you got instead was one of two things: the first reply was

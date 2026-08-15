@@ -330,6 +330,29 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
       expect(location(response).searchParams.get('next')).toBe('/activate');
     });
 
+    // The CLI login deep link: a logged-out user hits /oauth/consent whose query embeds
+    // the loopback redirect_uri as a percent-encoded absolute URL. That encoded http://
+    // must not trip the same-origin validation — dropping next= here strands the user on
+    // a bare signin with no way back to the consent screen (the `pagespace login`
+    // dead-end regression).
+    it('forwards next= for the consent deep-link carrying an encoded loopback redirect_uri', async () => {
+      const consentPath =
+        '/oauth/consent?client_id=psc_cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A51739%2Fcallback' +
+        '&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' +
+        '&code_challenge_method=S256&scope=drive.read&state=xyzABC123';
+      const response = await middleware(buildRequest(consentPath));
+
+      expect(response.status).toBe(307);
+      const next = location(response).searchParams.get('next');
+      expect(next).not.toBeNull();
+      // Round-trip the preserved deep link: the loopback redirect_uri must survive intact.
+      const preserved = new URL(next as string, 'http://localhost');
+      expect(preserved.pathname).toBe('/oauth/consent');
+      expect(preserved.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:51739/callback');
+      expect(preserved.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(preserved.searchParams.get('state')).toBe('xyzABC123');
+    });
+
     // A soft nav that hits an expired session carries Next's RSC cache-buster. Landing the
     // user back on `/activate?_rsc=abc` after signin would be stale and meaningless.
     it("strips Next's _rsc cache-buster from the preserved deep link", async () => {
