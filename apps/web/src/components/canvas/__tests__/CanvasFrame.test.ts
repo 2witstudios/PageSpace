@@ -19,6 +19,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
+import { PREVIEW_SANDBOX_TOKENS } from '@pagespace/lib/canvas/preview-headers';
 
 // React 19.2.6 production build in this sandbox doesn't export `act`;
 // @testing-library/react 16.x requires it. Polyfill with flushSync so React
@@ -457,5 +458,27 @@ describe('CanvasFrame — escape bridge', () => {
     }));
 
     expect(onEscape).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The frame attribute and the response header must stay in lockstep.
+ *
+ * The preview document lives at a real, authenticated, same-origin url. The
+ * iframe's `sandbox` ATTRIBUTE only covers the embedded case — a direct
+ * navigation (which author JS can trigger itself via the granted
+ * `allow-popups-to-escape-sandbox`) is covered solely by the response's CSP
+ * `sandbox` directive. If the two ever diverge, one load path silently becomes
+ * weaker than the other.
+ */
+describe('CANVAS_IFRAME_SANDBOX ↔ PREVIEW_SANDBOX_TOKENS', () => {
+  it('given both sandbox declarations, should grant exactly the same tokens', () => {
+    const frame = CANVAS_IFRAME_SANDBOX.split(/\s+/).sort();
+    const response = PREVIEW_SANDBOX_TOKENS.split(/\s+/).sort();
+    expect(response).toEqual(frame);
+  });
+
+  it('given the response sandbox, should NEVER grant allow-same-origin', () => {
+    expect(PREVIEW_SANDBOX_TOKENS.split(/\s+/)).not.toContain('allow-same-origin');
   });
 });
