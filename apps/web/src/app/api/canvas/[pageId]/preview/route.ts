@@ -84,15 +84,12 @@ export async function GET(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, pageId),
-    columns: { id: true, title: true, type: true, content: true, siteMode: true, isTrashed: true },
-  });
-
-  if (!page || page.isTrashed || page.type !== PageType.CANVAS) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  }
-
+  // Permission FIRST, before the page is inspected at all. Checking type or
+  // trashed-ness first would make a CANVAS page the caller cannot see answer 403
+  // while every other id answers 404 — an oracle letting any signed-in user
+  // enumerate which page ids exist and which of them are canvases. Since
+  // `canUserViewPage` is false for a missing page too, this single check answers
+  // identically for "does not exist" and "not yours".
   if (!(await canUserViewPage(user.id, pageId))) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
@@ -103,6 +100,15 @@ export async function GET(
       riskScore: 0.4,
     });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { id: true, title: true, type: true, content: true, siteMode: true, isTrashed: true },
+  });
+
+  if (!page || page.isTrashed || page.type !== PageType.CANVAS) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   // Same policy the published artifact carries, chosen by the same flag, so the
