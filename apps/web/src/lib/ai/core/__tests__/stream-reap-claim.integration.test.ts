@@ -1,7 +1,7 @@
 import { describe, it, beforeAll, beforeEach, afterAll } from 'vitest';
 import { assert } from './riteway';
 import { db } from '@pagespace/db/db';
-import { and, eq, sql } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
