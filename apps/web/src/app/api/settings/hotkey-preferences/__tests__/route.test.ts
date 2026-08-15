@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, PATCH } from '../route';
+import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 const mockSelect = vi.hoisted(() => vi.fn());
@@ -12,12 +12,14 @@ const mockUpdate = vi.hoisted(() => vi.fn());
 const mockSet = vi.hoisted(() => vi.fn());
 const mockReturning = vi.hoisted(() => vi.fn());
 const mockFindFirst = vi.hoisted(() => vi.fn());
+const mockDelete = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
+    delete: mockDelete,
     query: {
       userHotkeyPreferences: {
         findFirst: mockFindFirst,
@@ -193,5 +195,99 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const response = await PATCH(request);
 
     expect(response.status).toBe(400);
+  });
+
+  it('given a binding that could never match a key event, should return 400', async () => {
+    // What the old capture code produced for macOS Option+P.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Π' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('given a bare key with no modifier, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'N' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('given an empty binding (disable), should accept it', async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockReturning.mockResolvedValue([{ hotkeyId: 'tabs.cycle-next', binding: '' }]);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: '' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe('DELETE /api/settings/hotkey-preferences', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDelete.mockReturnValue({ where: mockWhere });
+    mockWhere.mockResolvedValue(undefined);
+
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('given a hotkeyId, should remove the override', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(200);
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('given no hotkeyId, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(400);
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('given unauthenticated request, should return 401', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+    vi.mocked(isAuthError).mockReturnValue(true);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(401);
   });
 });

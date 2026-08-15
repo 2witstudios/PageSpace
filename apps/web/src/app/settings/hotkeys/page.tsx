@@ -1,21 +1,28 @@
 "use client";
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowLeft, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useHotkeyPreferences, updateHotkeyPreference } from '@/hooks/useHotkeyPreferences';
+import { useHotkeyPreferences, updateHotkeyPreference, deleteHotkeyPreference } from '@/hooks/useHotkeyPreferences';
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
-import { getEffectiveBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
+import { getEffectiveBinding, resolvePlatformBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
+import {
+  RESERVED_BINDINGS,
+  formatBindingForDisplay,
+  isMacPlatform,
+} from '@/lib/hotkeys/binding';
 import { toast } from 'sonner';
 
 export default function HotkeysSettingsPage() {
   const router = useRouter();
   const { isLoading, mutate } = useHotkeyPreferences();
   const userBindings = useHotkeyStore((s) => s.userBindings);
+  const invalidBindings = useHotkeyStore((s) => s.invalidBindings);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const isMac = useMemo(() => isMacPlatform(), []);
 
   const hotkeysByCategory = getHotkeysByCategory();
   const categories = Object.keys(hotkeysByCategory) as HotkeyCategory[];
@@ -43,7 +50,13 @@ export default function HotkeysSettingsPage() {
     try {
       await updateHotkeyPreference(hotkeyId, binding);
       setEditingId(null);
-      toast.success('Hotkey updated');
+      if (RESERVED_BINDINGS.has(binding)) {
+        toast.warning(
+          `${formatBindingForDisplay(binding, isMac)} is usually claimed by your browser, so this shortcut may never reach PageSpace`
+        );
+      } else {
+        toast.success('Hotkey updated');
+      }
       mutate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to update hotkey');
@@ -51,11 +64,13 @@ export default function HotkeysSettingsPage() {
   };
 
   const handleReset = async (hotkeyId: string) => {
-    const definition = HOTKEY_REGISTRY.find((h) => h.id === hotkeyId);
-    if (!definition) return;
-
+    // Drop the override entirely rather than storing the default as a custom
+    // binding — the default is resolved per platform at read time.
     try {
-      await handleSave(hotkeyId, definition.defaultBinding);
+      await deleteHotkeyPreference(hotkeyId);
+      setEditingId(null);
+      toast.success('Hotkey reset to default');
+      mutate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reset hotkey');
     }
@@ -77,6 +92,13 @@ export default function HotkeysSettingsPage() {
         <p className="text-muted-foreground">
           Customize keyboard shortcuts for common actions. Click a shortcut to edit it.
         </p>
+        {invalidBindings.length > 0 && (
+          <p className="mt-3 text-sm text-muted-foreground">
+            {invalidBindings.length === 1 ? 'One shortcut was' : `${invalidBindings.length} shortcuts were`}{' '}
+            saved in a format that could never be triggered and {invalidBindings.length === 1 ? 'has' : 'have'}{' '}
+            been restored to the default. Set {invalidBindings.length === 1 ? 'it' : 'them'} again below.
+          </p>
+        )}
       </div>
 
       {isLoading ? (
@@ -98,9 +120,11 @@ export default function HotkeysSettingsPage() {
                 <CardContent>
                   <div className="space-y-4">
                     {hotkeys.map((hotkey) => {
-                      const effectiveBinding = userBindings.get(hotkey.id) ?? hotkey.defaultBinding;
                       const isEditing = editingId === hotkey.id;
-                      const isCustomized = effectiveBinding !== hotkey.defaultBinding;
+                      const isCustomized = userBindings.has(hotkey.id);
+                      const effectiveBinding = isCustomized
+                        ? userBindings.get(hotkey.id)!
+                        : resolvePlatformBinding(hotkey.defaultBinding);
 
                       return (
                         <div
@@ -128,7 +152,7 @@ export default function HotkeysSettingsPage() {
                                   onClick={() => setEditingId(hotkey.id)}
                                   className="font-mono min-w-[120px]"
                                 >
-                                  {effectiveBinding || 'Disabled'}
+                                  {formatBindingForDisplay(effectiveBinding, isMac) || 'Disabled'}
                                 </Button>
                                 {isCustomized && (
                                   <Button

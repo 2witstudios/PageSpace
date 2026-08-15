@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useHotkeyStore, getEffectiveBinding, parseBinding, matchesKeyEvent } from '../useHotkeyStore';
+import { eventToBinding } from '@/lib/hotkeys/binding';
 
 describe('useHotkeyStore', () => {
   beforeEach(() => {
@@ -39,6 +40,72 @@ describe('useHotkeyStore', () => {
 
       const binding = getEffectiveBinding('tabs.cycle-next');
       expect(binding).toBe('');
+    });
+  });
+
+  describe('stale bindings', () => {
+    it('given a binding that can never match, should drop it and fall back to the default', () => {
+      // "Alt+Π" is what the old capture code stored for macOS Option+P.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+      expect(useHotkeyStore.getState().invalidBindings).toContain('pages.quick-create');
+    });
+
+    it('given a valid binding, should keep it and report nothing invalid', () => {
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+P' },
+      ]);
+
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+P');
+      expect(useHotkeyStore.getState().invalidBindings).toEqual([]);
+    });
+
+    it('given a re-saved binding, should clear it from invalidBindings', () => {
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+      useHotkeyStore.getState().updateBinding('pages.quick-create', 'Alt+P');
+
+      expect(useHotkeyStore.getState().invalidBindings).toEqual([]);
+    });
+  });
+
+  describe('capture/match round trip', () => {
+    it('given macOS Option+P, what is recorded should match that same press', () => {
+      // The regression this whole fix exists for: recording used e.key ("π")
+      // while matching used e.code ("p"), so the binding could never fire.
+      const event = {
+        ctrlKey: false,
+        metaKey: false,
+        altKey: true,
+        shiftKey: false,
+        key: 'π',
+        code: 'KeyP',
+      } as KeyboardEvent;
+
+      const captured = eventToBinding(event);
+
+      expect(captured).toBe('Alt+P');
+      expect(matchesKeyEvent(captured, event)).toBe(true);
+    });
+
+    it('given Shift+1, what is recorded should match that same press', () => {
+      const event = {
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false,
+        shiftKey: true,
+        key: '!',
+        code: 'Digit1',
+      } as KeyboardEvent;
+
+      const captured = eventToBinding(event);
+
+      expect(captured).toBe('Ctrl+Shift+1');
+      expect(matchesKeyEvent(captured, event)).toBe(true);
     });
   });
 });

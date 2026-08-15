@@ -32,8 +32,18 @@ export function useHotkeyPreferences() {
 
   // Sync to store when data loads
   useEffect(() => {
-    if (data?.preferences) {
-      setUserBindings(data.preferences);
+    if (!data?.preferences) return;
+
+    setUserBindings(data.preferences);
+
+    // Bindings written by the old capture code can never match a key event and
+    // still shadow the default, leaving the shortcut dead. The store drops them
+    // on load; clean up the rows so this only happens once.
+    const invalid = useHotkeyStore.getState().invalidBindings;
+    for (const hotkeyId of invalid) {
+      void deleteHotkeyPreference(hotkeyId).catch(() => {
+        // Best-effort cleanup — the store already fell back to the default.
+      });
     }
   }, [data, setUserBindings]);
 
@@ -68,4 +78,20 @@ export async function updateHotkeyPreference(hotkeyId: string, binding: string):
 
   // Update local store
   useHotkeyStore.getState().updateBinding(hotkeyId, binding);
+}
+
+export async function deleteHotkeyPreference(hotkeyId: string): Promise<void> {
+  const res = await fetchWithAuth('/api/settings/hotkey-preferences', {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ hotkeyId }),
+  });
+
+  if (!res.ok) {
+    throw new Error('Failed to delete hotkey preference');
+  }
+
+  useHotkeyStore.getState().removeBinding(hotkeyId);
 }

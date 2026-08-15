@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
+import { hasModifier, isCanonicalBinding } from '@/lib/hotkeys/binding';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -61,6 +62,15 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // An empty binding disables the hotkey. Anything else must be in the
+    // canonical format so it can actually match a key event.
+    if (binding !== '' && (!isCanonicalBinding(binding) || !hasModifier(binding))) {
+      return NextResponse.json(
+        { error: 'Binding must be a supported key combination with at least one modifier' },
+        { status: 400 }
+      );
+    }
+
     // Check if preference exists
     const existingPreference = await db.query.userHotkeyPreferences.findFirst({
       where: and(
@@ -101,6 +111,38 @@ export async function PATCH(request: Request) {
     loggers.api.error('Error updating hotkey preference:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update hotkey preference' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/settings/hotkey-preferences - Remove an override (back to default)
+export async function DELETE(request: Request) {
+  try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
+
+    const body = await request.json();
+    const { hotkeyId } = body;
+
+    if (!hotkeyId || typeof hotkeyId !== 'string') {
+      return NextResponse.json({ error: 'hotkeyId is required' }, { status: 400 });
+    }
+
+    await db
+      .delete(userHotkeyPreferences)
+      .where(and(
+        eq(userHotkeyPreferences.userId, userId),
+        eq(userHotkeyPreferences.hotkeyId, hotkeyId)
+      ));
+
+    audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    loggers.api.error('Error deleting hotkey preference:', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to delete hotkey preference' },
       { status: 500 }
     );
   }

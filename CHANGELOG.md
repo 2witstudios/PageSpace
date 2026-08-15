@@ -110,6 +110,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   changes for a reply that finishes normally — the record is deleted the moment the finished message
   is safely saved, and a reply that never had a chance to save is the one case it is kept for.
 
+- **A keyboard shortcut you set yourself now actually fires** — recording a shortcut wrote down the
+  character the key produced rather than the key you pressed, so on a Mac an Option combination was
+  stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
+  choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
+  agree on what a key is called. Shortcuts already saved in the broken form are detected on load,
+  put back to their default, and flagged in Settings → Keyboard Shortcuts so you can set them again.
+- **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
+  but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
+- **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃
+  symbols on a Mac, and the built-in defaults now use Ctrl on Windows and Linux instead of a Command
+  key those keyboards do not have.
+- **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
+  would have fired while you were reading, and combinations your browser keeps for itself (like
+  Cmd+N) now save with a warning that they may never reach PageSpace.
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
   Creating a calendar event through an app or script without naming a timezone read it as UTC, so
