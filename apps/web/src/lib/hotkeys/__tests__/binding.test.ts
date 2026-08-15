@@ -203,6 +203,20 @@ describe('hasModifier', () => {
   it('given a modified key, should return true', () => {
     expect(hasModifier('Meta+K')).toBe(true);
   });
+
+  it('given a bare numpad "+", should return false', () => {
+    // The Add key reports key === "+", so an unmodified press captures as "+".
+    // Reading that lone separator as a modifier would admit a bare global
+    // shortcut that fires while the user is typing.
+    const captured = eventToBinding(keyEvent({ key: '+', code: 'NumpadAdd' }));
+    expect(captured).toBe('+');
+    expect(hasModifier(captured)).toBe(false);
+  });
+
+  it('given "+" as the main key under a modifier, should still return true', () => {
+    expect(hasModifier('Ctrl+Shift++')).toBe(true);
+    expect(hasModifier('Ctrl++')).toBe(true);
+  });
 });
 
 describe('formatBindingForDisplay', () => {

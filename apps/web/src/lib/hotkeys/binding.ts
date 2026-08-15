@@ -144,9 +144,16 @@ export function isCanonicalBinding(binding: string): boolean {
   return true;
 }
 
-/** True when the binding carries at least one modifier key. */
+/**
+ * True when the binding carries at least one modifier key.
+ *
+ * Counted through `splitBinding`, not by splitting on "+": the numpad Add key
+ * reports `key === "+"`, so a bare, unmodified press captures as "+", and a
+ * naive split reads that lone separator as a modifier. It would have let a
+ * global bare shortcut past the widget, the API and the store alike.
+ */
 export function hasModifier(binding: string): boolean {
-  return binding.split('+').length > 1;
+  return splitBinding(binding).modifiers.length > 0;
 }
 
 /**

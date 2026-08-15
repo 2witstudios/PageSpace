@@ -99,6 +99,17 @@ describe('useHotkeyStore', () => {
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
+    it('given a stored bare "+", should reset it like any other bare key', () => {
+      // The numpad Add key reports key === "+", so an unmodified press captures
+      // as "+" — the one bare key whose shape looks modified.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: '+' },
+      ]);
+
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+    });
+
     it('given a binding on a modifier key, should reset it rather than keep a dead override', () => {
       // The old widget only excluded Control/Meta/Alt/Shift, so "Ctrl+CapsLock"
       // was capturable. It can no longer fire, and keeping it would shadow the

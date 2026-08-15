@@ -224,6 +224,20 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     expect(response.status).toBe(400);
   });
 
+  it('given a bare "+" from the numpad Add key, should return 400', async () => {
+    // "+" is both the separator and a key, so this is the one bare binding that
+    // can look modified to a naive parser.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: '+' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+  });
+
   it('given an empty binding (disable), should accept it', async () => {
     mockFindFirst.mockResolvedValue(null);
     mockReturning.mockResolvedValue([{ hotkeyId: 'tabs.cycle-next', binding: '' }]);
