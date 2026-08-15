@@ -17,6 +17,10 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
   isScopedMCPAuth: vi.fn(() => false),
+  // Same boolean as isScopedMCPAuth for these fixtures; the real helper reads
+  // through getAllowedDriveIds so it also covers dispatched service auth.
+  isDriveScopedPrincipal: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
+  isServiceAuthResult: vi.fn((result: { tokenType?: string }) => result?.tokenType === 'service'),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -137,7 +141,7 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
-  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),

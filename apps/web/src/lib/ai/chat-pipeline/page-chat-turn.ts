@@ -53,7 +53,7 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -96,7 +96,6 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
-  filterToolsForDispatchCredentials,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
 } from '@/lib/ai/core/tool-filtering';
@@ -1231,7 +1230,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // so no per-request registration happens here anymore: a conversation IS a
     // session, there is no binding to compose by.
     const baseTools = filterToolsForReadOnly(
-      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
+      // Drive-scoped in the general sense, not "is an MCP result": a dispatched
+      // worker runs under service auth carrying an inherited ceiling and must
+      // get the same narrowed tool set the token that spawned it would.
+      filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
       readOnlyMode
     );
 
@@ -1276,11 +1278,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // The tier gate strips only the COMPUTE tools — a free payer keeps the
     // chat-only session family (sessions/chat are free on every plan).
     filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-    // spawn_session/send_session dispatch by forwarding the caller's browser
-    // session cookie — an MCP-authenticated request (allowed on this route)
-    // has none, so its dispatch could only ever refuse (codex round 9; same
-    // posture as /api/v1 and non-interactive workflow runs).
-    filteredTools = filterToolsForDispatchCredentials(filteredTools, !isMCPAuthResult(authResult)) as ToolSet;
+    // spawn_session/send_session used to be stripped for MCP-authenticated
+    // requests, because dispatch worked by forwarding the caller's browser
+    // session cookie and an MCP request has none — so advertising them could
+    // only ever produce a refusal (codex round 9). Dispatch signs its own hop
+    // now (`session-tools-runtime.ts`), so a credential the caller does not have
+    // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
+    // like any other. The ceiling that DID matter rides the dispatch instead:
+    // `mcpAllowedDriveIds` below flows into the signed payload and back out as
+    // service auth's `allowedDriveIds`.
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
@@ -1872,7 +1878,16 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.
                 mcpAllowedDriveIds: getAllowedDriveIds(authResult),
-                mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
+                // Also carried across an agent-dispatch hop: a worker turn
+                // arrives under service auth, whose `originatingMcpTokenId` is
+                // the token that started the chain. Dropping it there would drop
+                // the app-member RBAC ceiling `actor-permissions` applies on top
+                // of the drive scope — the scope alone does not imply the role.
+                mcpTokenId: isMCPAuthResult(authResult)
+                  ? authResult.tokenId
+                  : isServiceAuthResult(authResult)
+                    ? authResult.originatingMcpTokenId
+                    : undefined,
                 // How deep in an agent-dispatch chain this turn already runs —
                 // 0 for a direct user request, N for a worker turn dispatched
                 // by spawn_session/send_session (the X-Agent-Dispatch-Depth
