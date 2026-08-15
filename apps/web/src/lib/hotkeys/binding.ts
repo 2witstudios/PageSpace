@@ -68,7 +68,14 @@ export function resolveEventKey(event: BindingEventLike): string {
 
 /**
  * Build a canonical binding string from a keyboard event.
- * Returns '' when the press carries no main key (modifiers only).
+ *
+ * Returns '' when the press cannot be recorded: modifiers alone, or a press
+ * `isCanonicalBinding` would refuse. That last guard makes "anything capture
+ * emits, validation accepts" true by construction rather than by test — the
+ * invariant every bug in this module has been a violation of. It is reachable:
+ * an event with no `e.code` (a virtual or IME keyboard) skips the Alt branch of
+ * `resolveEventKey`, so macOS Option would otherwise capture the composed
+ * character and the PATCH would 400 on the widget's own output.
  */
 export function eventToBinding(event: BindingEventLike): string {
   const mainKey = resolveEventKey(event);
@@ -81,7 +88,8 @@ export function eventToBinding(event: BindingEventLike): string {
   if (event.shiftKey) parts.push('Shift');
   parts.push(mainKey);
 
-  return parts.join('+');
+  const binding = parts.join('+');
+  return isCanonicalBinding(binding) ? binding : '';
 }
 
 /**

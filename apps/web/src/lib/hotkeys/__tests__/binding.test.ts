@@ -99,6 +99,13 @@ describe('eventToBinding', () => {
   it('given a modifiers-only press, should return empty', () => {
     expect(eventToBinding(keyEvent({ metaKey: true, key: 'Meta', code: 'MetaLeft' }))).toBe('');
   });
+
+  it('given an Option press with no e.code, should refuse rather than emit a composed character', () => {
+    // A virtual or IME keyboard can report an empty code, which skips the Alt
+    // branch of resolveEventKey. Emitting "Alt+Π" here would hand the widget a
+    // binding its own PATCH validator rejects with a 400.
+    expect(eventToBinding(keyEvent({ altKey: true, key: 'π', code: '' }))).toBe('');
+  });
 });
 
 describe('capture and validation agree', () => {
