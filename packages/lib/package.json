@@ -97,6 +97,11 @@
       "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
       "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
     },
+    "./agent-workspaces/credential-scope": {
+      "types": "./dist/agent-workspaces/credential-scope.d.ts",
+      "import": "./dist/agent-workspaces/credential-scope.js",
+      "require": "./dist/agent-workspaces/credential-scope.js"
+    },
     "./agent-workspaces/decide-workspace-access": {
       "types": "./dist/agent-workspaces/decide-workspace-access.d.ts",
       "import": "./dist/agent-workspaces/decide-workspace-access.js",

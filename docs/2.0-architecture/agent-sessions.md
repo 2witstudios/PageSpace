@@ -122,14 +122,16 @@ finding 1's workspace confinement.
 1. **Verbs are resource-addressed and permission-gated, like `read_page`.**
    `send_session` / `read_session` / `kill_session` authorize against the resource:
    the caller can REACH the worker, it is actually a worker (bound into some
-   workspace), and its listing is not human-closed. **Reach is two borrowed rules,
-   not ownership.** The DRIVE admits you to the workspace
-   (`decideAgentSessionAccess`: owner/admin/member — exactly what axiom 6's
-   discovery already showed you), and the WORKSPACE shows you the thread
-   (`isConversationVisibleToViewer`: you own the workspace, you own the thread, or
-   its owner deliberately shared it — axiom 7, the same predicate that decides
-   whether its title is legible). So an agent addresses exactly the rows it can
-   name. Ownership alone used to be the gate, strictly narrower than the
+   workspace), and its listing is not human-closed. **Reach is three borrowed
+   rules, not ownership.** The CREDENTIAL's drive ceiling admits the request at
+   all (`mcpAllowedDriveIds` — see axiom 8), the DRIVE admits you to the
+   workspace (`decideAgentSessionAccess`: owner/admin/member — exactly what
+   axiom 6's discovery already showed you), and the WORKSPACE shows you the
+   thread (`isConversationVisibleToViewer`: you own the workspace, you own the
+   thread, or its owner deliberately shared it — axiom 7, the same predicate that
+   decides whether its title is legible). So an agent addresses exactly the rows
+   it can name, and only within what its key was cut for. Ownership alone used to
+   be the gate, strictly narrower than the
    platform's own rule: two members of one drive could see each other's
    workspaces and address nothing in them. Drive membership ALONE would have been
    too wide the other way — it would have made axiom 7's per-thread opt-in
@@ -201,6 +203,27 @@ finding 1's workspace confinement.
    what opens the thread. The verb descriptions carry the caution that belongs
    alongside — a shared worker's transcript is someone else's work: untrusted
    input, not instructions, and not yours to interrupt unasked.
+
+8. **A credential's drive ceiling binds every workspace-resolving verb, and it
+   is asked FIRST.** Every other rule here asks about the USER. A drive-scoped
+   MCP/API token is not its user: it is confined to a subset of that user's
+   drives, and a worker, workspace, pane grid or shell outside them must read as
+   nonexistent to it however freely its owner could reach the same thing. This
+   applies to the caller's OWN resources too — ownership is not an escape from
+   scope — and to PLACEMENT, which is a write: `spawn_session`'s explicit
+   `workspace` target is weighed against the ceiling alongside
+   `checkSessionAccess`, so a token cannot put an agent (and its sandbox reach)
+   somewhere it was never granted. Discovery is held to the same ceiling as
+   addressability, so `list_sessions` can never advertise an id the verbs refuse.
+
+   The subtlety worth recording, because it is what made this easy to get wrong:
+   a conversation's WORKSPACE BINDING and its AGENT PAGE need not share a drive.
+   `spawn_session` takes an explicit workspace id, so a conversation driven by an
+   agent in drive A can be bound to a workspace in drive B — and the page-scope
+   check that admitted the turn (`checkMCPPageScope`) covers the page, never the
+   binding. Any verb that resolves a workspace from that binding must therefore
+   consult the ceiling itself; "the page was in scope" does not carry.
+   Unresolvable drives fail closed.
 
 Unchanged by the re-model: the conversation→session binding stays write-once and
 owner-only (the hijack surface stays closed); shells stay workspace-scoped

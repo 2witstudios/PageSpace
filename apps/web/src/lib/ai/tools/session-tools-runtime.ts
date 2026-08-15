@@ -40,6 +40,7 @@ import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes'
 import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -834,8 +835,12 @@ async function resolveWorkerPlacement(input: {
   // worker into a workspace outside the token's drives would put an agent, and
   // its sandbox reach, somewhere that token was never granted. Refused with the
   // same anti-enumeration answer, so scope leaks nothing membership did not.
-  const targetDriveId = allowedDriveIds.length > 0 ? (await describeWorkspace(workspace)).workspaceDriveId : null;
-  const withinScope = allowedDriveIds.length === 0 || (targetDriveId !== null && allowedDriveIds.includes(targetDriveId));
+  // ONE rule, shared with the tool layer — see `credential-scope.ts` on why this
+  // must not be a second implementation. The workspace read is skipped entirely
+  // for an unscoped caller, for whom the answer cannot depend on it.
+  const withinScope =
+    allowedDriveIds.length === 0 ||
+    isDriveWithinCredentialScope(allowedDriveIds, (await describeWorkspace(workspace)).workspaceDriveId);
   const access = withinScope ? await checkSessionAccess(ownerId, workspace) : { allowed: false as const };
   if (!access.allowed) {
     // Missing, foreign, and not-a-member all read identically — an

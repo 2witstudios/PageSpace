@@ -73,6 +73,7 @@ import {
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
 import { isConversationVisibleToViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import type { SandboxStatus } from '@pagespace/lib/agent-workspaces/session-contract';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
@@ -694,22 +695,15 @@ function readDepth(context: ToolExecutionContext | undefined): number {
 /**
  * Whether a workspace's drive is inside the calling credential's ceiling.
  *
- * `[]` means unscoped — a session, or a full-account token — and admits
- * everything. A SCOPED credential admits only its own drives, and a workspace
- * with no drive at all (a global-assistant workspace) is never inside a
- * drive-scoped ceiling: there is no drive for the scope to have granted.
- *
- * Fails CLOSED on an unresolvable workspace drive, for the same reason: a null
- * is "we do not know where this lives", which a confined credential must not be
- * given the benefit of.
+ * A thin read of the context — the rule itself lives in
+ * `@pagespace/lib/agent-workspaces/credential-scope`, single-sourced because
+ * this layer and the production runtime both apply it and briefly disagreed.
  */
 function withinCredentialScope(
   context: ToolExecutionContext | undefined,
   workspaceDriveId: string | null,
 ): boolean {
-  const allowed = context?.mcpAllowedDriveIds ?? [];
-  if (allowed.length === 0) return true;
-  return workspaceDriveId !== null && allowed.includes(workspaceDriveId);
+  return isDriveWithinCredentialScope(context?.mcpAllowedDriveIds, workspaceDriveId);
 }
 
 /**
