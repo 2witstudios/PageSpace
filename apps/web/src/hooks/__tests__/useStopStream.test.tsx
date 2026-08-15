@@ -221,9 +221,7 @@ describe('useStopStream — isStopping', () => {
     act(() => { void result.current.handleStop(); });
     expect(result.current.isStopping).toBe(true);
 
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-    expect(result.current.isStopping).toBe(false);
+    await waitFor(() => expect(result.current.isStopping).toBe(false));
     expect(reportAbortOutcome).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'not_found' }),
     );
@@ -240,9 +238,7 @@ describe('useStopStream — isStopping', () => {
     act(() => { void result.current.handleStop(); });
     expect(result.current.isStopping).toBe(true);
 
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-    expect(result.current.isStopping).toBe(false);
+    await waitFor(() => expect(result.current.isStopping).toBe(false));
   });
 
   // THE P1. These surfaces keep ONE hook instance across a conversation switch. Stopping A and
@@ -311,6 +307,8 @@ describe('useStopStream — isStopping', () => {
     // A's abort finally answers. It must not touch B's affordance.
     await act(async () => { releaseA?.(); await Promise.resolve(); await Promise.resolve(); });
 
+    // Asserted after the queue has drained rather than via waitFor: this is a "stays true"
+    // claim, and waitFor would pass on the first tick without ever proving it survived.
     expect(result.current.isStopping).toBe(true);
   });
 });

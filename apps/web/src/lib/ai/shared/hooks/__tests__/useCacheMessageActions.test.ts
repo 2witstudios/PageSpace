@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useCacheMessageActions, type UseCacheMessageActionsOptions } from '../useCacheMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 // vi.mock factories are hoisted above module-scope declarations — a plain `let` here would
 // throw a TDZ ReferenceError at transform time. vi.hoisted lifts this state alongside the mock.
@@ -45,13 +46,25 @@ const baseOptions = (
     { mode: 'confirmed', message: assistantMsg('a1') },
   ],
   regenerate: vi.fn(),
-  wrapSend: <T,>(sendFn: () => T) => sendFn(),
+  wrapSend: makeWrapSend(overrides.conversationId === undefined ? 'conv-1' : overrides.conversationId),
   ...overrides,
 });
+
+/**
+ * Faithful to `useSendHandoff.wrapSend`, because the retry latch now IS its pendingSend
+ * registration: it registers synchronously, keyed by conversation, before invoking the send.
+ * A bare passthrough here would silently disable the very guard these cases exercise.
+ */
+const makeWrapSend = (conversationId: string | null) => <T,>(sendFn: () => T): T | undefined => {
+  if (!conversationId) return undefined;
+  useEditingStore.getState().startPendingSend(conversationId);
+  return sendFn();
+};
 
 describe('useCacheMessageActions handleRetry', () => {
   beforeEach(() => {
     mockState.handleRetryBaseResolve = undefined;
+    useEditingStore.setState({ pendingSends: new Set() });
   });
 
   it('given a retry, should apply the cache deletes BEFORE handleRetryBase (regenerate) settles, not after', async () => {
@@ -128,10 +141,11 @@ describe('useCacheMessageActions handleRetry', () => {
     let wrapSendCalls = 0;
     // Not vi.fn: wrapping erases the generic, and `wrapSend` has to stay generic to satisfy
     // the option's signature.
-    const wrapSend = <T,>(sendFn: () => T): T => {
+    const inner = makeWrapSend('conv-1');
+    const wrapSend = <T,>(sendFn: () => T): T | undefined => {
       wrapSendCalls += 1;
       retriesBeforeInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
-      const returned = sendFn();
+      const returned = inner(sendFn);
       retriesAfterInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
       return returned;
     };
@@ -155,9 +169,10 @@ describe('useCacheMessageActions handleRetry', () => {
   it('given a second retry while the first is still in flight, should fire only one regenerate', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
     let wrapSendCalls = 0;
-    const wrapSend = <T,>(sendFn: () => T): T => {
+    const inner = makeWrapSend('conv-1');
+    const wrapSend = <T,>(sendFn: () => T): T | undefined => {
       wrapSendCalls += 1;
-      return sendFn();
+      return inner(sendFn);
     };
 
     const { result } = renderHook(() => useCacheMessageActions(baseOptions({ wrapSend })));
@@ -181,11 +196,12 @@ describe('useCacheMessageActions handleRetry', () => {
   // let a retry still awaiting A's DELETEs silently swallow a Retry click in B.
   it('given a retry in flight for one conversation, should not block a retry in another', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
-    const wrapSend = <T,>(sendFn: () => T): T => sendFn();
 
     const { result, rerender } = renderHook(
       ({ conversationId }: { conversationId: string }) =>
-        useCacheMessageActions(baseOptions({ wrapSend, conversationId })),
+        useCacheMessageActions(
+          baseOptions({ conversationId, wrapSend: makeWrapSend(conversationId) }),
+        ),
       { initialProps: { conversationId: 'conv-1' } },
     );
     mockState.handleRetryBase?.mockClear();
@@ -201,6 +217,33 @@ describe('useCacheMessageActions handleRetry', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(mockState.handleRetryBase).toHaveBeenCalledTimes(2);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The cross-SURFACE case (CodeRabbit). GlobalAssistantView and SidebarChatTab each mount
+  // their own instance of this hook for the same conversation, so a per-instance ref left two
+  // Retry buttons unaware of each other. The server cannot save us there: its per-conversation
+  // takeover is a check-then-act and says so — "two near-simultaneous sends can BOTH find zero
+  // in-flight rows and BOTH proceed: two generations, two sets of tool calls, two bills".
+  it('given two hook instances on the same conversation, should run only one retry', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    // Two independent mounts, exactly as the dashboard and the sidebar produce.
+    const dashboard = renderHook(() => useCacheMessageActions(baseOptions()));
+    const sidebar = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void dashboard.result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // The other surface's Retry, while the first is still in flight.
+    act(() => { void sidebar.result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
 
     mockState.handleRetryBaseResolve?.();
     applyDeleteSpy.mockRestore();
