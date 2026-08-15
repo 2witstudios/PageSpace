@@ -105,18 +105,27 @@ beforeEach(() => {
 });
 
 describe('claimDeadStream — the predicate', () => {
-  it('sets the claim token from now(), not from the reaping instance\'s clock', async () => {
+  it('sets the claim token from the database clock, truncated to milliseconds', async () => {
     await claimDeadStream({ messageId: 'msg-1' });
 
-    // CLOCK SKEW IS THE POINT. `isProvablyDead(row, Date.now())` compares a Postgres timestamp
-    // against the READING instance's clock, and at N>1 two machines drift. A token minted from
-    // `new Date()` would be compared against `now()` by its own TTL check — so a skewed reaper
-    // could mint a claim its own expiry test then misreads.
+    // TWO SEPARATE REQUIREMENTS, both in one expression, so neither can be dropped silently.
+    //
+    // `now()` — CLOCK SKEW IS THE POINT. `isProvablyDead(row, Date.now())` compares a Postgres
+    // timestamp against the READING instance's clock, and at N>1 two machines drift. A token
+    // minted from `new Date()` would be compared against `now()` by its own TTL check, so a
+    // skewed reaper could mint a claim its own expiry test then misreads.
+    //
+    // `date_trunc('milliseconds', …)` — PRECISION. `timestamp` keeps microseconds; a JS `Date`
+    // holds only milliseconds, so an untruncated token comes back through the driver shortened
+    // and the fence's equality then matches ZERO rows — every settle and every frame release
+    // rejected, forever. This assertion is the cheap guard; the real one is
+    // `stream-reap-claim.integration.test.ts`, which runs the round trip against a real
+    // database (review finding — chatgpt-codex-connector, PR #2419).
     assert({
       given: 'a claim attempt',
-      should: 'write reap_claimed_at from the database clock',
+      should: 'write reap_claimed_at from now(), truncated to a precision the driver can carry',
       actual: (mockUpdateSet.mock.calls[0][0] as { reapClaimedAt: { sqlText?: string } }).reapClaimedAt.sqlText,
-      expected: 'now()',
+      expected: "date_trunc('milliseconds', now())",
     });
   });
 

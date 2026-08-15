@@ -313,22 +313,38 @@ export const materializeInterruptedStream = async ({
     });
   }
 
-  const streamCompletePayload = {
-    messageId: row.messageId,
-    pageId: row.channelId,
-    conversationId: row.conversationId,
-    aborted: true,
-  };
-  broadcastAiStreamComplete(streamCompletePayload).catch((error) => {
-    loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
+  // ANNOUNCE ONLY WHAT ACTUALLY HAPPENED.
+  //
+  // This broadcast used to be unconditional, which quietly undid the fence it sits behind.
+  // `stream_complete` is not advisory: clients handle it by ending the session, aborting the
+  // join and dropping the live stream entry. So on a fenced-off settle — the case where the
+  // owner beat again and is STILL GENERATING — the row correctly stayed `'streaming'` while
+  // this told every viewer the reply was over. The bubble would vanish mid-generation and not
+  // come back until some later reconciliation, which is the precise user-visible symptom this
+  // whole PR exists to remove, reintroduced two statements after the fix (review finding —
+  // chatgpt-codex-connector, PR #2419).
+  //
+  // Nothing is lost by gating it. `settled === false` has exactly two causes, and neither wants
+  // this event: the fence rejected us (the stream is alive — announcing its end is a lie), or
+  // another path already drove the row terminal (and that path fired its own broadcast).
+  if (settled) {
+    const streamCompletePayload = {
       messageId: row.messageId,
-      error: error instanceof Error ? error.message : 'unknown',
+      pageId: row.channelId,
+      conversationId: row.conversationId,
+      aborted: true,
+    };
+    broadcastAiStreamComplete(streamCompletePayload).catch((error) => {
+      loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
+        messageId: row.messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     });
-  });
-  // Transitional conv-room mirror — same as stream-lifecycle.ts's finish().
-  conversationEvents
-    .streamLifecycleMirror(row.conversationId, 'chat:stream_complete', streamCompletePayload)
-    .catch(() => {});
+    // Transitional conv-room mirror — same as stream-lifecycle.ts's finish().
+    conversationEvents
+      .streamLifecycleMirror(row.conversationId, 'chat:stream_complete', streamCompletePayload)
+      .catch(() => {});
+  }
 
   return settled;
 };

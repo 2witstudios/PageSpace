@@ -139,7 +139,25 @@ export const claimDeadStream = async ({
       // `now()`, not `new Date()`. The token has to come from the same clock the predicates
       // below are evaluated against, or a skewed reaper mints a token that its own TTL
       // comparison then misreads.
-      .set({ reapClaimedAt: sql`now()` })
+      //
+      // TRUNCATED TO MILLISECONDS, and this is not cosmetic — without it NOTHING here works.
+      // `timestamp` keeps PostgreSQL's microsecond precision, and `RETURNING` hands that back
+      // through the driver as a JavaScript `Date`, which holds only milliseconds. Binding that
+      // truncated value into the fence's equality then compares `…06.556` against the stored
+      // `…06.556568` and matches ZERO rows — so every fenced settle and every frame release
+      // would be rejected, the row would never leave `'streaming'`, and the reap would retry
+      // forever. Truncating at the source makes the value exactly representable on both sides,
+      // so the round trip is lossless. Verified against a real Postgres: `now()` matched 0 rows,
+      // `date_trunc('milliseconds', now())` matched 1 (review finding — chatgpt-codex-connector,
+      // PR #2419).
+      //
+      // A millisecond-granular token is still a perfectly good one: it is compared only for
+      // equality against itself and for age against a 60s TTL.
+      //
+      // MOCKED TESTS CANNOT SEE THIS. It lives entirely in the driver's type round trip, so the
+      // guard against regression is `stream-reap-claim.integration.test.ts`, which runs the real
+      // statements against the real database.
+      .set({ reapClaimedAt: sql`date_trunc('milliseconds', now())` })
       .where(and(
         eq(aiStreamSessions.messageId, messageId),
         // A row that already left 'streaming' was reaped, or finished normally. Either way its

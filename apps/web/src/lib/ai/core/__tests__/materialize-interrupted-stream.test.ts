@@ -19,6 +19,7 @@ const {
   mockDeleteWhere,
   mockClaimDeadStream,
   mockIsReapClaimStillHeld,
+  mockStreamLifecycleMirror,
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockInsertValues: vi.fn(),
@@ -40,6 +41,7 @@ const {
   mockDeleteWhere: vi.fn(),
   mockClaimDeadStream: vi.fn(),
   mockIsReapClaimStillHeld: vi.fn(),
+  mockStreamLifecycleMirror: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -172,6 +174,24 @@ vi.mock('@/lib/websocket', () => ({
   broadcastAiStreamComplete: mockBroadcastAiStreamComplete,
 }));
 
+// The transitional conv-room mirror. Carries the SAME stream_complete event to a different set
+// of listeners, so it has to be gated alongside the page-room broadcast — spied here so a case
+// can prove it is.
+//
+// ONLY that method is replaced. `message-repository` — whose real CAS terminal writes these
+// cases exercise — calls `messageCreated`/`messageUpdated`/`messageDeleted` on the same object,
+// so a whole-module stub silently broke every message write in the file.
+vi.mock('@/lib/websocket/conversation-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/websocket/conversation-events')>();
+  return {
+    ...actual,
+    conversationEvents: {
+      ...actual.conversationEvents,
+      streamLifecycleMirror: mockStreamLifecycleMirror,
+    },
+  };
+});
+
 vi.mock('@/lib/channels/notify-mentioned-users', () => ({
   notifyMentionedUsers: mockNotifyMentionedUsers,
 }));
@@ -278,6 +298,7 @@ beforeEach(() => {
   // zero-row race (a concurrent reap already settled this row) override this per-case.
   mockUpdateWhere.mockResolvedValue({ rowCount: 1 });
   mockBroadcastAiStreamComplete.mockResolvedValue(undefined);
+  mockStreamLifecycleMirror.mockResolvedValue(undefined);
   // Default: no durable frame log for this stream — a row started by a worker from before
   // the log had a writer. Every pre-existing case below therefore keeps exercising the
   // `parts` fallback exactly as it did, and the frame path is opted into per-test.
@@ -673,6 +694,29 @@ describe('materializeInterruptedStream — broadcast', () => {
     await materialize(pageRow());
 
     expect(mockBroadcastAiStreamComplete).not.toHaveBeenCalled();
+  });
+
+  // THE FENCE IS UNDONE IF THIS EVENT ESCAPES. `stream_complete` is not advisory: clients
+  // handle it by ending the session, aborting the join and dropping the live stream entry. A
+  // fenced-off settle means the owner beat again and is STILL GENERATING — so broadcasting
+  // there makes the reply vanish mid-generation, which is the exact user-visible symptom the
+  // whole PR exists to remove.
+  it('does not broadcast when the reap fence rejected the settle (the owner is still generating)', async () => {
+    mockUpdateWhere.mockResolvedValue({ rowCount: 0 });
+
+    await materialize(pageRow());
+
+    expect(mockBroadcastAiStreamComplete).not.toHaveBeenCalled();
+  });
+
+  it('does not mirror a fenced-off settle onto the conversation room either', async () => {
+    // The conv-room mirror carries the same event to a different set of listeners, so gating
+    // only the page-room broadcast would leave half the tear-down firing.
+    mockUpdateWhere.mockResolvedValue({ rowCount: 0 });
+
+    await materialize(pageRow());
+
+    expect(mockStreamLifecycleMirror).not.toHaveBeenCalled();
   });
 
   it('logs but does not throw when the broadcast itself fails — a broadcast failure alone does not undo an otherwise-successful materialization', async () => {
