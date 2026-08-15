@@ -1277,3 +1277,44 @@ describe('republishDriveCanonical', () => {
     expect(db.query.publishedPages.findMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The published artifact and the in-app preview must resolve `siteMode` from the
+ * same persisted column. If publishing drops it, a site-mode page loads CDN
+ * scripts and issues fetches in the preview but not once published — the exact
+ * parity this pipeline exists to guarantee, inverted.
+ */
+describe('publishCanvasPage — siteMode propagation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+  });
+
+  it('given a siteMode CANVAS page, should pass siteMode: true to the published renderer', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1', siteMode: true,
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(renderPublishedPage).toHaveBeenCalledWith(
+      expect.objectContaining({ siteMode: true }),
+    );
+  });
+
+  it('given a non-siteMode CANVAS page, should not enable it at publish time', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1', siteMode: false,
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(renderPublishedPage).toHaveBeenCalledWith(
+      expect.objectContaining({ siteMode: false }),
+    );
+  });
+});
