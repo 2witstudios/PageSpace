@@ -284,4 +284,33 @@ describe('useStopStream — isStopping', () => {
 
     expect(result.current.isStopping).toBe(false);
   });
+
+  // Found while re-reading the P1 fix, same failure family: every release runs AFTER an await,
+  // so by then the user may have switched conversation and pressed Stop again. An unscoped
+  // clearStopping() there wipes the SECOND Stop's feedback on the FIRST one's late reply.
+  it('given a late reply from a superseded Stop, should not wipe the current conversation\'s stopping state', async () => {
+    let releaseA: (() => void) | undefined;
+    abortByMessageId.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        // A's abort comes back 'unconfirmed' — the outcome that releases — but LATE.
+        releaseA = () => resolve({ aborted: false, code: 'unconfirmed', reason: 'no response' });
+      }),
+    );
+
+    const { result, rerender } = renderStop({ activeStream: OWN_STREAM });
+
+    act(() => { void result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // Switch to B and stop it too. B's abort resolves normally ('aborted' → hold).
+    const streamB = { messageId: 'msg-b', conversationId: 'conv-2', isOwn: true } as ActiveStream;
+    rerender({ activeStream: streamB, pendingSendConversationId: null });
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // A's abort finally answers. It must not touch B's affordance.
+    await act(async () => { releaseA?.(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.isStopping).toBe(true);
+  });
 });

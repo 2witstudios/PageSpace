@@ -125,14 +125,37 @@ export const useStopStream = ({
 
   const [stoppingConversationId, setStoppingConversationId] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirrors the state for reads that happen AFTER an await, where the render-captured value is
+  // a stale snapshot of a Stop that may since have been superseded.
+  const stoppingConversationIdRef = useRef<string | null>(null);
+
+  const raiseStopping = useCallback((conversationId: string) => {
+    stoppingConversationIdRef.current = conversationId;
+    setStoppingConversationId(conversationId);
+  }, []);
 
   const clearStopping = useCallback(() => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
+    stoppingConversationIdRef.current = null;
     setStoppingConversationId(null);
   }, []);
+
+  /**
+   * Release the affordance ONLY if it is still the one this Stop raised.
+   *
+   * Every release below happens after an await, and by then the user may have switched
+   * conversation and pressed Stop again — at which point an unscoped `clearStopping()` would
+   * wipe the SECOND Stop's feedback on the first one's late reply. Same failure family as the
+   * conversation-keying above: anything this hook does after an await has to name what it is
+   * acting on, because the hook outlives the conversation it was looking at.
+   */
+  const releaseStoppingFor = useCallback((conversationId: string | null) => {
+    if (conversationId === null || stoppingConversationIdRef.current !== conversationId) return;
+    clearStopping();
+  }, [clearStopping]);
 
   // DERIVED, never stored: the affordance belongs to the conversation whose Stop was pressed, so
   // it can only show while that conversation is still the one on screen AND still has something
@@ -166,9 +189,12 @@ export const useStopStream = ({
    * nothing to be stopping. Only `aborted` means teardown is genuinely inbound, and only it
    * keeps waiting on `chat:stream_complete`.
    */
-  const releaseUnlessAbortConfirmed = useCallback((result: AbortResult) => {
-    if (result.code !== 'aborted') clearStopping();
-  }, [clearStopping]);
+  const releaseUnlessAbortConfirmed = useCallback(
+    (result: AbortResult, conversationId: string | null) => {
+      if (result.code !== 'aborted') releaseStoppingFor(conversationId);
+    },
+    [releaseStoppingFor],
+  );
 
   const handleStop = useCallback(async () => {
     // FIRST, synchronously, before any await: the click has to change the screen within a frame.
@@ -177,11 +203,13 @@ export const useStopStream = ({
     //
     // Nothing to name means nothing to claim: with no target there is no conversation to key the
     // affordance to, so it is never raised rather than raised and instantly withdrawn.
-    if (stopTargetConversationId !== null) {
-      setStoppingConversationId(stopTargetConversationId);
+    const stoppedConversationId = stopTargetConversationId;
+    if (stoppedConversationId !== null) {
+      raiseStopping(stoppedConversationId);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {
         timeoutRef.current = null;
+        stoppingConversationIdRef.current = null;
         setStoppingConversationId(null);
       }, STOPPING_FEEDBACK_TIMEOUT_MS);
     }
@@ -192,7 +220,7 @@ export const useStopStream = ({
       if (action.type === 'abortByMessageId') {
         const result = await abortActiveStreamByMessageId({ messageId: action.messageId });
         reportAbortOutcome(result);
-        releaseUnlessAbortConfirmed(result);
+        releaseUnlessAbortConfirmed(result, stoppedConversationId);
         return;
       }
       if (action.type === 'abortByConversation') {
@@ -200,7 +228,7 @@ export const useStopStream = ({
           conversationId: action.conversationId,
         });
         reportAbortOutcome(result);
-        releaseUnlessAbortConfirmed(result);
+        releaseUnlessAbortConfirmed(result, stoppedConversationId);
         return;
       }
       // 'none' — nothing live and nothing sent. Deliberately silent: there is nothing to report
@@ -208,16 +236,18 @@ export const useStopStream = ({
     } catch (error) {
       // Kept for a genuinely unexpected throw (the helpers swallow network failure into
       // 'unconfirmed', which `releaseUnlessAbortConfirmed` handles). No socket is coming for it:
-      // release now rather than making the user wait out the backstop.
-      clearStopping();
+      // release now rather than making the user wait out the backstop — but only if this Stop's
+      // affordance is still the one showing.
+      releaseStoppingFor(stoppedConversationId);
       throw error;
     }
   }, [
     activeStream,
     pendingSendConversationId,
     stopTargetConversationId,
+    raiseStopping,
     releaseUnlessAbortConfirmed,
-    clearStopping,
+    releaseStoppingFor,
   ]);
 
   return { handleStop, isStopping };
