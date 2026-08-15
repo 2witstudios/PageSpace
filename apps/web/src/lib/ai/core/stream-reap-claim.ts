@@ -33,6 +33,14 @@ import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
  *   3. MUTUAL EXCLUSION. At N>1 several instances sweep the same rows concurrently. Exactly
  *      one UPDATE can set `reap_claimed_at`; the losers match zero rows and stand down.
  *
+ *      This rests on READ COMMITTED's re-check, not on luck: the second UPDATE blocks on the
+ *      row lock the first took, and when it unblocks Postgres re-evaluates its WHERE clause
+ *      against the UPDATED tuple. `reap_claimed_at` is fresh by then, so the TTL branch is
+ *      false and the statement matches nothing. Two claims cannot both win. (Their tokens
+ *      would also differ — each statement is its own transaction, so each gets its own `now()`
+ *      — but the re-check is what makes it safe, and the distinct tokens are only what makes
+ *      the FENCE able to tell them apart afterwards.)
+ *
  * WHY NOT AN OWNER TOKEN, and why not a CAS on `status` alone — both were considered and both
  * are non-answers, so they are recorded here rather than rediscovered:
  *
