@@ -46,6 +46,7 @@ import {
 } from '@pagespace/lib/auth/agent-dispatch-payload';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { loadServicePrincipal } from '@/lib/auth';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { dispatchChatTurn } from '@/lib/ai/chat-pipeline/handle-chat-turn';
 import { AGENT_DISPATCH_DEPTH_HEADER } from '@/lib/ai/core/agent-dispatch-depth';
 
@@ -65,9 +66,22 @@ function refused(): NextResponse {
 }
 
 export async function POST(request: Request) {
+  // Declared size FIRST, before buffering — the point of the cap is that a
+  // caller who can sign cannot make us hold an arbitrary body in memory, and a
+  // check that runs after `text()` has already resolved does not achieve that
+  // (PR review). The public entry does the same, in the same order.
+  const declaredLength = Number.parseInt(request.headers.get('content-length') || '0', 10);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+  }
+
   const rawBody = await request.text();
 
-  if (rawBody.length > MAX_BODY_BYTES) {
+  // BYTES, not UTF-16 code units: `String.length` counts units, so ~12.5MB of
+  // multibyte text passes a 25MB `.length` test while being 25MB on the wire.
+  // Kept as a second check because `content-length` is absent on a chunked
+  // request and is in any case the caller's claim about itself.
+  if (Buffer.byteLength(rawBody, 'utf8') > MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
   }
 
@@ -81,6 +95,32 @@ export async function POST(request: Request) {
   }
 
   const payload = parsed.payload;
+
+  // A DRIVE-SCOPED credential may not drive a global-assistant worker.
+  //
+  // The global strategy has no drive-scope machinery at all — no
+  // `filterToolsForMcpScope`, and an `experimental_context` that carries neither
+  // `mcpAllowedDriveIds` nor `mcpTokenId` — because until this route existed no
+  // scoped credential could reach it (`handle-chat-turn` refuses MCP tokens on
+  // the public global path, and the global URL is session-only). Letting a
+  // scoped dispatch through here would have silently handed the worker the
+  // owner's full cross-drive reach, ceiling and all (PR review, P1).
+  //
+  // Refusing is the right answer rather than a stopgap: a global-assistant
+  // conversation IS the user's whole account — it spans every drive by
+  // definition — so a token confined to some drives has no coherent business
+  // driving one. An UNSCOPED credential (a session, or a full-account token from
+  // the SDK/CLI) carries no ceiling and still reaches global workers, which is
+  // the case this epic set out to enable.
+  if (payload.chatId === null && payload.allowedDriveIds.length > 0) {
+    loggers.ai.warn('agent dispatch: scoped credential refused on a global-assistant worker', {
+      conversationId: payload.conversationId,
+    });
+    return NextResponse.json(
+      { error: 'A drive-scoped credential cannot drive a global-assistant worker.' },
+      { status: 403 },
+    );
+  }
 
   // The signature proved the SERVICE. This proves nothing about the user — it
   // READS the user, live, so suspension and role changes bind on this hop rather
@@ -96,6 +136,34 @@ export async function POST(request: Request) {
       conversationId: payload.conversationId,
     });
     return refused();
+  }
+
+  // IDEMPOTENCE. The signature's 5-minute window bounds replay but does not
+  // prevent it, and a replayed dispatch is not harmless: the user message
+  // upserts on its id, but the turn would start a SECOND generation, mint a new
+  // assistant message, and settle billing again (PR review).
+  //
+  // The payload's `messageId` is the idempotency key — it is signed, so a replay
+  // necessarily carries the same one, and it is already written by the turn it
+  // belongs to. If it exists, this dispatch was accepted before; answer as
+  // though it succeeded rather than erroring, because from the caller's side it
+  // did. Cluster-safe by construction (one shared table), unlike an in-process
+  // nonce cache.
+  //
+  // Residual, and deliberately not papered over: two replays racing inside the
+  // window can both read "absent" before either writes. Closing that needs a
+  // unique-constrained claim row, which is a schema change; the signature — an
+  // attacker holding the secret can sign a FRESH dispatch anyway — remains the
+  // real boundary, and this removes the accidental and the cheap-replay cases.
+  const alreadyDispatched = await messageRepository
+    .getMessageById(payload.messageId)
+    .catch(() => null);
+  if (alreadyDispatched) {
+    loggers.ai.warn('agent dispatch: ignoring a replayed dispatch', {
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+    });
+    return NextResponse.json({ ok: true, replayed: true }, { status: 200 });
   }
 
   // Depth comes from the SIGNED payload, and the header is rebuilt from it —

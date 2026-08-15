@@ -46,6 +46,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       isClosed: false,
       isShared: false,
       workspaceOwnerId: null,
+      workspaceDriveId: null,
     })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
@@ -376,6 +377,7 @@ describe('send_session', () => {
         isClosed: false,
         isShared: false,
         workspaceOwnerId: null,
+        workspaceDriveId: null,
       })),
       // Reach is the DRIVE's decision now, so a foreign row only reads as
       // nonexistent when that decision says no.
@@ -417,6 +419,7 @@ describe('cross-member reach: a drive member addresses another member\'s worker'
     // unreachable — pinned by the last two tests in this block.
     isShared: true,
     workspaceOwnerId: 'other-member',
+    workspaceDriveId: null,
   };
 
   /** Owned by someone else, reachable: drive admits the workspace AND the thread is shared. */
@@ -562,6 +565,7 @@ describe('cross-member reach: a drive member addresses another member\'s worker'
         ...FOREIGN_WORKER,
         isShared: false,
         workspaceOwnerId: USER_ID,
+        workspaceDriveId: null,
       })),
     });
 
@@ -599,6 +603,7 @@ describe('worker verbs are RESOURCE-addressed — REACH is the gate, the calling
     isClosed: false,
     isShared: false,
     workspaceOwnerId: null,
+    workspaceDriveId: null,
   };
 
   it('the caller\'s own worker in ANOTHER workspace is addressable — send/read/kill all reach it', async () => {
@@ -909,5 +914,104 @@ describe('shell addressing across the two id namespaces (review H2)', () => {
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toMatchObject({ success: true, killed: false });
     expect(deps.killShell).not.toHaveBeenCalled();
+  });
+});
+
+describe('a drive-scoped credential is held to its ceiling, whoever owns the worker', () => {
+  // A scoped MCP/API token is NOT its user: it is confined to a subset of that
+  // user's drives. Every other gate in this family asks about the user, so
+  // without this the token reached any worker its owner could — including in
+  // drives outside its scope (PR review, P1).
+  const scoped = { mcpAllowedDriveIds: ['drive-in-scope'], mcpTokenId: 'mcp-token-1' };
+
+  function rowInDrive(driveId: string | null, over: Record<string, unknown> = {}) {
+    return {
+      conversationId: 's1',
+      ownerId: USER_ID,
+      agentPageId: CALLER_AGENT,
+      name: 'worker',
+      workspaceId: WORKSPACE_ID,
+      isClosed: false,
+      isShared: false,
+      workspaceOwnerId: USER_ID,
+      workspaceDriveId: driveId,
+      ...over,
+    };
+  }
+
+  it('reaches its OWN worker inside the ceiling', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('drive-in-scope')) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(scoped),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('refuses its OWN worker outside the ceiling — ownership is not an escape from scope', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('drive-out-of-scope')) });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 's1', input: 'x' } : { sessionId: 's1' };
+      const refused = await run(tools[verb], input, contextOptions(scoped));
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions(scoped));
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('refuses a worker whose workspace drive cannot be resolved — fails CLOSED', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive(null)) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(scoped),
+    );
+
+    expect(sent.success).toBe(false);
+  });
+
+  it('an UNSCOPED caller is unaffected — an empty ceiling admits everything', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('any-drive')) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('list_sessions discovers only workspaces inside the ceiling', async () => {
+    // Discovery resolves from the USER's drive relationships, so without the
+    // same filter it advertised workspace ids and every worker's sessionId in
+    // drives the token may not touch — the addressability gate would then refuse
+    // exactly what the listing had just offered.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => null),
+      listOwnWorkspaces: vi.fn(async () => [
+        { workspaceId: 'ws-in', name: 'mine', driveId: 'drive-in-scope', sandbox: 'running' as const, workers: [] },
+        { workspaceId: 'ws-out', name: 'other', driveId: 'drive-out-of-scope', sandbox: 'running' as const, workers: [] },
+      ]),
+      listSharedWorkspaces: vi.fn(async () => [
+        { workspaceId: 'ws-shared-in', name: 'team', driveId: 'drive-in-scope', sandbox: 'running' as const, workers: [] },
+        { workspaceId: 'ws-shared-out', name: 'elsewhere', driveId: 'drive-out-of-scope', sandbox: 'running' as const, workers: [] },
+      ]),
+    });
+
+    const result = await run(createSessionTools(deps).list_sessions, {}, contextOptions(scoped));
+
+    expect((result.otherWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-in']);
+    expect((result.sharedWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-shared-in']);
+    expect(JSON.stringify(result)).not.toContain('drive-out-of-scope');
   });
 });

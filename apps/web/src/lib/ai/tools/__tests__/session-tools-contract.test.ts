@@ -48,6 +48,7 @@ const OWN_WORKER = {
   isClosed: false,
   isShared: false,
   workspaceOwnerId: null,
+  workspaceDriveId: null,
 };
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {

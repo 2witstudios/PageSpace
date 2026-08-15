@@ -8,6 +8,7 @@ import {
   type AgentDispatchPayload,
 } from '@pagespace/lib/auth/agent-dispatch-payload';
 import { loadServicePrincipal } from '@/lib/auth';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { dispatchChatTurn } from '@/lib/ai/chat-pipeline/handle-chat-turn';
 import { POST } from '../route';
 
@@ -17,8 +18,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 });
 vi.mock('@/lib/auth', () => ({ loadServicePrincipal: vi.fn() }));
 vi.mock('@/lib/ai/chat-pipeline/handle-chat-turn', () => ({ dispatchChatTurn: vi.fn() }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: { getMessageById: vi.fn() },
+}));
 
 const loadServicePrincipalMock = vi.mocked(loadServicePrincipal);
+const getMessageByIdMock = vi.mocked(messageRepository.getMessageById);
 const dispatchChatTurnMock = vi.mocked(dispatchChatTurn);
 
 const PAYLOAD: AgentDispatchPayload = {
@@ -62,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('REALTIME_BROADCAST_SECRET', 'test-broadcast-secret-at-least-32-chars');
   loadServicePrincipalMock.mockResolvedValue(PRINCIPAL);
+  getMessageByIdMock.mockResolvedValue(null);
   dispatchChatTurnMock.mockResolvedValue(new Response('ok', { status: 200 }));
 });
 
@@ -156,10 +162,55 @@ describe('POST /api/internal/agent-dispatch', () => {
   it('omits chatId entirely for a global-assistant worker', async () => {
     // The strategy selection distinguishes "no chatId" from "chatId: null"; a
     // null would fall through to the page strategy's "chatId is required" 400.
-    await POST(signed({ ...PAYLOAD, chatId: null }));
+    // Unscoped, because a DRIVE-SCOPED credential is refused on this path — see
+    // the test below.
+    await POST(signed({ ...PAYLOAD, chatId: null, allowedDriveIds: [], originatingMcpTokenId: undefined }));
 
     const turn = dispatchChatTurnMock.mock.calls[0][0];
     expect(turn.body).not.toHaveProperty('chatId');
     expect(turn.body.conversationId).toBe('worker-conversation-1');
+  });
+
+  it('refuses a DRIVE-SCOPED credential on a global-assistant worker', async () => {
+    // SECURITY. The global strategy has no drive-scope machinery — no
+    // `filterToolsForMcpScope`, no `mcpAllowedDriveIds` in its tool context — so
+    // letting a scoped dispatch through would hand the worker the owner's full
+    // cross-drive reach. A global-assistant conversation spans the whole
+    // account by definition, so a confined credential has no business driving
+    // one.
+    const response = await POST(signed({ ...PAYLOAD, chatId: null }));
+
+    expect(response.status).toBe(403);
+    expect(dispatchChatTurnMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores a REPLAYED dispatch rather than running the turn twice', async () => {
+    // The 5-minute signature window bounds replay but does not prevent it, and a
+    // replay is not harmless: it would start a second generation and settle
+    // billing again. The signed `messageId` is the idempotency key.
+    getMessageByIdMock.mockResolvedValue({ id: 'message-1' } as never);
+
+    const response = await POST(signed());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, replayed: true });
+    expect(dispatchChatTurnMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a body whose declared content-length exceeds the cap, without buffering it', async () => {
+    const { body, signatureHeader } = signAgentDispatch(PAYLOAD);
+    const oversized = new Request('http://localhost:3000/api/internal/agent-dispatch', {
+      method: 'POST',
+      headers: {
+        'x-broadcast-signature': signatureHeader,
+        'content-length': String(26 * 1024 * 1024),
+      },
+      body,
+    });
+
+    const response = await POST(oversized);
+
+    expect(response.status).toBe(413);
+    expect(dispatchChatTurnMock).not.toHaveBeenCalled();
   });
 });

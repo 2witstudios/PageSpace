@@ -173,7 +173,7 @@ export const WORKER_DISPATCH_TOOL_NAMES: ReadonlySet<string> = new Set([
  * Strip the worker-dispatch pair from an execution whose WORKSPACE DOES NOT
  * OUTLIVE IT.
  *
- * This used to be `filterToolsForEphemeralWorkspace`, and it used to guard a
+ * This used to be `filterToolsForDispatchCredentials`, and it used to guard a
  * credential: dispatch relayed the calling user's browser cookie, so any surface
  * without one advertised two tools whose dispatch could only refuse (review
  * #2326). That reason is GONE — dispatch signs its own hop now and needs no

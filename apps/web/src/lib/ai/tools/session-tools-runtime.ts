@@ -889,15 +889,22 @@ async function recoverMintedWorkspaceAfterThrow(
 }
 
 /**
- * A workspace's owner, for the one gate that needs it: a caller who OWNS the
- * workspace sees and addresses every thread in it, including other members'
- * private ones (they are the tenant of that working context). Read through the
- * same session store the rest of the runtime uses.
+ * The two workspace facts the worker-verb gates need, from one read.
+ *
+ *  - `ownerId`: a caller who OWNS the workspace sees and addresses every thread
+ *    in it, including other members' private ones — they are the tenant of that
+ *    working context.
+ *  - `driveId`: where the workspace lives, so a drive-SCOPED credential can be
+ *    held to its ceiling. Drive membership is a fact about the USER; a token
+ *    confined to some of that user's drives must not reach a worker outside
+ *    them just because its owner could (PR review, P1).
  */
-async function getWorkspaceOwnerId(workspaceId: string): Promise<string | null> {
+async function describeWorkspace(
+  workspaceId: string,
+): Promise<{ workspaceOwnerId: string | null; workspaceDriveId: string | null }> {
   const store = await getAgentSessionStore();
   const row = await store.findById(workspaceId);
-  return row?.ownerId ?? null;
+  return { workspaceOwnerId: row?.ownerId ?? null, workspaceDriveId: row?.driveId ?? null };
 }
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
@@ -963,7 +970,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // re-read at the gate so the verbs and the listing weigh the same
         // values, not merely the same rule.
         isShared: conversation.isShared,
-        workspaceOwnerId: membership ? (await getWorkspaceOwnerId(membership.workspaceId)) : null,
+        ...(membership
+          ? await describeWorkspace(membership.workspaceId)
+          : { workspaceOwnerId: null, workspaceDriveId: null }),
       };
     },
 

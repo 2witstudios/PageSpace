@@ -369,6 +369,14 @@ export interface WorkerRow {
    * them over titles.
    */
   workspaceOwnerId: string | null;
+  /**
+   * The drive the worker's workspace lives in, or null when it has none (a
+   * global-assistant workspace, or an unresolvable row). Consulted ONLY to hold
+   * a drive-scoped credential to its ceiling — drive membership is a fact about
+   * the USER, and a token confined to some of that user's drives must not reach
+   * a worker outside them.
+   */
+  workspaceDriveId: string | null;
 }
 
 export type DispatchOutcome =
@@ -676,6 +684,27 @@ function readDepth(context: ToolExecutionContext | undefined): number {
 }
 
 /**
+ * Whether a workspace's drive is inside the calling credential's ceiling.
+ *
+ * `[]` means unscoped — a session, or a full-account token — and admits
+ * everything. A SCOPED credential admits only its own drives, and a workspace
+ * with no drive at all (a global-assistant workspace) is never inside a
+ * drive-scoped ceiling: there is no drive for the scope to have granted.
+ *
+ * Fails CLOSED on an unresolvable workspace drive, for the same reason: a null
+ * is "we do not know where this lives", which a confined credential must not be
+ * given the benefit of.
+ */
+function withinCredentialScope(
+  context: ToolExecutionContext | undefined,
+  workspaceDriveId: string | null,
+): boolean {
+  const allowed = context?.mcpAllowedDriveIds ?? [];
+  if (allowed.length === 0) return true;
+  return workspaceDriveId !== null && allowed.includes(workspaceDriveId);
+}
+
+/**
  * The drive ceiling the CALLING credential is already under, to be carried
  * across the dispatch hop.
  *
@@ -922,6 +951,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // Not-found and not-reachable are ONE answer, settled before anything about
     // the row's state leaks into the response shape.
     if (!row) return { ok: false, error: notYourSession(conversationId) };
+    // THE CALLING CREDENTIAL'S CEILING, before anything about who owns what.
+    //
+    // Every other gate here asks about the USER. A drive-scoped MCP token is not
+    // its user: it is confined to a subset of their drives, and a worker outside
+    // that subset must read as nonexistent to it even when the person behind it
+    // could reach the worker perfectly well. This applies to the caller's OWN
+    // workers too — ownership is not an escape from scope (PR review, P1).
+    if (!withinCredentialScope(context, row.workspaceDriveId)) {
+      return { ok: false, error: notYourSession(conversationId) };
+    }
     if (row.ownerId !== actor.userId) {
       // A worker with no workspace has nothing to derive drive reach FROM, so a
       // non-owner cannot reach it however the drive is configured.
@@ -1138,10 +1177,27 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // denial, so keying on it withholds a refused workspace whatever the
         // reason for the refusal, and for any `deps` implementation.
         const excludeWorkspaceId = boundWorkspace?.workspaceId;
-        const [otherWorkspaces, sharedWorkspaces] = await Promise.all([
+        const [ownWorkspaces, memberWorkspaces] = await Promise.all([
           deps.listOwnWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
           deps.listSharedWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
         ]);
+        // Both listings resolve from the USER's drive relationships
+        // (`getDriveIdsForUser`), which is the right question for a session and
+        // the wrong one for a drive-scoped token: it would discover — with names,
+        // workspace ids and every worker's sessionId — workspaces its owner can
+        // reach and it cannot (PR review, P1). Held to the same ceiling
+        // `openAddressableSession` enforces, so discovery and addressability
+        // agree rather than one advertising what the other refuses.
+        //
+        // The BOUND workspace above needs no such filter: it is the workspace of
+        // the caller's own conversation, and a scoped token only reaches this
+        // turn at all through `checkMCPPageScope` on that conversation's page.
+        const otherWorkspaces = ownWorkspaces.filter((w) =>
+          withinCredentialScope(context, w.driveId),
+        );
+        const sharedWorkspaces = memberWorkspaces.filter((w) =>
+          withinCredentialScope(context, w.driveId),
+        );
 
         if (!conversationId || !workspace) {
           // No conversation, or a plain one with no workspace: nothing HERE,
