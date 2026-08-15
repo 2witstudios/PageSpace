@@ -43,8 +43,18 @@ describe('resolveEventKey', () => {
     expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Digit1' }))).toBe('1');
   });
 
-  it('given Alt on a named key, should still use the key name', () => {
+  it('given Alt on a named key, should use the code, which reads the same', () => {
     expect(resolveEventKey(keyEvent({ altKey: true, key: 'Tab', code: 'Tab' }))).toBe('Tab');
+  });
+
+  it('given Alt on punctuation, should use the code rather than the composed character', () => {
+    // macOS ⌥⇧/ reports "¿" — resolving the whole keyboard through e.code under
+    // Alt is what keeps capture and matching in agreement here.
+    expect(resolveEventKey(keyEvent({ altKey: true, shiftKey: true, key: '¿', code: 'Slash' }))).toBe('Slash');
+  });
+
+  it('given Alt on a modifier key, should return empty', () => {
+    expect(resolveEventKey(keyEvent({ altKey: true, key: 'Alt', code: 'AltLeft' }))).toBe('');
   });
 
   it('given a long-tail named key, should pass the name through', () => {
@@ -91,6 +101,37 @@ describe('eventToBinding', () => {
   });
 });
 
+describe('capture and validation agree', () => {
+  // The invariant the whole module rests on: if the widget can record it, the
+  // API must accept it and the store must keep it. Every bug found in review so
+  // far has been a violation of exactly this.
+  const presses = [
+    { name: 'macOS Option+P', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, key: 'π', code: 'KeyP' },
+    { name: 'macOS Option+Shift+/', ctrlKey: false, metaKey: false, altKey: true, shiftKey: true, key: '¿', code: 'Slash' },
+    { name: 'macOS Option+N (dead key)', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, key: 'Dead', code: 'KeyN' },
+    { name: 'macOS Option+1', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, key: '¡', code: 'Digit1' },
+    { name: 'Alt+Tab', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, key: 'Tab', code: 'Tab' },
+    { name: 'Ctrl+Shift+= (types "+")', ctrlKey: true, metaKey: false, altKey: false, shiftKey: true, key: '+', code: 'Equal' },
+    { name: 'Ctrl+Shift+?', ctrlKey: true, metaKey: false, altKey: false, shiftKey: true, key: '?', code: 'Slash' },
+    { name: 'AZERTY Ctrl+A', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: 'a', code: 'KeyQ' },
+    { name: 'Meta+1 from the numpad', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false, key: '1', code: 'Numpad1' },
+    { name: 'Ctrl+Pause', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: 'Pause', code: 'Pause' },
+    { name: 'Ctrl+ArrowUp', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: 'ArrowUp', code: 'ArrowUp' },
+    { name: 'Meta+Shift+Tab', ctrlKey: false, metaKey: true, altKey: false, shiftKey: true, key: 'Tab', code: 'Tab' },
+  ];
+
+  for (const press of presses) {
+    it(`given ${press.name}, what is captured should validate and match`, () => {
+      const event = keyEvent(press as unknown as Partial<KeyboardEvent> & { key: string });
+      const captured = eventToBinding(event);
+
+      expect(captured, 'should capture something').not.toBe('');
+      expect(isCanonicalBinding(captured), `${captured} should validate`).toBe(true);
+      expect(hasModifier(captured), `${captured} should carry a modifier`).toBe(true);
+    });
+  }
+});
+
 describe('isCanonicalBinding', () => {
   it('given every registry default, should accept it', () => {
     for (const hotkey of HOTKEY_REGISTRY) {
@@ -126,6 +167,27 @@ describe('isCanonicalBinding', () => {
     expect(isCanonicalBinding('Cmd+K')).toBe(false);
     expect(isCanonicalBinding('Shift+Ctrl+K')).toBe(false);
     expect(isCanonicalBinding('Ctrl+Ctrl+K')).toBe(false);
+    expect(isCanonicalBinding('Meta+Ctrl+K')).toBe(false);
+  });
+
+  it('given "+" as the main key, should accept it', () => {
+    // Shift+= types "+", so the separator is also a bindable key.
+    expect(isCanonicalBinding('Ctrl+Shift++')).toBe(true);
+    expect(isCanonicalBinding('Ctrl++')).toBe(true);
+  });
+
+  it('given a modifier name as the main key, should reject it', () => {
+    // resolveEventKey returns '' for these, so the binding could never fire —
+    // keeping it would shadow the default with something silently dead.
+    expect(isCanonicalBinding('Ctrl+CapsLock')).toBe(false);
+    expect(isCanonicalBinding('Ctrl+Shift')).toBe(false);
+    expect(isCanonicalBinding('Meta+Control')).toBe(false);
+  });
+
+  it('given an Alt binding on punctuation, should accept the code token', () => {
+    // macOS ⌥⇧/ composes "¿", so Alt resolves the whole keyboard through e.code.
+    expect(isCanonicalBinding('Alt+Shift+Slash')).toBe(true);
+    expect(isCanonicalBinding('Alt+Period')).toBe(true);
   });
 
   it('given an empty binding, should reject it (callers treat empty as disabled)', () => {

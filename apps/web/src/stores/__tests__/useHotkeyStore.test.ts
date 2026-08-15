@@ -99,6 +99,18 @@ describe('useHotkeyStore', () => {
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
+    it('given a binding on a modifier key, should reset it rather than keep a dead override', () => {
+      // The old widget only excluded Control/Meta/Alt/Shift, so "Ctrl+CapsLock"
+      // was capturable. It can no longer fire, and keeping it would shadow the
+      // default with something silently dead and no notice.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Ctrl+CapsLock' },
+      ]);
+
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+    });
+
     it('given a re-saved binding, should clear its reset notice', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },

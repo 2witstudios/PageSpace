@@ -21,6 +21,17 @@ const MODIFIER_ORDER = ['Ctrl', 'Meta', 'Alt', 'Shift'] as const;
 /** Keys that are modifiers themselves and can never be the main key. */
 const MODIFIER_KEY_NAMES = new Set(['Control', 'Meta', 'Alt', 'Shift', 'CapsLock']);
 
+/** `e.code` values for the modifier keys, which can never be the main key. */
+const MODIFIER_CODE = /^(Control|Meta|Alt|Shift|OS)(Left|Right)?$|^CapsLock$/;
+
+/**
+ * A token `resolveEventKey` can emit for an Alt binding: a letter or digit from
+ * `e.code`, or a `e.code` name, which is always ASCII and starts with a capital.
+ * Anything else under Alt — "Π", "¿", "~" — was written by the old capture code
+ * from a composed `e.key` and can never be produced again.
+ */
+const ALT_KEY_TOKEN = /^([A-Z0-9]|[A-Z][A-Za-z0-9]*)$/;
+
 interface BindingEventLike {
   ctrlKey: boolean;
   metaKey: boolean;
@@ -35,13 +46,20 @@ interface BindingEventLike {
  *
  * `e.key` is preferred because it is the character the user sees on the key —
  * layout-correct by construction. The one case it cannot be trusted is Alt:
- * macOS composes a different character (⌥P → "π") or a dead key (⌥N → "Dead"),
- * so for Alt combinations the physical `e.code` is used instead.
+ * macOS composes a different character (⌥P → "π", ⌥⇧/ → "¿") or a dead key
+ * (⌥N → "Dead"). For Alt the physical `e.code` is used throughout — every key,
+ * not just letters and digits — so that capture and matching agree on the whole
+ * keyboard rather than only the part `e.key` survives.
  */
 export function resolveEventKey(event: BindingEventLike): string {
   if (event.altKey && event.code) {
     if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
     if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+    // Punctuation, named and navigation keys keep their code ("Slash", "Tab").
+    // Alt bindings are therefore layout-independent, which is the trade Alt
+    // forces on us: e.key carries no usable signal here.
+    if (!MODIFIER_CODE.test(event.code)) return event.code;
+    return '';
   }
 
   if (!event.key || MODIFIER_KEY_NAMES.has(event.key)) return '';
@@ -66,10 +84,25 @@ export function eventToBinding(event: BindingEventLike): string {
   return parts.join('+');
 }
 
-/** Split a binding into its modifiers and key token. */
+/**
+ * Split a binding into its modifiers and key token.
+ *
+ * Modifiers are stripped from the left rather than splitting on every "+",
+ * because "+" is itself a key: Shift+= types one, so "Ctrl+Shift++" is a real
+ * binding whose key is "+". Splitting naively yields empty tokens and loses it.
+ */
 export function splitBinding(binding: string): { modifiers: string[]; key: string } {
-  const parts = binding.split('+');
-  return { modifiers: parts.slice(0, -1), key: parts[parts.length - 1] };
+  const modifiers: string[] = [];
+  let rest = binding;
+
+  for (const modifier of MODIFIER_ORDER) {
+    if (rest.startsWith(`${modifier}+`) && rest.length > modifier.length + 1) {
+      modifiers.push(modifier);
+      rest = rest.slice(modifier.length + 1);
+    }
+  }
+
+  return { modifiers, key: rest };
 }
 
 /**
@@ -88,25 +121,25 @@ export function splitBinding(binding: string): { modifiers: string[]; key: strin
 export function isCanonicalBinding(binding: string): boolean {
   if (!binding) return false;
 
-  const parts = binding.split('+');
-  // A trailing "+" key would produce an empty token.
-  if (parts.some((p) => p === '')) return false;
-
   const { modifiers, key } = splitBinding(binding);
+  if (!key) return false;
 
-  let lastIndex = -1;
-  for (const modifier of modifiers) {
-    const index = (MODIFIER_ORDER as readonly string[]).indexOf(modifier);
-    if (index <= lastIndex) return false; // unknown, out of order, or duplicated
-    lastIndex = index;
-  }
+  // Modifiers are stripped in canonical order, so anything left holding a "+"
+  // is a modifier out of order, duplicated, or unknown ("Shift+Ctrl+K" leaves
+  // "Ctrl+K"). The one legitimate "+" key is exactly "+".
+  if (key !== '+' && key.includes('+')) return false;
 
-  if (modifiers.includes('Alt')) {
-    // Alt resolves through e.code, which only ever yields A-Z or 0-9.
-    if (key.length === 1) return /^[A-Z0-9]$/.test(key);
-    // "Dead" is what macOS reports for ⌥N and friends — never matchable.
-    if (key === 'Dead') return false;
-  }
+  // A modifier name is never the main key: `resolveEventKey` returns '' for
+  // those, so "Ctrl+CapsLock" would be kept as an override that never fires.
+  if (MODIFIER_KEY_NAMES.has(key)) return false;
+
+  // "Dead" is what macOS reports for ⌥N and friends — never a real key.
+  if (key === 'Dead') return false;
+
+  // Under Alt the token comes from `e.code`, so it is ASCII and capitalised.
+  // A composed character ("Π", "¿", "~") could only have been written by the
+  // old capture code and can never be produced again.
+  if (modifiers.includes('Alt') && !ALT_KEY_TOKEN.test(key)) return false;
 
   return true;
 }
