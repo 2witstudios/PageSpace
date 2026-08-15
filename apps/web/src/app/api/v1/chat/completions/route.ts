@@ -36,6 +36,7 @@ import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-ev
 import { validateConversationAccess } from '@/lib/ai/openai-api/v1-conversations';
 import { extractToolCallsFromSteps } from '@/lib/ai/openai-api/extract-tool-calls-from-steps';
 import { resolveHoldDisposition } from '@/lib/ai/openai-api/resolve-hold-disposition';
+import { describeErrorCause } from '@/lib/ai/openai-api/describe-error-cause';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -393,6 +394,23 @@ export async function POST(request: Request): Promise<Response> {
     // 8. Build message context and save new user message
     const isThreadMode = incomingConversationId !== undefined;
     const conversationId = isThreadMode ? incomingConversationId : createId();
+
+    // The minted id needs its `conversations` row BEFORE anything writes a
+    // message against it. `messages.conversationId` is NOT NULL with an FK to
+    // `conversations.id`, so a non-threaded call — the default shape every
+    // plain OpenAI client and pagespace-cli's brain path sends — died on a
+    // 23503 foreign-key violation in savePageMessage before streaming ever
+    // started (#2414). Thread mode already has its row: 5c created it for a
+    // client_manages_history caller, and validateConversationAccess proved it
+    // exists for everyone else.
+    //
+    // Same eager-create as /api/ai/page-agents/consult, and for the second
+    // reason it gives too: the conversation is then listable, instead of
+    // holding messages no listing that joins `conversations` can see.
+    if (!isThreadMode) {
+      await conversationRepository.createConversation(conversationId, authResult.userId, pageId);
+    }
+
     const userMessage = messages[messages.length - 1];
 
     let inferenceMessages = messages;
@@ -550,7 +568,7 @@ export async function POST(request: Request): Promise<Response> {
             },
           }),
         }).catch((err: unknown) => {
-          loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
+          loggers.ai.error('OpenAI API: failed to save assistant message', err as Error, describeErrorCause(err));
         });
       }
 
@@ -750,7 +768,13 @@ export async function POST(request: Request): Promise<Response> {
   } catch (setupError) {
     // Pre-stream failure (capabilities / convertToModelMessages / persistence). No provider
     // tokens were billed; the finally frees the hold. Return 500 like the in-app chat route.
-    loggers.ai.error('OpenAI API: request setup failed before streaming', setupError as Error, { pageId });
+    // ...with the driver's own diagnostics, not just Drizzle's `Failed query:`
+    // wrapper — a constraint violation should name its constraint in the log
+    // rather than requiring the schema to be read by hand (#2414).
+    loggers.ai.error('OpenAI API: request setup failed before streaming', setupError as Error, {
+      pageId,
+      ...describeErrorCause(setupError),
+    });
     return NextResponse.json({ error: 'Failed to process chat request. Please try again.' }, { status: 500 });
   } finally {
     // Setup-phase disposition is always 'release' (resolveHoldDisposition); only act when the

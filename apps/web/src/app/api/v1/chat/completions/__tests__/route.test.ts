@@ -707,6 +707,37 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('openai mode: creates the conversations row the minted id will be written against', async () => {
+    // #2414: without this the auto-minted conversationId has no `conversations`
+    // row, and savePageMessage — whose conversationId is NOT NULL with an FK —
+    // fails 23503 before streaming starts, 500ing every non-threaded request.
+    await POST(makeRequest(validBody));
+    const created = vi.mocked(conversationRepository.createConversation).mock.calls[0];
+    const saved = vi.mocked(messageRepository.savePageMessage).mock.calls[0]?.[0];
+    assert({
+      given: 'a request with no conversation_id, so the route mints one',
+      should: 'create that exact conversation for the caller and agent page before saving the user message',
+      actual: {
+        createdWith: created?.slice(0, 3),
+        savedAgainst: saved?.conversationId,
+      },
+      expected: {
+        createdWith: ['test-id-123', 'user-1', 'page-123'],
+        savedAgainst: 'test-id-123',
+      },
+    });
+  });
+
+  test('thread mode: does not re-create a conversation the ownership check already resolved', async () => {
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    assert({
+      given: 'a thread-mode request whose conversations row already exists',
+      should: 'leave creation to the 5c ownership check and not create it again',
+      actual: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+      expected: 0,
+    });
+  });
+
   test('openai mode: does not call getMessagesForPage when conversation_id is absent', async () => {
     await POST(makeRequest(validBody));
     assert({
