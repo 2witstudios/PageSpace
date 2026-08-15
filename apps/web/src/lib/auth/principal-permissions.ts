@@ -47,7 +47,7 @@ import {
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
-import { isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
+import { getAllowedDriveIds, isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
 
 /**
  * A scoped MCP token acts as an app member (its allowedDriveIds are exactly its
@@ -55,6 +55,24 @@ import { isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, 
  */
 export function isScopedMCPAuth(auth: AuthResult): auth is MCPAuthResult {
   return isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0;
+}
+
+/**
+ * Whether the credential is confined to a set of drives AT ALL, whatever its
+ * shape — for the callers that only need the yes/no.
+ *
+ * `isScopedMCPAuth` cannot answer this: it is a TYPE GUARD that narrows to
+ * `MCPAuthResult` because most of its ~30 callers go on to read MCP-specific
+ * fields. A dispatched worker runs under service auth carrying an inherited
+ * ceiling, which is drive-scoped in every sense that matters to a tool-set
+ * filter but is not an MCP result and must not be narrowed to one.
+ *
+ * Reads through `getAllowedDriveIds`, so it stays correct for every credential
+ * shape by construction — including the manage-keys sentinel, which is scoped to
+ * a drive set of exactly nothing.
+ */
+export function isDriveScopedPrincipal(auth: AuthResult): boolean {
+  return getAllowedDriveIds(auth).length > 0;
 }
 
 /**

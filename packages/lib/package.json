@@ -477,6 +477,11 @@
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
     },
+    "./auth/agent-dispatch-payload": {
+      "types": "./dist/auth/agent-dispatch-payload.d.ts",
+      "import": "./dist/auth/agent-dispatch-payload.js",
+      "require": "./dist/auth/agent-dispatch-payload.js"
+    },
     "./repositories/account-repository": {
       "types": "./dist/repositories/account-repository.d.ts",
       "import": "./dist/repositories/account-repository.js",
@@ -1999,6 +2004,9 @@
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
+      ],
+      "auth/agent-dispatch-payload": [
+        "./dist/auth/agent-dispatch-payload.d.ts"
       ],
       "services/pending-uploads": [
         "./dist/services/pending-uploads.d.ts"

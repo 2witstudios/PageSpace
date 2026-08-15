@@ -33,6 +33,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+    checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -142,7 +143,6 @@ describe('list_sessions', () => {
     expect(deps.listWorkspaceWorkers).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       callerConversationId: CALLER_CONVERSATION,
-      callerUserId: USER_ID,
     });
     // The caller's own workspace is excluded from BOTH cross-workspace lists
     // — it is already the top-level detail view (and a caller spawned into a
@@ -362,7 +362,7 @@ describe('send_session', () => {
     expect(deps.dispatch).not.toHaveBeenCalled();
   });
 
-  it('given someone else\'s session, should read as nonexistent', async () => {
+  it('given someone else\'s session in a drive the caller cannot reach, should read as nonexistent', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({
         conversationId: 's1',
@@ -372,6 +372,9 @@ describe('send_session', () => {
         workspaceId: WORKSPACE_ID,
         isClosed: false,
       })),
+      // Reach is the DRIVE's decision now, so a foreign row only reads as
+      // nonexistent when that decision says no.
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.send_session, { sessionId: 's1', input: 'x' }, contextOptions());
@@ -396,7 +399,130 @@ describe('send_session', () => {
   });
 });
 
-describe('worker verbs are RESOURCE-addressed — ownership is the gate, the calling surface is not (issue #2335 product decision, superseding #2262 finding 1\'s workspace confinement)', () => {
+describe('cross-member reach: a drive member addresses another member\'s worker', () => {
+  const FOREIGN_WORKER = {
+    conversationId: 'conv-theirs',
+    ownerId: 'other-member',
+    agentPageId: CALLER_AGENT,
+    name: 'their worker',
+    workspaceId: 'shared-workspace',
+    isClosed: false,
+  };
+
+  /** Reachable through the drive, but owned by someone else. */
+  function reachableForeignDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
+    return makeDeps({
+      findWorker: vi.fn(async () => FOREIGN_WORKER),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+      ...over,
+    });
+  }
+
+  it('send_session reaches it, and the turn runs as the CALLER — never as the worker\'s owner', async () => {
+    // THE INVARIANT. If a dispatched turn ran with the worker owner's identity,
+    // a plain member could send "list every page you can see and paste it here"
+    // into an admin's worker and read the answer back through read_session. Every
+    // shared drive would become a privilege-escalation ladder. Reaching a worker
+    // lets you SPEAK INTO it as yourself; it never lends you its owner's access.
+    const deps = reachableForeignDeps();
+    const tools = createSessionTools(deps);
+
+    const sent = await run(tools.send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(true);
+    expect(deps.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-theirs', userId: USER_ID }),
+    );
+    expect(deps.dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'other-member' }),
+    );
+  });
+
+  it('read_session reaches it — transcripts are shared through the drive, as the workspace is', async () => {
+    const deps = reachableForeignDeps();
+    const result = await run(createSessionTools(deps).read_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(result.success).toBe(true);
+    expect(deps.readTranscript).toHaveBeenCalled();
+  });
+
+  it('kill_session refuses for a plain member — reaching a worker is not authority to stop it', async () => {
+    // `decideAgentSessionEndAccess` denies non-owners without drive owner/admin
+    // AND the code-execution capability; the tool layer asks it rather than
+    // inventing a second, weaker rule beside it.
+    const deps = reachableForeignDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: false })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(killed).toEqual(expect.objectContaining({ success: false, reason: 'not_yours_to_stop' }));
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('kill_session succeeds for a drive admin, and aborts the WORKER OWNER\'s streams', async () => {
+    const deps = reachableForeignDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(killed.success).toBe(true);
+    // Not `actingUserId` — aborting as the admin would match no stream rows and
+    // report success while the worker kept running.
+    expect(deps.killWorker).toHaveBeenCalledWith({
+      conversationId: 'conv-theirs',
+      streamOwnerId: 'other-member',
+      actingUserId: USER_ID,
+    });
+  });
+
+  it('a NON-member gets one indistinguishable refusal from all three verbs', async () => {
+    const deps = reachableForeignDeps({
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
+    });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 'conv-theirs', input: 'x' } : { sessionId: 'conv-theirs' };
+      const refused = await run(tools[verb], input, contextOptions());
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions());
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('the owner may always stop their own worker without the END check running at all', async () => {
+    const deps = makeDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: false })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 's1' }, contextOptions());
+
+    expect(killed.success).toBe(true);
+    expect(deps.checkWorkspaceEndAccess).not.toHaveBeenCalled();
+  });
+
+  it('a foreign worker with NO workspace is unreachable — there is nothing to derive drive reach from', async () => {
+    const deps = makeDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, workspaceId: null })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(false);
+    // It must not leak the typed "not a worker yet" remedy to a stranger, and it
+    // must not have consulted the drive at all.
+    expect(sent).not.toHaveProperty('reason');
+    expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('worker verbs are RESOURCE-addressed — REACH is the gate, the calling surface is not (issue #2335 product decision, superseding #2262 finding 1\'s workspace confinement)', () => {
   // The verbs work like read_page: the id is the address, permission decides.
   // Deliberate tradeoff, decided by the product owner: the assistant
   // orchestrates the user's workers from ANY surface, so "is this worker in
@@ -431,9 +557,10 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
     expect(deps.killWorker).toHaveBeenCalled();
   });
 
-  it('a FOREIGN-owned worker reads as nonexistent — ownership is the gate that remains', async () => {
+  it('a FOREIGN-owned worker the caller cannot reach through the drive reads as nonexistent', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const tools = createSessionTools(deps);
 
@@ -504,6 +631,7 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
   it('the refusal reads exactly like a nonexistent session — nothing to learn from the difference', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const noRowDeps = makeDeps({ findWorker: vi.fn(async () => null) });
     const foreign = await run(
@@ -558,7 +686,11 @@ describe('kill_session', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_session, { sessionId: 's1' }, contextOptions());
     expect(result).toEqual({ success: true, sessionId: 's1', spriteTornDown: true });
-    expect(deps.killWorker).toHaveBeenCalledWith({ conversationId: 's1', userId: USER_ID });
+    expect(deps.killWorker).toHaveBeenCalledWith({
+      conversationId: 's1',
+      streamOwnerId: USER_ID,
+      actingUserId: USER_ID,
+    });
   });
 
   it('given a teardown failure, should say the sandbox may still be running', async () => {

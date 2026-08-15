@@ -126,7 +126,7 @@ vi.mock('@/lib/ai/core/ai-tools', async () => {
 });
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
-  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),

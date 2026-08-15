@@ -45,6 +45,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE })),
     // Mallory is no longer a member of the drive Alice's workspace lives in.
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: false, reason: 'not_a_member' })),
+    checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),

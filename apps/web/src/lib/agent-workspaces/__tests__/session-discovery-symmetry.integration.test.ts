@@ -1,6 +1,14 @@
 /**
- * Discovery symmetry + shared-metadata redaction (epic Phase 2), against a
+ * Discovery symmetry + shared-metadata visibility (epic Phase 2), against a
  * REAL migration-built Postgres.
+ *
+ * NOTE ON A REVERSAL. This file was written when the tool surface redacted
+ * other members' private-thread titles, and its name still says "redaction".
+ * The cross-member reach change removed that redaction from the TOOL listing
+ * (not from the shared rule, which still serves the HTTP/sidebar surface and is
+ * pinned below): once every listed worker is addressable by send/read/
+ * kill_session, hiding the label leaves an agent unable to choose between ids it
+ * is allowed to use.
  *
  * PR #2336 flagged (deliberately out of scope there): `list_sessions`' cross-
  * workspace listing was scoped to workspaces the caller OWNS, while
@@ -35,7 +43,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { factories } from '@pagespace/db/test/factories';
-import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
+import { PRIVATE_THREAD_REDACTION, redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import { createConversationInSession, spawnSession } from '../agent-workspaces-runtime';
@@ -104,13 +112,26 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     if (!listed) return;
     expect(listed.driveId).toBe(drive.id);
 
-    // …with an HONEST worker count and the one redaction rule applied.
+    // …with an HONEST worker count and REAL titles. This used to assert
+    // `PRIVATE_THREAD_REDACTION` for the owner's private thread; the reach
+    // widening removed that, because every row here is now addressable by
+    // send/read/kill_session and a member cannot choose between several
+    // identical "(private thread)" labels. The redaction rule itself is intact
+    // and still governs the HTTP/sidebar listing — pinned below.
     expect(listed.workers).toHaveLength(3);
     const titleById = new Map(listed.workers.map((w) => [w.sessionId, w.name]));
     expect(titleById.get(memberThreadId)).toBe('member research');
     expect(titleById.get(ownerSharedId)).toBe('team notes');
-    expect(titleById.get(ownerPrivateId)).toBe(PRIVATE_THREAD_REDACTION);
-    expect(JSON.stringify(listed)).not.toContain('owner secret plans');
+    expect(titleById.get(ownerPrivateId)).toBe('owner secret plans');
+    // The rule still exists and still redacts — it just no longer stands
+    // between an agent and an id it is allowed to address.
+    expect(
+      redactConversationTitleForViewer({
+        viewerId: member.id,
+        workspaceOwnerId: owner.id,
+        conversation: { ownerId: owner.id, isShared: false, title: 'owner secret plans' },
+      }),
+    ).toBe(PRIVATE_THREAD_REDACTION);
 
     // 2. SYMMETRY — the id the listing surfaced is spawnable-into, through
     // the same gate the explicit-workspaceId path always enforced.
@@ -144,7 +165,6 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const ownerDetail = await deps.listWorkspaceWorkers({
       workspaceId,
       callerConversationId: ownerPrivateId,
-      callerUserId: owner.id,
     });
     const ownerTitles = new Map(ownerDetail.workers.map((w) => [w.sessionId, w.name]));
     expect(ownerTitles.get(ownerPrivateId)).toBe('owner secret plans');
