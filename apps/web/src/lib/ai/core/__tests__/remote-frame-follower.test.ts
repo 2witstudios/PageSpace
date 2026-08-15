@@ -40,6 +40,14 @@ import { acquireRemoteChannel, resetRemoteFrameFollowers } from '../remote-frame
 
 const frame = (n: number): UIMessageChunk => ({ type: 'text-delta', id: 't1', delta: `f${n}` });
 
+/**
+ * The SDK's own stream terminators, which are what prove a durable log holds a WHOLE
+ * generation rather than a prefix the writer gave up on. See STREAM_TERMINATOR_FRAMES.
+ */
+const FINISH = { type: 'finish' } as UIMessageChunk;
+const ABORT = { type: 'abort' } as UIMessageChunk;
+const ERROR_FRAME = { type: 'error', errorText: 'boom' } as UIMessageChunk;
+
 const read = (over: Partial<FrameCursorRead> = {}): FrameCursorRead => ({
   frames: [],
   nextSeq: 0,
@@ -159,10 +167,10 @@ describe('acquireRemoteChannel — following another instance\'s log', () => {
   // frames are still there" are independent facts. Collapsing them is what would make a followed
   // reply silently shorter than the one the originating tab saw.
 
-  it('given a terminal row whose log is still present, serves the rest then ends cleanly', async () => {
+  it('given a terminal row whose log is still present AND terminated, serves the rest then ends cleanly', async () => {
     mockReadFramesFrom
       .mockResolvedValueOnce(read({ nextSeq: 0 }))
-      .mockResolvedValueOnce(read({ frames: [frame(0)], nextSeq: 1 }));
+      .mockResolvedValueOnce(read({ frames: [frame(0), FINISH], nextSeq: 2 }));
     mockStatusRow.mockResolvedValue(COMPLETE);
 
     const { channel } = acquireRemoteChannel('msg-1');
@@ -170,10 +178,100 @@ describe('acquireRemoteChannel — following another instance\'s log', () => {
     await settle();
 
     assert({
-      given: 'a finished generation whose frames survive',
+      given: 'a finished generation whose log survives and carries the stream terminator',
       should: 'deliver the tail and end WITHOUT asking for a reload',
       actual: { frames: seen.frames, end: seen.end },
-      expected: { frames: [frame(0)], end: { reason: 'finished', aborted: false, truncated: false } },
+      expected: {
+        frames: [frame(0), FINISH],
+        end: { reason: 'finished', aborted: false, truncated: false },
+      },
+    });
+  });
+
+  // ── A NON-EMPTY LOG IS NOT A COMPLETE ONE ───────────────────────────────────────────────────
+  //
+  // `frame-log-writer` stops early in three documented ways (pre-write delete failed, batch
+  // insert failed, durable budget exhausted), and every one leaves a valid, contiguous,
+  // HOLE-FREE prefix. Without a completeness proof that reads as a clean end: `empty` false,
+  // `truncated` false, and — because frames were delivered — `joinFailed` false too. The user
+  // keeps a truncated reply nothing ever reloads.
+
+  it('given a surviving log that never terminated, asks for a reload rather than ending cleanly', async () => {
+    mockReadFramesFrom
+      .mockResolvedValueOnce(read({ frames: [frame(0), frame(1)], nextSeq: 2 }))
+      .mockResolvedValue(read({ nextSeq: 2 }));
+    mockStatusRow.mockResolvedValue(COMPLETE);
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+    await nextTick();
+
+    assert({
+      given: 'a writer that gave up partway, leaving a hole-free PREFIX',
+      should: 'keep the frames but end truncated — a short log must not read as a complete one',
+      actual: { frames: seen.frames.length, truncated: seen.end?.truncated },
+      expected: { frames: 2, truncated: true },
+    });
+  });
+
+  it('accepts an abort frame as proof of completeness', async () => {
+    mockReadFramesFrom
+      .mockResolvedValueOnce(read({ nextSeq: 0 }))
+      .mockResolvedValueOnce(read({ frames: [frame(0), ABORT], nextSeq: 2 }));
+    mockStatusRow.mockResolvedValue(ABORTED);
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+
+    // A stopped generation is still a COMPLETE record of what it produced — the SDK's `abort`
+    // frame is its terminator, and the client's bubble should not be replaced by a reload.
+    assert({
+      given: 'a Stopped generation whose log carries the abort terminator',
+      should: 'end aborted but not truncated',
+      actual: { aborted: seen.end?.aborted, truncated: seen.end?.truncated },
+      expected: { aborted: true, truncated: false },
+    });
+  });
+
+  it('accepts the pump\'s synthetic error frame as proof of completeness', async () => {
+    mockReadFramesFrom
+      .mockResolvedValueOnce(read({ nextSeq: 0 }))
+      .mockResolvedValueOnce(read({ frames: [frame(0), ERROR_FRAME], nextSeq: 2 }));
+    mockStatusRow.mockResolvedValue(COMPLETE);
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+
+    // The pump appends this and then stops reading, so it is the last frame there will ever be.
+    assert({
+      given: 'a generation whose SDK stream threw',
+      should: 'treat the recorded error as the end of the record, not as a truncation',
+      actual: seen.end?.truncated,
+      expected: false,
+    });
+  });
+
+  it('remembers a terminator seen on an EARLIER tick', async () => {
+    mockReadFramesFrom
+      .mockResolvedValueOnce(read({ frames: [frame(0), FINISH], nextSeq: 2 }))
+      .mockResolvedValue(read({ nextSeq: 2 }));
+    mockStatusRow.mockResolvedValue(COMPLETE);
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+    await nextTick();
+
+    // The terminal branch runs on a LATER tick than the one that delivered the terminator, so
+    // the proof has to be remembered rather than re-derived from the final read.
+    assert({
+      given: 'a terminator delivered before the row went terminal',
+      should: 'still count as proof when the follower ends',
+      actual: seen.end?.truncated,
+      expected: false,
     });
   });
 
@@ -199,7 +297,7 @@ describe('acquireRemoteChannel — following another instance\'s log', () => {
   it('given an aborted row, carries aborted through', async () => {
     mockReadFramesFrom
       .mockResolvedValueOnce(read({ nextSeq: 0 }))
-      .mockResolvedValueOnce(read({ nextSeq: 0 }));
+      .mockResolvedValueOnce(read({ nextSeq: 0, empty: true }));
     mockStatusRow.mockResolvedValue(ABORTED);
 
     const { channel } = acquireRemoteChannel('msg-1');

@@ -29,6 +29,25 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * so its leading frames are sliced off — which is the same arithmetic the docblock describes,
  * just after an indexable seek rather than instead of one.
  *
+ * ── THE BUDGET BOUNDS THE QUERY, NOT THE LOOP ───────────────────────────────────────────────
+ *
+ * An earlier version selected every row from the cursor onward and applied `MAX_TICK_BYTES`
+ * while walking the result. That bounded nothing: the driver had already materialized and
+ * parsed the entire remaining log — up to the writer's 64 MB per-stream durable ceiling —
+ * before any JavaScript ceiling could look at it. A reconnect against a long stream, and
+ * especially a fleet-wide reconnect across many streams, would allocate that per follower
+ * (review finding — chatgpt-codex-connector, PR #2421). `readFrames` documents avoiding
+ * exactly this and then this module reintroduced it.
+ *
+ * So the payload is never over-fetched. The METADATA pass reads three integers per row —
+ * negligible whatever the log holds, and `LIMIT`ed besides — and the contiguous prefix and
+ * the byte budget are both decided from it. The PAYLOAD pass then fetches `frames` for exactly
+ * the rows that survived that decision, bounded by `from_seq <= $lastWanted`.
+ *
+ * It also costs LESS than the version it replaces on the common path. A tick that finds nothing
+ * new — most of them, on a stream inside a tool call — now stops after the metadata query and
+ * never issues the payload query at all.
+ *
  * ── CONTIGUITY IS ENFORCED EXACTLY AS `readFrames` ENFORCES IT ──────────────────────────────
  *
  * A row whose `from_seq` is not where the walk expected it is a HOLE, and the walk STOPS there
@@ -55,6 +74,19 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * whole message in a single call, and this one simply continues on the next tick 250ms later.
  */
 const MAX_TICK_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Ceiling on how many row HEADERS one tick inspects.
+ *
+ * The metadata pass is three integers per row, so this is a formality against a pathological
+ * log rather than a real constraint — but it makes the first query bounded in the same
+ * statement rather than in the loop that reads it, which is the whole lesson of `MAX_TICK_BYTES`
+ * above. Comfortably more rows than `MAX_TICK_BYTES` can admit at any realistic batch size, so
+ * the byte budget is what actually decides the prefix and this never truncates first in
+ * practice. Reaching it behaves exactly like reaching the byte budget: the tick stops, and the
+ * next one resumes from the cursor it left.
+ */
+const MAX_TICK_ROWS = 512;
 
 export interface FrameCursorRead {
   /** Frames from `fromSeq` onward, contiguous, in seq order. */
@@ -150,14 +182,15 @@ export const readFramesFrom = async ({
     }
   }
 
-  // CURSOR 2 — forward range scan from the containing row. Also a PK seek.
-  let rows: { fromSeq: number; frameCount: number; frames: unknown[]; byteSize: number }[];
+  // PASS 1 — METADATA ONLY, forward from the containing row. Three integers per row, `LIMIT`ed:
+  // this is what makes the budget below a real bound rather than a ceiling applied to something
+  // the driver has already parsed into memory.
+  let index: { fromSeq: number; frameCount: number; byteSize: number }[];
   try {
-    rows = await db
+    index = await db
       .select({
         fromSeq: aiStreamFrames.fromSeq,
         frameCount: aiStreamFrames.frameCount,
-        frames: aiStreamFrames.frames,
         byteSize: aiStreamFrames.byteSize,
       })
       .from(aiStreamFrames)
@@ -165,9 +198,10 @@ export const readFramesFrom = async ({
         eq(aiStreamFrames.messageId, messageId),
         gte(aiStreamFrames.fromSeq, containing),
       ))
-      .orderBy(asc(aiStreamFrames.fromSeq));
+      .orderBy(asc(aiStreamFrames.fromSeq))
+      .limit(MAX_TICK_ROWS);
   } catch (error) {
-    loggers.ai.warn('frame-log-cursor: range read failed', {
+    loggers.ai.warn('frame-log-cursor: index read failed', {
       messageId,
       fromSeq,
       error: error instanceof Error ? error.message : 'unknown',
@@ -175,15 +209,17 @@ export const readFramesFrom = async ({
     return nothing(fromSeq, false);
   }
 
-  const collected: UIMessageChunk[] = [];
+  // Decide the contiguous, budgeted prefix from the metadata alone.
+  //
   // The walk starts at the CONTAINING row's seq, not at `fromSeq` — the leading frames it
   // contributes are sliced off at the end. Starting the contiguity check at `fromSeq` instead
   // would report a hole for every ordinary mid-row cursor.
   let expectedSeq = containing;
+  let lastWantedSeq = -1;
   let truncated = false;
   let readBytes = 0;
 
-  for (const row of rows) {
+  for (const row of index) {
     if (row.fromSeq !== expectedSeq) {
       // A HOLE. Stop — never skip. See the module docblock: past this point the fold would be
       // confidently wrong rather than merely short, and it is being streamed to a live reader.
@@ -195,17 +231,77 @@ export const readFramesFrom = async ({
       truncated = true;
       break;
     }
-    // Checked AFTER the contiguity test and BEFORE taking the row, so the budget bounds what is
-    // materialized. Not `truncated`: the walk stopped because it had read enough, not because
-    // the log is unservable, and the next tick resumes exactly here.
-    if (readBytes >= MAX_TICK_BYTES && collected.length > 0) break;
+    // Checked AFTER the contiguity test and BEFORE the row is taken, so the budget decides what
+    // the payload query will FETCH. Deliberately not `truncated`: the walk stopped because it
+    // had taken enough for one tick, not because the log is unservable, and the next tick
+    // resumes exactly here. The first row is always taken, so a single oversized row still makes
+    // progress rather than stalling the follower forever.
+    if (readBytes >= MAX_TICK_BYTES && lastWantedSeq >= 0) break;
 
     readBytes += row.byteSize;
-    collected.push(...(row.frames as UIMessageChunk[]));
+    lastWantedSeq = row.fromSeq;
     // Advance by the RECORDED count, exactly as `readFrames` does. Trusting the column is what
     // makes a disagreement between it and the payload surface as a gap (and stop the walk)
     // rather than silently shifting every subsequent row's seq.
     expectedSeq = row.fromSeq + row.frameCount;
+  }
+
+  // NOTHING NEW TO FETCH. Two ways to land here, and both are ordinary rather than exceptional:
+  // the very first row was a hole (`lastWantedSeq < 0`), or the admitted rows reach no further
+  // than the cursor already does (`expectedSeq <= fromSeq`) — which is what EVERY tick on a
+  // stream sitting in a long tool call looks like.
+  //
+  // Returning here is most of what makes the two-pass split cheaper than the single
+  // over-fetching query it replaced rather than merely safer: the common tick now costs two
+  // integer reads and never touches the `frames` jsonb at all.
+  if (lastWantedSeq < 0 || expectedSeq <= fromSeq) {
+    return { frames: [], nextSeq: fromSeq, truncated, empty: false };
+  }
+
+  // PASS 2 — the payload for exactly those rows, and no more.
+  let rows: { fromSeq: number; frameCount: number; frames: unknown[] }[];
+  try {
+    rows = await db
+      .select({
+        fromSeq: aiStreamFrames.fromSeq,
+        frameCount: aiStreamFrames.frameCount,
+        frames: aiStreamFrames.frames,
+      })
+      .from(aiStreamFrames)
+      .where(and(
+        eq(aiStreamFrames.messageId, messageId),
+        gte(aiStreamFrames.fromSeq, containing),
+        lte(aiStreamFrames.fromSeq, lastWantedSeq),
+      ))
+      .orderBy(asc(aiStreamFrames.fromSeq));
+  } catch (error) {
+    loggers.ai.warn('frame-log-cursor: payload read failed', {
+      messageId,
+      fromSeq,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return nothing(fromSeq, false);
+  }
+
+  // PASS 2 RE-WALKS CONTIGUITY rather than trusting pass 1 to still describe the table —
+  // the same rule `readFrames` follows, and for the same reason: between the two queries a
+  // release or the retention backstop can delete this message's rows wholesale. Re-deriving here
+  // makes pass 1 purely a decision about HOW MUCH to fetch, and leaves this walk the single
+  // authority on what is contiguous.
+  const collected: UIMessageChunk[] = [];
+  let seq = containing;
+  for (const row of rows) {
+    if (row.fromSeq !== seq) {
+      loggers.ai.warn('frame-log-cursor: log changed between the index and payload reads — stopping', {
+        messageId,
+        expectedSeq: seq,
+        foundSeq: row.fromSeq,
+      });
+      truncated = true;
+      break;
+    }
+    collected.push(...(row.frames as UIMessageChunk[]));
+    seq = row.fromSeq + row.frameCount;
   }
 
   // Drop what the containing row contributed before the cursor.
@@ -214,7 +310,7 @@ export const readFramesFrom = async ({
 
   return {
     frames,
-    nextSeq: Math.max(fromSeq, expectedSeq),
+    nextSeq: Math.max(fromSeq, seq),
     truncated,
     empty: false,
   };

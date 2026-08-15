@@ -1,3 +1,4 @@
+import type { UIMessageChunk } from 'ai';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
@@ -62,6 +63,33 @@ const IDLE_POLL_INTERVAL_MS = 1000;
 const EMPTY_TICKS_BEFORE_BACKOFF = 4;
 
 /**
+ * The frames that PROVE the log holds a whole generation.
+ *
+ * A NON-EMPTY LOG IS NOT A COMPLETE ONE, and conflating them was a real bug. `frame-log-writer`
+ * has three documented ways to stop early — its pre-write delete failing, a batch insert
+ * failing, and exhausting the per-stream durable budget — and every one of them leaves a valid,
+ * contiguous, HOLE-FREE prefix behind. A follower that delivered such a prefix and then found
+ * the row terminal would see `empty: false` and `truncated: false`, hand the client a clean
+ * `done`, and — because frames HAD been delivered — leave `joinFailed` false too. The user would
+ * be left looking at a truncated reply that nothing ever reloaded, with no signal anywhere that
+ * it was short (review finding — chatgpt-codex-connector, PR #2421).
+ *
+ * The log has no length marker to check against, and `raw_parts_count` — the comparator
+ * `materializeInterruptedStream` uses for exactly this question — is zeroed by the terminal
+ * write, so it is gone by the time a follower needs it. But the STREAM carries its own
+ * terminator: `pumpSdkStreamToChannel` appends every SDK frame verbatim, so a log that contains
+ * one contains everything the generation produced. `finish` ends a normal turn, `abort` a
+ * stopped one, and `error` is the synthetic frame the pump appends when the SDK stream throws —
+ * after which it stops reading. Any of the three is proof that capture ran to the end.
+ *
+ * Deliberately "have we EVER seen one" rather than "is the last frame one": a trailing
+ * `message-metadata` frame would defeat the stricter test, and the cost of being wrong differs
+ * enormously by direction. Failing to recognise completeness costs one needless reload; falsely
+ * claiming it is the silent truncation above.
+ */
+const STREAM_TERMINATOR_FRAMES: ReadonlySet<string> = new Set(['finish', 'abort', 'error']);
+
+/**
  * How long a channel outlives its last subscriber.
  *
  * A tab reconnecting (a network blip, a `resumeFromSeq` reseed, a pane remounting) would
@@ -82,6 +110,9 @@ interface Follower {
   refs: number;
   cursor: number;
   emptyTicks: number;
+  /** A stream terminator has reached this channel — see STREAM_TERMINATOR_FRAMES. Until it has,
+   *  a non-empty log is not evidence of a complete one. */
+  sawTerminator: boolean;
   pollTimer: ReturnType<typeof setTimeout> | null;
   lingerTimer: ReturnType<typeof setTimeout> | null;
   evictionTimer: ReturnType<typeof setTimeout>;
@@ -113,6 +144,14 @@ const readTerminalState = async (
       error: error instanceof Error ? error.message : 'unknown',
     });
     return { present: true, terminal: false, aborted: false };
+  }
+};
+
+/** Append frames and record whether any of them ended the stream. */
+const deliver = (follower: Follower, frames: readonly UIMessageChunk[]): void => {
+  for (const chunk of frames) {
+    follower.channel.append(chunk);
+    if (STREAM_TERMINATOR_FRAMES.has(chunk.type)) follower.sawTerminator = true;
   }
 };
 
@@ -164,7 +203,7 @@ const tick = async (messageId: string, follower: Follower): Promise<void> => {
   if (follower.stopped) return;
 
   if (read.frames.length > 0) {
-    for (const chunk of read.frames) follower.channel.append(chunk);
+    deliver(follower, read.frames);
     follower.cursor = read.nextSeq;
     // Reset on ANY new frame — the backoff is about quiet streams, and a stream that spoke is
     // not quiet. Without this a reader that fell into the idle cadence during one long tool call
@@ -205,24 +244,31 @@ const tick = async (messageId: string, follower: Follower): Promise<void> => {
       return;
     }
 
-    // The row is terminal. Which of the two honest answers depends on whether the log is STILL
-    // THERE: `stream-lifecycle` releases the frames once the terminal `messages` row is
-    // confirmed, so an empty log means the reply is durably saved and this follower cannot
-    // prove it delivered all of it.
+    // The row is terminal. One last read, because frames can land between the tick that found
+    // nothing and the status query that answered.
     const tail = await readFramesFrom({ messageId, fromSeq: follower.cursor });
     if (follower.stopped) return;
 
     if (tail.frames.length > 0) {
-      for (const chunk of tail.frames) follower.channel.append(chunk);
+      deliver(follower, tail.frames);
       follower.cursor = tail.nextSeq;
     }
 
+    // A CLEAN END REQUIRES PROOF, not merely the absence of evidence to the contrary.
+    //
+    //   - `tail.empty` — the log was RELEASED. `stream-lifecycle` deletes the frames once the
+    //     terminal `messages` row is confirmed, so the reply is durably saved and this follower
+    //     cannot show it delivered all of it. (Reported only for a log with no rows AT ALL,
+    //     never for a failed read — see `FrameCursorRead.empty` — so a DB blip cannot
+    //     masquerade as a released log and send every viewer into a needless reload.)
+    //   - `tail.truncated` — a hole, or a log that begins after this cursor.
+    //   - `!sawTerminator` — the log survives and is hole-free, but no `finish`/`abort`/`error`
+    //     ever arrived, so the writer stopped early and this is a PREFIX. See
+    //     STREAM_TERMINATOR_FRAMES: without this clause a short log reads exactly like a
+    //     complete one.
     finishFollower(messageId, follower, {
       aborted: state.aborted,
-      // `empty` is reported only for a log with no rows AT ALL — never for a failed read (see
-      // `FrameCursorRead.empty`), so a DB blip cannot masquerade as a released log and send
-      // every viewer into a needless reload.
-      truncated: tail.truncated || tail.empty,
+      truncated: tail.truncated || tail.empty || !follower.sawTerminator,
     });
     return;
   }
@@ -260,6 +306,7 @@ export const acquireRemoteChannel = (messageId: string): RemoteChannelHandle => 
     // answer `overflow` to every other subscriber below it.
     cursor: 0,
     emptyTicks: 0,
+    sawTerminator: false,
     pollTimer: null,
     lingerTimer: null,
     // Leak backstop, sharing STREAM_MAX_LIFETIME_MS with the channel registry, the abort
