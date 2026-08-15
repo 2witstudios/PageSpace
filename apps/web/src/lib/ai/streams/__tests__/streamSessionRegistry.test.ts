@@ -169,7 +169,52 @@ describe('endings', () => {
     await settle();
 
     expect(ends[0]?.channelId).toBe('page-1');
+  });
+
+  it('given a join that RESOLVED but delivered nothing, still reports joinFailed', async () => {
+    // A join can resolve cleanly having delivered NOTHING: it opened, the stream was already
+    // over, and the end sentinel was the first thing on the wire. What the store holds then is
+    // the seeded snapshot — debounced, and possibly SHORTER than the finished reply. Reporting
+    // `joinFailed: false` told consumers to keep it, and they kept a truncated bubble.
+    consumeStreamJoin.mockResolvedValue({ aborted: false });
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    await settle();
+
+    expect(ends[0]?.joinFailed).toBe(true);
+  });
+
+  it('given a join that delivered frames, reports joinFailed false', async () => {
+    consumeStreamJoin.mockImplementation(async (_id, _signal, onParts) => {
+      onParts([{ type: 'text', text: 'hello' }], 0);
+      return { aborted: false };
+    });
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    await settle();
+
     expect(ends[0]?.joinFailed).toBe(false);
+  });
+
+  it('given the server ended the join with reload, reports joinFailed even though frames arrived', async () => {
+    // The cross-instance case: a follower delivered a real prefix and then found the durable
+    // frame log released or holed. The content on screen is genuine but incomplete, and there is
+    // no seq to resume from — only the durably-persisted message is whole.
+    consumeStreamJoin.mockImplementation(async (_id, _signal, onParts) => {
+      onParts([{ type: 'text', text: 'partial' }], 0);
+      return { aborted: false, reload: true };
+    });
+    const ends: StreamSessionEnd[] = [];
+    onStreamSessionEnd((end) => ends.push(end));
+
+    openStreamSession(descriptor());
+    await settle();
+
+    expect(ends[0]?.joinFailed).toBe(true);
   });
 
   it('given a completion for a stream we never watched, reports joinFailed so the consumer reloads', () => {

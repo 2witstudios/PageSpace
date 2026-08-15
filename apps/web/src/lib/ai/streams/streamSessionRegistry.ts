@@ -148,10 +148,14 @@ export interface StreamSessionEnd {
    */
   aborted?: boolean;
   /**
-   * The join never delivered anything authoritative — usually because the stream lives on
-   * another web instance whose in-process channel registry this one cannot reach. The
-   * generation was fine; we just could not watch it. The consumer must reload the durably
-   * persisted message rather than trust whatever partial content the store held.
+   * The join never delivered a complete, authoritative copy. The generation was fine; we just
+   * could not watch all of it. The consumer must reload the durably persisted message rather
+   * than trust whatever partial content the store held.
+   *
+   * Three ways to get here, and they are all the same instruction to a consumer: the join
+   * errored; it resolved having delivered nothing; or the server ended it with `reload`, meaning
+   * a cross-instance follower found the durable frame log released or holed and could not serve
+   * the rest.
    */
   joinFailed: boolean;
 }
@@ -451,7 +455,20 @@ export const openStreamSession = (descriptor: StreamSessionDescriptor): void => 
       endSession(descriptor.messageId, {
         conversationId: descriptor.conversationId,
         channelId: descriptor.channelId,
-        joinFailed: false,
+        // `!delivered`, NOT a flat `false` — and the difference is the whole point of this line.
+        //
+        // A join can resolve cleanly having delivered NOTHING: it opened, the stream was already
+        // over, and the end sentinel was the first and only thing on the wire. What the store
+        // holds in that case is the seeded snapshot, which is debounced and can be SHORTER than
+        // the finished reply. Reporting `joinFailed: false` there told every consumer "keep what
+        // you have, it is authoritative", and they kept a truncated bubble.
+        //
+        // `reload` is the server saying the same thing explicitly: a cross-instance follower
+        // could not serve the whole message (the durable log was released or holed), so whatever
+        // arrived is a prefix however much of it there was. Neither is a failure — the
+        // generation was fine — but in both cases the durably-persisted message is the only
+        // complete copy, and `joinFailed` is exactly the flag that sends consumers to it.
+        joinFailed: !session.delivered || result.reload === true,
       });
     })
     .catch((error: unknown) => {
