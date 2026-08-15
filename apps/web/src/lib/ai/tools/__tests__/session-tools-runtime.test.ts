@@ -95,6 +95,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { resolveCallerSessionForWorker, buildSessionToolsDeps } from '../session-tools-runtime';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const sessionRow = { id: 'ses-1', ownerId: 'user-1', endedAt: null };
 const globalConversation = { id: 'conv-g', type: 'global', userId: 'user-1', isActive: true, contextId: null };
@@ -465,6 +466,42 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
       conversationId: 'conv-worker',
       userId: 'worker-owner',
     });
+  });
+
+  test('a cross-member kill leaves an audit record naming BOTH parties — the abort row alone cannot say who did it', async () => {
+    // The abort is recorded under the WORKER'S OWNER (the test above), and the
+    // owner sees only a stream that stopped. This is the one place both
+    // identities are in hand, so it is the only place the record can be made.
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'worker-owner',
+      actingUserId: 'drive-admin',
+    });
+
+    expect(loggers.ai.warn).toHaveBeenCalledWith(
+      expect.stringContaining('stopped by someone other than its owner'),
+      expect.objectContaining({
+        conversationId: 'conv-worker',
+        workerOwnerId: 'worker-owner',
+        actingUserId: 'drive-admin',
+      }),
+    );
+  });
+
+  test('an owner stopping their OWN worker records nothing — every kill would otherwise warn, and a log that always fires says nothing', async () => {
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'user-1',
+      actingUserId: 'user-1',
+    });
+
+    expect(loggers.ai.warn).not.toHaveBeenCalled();
   });
 
   test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {

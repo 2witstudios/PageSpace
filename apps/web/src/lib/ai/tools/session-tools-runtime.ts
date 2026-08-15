@@ -1113,7 +1113,18 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // authorized a drive admin to stop another member's worker, aborting as the
       // ADMIN would match zero rows and report success while the worker kept
       // running. Authorization happened before this call; this names the rows.
-      void actingUserId;
+      //
+      // A CROSS-MEMBER stop is the one outcome nobody is told about: the worker's
+      // owner sees only an aborted stream, and the abort itself is recorded under
+      // THEIR id (above), so the row cannot say who did it. Record the acting
+      // user here — it is the only place both identities are in hand (PR review).
+      if (actingUserId !== streamOwnerId) {
+        loggers.ai.warn('kill_session: a worker was stopped by someone other than its owner', {
+          conversationId,
+          workerOwnerId: streamOwnerId,
+          actingUserId,
+        });
+      }
       await abortConversationStreams({ conversationId, userId: streamOwnerId }).catch(() => {});
       // Deliberately NO sandbox teardown: a worker works in its SPAWNER's
       // workspace, so tearing "its" sandbox down would destroy a working context
