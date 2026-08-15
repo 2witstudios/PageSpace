@@ -134,6 +134,22 @@ describe('migrateLegacyBinding', () => {
     expect(migrateLegacyBinding('Alt+†')).toBeNull();
   });
 
+  it('given a shifted character with no Shift, should not guess a physical key', () => {
+    // macOS ⌥N reports "~". Mapping that to "`" the way a real Shift+` would
+    // hand the user a shortcut they never chose — reset instead.
+    expect(migrateLegacyBinding('Alt+~')).toBeNull();
+    expect(migrateLegacyBinding('Alt+…')).toBeNull();
+  });
+
+  it('given a shifted character with Shift held, should map it', () => {
+    // Shift+` is the only way to type "~", so the physical key is unambiguous.
+    expect(migrateLegacyBinding('Ctrl+Shift+~')).toBe('Ctrl+Shift+`');
+  });
+
+  it('given a legacy binding on an unrecognised named key, should return null', () => {
+    expect(migrateLegacyBinding('Alt+Dead')).toBeNull();
+  });
+
   it('given an empty binding, should return null', () => {
     expect(migrateLegacyBinding('')).toBeNull();
   });

@@ -172,18 +172,23 @@ const UNSHIFTED_BY_SHIFTED_CHAR: Record<string, string> = {
   '?': '/',
   '|': '\\',
   '~': '`',
-  ' ': 'Space',
 };
 
 /**
  * Translate a binding written by the old `e.key`-based capture into the
  * canonical form, when the old form was one that actually worked.
  *
- * A shifted punctuation or digit key (`Ctrl+Shift+?`) matched fine under the
- * previous matcher because it also compared `e.key`, so those bindings are
- * migrated rather than discarded. A binding holding a character no key press
- * can produce in canonical form — an Option-composed letter like `Alt+Π` — was
- * never matchable and cannot be recovered; those return null.
+ * A shifted key (`Ctrl+Shift+?`) matched fine under the previous matcher, which
+ * also compared `e.key`, so those are migrated rather than discarded. A binding
+ * holding a character no key press can produce in canonical form — an
+ * Option-composed letter like `Alt+Π` — was never matchable and cannot be
+ * recovered; those return null and the default takes over.
+ *
+ * The shifted-character mapping only applies when Shift is actually part of the
+ * binding. `~`, `!` and friends require Shift to type, so without it the
+ * character came from Option composition (macOS ⌥N reports `~`) and says
+ * nothing about which physical key was pressed — guessing there would hand the
+ * user a shortcut they never chose.
  */
 export function migrateLegacyBinding(binding: string): string | null {
   if (!binding) return null;
@@ -193,9 +198,21 @@ export function migrateLegacyBinding(binding: string): string | null {
   if (parts.some((p) => p === '')) return null;
 
   const key = parts[parts.length - 1];
-  const migratedKey = UNSHIFTED_BY_SHIFTED_CHAR[key] ?? (key.length === 1 ? key.toUpperCase() : key);
-  const migrated = [...parts.slice(0, -1), migratedKey].join('+');
+  const modifiers = parts.slice(0, -1);
+  const hasShift = modifiers.includes('Shift');
 
+  let migratedKey: string;
+  if (key === ' ') {
+    migratedKey = 'Space';
+  } else if (hasShift && UNSHIFTED_BY_SHIFTED_CHAR[key]) {
+    migratedKey = UNSHIFTED_BY_SHIFTED_CHAR[key];
+  } else if (key.length === 1) {
+    migratedKey = key.toUpperCase();
+  } else {
+    return null;
+  }
+
+  const migrated = [...modifiers, migratedKey].join('+');
   return isCanonicalBinding(migrated) ? migrated : null;
 }
 
