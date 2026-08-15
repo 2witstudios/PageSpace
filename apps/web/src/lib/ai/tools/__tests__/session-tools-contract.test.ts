@@ -46,13 +46,17 @@ const OWN_WORKER = {
   name: 'worker',
   workspaceId: WORKSPACE_ID,
   isClosed: false,
+  isShared: false,
+  workspaceOwnerId: null,
+  workspaceDriveId: null,
 };
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+    checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -306,7 +310,13 @@ describe('kill_session description: "any in-flight run is aborted. The conversat
     const deps = makeDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_session, { sessionId: 'conv-worker' }, contextOptions());
-    expect(deps.killWorker).toHaveBeenCalledWith({ conversationId: 'conv-worker', userId: USER_ID });
+    expect(deps.killWorker).toHaveBeenCalledWith({
+      conversationId: 'conv-worker',
+      // The worker is the caller's own here, so both ids are theirs — the
+      // cross-member case is pinned in session-tools-runtime.test.ts.
+      streamOwnerId: USER_ID,
+      actingUserId: USER_ID,
+    });
     // The production wiring always answers spriteTornDown: false — the
     // response honestly reports no sandbox was torn down.
     expect(result).toEqual({ success: true, sessionId: 'conv-worker', spriteTornDown: false });
@@ -317,6 +327,11 @@ describe('the typed refusal contract (spec §2): foreign rows read as nonexisten
   it('no-row and foreign-owner refusals are byte-identical — anti-enumeration preserved', async () => {
     const foreignDeps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OWN_WORKER, conversationId: 'conv-x', ownerId: 'someone-else' })),
+      // Unreachable through the drive as well as unowned — that combination is
+      // what must be indistinguishable from a row that does not exist. A foreign
+      // row the caller CAN reach is addressable now and answers differently, by
+      // design.
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
     for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {

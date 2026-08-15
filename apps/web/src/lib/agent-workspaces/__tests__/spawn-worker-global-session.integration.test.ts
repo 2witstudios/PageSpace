@@ -188,6 +188,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       agentPageId: null,
       name: 'isolated worker',
       workspace: 'new',
+      allowedDriveIds: [],
     });
     if (!isolated.ok) throw new Error(`isolated spawn failed: ${isolated.reason}`);
     expect(isolated.workspaceId).not.toBe(ensured.session.id);
@@ -207,6 +208,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       agentPageId: null,
       name: 'targeted worker',
       workspace: ensured.session.id,
+      allowedDriveIds: [],
     });
     if (!targeted.ok) throw new Error(`targeted spawn failed: ${targeted.reason}`);
     expect(targeted.workspaceId).toBe(ensured.session.id);
@@ -224,6 +226,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       agentPageId: null,
       name: 'trespasser',
       workspace: strangerSession.session.id,
+      allowedDriveIds: [],
     });
     expect(denied).toMatchObject({ ok: false, reason: 'workspace_not_found' });
 

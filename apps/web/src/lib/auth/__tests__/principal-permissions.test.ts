@@ -525,3 +525,79 @@ describe('canManagePageWebhooks', () => {
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
   });
 });
+
+describe('a dispatched worker is authorized as the credential that STARTED the chain', () => {
+  // A worker turn arrives as `ServiceAuthResult` — a fourth AuthResult variant.
+  // Every branch in principal-permissions was written against the first three,
+  // so a service result fell through every `isScopedMCPAuth` check to the plain
+  // USER path and ran with the owning user's full permissions, discarding the
+  // ceiling the signed dispatch carried. Three reviewers found this
+  // independently (PR review, P1). The fix normalizes at the door.
+  const serviceFromScopedToken: AuthResult = {
+    ...base,
+    userId: USER_ID,
+    tokenType: 'service',
+    service: 'agent-dispatch',
+    allowedDriveIds: [DRIVE_ID],
+    originatingMcpTokenId: TOKEN_ID,
+  };
+
+  const serviceFromSession: AuthResult = {
+    ...base,
+    userId: USER_ID,
+    tokenType: 'service',
+    service: 'agent-dispatch',
+    allowedDriveIds: [],
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('resolves page access through the ORIGINATING TOKEN, never the owning user', async () => {
+    vi.mocked(getAppAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+    const level = await getPrincipalAccessLevel(serviceFromScopedToken, PAGE_ID);
+
+    expect(getAppAccessLevel).toHaveBeenCalledWith(TOKEN_ID, PAGE_ID);
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(level?.canEdit).toBe(false);
+  });
+
+  it('a VIEWER-scoped token cannot clear the edit gate through its owner', async () => {
+    // The concrete escalation: pass the page-chat edit gate on the owner's
+    // broader access, append a message, and run the agent.
+    vi.mocked(getAppAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    expect(await canPrincipalEditPage(serviceFromScopedToken, PAGE_ID)).toBe(false);
+    expect(canUserEditPage).not.toHaveBeenCalled();
+  });
+
+  it('applies the token ceiling to drive membership and drive enumeration too', async () => {
+    vi.mocked(hasAppDriveMembership).mockResolvedValue(true);
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+
+    expect(await isPrincipalDriveMember(serviceFromScopedToken, DRIVE_ID)).toBe(true);
+    expect(hasAppDriveMembership).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+
+    expect(await getPrincipalDriveIds(serviceFromScopedToken)).toEqual([DRIVE_ID]);
+    expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it('a chain that started from a SESSION still resolves as the user', async () => {
+    // An unscoped chain has no ceiling to inherit and no token to resolve
+    // against — the normalization must not invent one.
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+
+    expect(await canPrincipalViewPage(serviceFromSession, PAGE_ID)).toBe(true);
+    expect(canUserViewPage).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(getAppAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('webhook management stays refused for a service turn from a scoped token', async () => {
+    mockPagesFindFirst.mockResolvedValue({ driveId: DRIVE_ID });
+
+    expect(await canManagePageWebhooks(serviceFromScopedToken, PAGE_ID)).toBe(false);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+});
