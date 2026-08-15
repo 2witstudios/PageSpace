@@ -20,7 +20,7 @@
  * explicit cache write the action would render no change. A base-call failure
  * rolls back inside useMessageActions and leaves the cache untouched.
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { useMessageActions } from './useMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
@@ -35,6 +35,23 @@ export interface UseCacheMessageActionsOptions {
   /** The full rendered list (selectRenderedMessages output, mode included). */
   renderedMessages: RenderedMessage[];
   regenerate: (options?: { body?: Record<string, unknown> }) => void;
+  /**
+   * The surface's `useSendHandoff.wrapSend` — the SAME one its send uses.
+   *
+   * RETRY IS A SEND AND NOW GOES THROUGH SEND'S OPTIMISTIC PATH. It never did: `regenerate` was
+   * called bare, so `pendingSendConversationId` stayed null, every surface's
+   * `displayIsStreaming` stayed FALSE for the whole window, and the composer sat there with an
+   * enabled textarea and a Send button while a regeneration was already under way. The one
+   * visible change was the old assistant bubble vanishing — which reads as "something broke",
+   * not "working on it". Send had complete optimistic UI the entire time; the two were never
+   * meaningfully different in server work, only in feedback.
+   *
+   * Wrapped HERE rather than at each surface's regenerate adapter: this hook is the one shared
+   * wrapper every surface already funnels retry through, so there is a single place to get it
+   * right and nothing to drift. It also covers more than `regenerate` alone would — see
+   * handleRetry.
+   */
+  wrapSend: <T>(sendFn: () => T) => T | undefined;
 }
 
 /**
@@ -69,6 +86,7 @@ export function useCacheMessageActions({
   conversationId,
   renderedMessages,
   regenerate,
+  wrapSend,
 }: UseCacheMessageActionsOptions): UseCacheMessageActionsResult {
   const stableMessages = useMemo(
     () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
@@ -104,23 +122,43 @@ export function useCacheMessageActions({
     conversationMessagesActions.applyDelete(conversationId, messageId);
   }, [handleDeleteBase, conversationId]);
 
-  const handleRetry = useCallback(async () => {
-    // planRetry is the guard: it plans nothing (no ids, no lastUserMessage) while a
-    // stream is live anywhere in the rendered list, so an in-flight run can never be
-    // deleted out from under itself. No user turn to retry from is the same no-op.
-    const { assistantIdsToDelete, lastUserMessage } = planRetry(renderedMessages);
-    if (!lastUserMessage) return;
+  // Latched for the whole retry, synchronously, before any await. Every other guard is
+  // state-derived — planRetry's live-stream check, the button's `retryDisabled` — and state only
+  // settles after a render, so a double-click lands both handlers inside the same await window
+  // and fires TWO regenerations, billed twice.
+  const retryInFlightRef = useRef(false);
 
-    // Delete BEFORE awaiting handleRetryBase, not after: its underlying `regenerate` is a
-    // real Promise that resolves once the new stream finishes (the ai SDK's makeRequest
-    // reads the response to completion), so awaiting it first would leave the old assistant
-    // rows visible in the cache/UI alongside the new streaming reply for the whole
-    // regeneration (PR 6 review, CodeRabbit).
-    if (conversationId) {
-      for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
+  const handleRetry = useCallback(async () => {
+    if (retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
+    try {
+      // planRetry is the guard: it plans nothing (no ids, no lastUserMessage) while a
+      // stream is live anywhere in the rendered list, so an in-flight run can never be
+      // deleted out from under itself. No user turn to retry from is the same no-op.
+      const { assistantIdsToDelete, lastUserMessage } = planRetry(renderedMessages);
+      if (!lastUserMessage) return;
+
+      // Delete BEFORE awaiting handleRetryBase, not after: its underlying `regenerate` is a
+      // real Promise that resolves once the new stream finishes (the ai SDK's makeRequest
+      // reads the response to completion), so awaiting it first would leave the old assistant
+      // rows visible in the cache/UI alongside the new streaming reply for the whole
+      // regeneration (PR 6 review, CodeRabbit).
+      if (conversationId) {
+        for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
+      }
+
+      // THE OPTIMISTIC PATH, and it starts HERE — not around `regenerate` alone. handleRetryBase
+      // has real network work to do before it can even issue the regenerate POST (it must delete
+      // the superseded assistant rows server-side first; see its own comment for why that
+      // ordering is load-bearing rather than incidental). Wrapping only the regenerate would
+      // leave that whole round trip unfeedbacked — the exact dead window this is here to close.
+      // From this call the surface's `displayIsStreaming` is true, so the composer locks and
+      // offers Stop within a frame, same as a send.
+      await wrapSend(() => handleRetryBase());
+    } finally {
+      retryInFlightRef.current = false;
     }
-    await handleRetryBase();
-  }, [renderedMessages, handleRetryBase, conversationId]);
+  }, [renderedMessages, handleRetryBase, conversationId, wrapSend]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };
 }

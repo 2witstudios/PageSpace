@@ -127,6 +127,10 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
       onEdit={handleEdit}
       onDelete={handleDelete}
       onRetry={handleRetry}
+      // A retry is a send: wrapSend flips displayIsStreaming synchronously, so this disables
+      // the button in flight and for the whole generation (a second click = a second,
+      // double-billed regeneration).
+      retryDisabled={displayIsStreaming}
       onUndoFromHere={handleUndoFromHere}
       isLastAssistantMessage={message.id === lastAssistantMessageId}
       isLastUserMessage={message.id === lastUserMessageId}
@@ -442,8 +446,9 @@ const SidebarChatTab: React.FC = () => {
       if (!currentConversationId) return;
       void regenerate(currentConversationId, opts);
     },
-    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
-    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
+    // Retry inherits send's optimistic path — the SAME wrapSend a send uses, so the composer
+    // locks and offers Stop from the click instead of after the deletes.
+    wrapSend,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -794,7 +799,7 @@ const SidebarChatTab: React.FC = () => {
   //
   // There is no whose. `activeStream` is a read of the one place a live stream is recorded, and
   // the abort names it by messageId — which no surface owns, and which needs no map.
-  const handleStop = useStopStream({
+  const { handleStop, isStopping } = useStopStream({
     activeStream,
     pendingSendConversationId,
   });
@@ -978,6 +983,7 @@ const SidebarChatTab: React.FC = () => {
           onSend={handleSendMessage}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
+          isStopping={isStopping}
           placeholder={`Ask about ${contextLabel ?? 'your workspace'}...`}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}

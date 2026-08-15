@@ -240,7 +240,7 @@ export function useAssistantSessionChat({
     [conversationId, wrapSend, sendMessage, buildBody],
   );
 
-  const handleStop = useStopStream({
+  const { handleStop, isStopping } = useStopStream({
     activeStream,
     pendingSendConversationId,
   });
@@ -258,6 +258,8 @@ export function useAssistantSessionChat({
     regenerate: (opts?: { body?: Record<string, unknown> }) => {
       void regenerate(conversationId, opts);
     },
+    // Retry inherits send's optimistic path — see useCacheMessageActions.
+    wrapSend,
   });
 
   const lastAssistantMessageId = useMemo(
@@ -294,6 +296,7 @@ export function useAssistantSessionChat({
     reloadConversation,
     handleSend,
     handleStop,
+    isStopping,
     handleEdit,
     handleDelete,
     handleRetry,

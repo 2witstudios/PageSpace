@@ -75,6 +75,8 @@ export interface UseAgentSessionChatReturn {
   /** Resolves false when nothing was dispatched (empty text, refused handoff) — the composer restores its draft. */
   handleSend: (text: string) => Promise<boolean>;
   handleStop: () => Promise<void>;
+  /** A Stop was requested and has not resolved — render "stopping", never "stopped". */
+  isStopping: boolean;
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   handleDelete: (messageId: string) => Promise<void>;
   handleRetry: () => Promise<void>;
@@ -238,7 +240,7 @@ export function useAgentSessionChat({
     [conversationId, wrapSend, sendMessage, buildBody],
   );
 
-  const handleStop = useStopStream({
+  const { handleStop, isStopping } = useStopStream({
     activeStream,
     pendingSendConversationId,
   });
@@ -255,6 +257,8 @@ export function useAgentSessionChat({
     regenerate: (opts?: { body?: Record<string, unknown> }) => {
       void regenerate(conversationId, opts);
     },
+    // Retry inherits send's optimistic path — see useCacheMessageActions.
+    wrapSend,
   });
 
   const lastAssistantMessageId = useMemo(
@@ -291,6 +295,7 @@ export function useAgentSessionChat({
     reloadConversation,
     handleSend,
     handleStop,
+    isStopping,
     handleEdit,
     handleDelete,
     handleRetry,

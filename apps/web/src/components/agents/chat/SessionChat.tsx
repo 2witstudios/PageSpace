@@ -210,6 +210,7 @@ export function SessionChatView({
           onSend={() => void handleSendClick()}
           onStop={() => void chat.handleStop()}
           isStreaming={chat.displayIsStreaming}
+          isStopping={chat.isStopping}
           disabled={isReadOnly}
           placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
           hideModelSelector

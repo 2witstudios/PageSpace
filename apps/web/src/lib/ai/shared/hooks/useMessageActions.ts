@@ -173,7 +173,29 @@ export function useMessageActions({
     const assistantMessagesToDelete = getAssistantMessagesAfterLastUser(currentMessages);
 
     if (assistantMessagesToDelete.length > 0) {
-      // Delete them from the database in parallel — calls are independent
+      // AWAITED, AND IT HAS TO BE — this is a hard ordering dependency, not caution.
+      //
+      // The obvious latency win here is to fire these DELETEs alongside the regenerate POST
+      // instead of before it: the local cache row is already gone (useCacheMessageActions ran
+      // applyDelete synchronously), so from the client's side the deletes look like a pure
+      // prefix, and dropping the await would take a whole round trip off the retry.
+      //
+      // It would also silently corrupt the retry. The regenerate POST does NOT regenerate from
+      // the messages the client sends: `handleChatTurn` loads the conversation from the DATABASE
+      // and says so ("We use database-loaded messages, NOT requestMessages from client",
+      // global-chat-turn.ts / page-chat-turn.ts), and nothing server-side supersedes the trailing
+      // assistant rows on a regenerate. Race the DELETEs against the POST and the model is handed
+      // its own previous answer as the newest turn — it rewrites or continues that answer instead
+      // of re-answering the user, and does it nondeterministically, depending on which request
+      // reached the DB first.
+      //
+      // The round trip is real and it is paid. What it is NOT any more is INVISIBLE: the whole
+      // retry now runs inside the surface's `wrapSend`, so the composer locks and offers Stop
+      // from the click (see useCacheMessageActions.handleRetry).
+      //
+      // The deletes are already concurrent WITH EACH OTHER — one Promise.allSettled over N
+      // independent requests, not N sequential awaits — so the cost here is one round trip, not
+      // one per superseded message.
       await Promise.allSettled(
         assistantMessagesToDelete.map((msg) => {
           const url = isAgentMode

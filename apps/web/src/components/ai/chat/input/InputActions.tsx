@@ -3,12 +3,20 @@
 import React from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, StopCircle } from 'lucide-react';
+import { ArrowRight, Loader2, StopCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface InputActionsProps {
   /** Whether AI is currently streaming */
   isStreaming: boolean;
+  /**
+   * A Stop has been requested and has not resolved yet (`useStopStream.isStopping`).
+   *
+   * Renders as STOPPING, not stopped: the button stays the destructive Stop button and the
+   * reply keeps streaming behind it. The stream's teardown is the socket's call, never this
+   * flag's — see useStopStream's docblock for why claiming otherwise is dishonest.
+   */
+  isStopping?: boolean;
   /** Send message handler */
   onSend: () => void;
   /** Stop streaming handler */
@@ -30,6 +38,7 @@ export interface InputActionsProps {
  */
 export function InputActions({
   isStreaming,
+  isStopping = false,
   onSend,
   onStop,
   disabled = false,
@@ -41,13 +50,21 @@ export function InputActions({
     <Button
       data-testid="chat-stop"
       onClick={onStop}
+      // Disabled while the first Stop is in flight: a second one names the same stream and
+      // changes nothing, and an unlatched button reads as "that click did nothing".
+      disabled={isStopping}
+      data-stopping={isStopping ? 'true' : undefined}
       variant="destructive"
       size="icon"
-      className="h-9 w-9 shrink-0"
-      title="Stop generating"
-      aria-label="Stop generating"
+      className="h-9 w-9 shrink-0 disabled:opacity-100"
+      title={isStopping ? 'Stopping…' : 'Stop generating'}
+      aria-label={isStopping ? 'Stopping' : 'Stop generating'}
     >
-      <StopCircle className="h-4 w-4" />
+      {isStopping ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <StopCircle className="h-4 w-4" />
+      )}
     </Button>
   ) : (
     <button

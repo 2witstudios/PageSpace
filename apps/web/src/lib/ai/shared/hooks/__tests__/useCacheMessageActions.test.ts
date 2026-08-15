@@ -37,6 +37,7 @@ const baseOptions = (
     { mode: 'confirmed', message: assistantMsg('a1') },
   ],
   regenerate: vi.fn(),
+  wrapSend: <T,>(sendFn: () => T) => sendFn(),
   ...overrides,
 });
 
@@ -104,4 +105,66 @@ describe('useCacheMessageActions handleRetry', () => {
   // `regenerate` composes its request from the store's settled view at call time, which is
   // what that hydration was manually arranging. The cross-conversation content leak it
   // guarded against needed a shared `Chat` to be possible at all.
+
+  // Retry never went through the surface's optimistic path: `regenerate` was called bare, so
+  // pendingSendConversationId stayed null, every surface's displayIsStreaming stayed FALSE for
+  // the whole window, and the composer sat there with an enabled textarea and a Send button
+  // while a regeneration was already under way.
+  it('given a retry, should issue it through wrapSend so the composer locks like a send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    // Counted around the wrapped call: proves the retry runs INSIDE the registration rather
+    // than merely after it, which is the whole point — the composer has to be locked while the
+    // network work happens, not once it is done.
+    let retriesBeforeInner = -1;
+    let retriesAfterInner = -1;
+    let wrapSendCalls = 0;
+    // Not vi.fn: wrapping erases the generic, and `wrapSend` has to stay generic to satisfy
+    // the option's signature.
+    const wrapSend = <T,>(sendFn: () => T): T => {
+      wrapSendCalls += 1;
+      retriesBeforeInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
+      const returned = sendFn();
+      retriesAfterInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
+      return returned;
+    };
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ wrapSend })));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(wrapSendCalls).toBe(1);
+    expect(retriesBeforeInner).toBe(0);
+    expect(retriesAfterInner).toBe(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // Double-click. Every other guard is state-derived and only closes after a render, so both
+  // clicks land inside the same await window — two regenerations, billed twice.
+  it('given a second retry while the first is still in flight, should fire only one regenerate', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    let wrapSendCalls = 0;
+    const wrapSend = <T,>(sendFn: () => T): T => {
+      wrapSendCalls += 1;
+      return sendFn();
+    };
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ wrapSend })));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => {
+      void result.current.handleRetry();
+      void result.current.handleRetry();
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(wrapSendCalls).toBe(1);
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
 });

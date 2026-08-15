@@ -64,6 +64,26 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Stop and Retry now react the moment you press them** — both were doing their work at roughly
+  the speed they always had, and both spent that time showing you nothing at all, which reads as a
+  hang.
+
+  Pressing Stop changed no pixel until the server confirmed the abort and the result came back over
+  the realtime connection — a wait that is deliberately allowed to run to several seconds when the
+  generation is running on another machine. The button now says **Stopping…** from the moment you
+  press it. It does not say *stopped*: the reply keeps streaming underneath until the generation
+  actually ends, because a Stop that has been requested and a Stop that has taken effect are
+  different things, and claiming the second one while an agent is still running tools and still
+  costing you money is worse than saying nothing. Pressing Stop a moment after the reply had already
+  finished used to produce no response whatsoever; now it acknowledges the press and settles.
+
+  Retry had no feedback at all. It quietly deleted the old answer, waited on the server, and only
+  then started regenerating — so the one visible change in the whole window was the previous reply
+  vanishing, which looks like a failure rather than like work in progress. Retry now behaves exactly
+  like sending a message: the composer locks and offers Stop from the click onward. Retry is also
+  disabled while it is running, so a double-click can no longer start (and bill for) two
+  regenerations.
+
 - **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
   endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered
   every valid request to a page agent with a generic "Failed to process chat request. Please try

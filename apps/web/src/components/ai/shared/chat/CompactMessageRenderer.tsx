@@ -25,6 +25,8 @@ interface CompactTextBlockProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onRetry?: () => void;
+  /** A retry is already in flight — see MessageActionButtons.retryDisabled. */
+  retryDisabled?: boolean;
   onUndoFromHere?: () => void;
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
@@ -48,6 +50,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   isEditing,
   onSaveEdit,
@@ -108,6 +111,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onRetry={onRetry}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={onUndoFromHere}
                 compact
               />
@@ -126,6 +130,11 @@ interface CompactMessageRendererProps {
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  /**
+   * A retry is already in flight for this conversation. Passed down to the retry affordances
+   * only — a second retry regenerates a second time and bills for it.
+   */
+  retryDisabled?: boolean;
   onUndoFromHere?: (messageId: string) => void;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
@@ -147,6 +156,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   onTaskUpdate,
   isLastAssistantMessage = false,
@@ -262,6 +272,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
                 onRetry={canRetry ? handleRetry : undefined}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={hasToolCalls && onUndoFromHere ? () => onUndoFromHere(message.id) : undefined}
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
@@ -332,6 +343,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 variant="ghost"
                 size="sm"
                 onClick={handleRetry}
+                disabled={retryDisabled}
                 className="h-4 px-0.5"
                 title="Retry this message"
                 aria-label="Retry this message"

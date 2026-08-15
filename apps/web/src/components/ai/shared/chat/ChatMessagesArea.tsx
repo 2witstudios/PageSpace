@@ -187,6 +187,11 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         onEdit={!isReadOnly ? onEdit : undefined}
         onDelete={!isReadOnly ? onDelete : undefined}
         onRetry={!isReadOnly ? onRetry : undefined}
+        // A retry is a send: the moment one is issued this surface's streaming flag goes true
+        // (wrapSend registers the pendingSend synchronously), so this both disables the button
+        // in flight and keeps it disabled for the whole generation. Without it a second click
+        // fired a second, double-billed regeneration.
+        retryDisabled={isStreaming}
         onUndoFromHere={!isReadOnly ? handleUndoFromHere : undefined}
         isLastAssistantMessage={message.id === lastAssistantMessageId}
         isLastUserMessage={message.id === lastUserMessageId}
