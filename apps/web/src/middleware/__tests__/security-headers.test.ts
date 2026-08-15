@@ -345,6 +345,24 @@ describe('Security Headers', () => {
       expect(response.headers.get('X-Frame-Options')).toBe('DENY');
     });
 
+    it('given sameOriginFrameable, should relax X-Frame-Options to SAMEORIGIN (never wider)', () => {
+      // The canvas preview is framed by the dashboard itself, and DENY blocks
+      // framing even same-origin — without this the preview renders blank.
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, sameOriginFrameable: true });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+    });
+
+    it('given sameOriginFrameable is absent, should keep DENY so no other route is framable', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    });
+
     it('sets X-Content-Type-Options to nosniff', () => {
       const response = NextResponse.next();
 

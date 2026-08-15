@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildBaselineCsp, buildDocumentCsp } from '../csp';
+import { buildBaselineCsp, buildDocumentCsp, buildSiteCsp } from '../csp';
 
 describe('buildBaselineCsp', () => {
   it('defaults to form-action \'none\' when no origin is given', () => {
@@ -25,6 +25,44 @@ describe('buildBaselineCsp', () => {
     expect(withOrigin).toContain("object-src 'none'");
     expect(withOrigin).toContain("base-uri 'none'");
     expect(withOrigin).toContain("script-src 'unsafe-inline'");
+  });
+});
+
+describe('buildSiteCsp', () => {
+  it('lets a site load scripts from any https host', () => {
+    const csp = buildSiteCsp();
+    expect(csp).toContain('script-src');
+    expect(csp).toMatch(/script-src[^;]*\bhttps:/);
+  });
+
+  it('lets a site reach any https origin over fetch and any wss origin over websocket', () => {
+    const csp = buildSiteCsp();
+    expect(csp).toMatch(/connect-src[^;]*\bhttps:/);
+    expect(csp).toMatch(/connect-src[^;]*\bwss:/);
+  });
+
+  it("still pins object-src and base-uri to 'none' — neither is needed by a real website", () => {
+    const csp = buildSiteCsp();
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'none'");
+  });
+
+  it('keeps a deny-by-default base so an undeclared directive stays blocked', () => {
+    const csp = buildSiteCsp();
+    expect(csp).toContain("default-src 'none'");
+  });
+
+  it('still permits form submission to the PageSpace forms endpoint', () => {
+    const csp = buildSiteCsp();
+    expect(csp).toMatch(/form-action[^;]*\bhttps:/);
+    expect(csp).not.toContain("form-action 'none'");
+  });
+
+  it('leaves the baseline policy untouched, so nothing already published widens', () => {
+    const baseline = buildBaselineCsp();
+    expect(baseline).not.toContain('connect-src');
+    expect(baseline).toContain("script-src 'unsafe-inline'");
+    expect(baseline).not.toMatch(/script-src[^;]*\bhttps:/);
   });
 });
 

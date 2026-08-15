@@ -12,6 +12,7 @@ import {
   isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
+import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -401,7 +402,19 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
+    //
+    // The canvas preview route returns a full HTML document carrying its own CSP
+    // (so the in-app frame runs under the same policy the published artifact
+    // does) and is framed by the dashboard itself — hence skipCSP, so the API
+    // policy doesn't intersect with and clobber it, and SAMEORIGIN framing
+    // instead of DENY. See isCanvasPreviewRoute.
+    const isPreviewRoute = isCanvasPreviewRoute(pathname);
+    const { response } = createSecureResponse(isProduction, req, {
+      isAPIRoute,
+      disableCOEP: shouldDisableCOEP(pathname),
+      skipCSP: isPreviewRoute,
+      sameOriginFrameable: isPreviewRoute,
+    });
 
     return response;
   }, event);

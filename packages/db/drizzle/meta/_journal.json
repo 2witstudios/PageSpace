@@ -1821,6 +1821,13 @@
       "when": 1786634266320,
       "tag": "0259_minor_black_crow",
       "breakpoints": true
+    },
+    {
+      "idx": 260,
+      "version": "7",
+      "when": 1786826281689,
+      "tag": "0260_slow_hairball",
+      "breakpoints": true
     }
   ]
 }

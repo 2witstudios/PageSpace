@@ -975,3 +975,66 @@ describe('renderCanvasDocument — cspOverride', () => {
     expect(out).not.toContain('ignored.example');
   });
 });
+
+describe('renderCanvasDocument — site mode', () => {
+  it('given siteMode, should emit the site CSP so CDN scripts and fetch are permitted', () => {
+    const out = renderCanvasDocument({ html: '<p>hi</p>', siteMode: true });
+    expect(out).toMatch(/script-src[^;"]*\bhttps:/);
+    expect(out).toMatch(/connect-src[^;"]*\bhttps:/);
+  });
+
+  it('given no siteMode, should emit the baseline CSP unchanged', () => {
+    const out = renderCanvasDocument({ html: '<p>hi</p>' });
+    expect(out).toContain(BASELINE_CSP);
+  });
+
+  it('given siteMode, should preserve an external https url() in author CSS', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body{background:url("https://cdn.example.com/bg.png")}</style><p>hi</p>',
+      siteMode: true,
+    });
+    expect(out).toContain('https://cdn.example.com/bg.png');
+    expect(out).not.toContain('url("")');
+  });
+
+  it('given no siteMode, should still strip an external https url() from author CSS', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body{background:url("https://cdn.example.com/bg.png")}</style><p>hi</p>',
+    });
+    expect(out).not.toContain('cdn.example.com');
+    expect(out).toContain('url("")');
+  });
+
+  // The override is a whole-contract switch, not just a header swap: a pipeline
+  // asking for `script-src 'none'` is asking for a locked-down document, and
+  // relaxed CSS would still let author styles pull external `url()`/`@import`
+  // — a tracking/exfiltration channel the document sanitizer exists to close.
+  it('given both siteMode and cspOverride, should still strip external CSS urls', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body{background:url("https://cdn.example.com/bg.png")}</style><p>hi</p>',
+      siteMode: true,
+      cspOverride: "default-src 'none'; script-src 'none';",
+    });
+    expect(out).not.toContain('cdn.example.com');
+    expect(out).toContain('url("")');
+  });
+
+  it('given both siteMode and cspOverride, should still block an external @import', () => {
+    const out = renderCanvasDocument({
+      html: "<style>@import url('https://fonts.googleapis.com/css2?family=Inter');</style><p>hi</p>",
+      siteMode: true,
+      cspOverride: "default-src 'none'; script-src 'none';",
+    });
+    expect(out).toContain('@import blocked');
+  });
+
+  it('given both siteMode and cspOverride, should honour the override so the publish pipelines still win', () => {
+    const out = renderCanvasDocument({
+      html: '<p>hi</p>',
+      siteMode: true,
+      cspOverride: "default-src 'none'; script-src 'none';",
+    });
+    expect(out).toContain('content="default-src \'none\'; script-src \'none\';"');
+    expect(out).not.toMatch(/script-src[^;"]*\bhttps:/);
+  });
+});

@@ -23,6 +23,53 @@ export function buildBaselineCsp(formActionOrigin?: string): string {
 }
 
 /**
+ * Builds the CSP for canvas pages in SITE MODE (`pages.siteMode`) — the policy that
+ * lets a canvas page behave like an ordinary production website.
+ *
+ * The baseline above is a *document* policy: `script-src 'unsafe-inline'` names no
+ * host, so no CDN `<script src>` loads, and the absence of `connect-src` falls back
+ * to `default-src 'none'`, so `fetch`/XHR/WebSocket/`sendBeacon` are all dead. That
+ * is right for a rendered document and wrong for a site that wants React from a CDN
+ * and an API call.
+ *
+ * Site mode therefore opens the fetch directives to `https:` (plus `wss:` for
+ * websockets, and `blob:`/`data:` for content the page generates client-side).
+ * Two things stay pinned, because a website has no legitimate need for either and
+ * both are classic injection sinks:
+ *
+ *  - `object-src 'none'` — no `<object>`/`<embed>` plugin content;
+ *  - `base-uri 'none'` — author markup can never retarget relative URL resolution.
+ *
+ * `default-src 'none'` is likewise kept as the deny-by-default floor, so any
+ * directive NOT named here stays blocked rather than inheriting a permissive
+ * default. `form-action` opens to `https:` so a site can post to its own backend,
+ * a third-party form service, or the PageSpace forms endpoint alike.
+ *
+ * Deliberately NOT included: `'unsafe-eval'`. Loading libraries from a CDN does not
+ * require it — only `eval`/`new Function` do — so it stays off until something
+ * concretely needs it.
+ *
+ * Unlike `buildBaselineCsp` this takes no form-action origin: `form-action https:`
+ * already covers every origin such a parameter could name.
+ */
+export function buildSiteCsp(): string {
+  return [
+    "default-src 'none'",
+    "script-src 'unsafe-inline' https:",
+    'connect-src https: wss:',
+    'img-src https: data: blob:',
+    "style-src 'unsafe-inline' https:",
+    'font-src https: data:',
+    'media-src https: blob:',
+    'frame-src https:',
+    'worker-src https: blob:',
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self' https:",
+  ].join('; ');
+}
+
+/**
  * Builds the CSP for published DOCUMENT pages (see `../publish/render-document-page.ts`).
  * Unlike canvas pages, documents never run author scripts — the sanitizer
  * (`sanitizeDocumentHtml`) already strips `<script>` tags, and this policy is

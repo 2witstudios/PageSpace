@@ -123,6 +123,7 @@ type PageLookupResult = {
   toolExposureMode: 'upfront' | 'search';
   userScopedAccess: boolean;
   sandboxEnabled: boolean;
+  siteMode: boolean;
   description: string | null;
   fileSize: number | null;
   mimeType: string | null;
@@ -169,6 +170,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   toolExposureMode: 'upfront',
   userScopedAccess: false,
   sandboxEnabled: false,
+  siteMode: false,
   description: null,
   fileSize: null,
   mimeType: null,

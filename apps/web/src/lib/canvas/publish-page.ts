@@ -178,8 +178,13 @@ async function preparePublishContent(params: {
   currentPageId: string;
   currentPath: string;
   actingUserId: string;
+  /**
+   * Mirrors `pages.siteMode`. CANVAS only — the DOCUMENT/CODE/SHEET pipelines
+   * pass an explicit stricter `cspOverride`, which wins regardless.
+   */
+  siteMode?: boolean;
 }): Promise<PreparedPublishContent> {
-  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId } = params;
+  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId, siteMode } = params;
 
   switch (type) {
     case PageType.CANVAS: {
@@ -188,7 +193,7 @@ async function preparePublishContent(params: {
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
       const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
-      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, ...args }) };
+      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, siteMode, ...args }) };
     }
     case PageType.DOCUMENT: {
       const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
@@ -229,7 +234,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const page = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
-    columns: { id: true, type: true, title: true, content: true, contentMode: true, driveId: true },
+    columns: { id: true, type: true, title: true, content: true, contentMode: true, driveId: true, siteMode: true },
   });
 
   if (!page) {
@@ -308,6 +313,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     currentPageId: pageId,
     currentPath: path,
     actingUserId: userId,
+    siteMode: page.siteMode,
   });
   const { meta, body: bodyHtml } = prepared;
   const assetBaseUrl = getPublishAssetBaseUrl();
@@ -696,7 +702,7 @@ async function renderNotFoundPageHtml(params: {
         eq(pages.isTrashed, false),
         inArray(pages.type, getPublishablePageTypes()),
       ),
-      columns: { type: true, title: true, content: true, contentMode: true },
+      columns: { type: true, title: true, content: true, contentMode: true, siteMode: true },
     });
     if (!page) return null;
 
@@ -710,6 +716,7 @@ async function renderNotFoundPageHtml(params: {
       currentPageId: pageId,
       currentPath: '',
       actingUserId: ownerId,
+      siteMode: page.siteMode,
     });
     const { meta } = prepared;
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);

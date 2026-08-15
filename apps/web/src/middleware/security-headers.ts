@@ -206,11 +206,12 @@ type SecurityHeadersOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
   skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false }: SecurityHeadersOptions
+  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false }: SecurityHeadersOptions
 ): NextResponse => {
   // `skipCSP` lets a route own its own Content-Security-Policy header (see
   // isHandoffBridgeRoute). Browsers enforce the INTERSECTION of every CSP header
@@ -220,7 +221,12 @@ export const applySecurityHeaders = (
     const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
     response.headers.set('Content-Security-Policy', csp);
   }
-  response.headers.set('X-Frame-Options', 'DENY');
+  // DENY blocks framing even from the same origin, so a route the dashboard
+  // frames ITSELF (the canvas preview — see isCanvasPreviewRoute) must relax to
+  // SAMEORIGIN or render blank. This is the legacy half of the control; the
+  // route's own policy carries `frame-ancestors 'self'`, which modern browsers
+  // prefer over this header. Never widened beyond same-origin.
+  response.headers.set('X-Frame-Options', sameOriginFrameable ? 'SAMEORIGIN' : 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
@@ -309,6 +315,7 @@ type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
   skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
 const buildSecureResponse = (
@@ -317,7 +324,7 @@ const buildSecureResponse = (
   request?: Request,
   options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
-  const { isAPIRoute = false, disableCOEP = false, skipCSP = false } = options;
+  const { isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false } = options;
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
@@ -334,7 +341,7 @@ const buildSecureResponse = (
   const response = make(requestHeaders);
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP });
+  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP, sameOriginFrameable });
 
   return { response, nonce };
 };

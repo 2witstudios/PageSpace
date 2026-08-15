@@ -148,7 +148,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'position', 'isTrashed', 'aiProvider', 'aiModel', 'systemPrompt',
       'enabledTools', 'includeDrivePrompt', 'agentDefinition',
       'visibleToGlobalAssistant', 'includePageTree', 'pageTreeScope',
-      'toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'description',
+      'toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'siteMode', 'description',
       'fileSize', 'mimeType', 'originalFileName', 'filePath', 'fileMetadata',
       'processingStatus', 'processingError', 'processedAt', 'extractionMethod',
       'extractionMetadata', 'contentHash', 'excludeFromSearch', 'isPrivate',
