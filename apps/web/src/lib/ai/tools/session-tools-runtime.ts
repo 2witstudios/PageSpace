@@ -766,11 +766,13 @@ async function resolveWorkerPlacement(input: {
   callerConversationId: string;
   ownerId: string;
   agentPageId: string | null;
+  /** The calling credential's drive ceiling; `[]` = unscoped. */
+  allowedDriveIds: string[];
 }): Promise<
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, ownerId, agentPageId } = input;
+  const { workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds } = input;
 
   if (workspace === undefined) {
     // The caller's own workspace — minted if it has none.
@@ -826,8 +828,15 @@ async function resolveWorkerPlacement(input: {
   }
 
   // An existing workspaceId, gated by the ONE session access decision
-  // (`checkSessionAccess` — owner or drive member).
-  const access = await checkSessionAccess(ownerId, workspace);
+  // (`checkSessionAccess` — owner or drive member) AND by the calling
+  // credential's ceiling. The access decision asks about the USER; a
+  // drive-scoped token is not its user, and PLACEMENT IS A WRITE — spawning a
+  // worker into a workspace outside the token's drives would put an agent, and
+  // its sandbox reach, somewhere that token was never granted. Refused with the
+  // same anti-enumeration answer, so scope leaks nothing membership did not.
+  const targetDriveId = allowedDriveIds.length > 0 ? (await describeWorkspace(workspace)).workspaceDriveId : null;
+  const withinScope = allowedDriveIds.length === 0 || (targetDriveId !== null && allowedDriveIds.includes(targetDriveId));
+  const access = withinScope ? await checkSessionAccess(ownerId, workspace) : { allowed: false as const };
   if (!access.allowed) {
     // Missing, foreign, and not-a-member all read identically — an
     // id-guessing caller learns nothing.
@@ -911,7 +920,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
       const row = await findSessionForConversation(conversationId);
-      return row ? { workspaceId: row.id } : null;
+      // `driveId` rides along so `list_sessions` can hold the BOUND workspace to
+      // the calling credential's ceiling: a conversation's binding can point at
+      // a workspace in a different drive than its agent page (spawn_session
+      // takes an explicit `workspace` id), so the page-scope check upstream does
+      // not cover it.
+      return row ? { workspaceId: row.id, driveId: row.driveId ?? null } : null;
     },
 
     // THE session-access decision, wired for the tool surface exactly as the
@@ -990,8 +1004,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 

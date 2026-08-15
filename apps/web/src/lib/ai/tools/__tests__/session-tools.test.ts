@@ -30,7 +30,7 @@ const SHELL = {
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
@@ -214,6 +214,9 @@ describe('spawn_session', () => {
       agentPageId: CALLER_AGENT,
       name: 'worker',
       workspace: undefined,
+      // The calling credential's ceiling rides placement — empty here because
+      // this caller is unscoped. Pinned in the scoped block below.
+      allowedDriveIds: [],
     });
     expect(deps.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'new-session-id', depth: 1, wait: false, input: 'do the thing' }),
@@ -989,6 +992,72 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     );
 
     expect(sent.success).toBe(true);
+  });
+
+  it('the BOUND workspace is held to the ceiling too — a binding can point outside it', async () => {
+    // `spawn_session` takes an explicit `workspace` id, so a conversation driven
+    // by an agent page in drive A can be bound to a workspace in drive B. The
+    // page-scope check upstream covers the PAGE, not the binding — so without
+    // this gate a scoped token got the richest view in the file (every worker's
+    // sessionId and agent binding, every shell, live sandbox status) for a drive
+    // it may not touch.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      listOwnWorkspaces: vi.fn(async () => []),
+      listSharedWorkspaces: vi.fn(async () => []),
+    });
+
+    const result = await run(createSessionTools(deps).list_sessions, {}, contextOptions(scoped));
+
+    // Degrades to the no-workspace answer rather than erroring, exactly as a
+    // revoked drive membership does.
+    expect(result.workspaceId).toBeNull();
+    expect(result.workers).toEqual([]);
+    expect(deps.listWorkspaceWorkers).not.toHaveBeenCalled();
+  });
+
+  it('spawn_session cannot PLACE a worker into an out-of-scope workspace', async () => {
+    // Placement is a WRITE, and the worst of the class: it puts an agent, and
+    // its sandbox reach, into a workspace the token was never granted. The
+    // ceiling rides `createWorkerSession` so the runtime's placement resolver
+    // enforces it alongside the user-level session-access decision.
+    const deps = makeDeps();
+
+    await run(
+      createSessionTools(deps).spawn_session,
+      { name: 'w', prompt: 'go', workspace: 'ws-elsewhere' },
+      contextOptions(scoped),
+    );
+
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedDriveIds: ['drive-in-scope'] }),
+    );
+  });
+
+  it('spawn_shell refuses when the conversation is bound OUT of scope', async () => {
+    // A shell is live PTY access. Only an EXISTING binding can point out of
+    // scope — with none, `ensure` mints in the agent's own drive, which the
+    // page-scope check upstream already admitted.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+    });
+
+    const result = await run(createSessionTools(deps).spawn_shell, {}, contextOptions(scoped));
+
+    expect(result.success).toBe(false);
+    expect(deps.ensureOwnSessionSandbox).not.toHaveBeenCalled();
+    expect(deps.spawnShell).not.toHaveBeenCalled();
+  });
+
+  it('the pane grid is unreachable when the bound workspace is out of scope', async () => {
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+    });
+
+    const result = await run(createSessionTools(deps).list_panes, {}, contextOptions(scoped));
+
+    expect(result.success).toBe(false);
+    expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
   });
 
   it('list_sessions discovers only workspaces inside the ceiling', async () => {

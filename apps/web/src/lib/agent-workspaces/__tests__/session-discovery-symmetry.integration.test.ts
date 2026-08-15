@@ -140,6 +140,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
       agentPageId: null,
       name: 'member worker',
       workspace: workspaceId,
+      allowedDriveIds: [],
     });
     expect(spawnedInto).toEqual({ ok: true, workspaceId });
     // MEMBERSHIP IS THE NODE. This asserted `conversations.workspaceId`, which
@@ -182,6 +183,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
       agentPageId: null,
       name: 'trespasser',
       workspace: workspaceId,
+      allowedDriveIds: [],
     });
     expect(refused).toMatchObject({ ok: false, reason: 'workspace_not_found' });
   });

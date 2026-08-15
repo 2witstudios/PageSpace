@@ -414,7 +414,9 @@ export interface SessionToolsDeps {
    * id namespaces meet exactly here: everything the shell verbs compare, and
    * everything the listing enumerates, hangs off this one resolution.
    */
-  findOwnWorkspace: (conversationId: string) => Promise<{ workspaceId: string } | null>;
+  findOwnWorkspace: (
+    conversationId: string,
+  ) => Promise<{ workspaceId: string; driveId: string | null } | null>;
   /**
    * THE session-access decision (`checkSessionAccess` — owner or drive
    * member), applied to a workspace the caller reached by resolving their own
@@ -513,6 +515,12 @@ export interface SessionToolsDeps {
      * workspaceId the caller may use (`checkSessionAccess`).
      */
     workspace?: string;
+    /**
+     * The calling credential's drive ceiling; `[]` = unscoped. PLACEMENT IS A
+     * WRITE, so a scoped token must not put a worker — and its sandbox reach —
+     * into a workspace outside its drives, however freely its OWNER could.
+     */
+    allowedDriveIds: string[];
   }) => Promise<
     | { ok: true; workspaceId: string }
     | { ok: false; reason: string; detail?: string }
@@ -788,6 +796,16 @@ function workerListingClosed(sessionId: string): { success: false; error: string
  * same in all of them, and the distinctions are about server plumbing it
  * cannot act on.
  */
+/**
+ * The calling credential may not reach this conversation's sandbox. Says what is
+ * wrong without naming the drive — the caller has proven nothing about it.
+ */
+const NO_SANDBOX_IN_SCOPE = {
+  success: false as const,
+  error:
+    'This conversation\'s workspace is outside what the current credential may reach, so its sandbox is unavailable here.',
+};
+
 const NO_GRID = {
   success: false as const,
   error:
@@ -1028,6 +1046,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
     if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
     const workspace = await deps.findOwnWorkspace(conversationId);
     if (!workspace) return { ok: false, error: NO_GRID };
+    // The CREDENTIAL's ceiling, alongside the user's membership below — a
+    // binding can point at a workspace in a drive the calling token may not
+    // touch (see the note in `list_sessions`). Answers NO_GRID rather than
+    // GRID_ACCESS_LOST: nothing was lost, it was never in scope, and the
+    // less specific answer is the fail-closed one.
+    if (!withinCredentialScope(context, workspace.driveId)) return { ok: false, error: NO_GRID };
     const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
     if (!access.allowed) return { ok: false, error: GRID_ACCESS_LOST };
     return { ok: true, workspaceId: workspace.workspaceId, viewerId: actor.userId };
@@ -1122,6 +1146,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // every real shell, ever).
     const workspace = await deps.findOwnWorkspace(conversationId);
     if (!workspace) return { ok: false, error: notYourShell(shellId) };
+    // The CREDENTIAL's ceiling first: a shell is live PTY access to a sandbox,
+    // and a binding can point at a workspace in a drive this token may not
+    // touch (see the note in `list_sessions`).
+    if (!withinCredentialScope(context, workspace.driveId)) {
+      return { ok: false, error: notYourShell(shellId) };
+    }
     // Revocation check, before the shell row is read: a caller who may no
     // longer use this workspace learns nothing about which shells are in it.
     const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
@@ -1159,8 +1189,21 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // filter applies. Losing access degrades this to the no-workspace
         // answer below rather than erroring — the caller's OTHER workspaces are
         // still listable, and a refusal here would strand them.
+        // TWO gates, and the second is not redundant with the first.
+        //
+        // `checkWorkspaceAccess` asks about the USER's drive membership. The
+        // ceiling asks about the CREDENTIAL, and a conversation's binding can
+        // point outside it: `spawn_session` takes an explicit `workspace` id, so
+        // a conversation driven by an agent page in drive A may be bound to a
+        // workspace in drive B. A scoped token would then get the richest view
+        // in this file — every worker's sessionId and agent binding, every
+        // shell, the live sandbox status — for a drive it may not touch. I
+        // originally argued this gate was unnecessary because `checkMCPPageScope`
+        // covers the agent page; that reasoning was wrong, because the page and
+        // the bound workspace need not share a drive.
         const workspace =
           boundWorkspace &&
+          withinCredentialScope(context, boundWorkspace.driveId) &&
           (await deps.checkWorkspaceAccess(actor.userId, boundWorkspace.workspaceId)).allowed
             ? boundWorkspace
             : null;
@@ -1189,9 +1232,8 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // `openAddressableSession` enforces, so discovery and addressability
         // agree rather than one advertising what the other refuses.
         //
-        // The BOUND workspace above needs no such filter: it is the workspace of
-        // the caller's own conversation, and a scoped token only reaches this
-        // turn at all through `checkMCPPageScope` on that conversation's page.
+        // The BOUND workspace above gets the same filter, for the same reason —
+        // see the note there on why its drive can differ from the agent page's.
         const otherWorkspaces = ownWorkspaces.filter((w) =>
           withinCredentialScope(context, w.driveId),
         );
@@ -1284,6 +1326,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           agentPageId,
           name: plan.name,
           workspace: targetWorkspace,
+          allowedDriveIds: context?.mcpAllowedDriveIds ?? [],
         });
         if (!created.ok) {
           return {
@@ -1463,6 +1506,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const conversationId = context?.conversationId;
         if (!conversationId) return NEEDS_CONVERSATION;
 
+        // A shell is live PTY access to a sandbox, so the calling credential's
+        // ceiling applies before one is opened or provisioned. Only an EXISTING
+        // binding can point out of scope: when there is none, `ensure` mints the
+        // workspace in the agent's own drive, which the page-scope check
+        // upstream has already admitted.
+        const existing = await deps.findOwnWorkspace(conversationId);
+        if (existing && !withinCredentialScope(context, existing.driveId)) {
+          return { success: false, error: NO_SANDBOX_IN_SCOPE };
+        }
+
         const ensured = await deps.ensureOwnSessionSandbox({
           conversationId,
           userId: actor.userId,
@@ -1564,9 +1617,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // in it. A revoked caller reads the workspace as gone, which collapses
         // into the already-gone answer below without telling them which it was.
         const workspace = await deps.findOwnWorkspace(conversationId);
-        const stillAllowed = workspace
-          ? (await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId)).allowed
-          : false;
+        const stillAllowed =
+          workspace && withinCredentialScope(context, workspace.driveId)
+            ? (await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId)).allowed
+            : false;
         const shell = await deps.findShell(shellId);
         // Already gone is SUCCESS (planKillTarget's rule): teardown callers
         // retry, and a 404-shaped error would make every one special-case it.

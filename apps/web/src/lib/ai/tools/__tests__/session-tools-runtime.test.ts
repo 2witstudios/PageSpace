@@ -271,6 +271,7 @@ describe('createWorkerSession — placement', () => {
     ownerId: 'user-1',
     agentPageId: null as string | null,
     name: 'worker',
+    allowedDriveIds: [] as string[],
   };
 
   test('workspace omitted: resolves the caller\'s own session and creates the worker there', async () => {

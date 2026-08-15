@@ -42,7 +42,7 @@ const LAYOUT: PaneGridListing = {
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     // The binding survives revocation — that is the whole point.
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE, driveId: null })),
     // Mallory is no longer a member of the drive Alice's workspace lives in.
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: false, reason: 'not_a_member' })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
