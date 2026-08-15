@@ -707,34 +707,62 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
-  test('openai mode: creates the conversations row the minted id will be written against', async () => {
-    // #2414: without this the auto-minted conversationId has no `conversations`
-    // row, and savePageMessage — whose conversationId is NOT NULL with an FK —
-    // fails 23503 before streaming starts, 500ing every non-threaded request.
-    await POST(makeRequest(validBody));
-    const created = vi.mocked(conversationRepository.createConversation).mock.calls[0];
-    const saved = vi.mocked(messageRepository.savePageMessage).mock.calls[0]?.[0];
+  test('openai mode: a request without conversation_id persists nothing and still streams', async () => {
+    // #2414: the route used to save both sides of a stateless call against a
+    // freshly minted conversationId that had no `conversations` row. That
+    // column is NOT NULL with an FK, so the save died 23503 in setup and 500'd
+    // every default-shaped request. The documented contract for this path is
+    // "nothing is kept" (docs/features/agent-api), so the writes go, not the
+    // FK — creating the row would have made the stateless path durable.
+    const response = await POST(makeRequest(validBody));
+    await response.text();
     assert({
-      given: 'a request with no conversation_id, so the route mints one',
-      should: 'create that exact conversation for the caller and agent page before saving the user message',
+      given: 'a request with no conversation_id — the documented stateless path',
+      should: 'return a 200 stream while writing no conversation and no message',
       actual: {
-        createdWith: created?.slice(0, 3),
-        savedAgainst: saved?.conversationId,
+        status: response.status,
+        conversationsCreated: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+        messagesSaved: vi.mocked(messageRepository.savePageMessage).mock.calls.length,
       },
-      expected: {
-        createdWith: ['test-id-123', 'user-1', 'page-123'],
-        savedAgainst: 'test-id-123',
-      },
+      expected: { status: 200, conversationsCreated: 0, messagesSaved: 0 },
     });
   });
 
-  test('thread mode: does not re-create a conversation the ownership check already resolved', async () => {
-    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+  test('openai mode: a stateless call is still billed for what it burned', async () => {
+    // Not persisting is not the same as not charging: the provider ran.
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0]?.[0];
+    assert({
+      given: 'a stateless call that finished normally',
+      should: 'still track usage once, against the in-request correlation id',
+      actual: {
+        count: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        conversationId: call?.conversationId,
+        success: call?.success,
+      },
+      expected: { count: 1, conversationId: 'test-id-123', success: true },
+    });
+  });
+
+  test('thread mode: a supplied conversation_id is what makes the exchange durable', async () => {
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    await response.text();
+    const roles = vi.mocked(messageRepository.savePageMessage).mock.calls.map(c => c[0].role);
+    const convIds = vi.mocked(messageRepository.savePageMessage).mock.calls.map(c => c[0].conversationId);
     assert({
       given: 'a thread-mode request whose conversations row already exists',
-      should: 'leave creation to the 5c ownership check and not create it again',
-      actual: vi.mocked(conversationRepository.createConversation).mock.calls.length,
-      expected: 0,
+      should: 'persist both sides against that conversation, without re-creating it',
+      actual: {
+        roles,
+        convIds: [...new Set(convIds)],
+        conversationsCreated: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+      },
+      expected: {
+        roles: ['user', 'assistant'],
+        convIds: ['conv-abc'],
+        conversationsCreated: 0,
+      },
     });
   });
 
@@ -1089,7 +1117,9 @@ describe('POST /api/v1/chat/completions', () => {
       },
     })) as unknown as typeof streamText);
 
-    const response = await POST(makeRequest(validBody));
+    // conversation_id supplied: persistence is what this test is about, and a
+    // stateless call deliberately writes nothing (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
     const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
@@ -1157,19 +1187,23 @@ describe('POST /api/v1/chat/completions', () => {
       },
     })) as unknown as typeof streamText);
 
-    const response = await POST(makeRequest(validBody));
+    // conversation_id supplied so the assistant row is actually written —
+    // otherwise "saved without toolCalls" would pass on a save that never
+    // happened (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
     const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with steps but no tool calls',
-      should: 'save the assistant message without toolCalls or toolResults',
+      should: 'save the assistant message, with no toolCalls or toolResults on it',
       actual: {
+        saved: assistantSave !== undefined,
         toolCalls: assistantSave?.[0]?.toolCalls,
         toolResults: assistantSave?.[0]?.toolResults,
       },
-      expected: { toolCalls: undefined, toolResults: undefined },
+      expected: { saved: true, toolCalls: undefined, toolResults: undefined },
     });
   });
 
@@ -1213,7 +1247,9 @@ describe('POST /api/v1/chat/completions', () => {
     // here must NOT strand the gate's hold + in-flight slot until TTL.
     vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
 
-    const response = await POST(makeRequest(validBody));
+    // Thread mode: only a durable call persists the user message at all, so
+    // that save is the setup step this leak regression can throw from (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
 
     assert({
       given: 'a throw during pre-stream setup (user-message persistence) after the hold is placed',
@@ -1364,7 +1400,9 @@ describe('POST /api/v1/chat/completions', () => {
       () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
     );
 
-    const response = await POST(makeRequest(validBody));
+    // Thread mode for the same reason as the test above: the stateless path
+    // never reaches savePageMessage (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
 
     assert({
       given: 'a pre-stream setup failure whose hold release resolves on a later tick',

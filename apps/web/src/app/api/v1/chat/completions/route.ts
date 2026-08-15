@@ -395,21 +395,26 @@ export async function POST(request: Request): Promise<Response> {
     const isThreadMode = incomingConversationId !== undefined;
     const conversationId = isThreadMode ? incomingConversationId : createId();
 
-    // The minted id needs its `conversations` row BEFORE anything writes a
-    // message against it. `messages.conversationId` is NOT NULL with an FK to
-    // `conversations.id`, so a non-threaded call — the default shape every
-    // plain OpenAI client and pagespace-cli's brain path sends — died on a
-    // 23503 foreign-key violation in savePageMessage before streaming ever
-    // started (#2414). Thread mode already has its row: 5c created it for a
-    // client_manages_history caller, and validateConversationAccess proved it
-    // exists for everyone else.
+    // `conversation_id` IS the persistence switch, and its absence means the
+    // caller opted out. The public contract is explicit — "Each call is
+    // stateless by default: you send the messages, the agent replies, nothing
+    // is kept. Pass a conversation_id and the thread becomes durable"
+    // (apps/marketing/src/app/docs/features/agent-api/page.tsx) — so a default
+    // call must persist NOTHING, and this route was trying to save both sides
+    // of it anyway. `messages.conversationId` is NOT NULL with an FK to
+    // `conversations.id`, and the minted id has no row, so every one of those
+    // saves died 23503 in setup and 500'd the request before streaming (#2414).
     //
-    // Same eager-create as /api/ai/page-agents/consult, and for the second
-    // reason it gives too: the conversation is then listable, instead of
-    // holding messages no listing that joins `conversations` can see.
-    if (!isThreadMode) {
-      await conversationRepository.createConversation(conversationId, authResult.userId, pageId);
-    }
+    // Creating the row instead would have "fixed" the 500 by making the
+    // stateless path durable: prompts a caller deliberately left unthreaded
+    // would land in the agent's history, visible in the app. That is the wrong
+    // half of the contract to change. Skipping the writes honours it and
+    // removes the FK violation at the same time.
+    //
+    // The id itself lives on as an in-request correlation key — tool
+    // attribution (`aiConversationId`) and the usage row both take it, and
+    // neither column carries an FK — so nothing downstream needs a real row.
+    const persistConversation = isThreadMode;
 
     const userMessage = messages[messages.length - 1];
 
@@ -468,7 +473,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const userMessageId = userMessage.id;
-    if (userMessage && userMessage.role === 'user') {
+    if (persistConversation && userMessage && userMessage.role === 'user') {
       await messageRepository.savePageMessage({
         messageId: userMessageId,
         pageId,
@@ -550,7 +555,10 @@ export async function POST(request: Request): Promise<Response> {
       const assistantId = createId();
       const extracted = extractToolCallsFromSteps(steps ?? []);
       const hasContent = text !== undefined || extracted.toolCalls.length > 0;
-      if (hasContent) {
+      // Both halves of the exchange follow the one switch: a stateless call
+      // keeps the reply no more than it keeps the prompt. The billing that
+      // follows is unconditional — an unpersisted turn is still real spend.
+      if (persistConversation && hasContent) {
         await messageRepository.savePageMessage({
           messageId: assistantId,
           pageId,
