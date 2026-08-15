@@ -190,6 +190,53 @@ describe('GET /api/canvas/[pageId]/preview', () => {
     }
   });
 
+  /**
+   * The rendered document carries its own <meta> CSP, and browsers enforce the
+   * INTERSECTION of every policy delivered. A header that permits form-action
+   * while the meta still says 'none' is therefore inert — the fix has to reach
+   * both, or it only looks applied.
+   */
+  it('given an app origin, should scope the meta policy too, not just the header', async () => {
+    const previous = process.env.WEB_APP_URL;
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+    try {
+      const body = await (await GET(request(), context())).text();
+      expect(body).toContain("form-action 'self' https://app.pagespace.ai");
+      expect(body).not.toContain("form-action 'none'");
+    } finally {
+      if (previous === undefined) delete process.env.WEB_APP_URL;
+      else process.env.WEB_APP_URL = previous;
+    }
+  });
+
+  /**
+   * General invariant behind the two specific cases above: the document's <meta>
+   * policy and the response header are built by separate calls that must be fed
+   * the same inputs. Browsers intersect them, so any directive one grants and the
+   * other withholds is silently withheld. This pins every base directive rather
+   * than one parameter, so a third input added later cannot diverge unnoticed.
+   */
+  it.each([false, true])('given siteMode=%s, should deliver the same base policy in meta and header', async (siteMode) => {
+    const previous = process.env.WEB_APP_URL;
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(canvasPage({ siteMode }) as never);
+    try {
+      const res = await GET(request(), context());
+      const header = res.headers.get('Content-Security-Policy') ?? '';
+      const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await res.text())?.[1] ?? '';
+
+      expect(meta).not.toBe('');
+      // The header adds embedding/sandbox directives a <meta> cannot carry; every
+      // directive the meta DOES declare must appear in the header unchanged.
+      for (const directive of meta.split(';').map((d) => d.trim()).filter(Boolean)) {
+        expect(header).toContain(directive);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.WEB_APP_URL;
+      else process.env.WEB_APP_URL = previous;
+    }
+  });
+
   it('given a non-siteMode page, should serve the baseline policy', async () => {
     const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
 

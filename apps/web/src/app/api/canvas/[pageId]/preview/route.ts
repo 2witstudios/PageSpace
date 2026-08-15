@@ -153,6 +153,12 @@ export async function GET(
     // not want.
     escapeBridge: true,
     siteMode: page.siteMode,
+    // Must match the origin baked into the response header above. The rendered
+    // document carries its OWN <meta> CSP and browsers enforce the intersection
+    // of every policy delivered, so a header that permits `form-action` while
+    // the meta still says `'none'` is inert. Ignored under siteMode, which
+    // permits any https origin without needing one.
+    formActionOrigin,
   });
 
   return new NextResponse(html, { status: 200, headers });
