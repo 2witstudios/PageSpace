@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { streamChannelRegistry } from '@/lib/ai/core/stream-channel-registry';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
+import { resolveStreamJoinContext } from '@/lib/ai/core/stream-join-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,10 +46,20 @@ export async function GET(
 
   const { messageId } = await context.params;
 
-  const meta = streamChannelRegistry.getMeta(messageId);
-  if (!meta) {
+  // WHAT THIS INSTANCE CAN SAY ABOUT THE STREAM — the registry if it owns it, otherwise the
+  // one thing every instance shares, its `ai_stream_sessions` row.
+  //
+  // The registry lookup used to be right here, ahead of the authz block, and it had to be: the
+  // authz inputs lived in the same in-memory entry as the frames. At N>1 that made an ordinary
+  // cross-instance join indistinguishable from a nonexistent one — both 404. The context module
+  // maps the row to EXACTLY the `StreamMeta` shape the registry produces, so everything below
+  // this line is unchanged and there is no second authorization path to keep in step with the
+  // first. See stream-join-context.ts.
+  const joinContext = await resolveStreamJoinContext(messageId);
+  if (joinContext.kind === 'missing') {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
+  const meta = joinContext.meta;
 
   const channelOwner = parseGlobalChannelId(meta.pageId);
   // Page access, then conversation access. A page channel carries every conversation on
@@ -120,10 +130,17 @@ export async function GET(
   // arithmetic, where the server replayed its whole buffer and the client was told how many
   // frames to discard — under-skipping duplicated visible text, over-skipping left a silent
   // permanent gap, and neither was detectable from either side.
-  const channel = streamChannelRegistry.get(messageId);
-  if (!channel) {
+  //
+  // A `remote` or `terminal` context has no channel to read from YET — serving one is the next
+  // leaf (the durable log's follower). Until then this is the same 404 the route already gave
+  // for a registry miss, reached AFTER authorization rather than instead of it. The client's
+  // poll fallback (`stream-join-poll-fallback.ts`) handles a 404 exactly as it does today, so
+  // cross-instance delivery is unchanged by this leaf — what changes is that the answer is now
+  // classified, and that a caller who may not subscribe is refused for the right reason.
+  if (joinContext.kind !== 'local') {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
+  const channel = joinContext.channel;
 
   const requestedFromSeq = Number(new URL(request.url).searchParams.get('fromSeq') ?? '0');
   const fromSeq = Number.isFinite(requestedFromSeq) && requestedFromSeq >= 0
