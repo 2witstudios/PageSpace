@@ -26,14 +26,20 @@
  * dispatched turn and a browser turn can never diverge on which strategy a
  * conversation gets.
  *
- * ONE DELIBERATE WIDENING over the public page URL. `POST /api/ai/chat` re-refuses
- * an MCP token that resolves to a global-assistant conversation, because that URL
- * is addressable by untrusted bearer clients naming an arbitrary conversation id.
- * A dispatch is not that: the tool layer already resolved the target and
- * authorized this actor against it, and the payload is signed. So a chain that
- * STARTED at an MCP token can reach a global worker here — which is what lets the
- * SDK and CLI talk to the global assistant — while `dispatchChatTurn`'s own
+ * ONE DELIBERATE WIDENING over the public page URL, and a narrowing of its own.
+ * `POST /api/ai/chat` re-refuses ANY MCP token that resolves to a
+ * global-assistant conversation, because that URL is addressable by untrusted
+ * bearer clients naming an arbitrary conversation id. A dispatch is not that: the
+ * tool layer already resolved the target and authorized this actor against it,
+ * and the payload is signed. So a chain that started at an UNSCOPED token can
+ * reach a global worker here — which is what lets the SDK and CLI talk to the
+ * global assistant — while `dispatchChatTurn`'s own
  * `conversation.userId === auth.userId` check still gates who that may be.
+ *
+ * A DRIVE-SCOPED credential is refused on that path outright (see the guard
+ * below): the global strategy has no drive-scope machinery, and a global
+ * conversation spans the whole account by definition, so there is nothing
+ * coherent for a drive-confined credential to be doing there.
  *
  * NOT rate-limited or credit-gated here: the turn it delivers runs through the
  * standard pipeline, which gates and meters it exactly as it would a human's.
