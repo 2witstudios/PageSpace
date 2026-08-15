@@ -39,14 +39,13 @@ export function useHotkeyPreferences() {
     // Bindings written by the old capture code no longer match what the runtime
     // compares against. The store has already rewritten the salvageable ones and
     // dropped the rest; persist both outcomes so this happens only once.
-    const { userBindings, migratedBindings, clearMigratedBindings } = useHotkeyStore.getState();
+    const { userBindings, migratedBindings } = useHotkeyStore.getState();
 
     for (const { hotkeyId, binding } of migratedBindings) {
       void updateHotkeyPreference(hotkeyId, binding).catch(() => {
         // Best-effort — the store is already using the rewritten binding.
       });
     }
-    if (migratedBindings.length > 0) clearMigratedBindings();
 
     // Anything in this payload the store refused to keep was unmatchable. Derive
     // it from the payload rather than the accumulated notice list, so a later

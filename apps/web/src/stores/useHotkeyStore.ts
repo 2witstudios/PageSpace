@@ -21,13 +21,15 @@ interface HotkeyState {
    * survives the cleanup that removes the row.
    */
   resetHotkeys: string[];
-  /** Bindings rewritten on load; the caller persists these. */
+  /**
+   * Bindings rewritten during the most recent load; the caller persists these.
+   * Recomputed on every load, so it never needs clearing.
+   */
   migratedBindings: MigratedBinding[];
   loaded: boolean;
   setUserBindings: (bindings: HotkeyBinding[]) => void;
   updateBinding: (hotkeyId: string, binding: string) => void;
   removeBinding: (hotkeyId: string) => void;
-  clearMigratedBindings: () => void;
   dismissResetNotice: () => void;
   reset: () => void;
 }
@@ -91,10 +93,6 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
       newMap.delete(hotkeyId);
       return { userBindings: newMap };
     });
-  },
-
-  clearMigratedBindings: () => {
-    set({ migratedBindings: [] });
   },
 
   dismissResetNotice: () => {
