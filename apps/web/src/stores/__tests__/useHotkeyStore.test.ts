@@ -44,7 +44,7 @@ describe('useHotkeyStore', () => {
   });
 
   describe('stale bindings', () => {
-    it('given a binding that can never match, should drop it and fall back to the default', () => {
+    it('given an Alt binding that can never match, should reset it to the default', () => {
       // "Alt+Π" is what the old capture code stored for macOS Option+P.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
@@ -52,7 +52,6 @@ describe('useHotkeyStore', () => {
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
-      expect(useHotkeyStore.getState().migratedBindings).toEqual([]);
     });
 
     it('given a valid binding, should keep it and report nothing reset', () => {
@@ -64,46 +63,40 @@ describe('useHotkeyStore', () => {
       expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
-    it('given a legacy shifted-punctuation binding, should migrate it rather than reset it', () => {
-      // "Ctrl+Shift+?" worked under the old matcher — it must not be discarded.
+    it('given a legacy shifted-punctuation binding, should keep it working untouched', () => {
+      // "Ctrl+Shift+?" matched before this change and must still match after it.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' },
       ]);
 
-      expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+/');
+      expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+?');
       expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
-      expect(useHotkeyStore.getState().migratedBindings).toEqual([
-        { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+/' },
-      ]);
-    });
-
-    it('given a migrated binding, should still match the same physical keys', () => {
-      useHotkeyStore.getState().setUserBindings([
-        { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' },
-      ]);
 
       const event = {
-        ctrlKey: true,
-        metaKey: false,
-        altKey: false,
-        shiftKey: true,
-        key: '?',
-        code: 'Slash',
+        ctrlKey: true, metaKey: false, altKey: false, shiftKey: true,
+        key: '?', code: 'Slash',
       } as KeyboardEvent;
-
       expect(matchesKeyEvent(getEffectiveBinding('editing.find'), event)).toBe(true);
+    });
+
+    it('given a legacy long-tail named key, should keep it rather than delete it', () => {
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'editing.find', binding: 'Ctrl+Pause' },
+      ]);
+
+      expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Pause');
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
     it('given a stored bare key, should reset it rather than let it fire while browsing', () => {
       // The old capture widget had no modifier guard, so a plain "N" could be
-      // saved. It is canonical, but it would fire while the user is reading.
+      // saved. It would fire while the user is simply reading.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'N' },
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
-      expect(useHotkeyStore.getState().migratedBindings).toEqual([]);
     });
 
     it('given a re-saved binding, should clear its reset notice', () => {
@@ -116,8 +109,8 @@ describe('useHotkeyStore', () => {
     });
 
     it('given cleanup that removes the row, should keep the notice until dismissed', () => {
-      // The reviewer's case: cleanup deletes the row, so the next load sees
-      // nothing wrong. The notice must survive that or the user is never told.
+      // Cleanup deletes the row, so the next load sees nothing wrong. The
+      // notice must survive that or the user is never told.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);
@@ -162,8 +155,34 @@ describe('useHotkeyStore', () => {
 
       const captured = eventToBinding(event);
 
-      expect(captured).toBe('Ctrl+Shift+1');
+      expect(captured).toBe('Ctrl+Shift+!');
       expect(matchesKeyEvent(captured, event)).toBe(true);
+    });
+
+    it('given a non-US layout, should bind the key the user sees', () => {
+      // AZERTY puts the key labelled A at physical KeyQ. Binding by position
+      // would silently move the shortcut to the key labelled Q.
+      const event = {
+        ctrlKey: true, metaKey: false, altKey: false, shiftKey: false,
+        key: 'a', code: 'KeyQ',
+      } as KeyboardEvent;
+
+      const captured = eventToBinding(event);
+
+      expect(captured).toBe('Ctrl+A');
+      expect(matchesKeyEvent(captured, event)).toBe(true);
+    });
+
+    it('given a numpad digit, should fire the same binding as the top row', () => {
+      // Both report e.key "1", so "Meta+1" covers both — as it did before.
+      const numpad = {
+        ctrlKey: false, metaKey: true, altKey: false, shiftKey: false,
+        key: '1', code: 'Numpad1',
+      } as KeyboardEvent;
+      const topRow = { ...numpad, code: 'Digit1' } as KeyboardEvent;
+
+      expect(matchesKeyEvent('Meta+1', numpad)).toBe(true);
+      expect(matchesKeyEvent('Meta+1', topRow)).toBe(true);
     });
   });
 });

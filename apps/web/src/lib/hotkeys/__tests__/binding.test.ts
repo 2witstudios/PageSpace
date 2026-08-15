@@ -4,8 +4,7 @@ import {
   formatBindingForDisplay,
   hasModifier,
   isCanonicalBinding,
-  keyFromCode,
-  migrateLegacyBinding,
+  resolveEventKey,
 } from '../binding';
 import { HOTKEY_REGISTRY } from '../registry';
 
@@ -20,37 +19,51 @@ function keyEvent(overrides: Partial<KeyboardEvent> & { key: string }) {
   } as unknown as KeyboardEvent;
 }
 
-describe('keyFromCode', () => {
-  it('given a letter code, should return the uppercase letter', () => {
-    expect(keyFromCode('KeyP', 'p')).toBe('P');
+describe('resolveEventKey', () => {
+  it('given a plain letter, should use the character on the keycap', () => {
+    expect(resolveEventKey(keyEvent({ key: 'p', code: 'KeyP' }))).toBe('P');
   });
 
-  it('given a digit code, should return the digit regardless of shift symbol', () => {
-    expect(keyFromCode('Digit1', '!')).toBe('1');
+  it('given a non-US layout, should follow the label rather than the position', () => {
+    // AZERTY: the key labelled A sits at physical KeyQ. A user who bound
+    // "Ctrl+A" means the key they see, so e.key is the correct signal.
+    expect(resolveEventKey(keyEvent({ ctrlKey: true, key: 'a', code: 'KeyQ' }))).toBe('A');
   });
 
-  it('given a named code, should return the code', () => {
-    expect(keyFromCode('Tab', 'Tab')).toBe('Tab');
-    expect(keyFromCode('ArrowUp', 'ArrowUp')).toBe('ArrowUp');
+  it('given a numpad digit, should resolve the same as the top-row digit', () => {
+    // Both report e.key "1", so one binding covers both keys — as it always did.
+    expect(resolveEventKey(keyEvent({ key: '1', code: 'Numpad1' }))).toBe('1');
+    expect(resolveEventKey(keyEvent({ key: '1', code: 'Digit1' }))).toBe('1');
   });
 
-  it('given a punctuation code, should return the character', () => {
-    expect(keyFromCode('Slash', '/')).toBe('/');
+  it('given Alt held, should fall back to the physical key', () => {
+    // macOS composes with Option: ⌥P reports "π", ⌥N reports "Dead".
+    expect(resolveEventKey(keyEvent({ altKey: true, key: 'π', code: 'KeyP' }))).toBe('P');
+    expect(resolveEventKey(keyEvent({ altKey: true, key: 'Dead', code: 'KeyN' }))).toBe('N');
+    expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Digit1' }))).toBe('1');
+  });
+
+  it('given Alt on a named key, should still use the key name', () => {
+    expect(resolveEventKey(keyEvent({ altKey: true, key: 'Tab', code: 'Tab' }))).toBe('Tab');
+  });
+
+  it('given a long-tail named key, should pass the name through', () => {
+    expect(resolveEventKey(keyEvent({ key: 'Pause', code: 'Pause' }))).toBe('Pause');
+    expect(resolveEventKey(keyEvent({ key: 'PrintScreen' }))).toBe('PrintScreen');
   });
 
   it('given no code, should fall back to the key', () => {
-    expect(keyFromCode(undefined, 'k')).toBe('K');
-    expect(keyFromCode(undefined, 'Tab')).toBe('Tab');
+    expect(resolveEventKey(keyEvent({ key: 'k' }))).toBe('K');
+    expect(resolveEventKey(keyEvent({ key: 'Tab' }))).toBe('Tab');
   });
 
-  it('given a modifier-only press with no usable code, should return empty', () => {
-    expect(keyFromCode(undefined, 'Shift')).toBe('');
+  it('given a modifier-only press, should return empty', () => {
+    expect(resolveEventKey(keyEvent({ key: 'Shift', code: 'ShiftLeft' }))).toBe('');
   });
 });
 
 describe('eventToBinding', () => {
   it('given macOS Option+P where e.key is the composed character, should record the physical key', () => {
-    // This is the bug: Option mutates e.key ("π") while e.code stays "KeyP".
     const binding = eventToBinding(keyEvent({ altKey: true, key: 'π', code: 'KeyP' }));
     expect(binding).toBe('Alt+P');
   });
@@ -60,9 +73,10 @@ describe('eventToBinding', () => {
     expect(binding).toBe('Alt+N');
   });
 
-  it('given Shift+1, should record the digit rather than the shifted symbol', () => {
-    const binding = eventToBinding(keyEvent({ shiftKey: true, key: '!', code: 'Digit1' }));
-    expect(binding).toBe('Shift+1');
+  it('given a shifted punctuation key, should record the character typed', () => {
+    // "Ctrl+Shift+?" is what the old capture stored and what still matches.
+    const binding = eventToBinding(keyEvent({ ctrlKey: true, shiftKey: true, key: '?', code: 'Slash' }));
+    expect(binding).toBe('Ctrl+Shift+?');
   });
 
   it('given all modifiers, should emit them in canonical order', () => {
@@ -84,9 +98,28 @@ describe('isCanonicalBinding', () => {
     }
   });
 
-  it('given a binding written from a mutated macOS key, should reject it', () => {
+  it('given a legacy binding that still matches, should accept it untouched', () => {
+    // These all worked before this change and must keep working — no migration.
+    expect(isCanonicalBinding('Ctrl+Shift+?')).toBe(true);
+    expect(isCanonicalBinding('Ctrl+Shift+_')).toBe(true);
+    expect(isCanonicalBinding('Ctrl+Pause')).toBe(true);
+    expect(isCanonicalBinding('Ctrl+PrintScreen')).toBe(true);
+    expect(isCanonicalBinding('Ctrl+MediaPlayPause')).toBe(true);
+  });
+
+  it('given an Alt binding holding a composed character, should reject it', () => {
+    // Alt resolves through e.code, which only yields A-Z or 0-9, so these can
+    // never be produced by a key press and never matched anything.
     expect(isCanonicalBinding('Alt+Π')).toBe(false);
     expect(isCanonicalBinding('Alt+†')).toBe(false);
+    expect(isCanonicalBinding('Alt+~')).toBe(false);
+    expect(isCanonicalBinding('Alt+Dead')).toBe(false);
+  });
+
+  it('given an Alt binding on a plain key, should accept it', () => {
+    expect(isCanonicalBinding('Alt+N')).toBe(true);
+    expect(isCanonicalBinding('Alt+1')).toBe(true);
+    expect(isCanonicalBinding('Alt+Tab')).toBe(true);
   });
 
   it('given an unknown or misordered modifier, should reject it', () => {
@@ -107,51 +140,6 @@ describe('hasModifier', () => {
 
   it('given a modified key, should return true', () => {
     expect(hasModifier('Meta+K')).toBe(true);
-  });
-});
-
-describe('migrateLegacyBinding', () => {
-  it('given a shifted punctuation binding that used to work, should map it to the physical key', () => {
-    expect(migrateLegacyBinding('Ctrl+Shift+?')).toBe('Ctrl+Shift+/');
-    expect(migrateLegacyBinding('Ctrl+Shift+_')).toBe('Ctrl+Shift+-');
-    expect(migrateLegacyBinding('Meta+Shift+{')).toBe('Meta+Shift+[');
-  });
-
-  it('given a shifted digit binding, should map it to the digit', () => {
-    expect(migrateLegacyBinding('Ctrl+Shift+!')).toBe('Ctrl+Shift+1');
-  });
-
-  it('given a legacy space binding, should map it to Space', () => {
-    expect(migrateLegacyBinding('Ctrl+ ')).toBe('Ctrl+Space');
-  });
-
-  it('given an already-canonical binding, should return it unchanged', () => {
-    expect(migrateLegacyBinding('Meta+K')).toBe('Meta+K');
-  });
-
-  it('given an Option-composed binding that never matched, should return null', () => {
-    expect(migrateLegacyBinding('Alt+Π')).toBeNull();
-    expect(migrateLegacyBinding('Alt+†')).toBeNull();
-  });
-
-  it('given a shifted character with no Shift, should not guess a physical key', () => {
-    // macOS ⌥N reports "~". Mapping that to "`" the way a real Shift+` would
-    // hand the user a shortcut they never chose — reset instead.
-    expect(migrateLegacyBinding('Alt+~')).toBeNull();
-    expect(migrateLegacyBinding('Alt+…')).toBeNull();
-  });
-
-  it('given a shifted character with Shift held, should map it', () => {
-    // Shift+` is the only way to type "~", so the physical key is unambiguous.
-    expect(migrateLegacyBinding('Ctrl+Shift+~')).toBe('Ctrl+Shift+`');
-  });
-
-  it('given a legacy binding on an unrecognised named key, should return null', () => {
-    expect(migrateLegacyBinding('Alt+Dead')).toBeNull();
-  });
-
-  it('given an empty binding, should return null', () => {
-    expect(migrateLegacyBinding('')).toBeNull();
   });
 });
 

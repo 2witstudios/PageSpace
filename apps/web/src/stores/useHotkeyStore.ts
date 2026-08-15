@@ -4,8 +4,8 @@ import {
   hasModifier,
   isCanonicalBinding,
   isMacPlatform,
-  keyFromCode,
-  migrateLegacyBinding,
+  resolveEventKey,
+  splitBinding,
 } from '@/lib/hotkeys/binding';
 
 interface HotkeyBinding {
@@ -13,25 +13,14 @@ interface HotkeyBinding {
   binding: string;
 }
 
-/** A stored binding rewritten into the canonical form, to be persisted. */
-interface MigratedBinding {
-  hotkeyId: string;
-  binding: string;
-}
-
 interface HotkeyState {
   userBindings: Map<string, string>;
   /**
-   * Hotkey IDs whose stored binding could not be salvaged and fell back to the
-   * default. Kept until the user re-binds or dismisses it, so the notice
-   * survives the cleanup that removes the row.
+   * Hotkey IDs whose stored binding cannot fire and fell back to the default.
+   * Kept until the user re-binds or dismisses it, so the notice survives the
+   * cleanup that removes the row.
    */
   resetHotkeys: string[];
-  /**
-   * Bindings rewritten during the most recent load; the caller persists these.
-   * Recomputed on every load, so it never needs clearing.
-   */
-  migratedBindings: MigratedBinding[];
   loaded: boolean;
   setUserBindings: (bindings: HotkeyBinding[]) => void;
   updateBinding: (hotkeyId: string, binding: string) => void;
@@ -43,13 +32,11 @@ interface HotkeyState {
 export const useHotkeyStore = create<HotkeyState>((set) => ({
   userBindings: new Map(),
   resetHotkeys: [],
-  migratedBindings: [],
   loaded: false,
 
   setUserBindings: (bindings) => {
     const map = new Map<string, string>();
     const wasReset: string[] = [];
-    const migrated: MigratedBinding[] = [];
 
     for (const { hotkeyId, binding } of bindings) {
       // An empty binding means "disabled" and is intentional.
@@ -62,27 +49,17 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
       // possibility — and it fires against the global listeners while the user
       // is just reading. Both the widget and the API now refuse these; reset
       // the ones already saved rather than honouring them.
-      if (!hasModifier(binding)) {
+      //
+      // The other unusable shape is an Alt binding holding a macOS-composed
+      // character ("Alt+Π"), which never matched anything and cannot be traced
+      // back to a physical key. Everything else — including shifted punctuation
+      // and long-tail named keys — still matches and is kept untouched.
+      if (!hasModifier(binding) || !isCanonicalBinding(binding)) {
         wasReset.push(hotkeyId);
         continue;
       }
 
-      if (isCanonicalBinding(binding)) {
-        map.set(hotkeyId, binding);
-        continue;
-      }
-
-      // Written by the old `e.key` capture. Shifted punctuation ("Ctrl+Shift+?")
-      // used to match and is rewritten to the physical key it stands for; a
-      // binding that could never match (an Option-composed letter) is dropped so
-      // the default takes over.
-      const rewritten = migrateLegacyBinding(binding);
-      if (rewritten) {
-        map.set(hotkeyId, rewritten);
-        migrated.push({ hotkeyId, binding: rewritten });
-      } else {
-        wasReset.push(hotkeyId);
-      }
+      map.set(hotkeyId, binding);
     }
 
     set((state) => ({
@@ -90,7 +67,6 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
       // Accumulate: cleanup removes the row, so a later load sees nothing wrong
       // and would otherwise erase the notice before the user ever reads it.
       resetHotkeys: [...new Set([...state.resetHotkeys, ...wasReset])],
-      migratedBindings: migrated,
       loaded: true,
     }));
   },
@@ -120,7 +96,7 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
   },
 
   reset: () => {
-    set({ userBindings: new Map(), resetHotkeys: [], migratedBindings: [], loaded: false });
+    set({ userBindings: new Map(), resetHotkeys: [], loaded: false });
   },
 }));
 
@@ -164,15 +140,14 @@ interface ParsedBinding {
 
 /** Parse a binding string like "Ctrl+Shift+K" into components */
 export function parseBinding(binding: string): ParsedBinding {
-  const parts = binding.split('+');
-  const key = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1).map((m) => m.toLowerCase());
+  const { modifiers, key } = splitBinding(binding);
+  const lower = modifiers.map((m) => m.toLowerCase());
 
   return {
-    ctrl: modifiers.includes('ctrl'),
-    meta: modifiers.includes('meta'),
-    shift: modifiers.includes('shift'),
-    alt: modifiers.includes('alt'),
+    ctrl: lower.includes('ctrl'),
+    meta: lower.includes('meta'),
+    shift: lower.includes('shift'),
+    alt: lower.includes('alt'),
     key: key.length === 1 ? key.toLowerCase() : key,
   };
 }
@@ -180,14 +155,14 @@ export function parseBinding(binding: string): ParsedBinding {
 /**
  * Check if a keyboard event matches a binding string.
  *
- * The key token is resolved through the same `keyFromCode` the settings capture
+ * The key token comes from the same `resolveEventKey` the settings capture
  * widget uses, so what gets recorded and what gets matched cannot drift.
  */
 export function matchesKeyEvent(binding: string, event: KeyboardEvent): boolean {
   if (!binding) return false;
 
   const parsed = parseBinding(binding);
-  const eventKey = keyFromCode(event.code, event.key);
+  const eventKey = resolveEventKey(event);
   if (!eventKey) return false;
 
   return (

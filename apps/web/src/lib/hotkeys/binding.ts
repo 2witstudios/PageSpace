@@ -1,10 +1,16 @@
 // apps/web/src/lib/hotkeys/binding.ts
 //
 // Canonical binding-string format, shared by the settings capture widget and the
-// runtime matcher. Both sides MUST derive the key token through this module —
-// when they each rolled their own, macOS Option presses were recorded from
-// `e.key` (Option+P → "π") but matched from `e.code` ("p"), so a rebound
-// shortcut could never fire while still overriding its default.
+// runtime matcher. Both sides MUST derive the key token through `resolveEventKey`
+// — when they each rolled their own, macOS Option presses were recorded from
+// `e.key` (Option+P → "π") but matched with an `e.code` fallback ("P"), so a
+// rebound shortcut could never fire while still overriding its default.
+//
+// The token is `e.key` — the character on the keycap — except when Alt is held.
+// Alt composes characters on macOS (⌥P → "π", ⌥N → "Dead"), so there the
+// physical `e.code` is the only usable signal. Keeping `e.key` everywhere else
+// is deliberate: it is what makes `Ctrl+A` land on the key labelled A whatever
+// the layout, and `Ctrl+1` fire from the numpad as well as the top row.
 //
 // Format: modifiers in the fixed order Ctrl, Meta, Alt, Shift, then the key
 // token, joined with "+". e.g. "Meta+Shift+K", "Ctrl+Tab", "Alt+N".
@@ -12,66 +18,8 @@
 /** Modifier names, in the order they must appear in a canonical binding. */
 const MODIFIER_ORDER = ['Ctrl', 'Meta', 'Alt', 'Shift'] as const;
 
-/** Key event `code` values that map to a punctuation token. */
-const PUNCTUATION_BY_CODE: Record<string, string> = {
-  Minus: '-',
-  Equal: '=',
-  BracketLeft: '[',
-  BracketRight: ']',
-  Semicolon: ';',
-  Quote: "'",
-  Comma: ',',
-  Period: '.',
-  Slash: '/',
-  Backslash: '\\',
-  Backquote: '`',
-};
-
-/** Named (non-character) keys we accept, keyed by their `code`. */
-const NAMED_CODES = new Set([
-  'Tab',
-  'Enter',
-  'Escape',
-  'Space',
-  'Backspace',
-  'Delete',
-  'Insert',
-  'Home',
-  'End',
-  'PageUp',
-  'PageDown',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-]);
-
-const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
-
 /** Keys that are modifiers themselves and can never be the main key. */
 const MODIFIER_KEY_NAMES = new Set(['Control', 'Meta', 'Alt', 'Shift', 'CapsLock']);
-
-/**
- * Resolve a keyboard event to its canonical key token, physical-position first.
- *
- * `code` describes the physical key and is unaffected by modifiers or layout
- * remapping, so it is preferred. `key` is the fallback for events that carry no
- * `code` (synthetic events in tests, some virtual keyboards).
- */
-export function keyFromCode(code: string | undefined, key: string | undefined): string {
-  if (code) {
-    if (code.startsWith('Key') && code.length === 4) return code.slice(3).toUpperCase();
-    if (code.startsWith('Digit') && code.length === 6) return code.slice(5);
-    if (code.startsWith('Numpad') && code.length > 6) return `Numpad${code.slice(6)}`;
-    if (FUNCTION_KEY.test(code)) return code;
-    if (NAMED_CODES.has(code)) return code;
-    if (PUNCTUATION_BY_CODE[code]) return PUNCTUATION_BY_CODE[code];
-  }
-
-  if (!key) return '';
-  if (MODIFIER_KEY_NAMES.has(key)) return '';
-  return key.length === 1 ? key.toUpperCase() : key;
-}
 
 interface BindingEventLike {
   ctrlKey: boolean;
@@ -83,11 +31,29 @@ interface BindingEventLike {
 }
 
 /**
+ * Resolve a keyboard event to its canonical key token.
+ *
+ * `e.key` is preferred because it is the character the user sees on the key —
+ * layout-correct by construction. The one case it cannot be trusted is Alt:
+ * macOS composes a different character (⌥P → "π") or a dead key (⌥N → "Dead"),
+ * so for Alt combinations the physical `e.code` is used instead.
+ */
+export function resolveEventKey(event: BindingEventLike): string {
+  if (event.altKey && event.code) {
+    if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
+    if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+  }
+
+  if (!event.key || MODIFIER_KEY_NAMES.has(event.key)) return '';
+  return event.key.length === 1 ? event.key.toUpperCase() : event.key;
+}
+
+/**
  * Build a canonical binding string from a keyboard event.
  * Returns '' when the press carries no main key (modifiers only).
  */
 export function eventToBinding(event: BindingEventLike): string {
-  const mainKey = keyFromCode(event.code, event.key);
+  const mainKey = resolveEventKey(event);
   if (!mainKey) return '';
 
   const parts: string[] = [];
@@ -100,36 +66,33 @@ export function eventToBinding(event: BindingEventLike): string {
   return parts.join('+');
 }
 
-/** True when the key token is one this module can emit. */
-function isCanonicalKeyToken(token: string): boolean {
-  if (token.length === 1) {
-    return /^[A-Z0-9]$/.test(token) || Object.values(PUNCTUATION_BY_CODE).includes(token);
-  }
-  if (NAMED_CODES.has(token)) return true;
-  if (FUNCTION_KEY.test(token)) return true;
-  if (token.startsWith('Numpad') && token.length > 6) return true;
-  return false;
+/** Split a binding into its modifiers and key token. */
+export function splitBinding(binding: string): { modifiers: string[]; key: string } {
+  const parts = binding.split('+');
+  return { modifiers: parts.slice(0, -1), key: parts[parts.length - 1] };
 }
 
 /**
- * True when `binding` is in the canonical format this module produces:
- * known modifiers, in order, with no duplicates, and an emittable key token.
+ * True when `binding` could actually be produced by a key press.
  *
- * Bindings that fail this check were written by the old, asymmetric capture
- * code (e.g. "Alt+Π") and can never match a real event — callers treat them as
- * stale and fall back to the default.
+ * Validation is deliberately permissive about the key token: `e.key` covers a
+ * long tail this module has no business enumerating (`Pause`, `PrintScreen`,
+ * media keys, layout-specific characters), and rejecting an unfamiliar name
+ * would throw away a shortcut that works.
+ *
+ * The one thing it does reject is an Alt binding holding a composed character.
+ * Those were written by the old capture code on macOS — `Alt+Π`, `Alt+~`,
+ * `Alt+Dead` — and can never match, because Alt combinations now resolve
+ * through `e.code` and yield a plain letter or digit.
  */
 export function isCanonicalBinding(binding: string): boolean {
   if (!binding) return false;
 
   const parts = binding.split('+');
-  // A trailing "+" key would produce an empty token; "+" itself is not emittable.
+  // A trailing "+" key would produce an empty token.
   if (parts.some((p) => p === '')) return false;
 
-  const key = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1);
-
-  if (!isCanonicalKeyToken(key)) return false;
+  const { modifiers, key } = splitBinding(binding);
 
   let lastIndex = -1;
   for (const modifier of modifiers) {
@@ -138,82 +101,19 @@ export function isCanonicalBinding(binding: string): boolean {
     lastIndex = index;
   }
 
+  if (modifiers.includes('Alt')) {
+    // Alt resolves through e.code, which only ever yields A-Z or 0-9.
+    if (key.length === 1) return /^[A-Z0-9]$/.test(key);
+    // "Dead" is what macOS reports for ⌥N and friends — never matchable.
+    if (key === 'Dead') return false;
+  }
+
   return true;
 }
 
 /** True when the binding carries at least one modifier key. */
 export function hasModifier(binding: string): boolean {
   return binding.split('+').length > 1;
-}
-
-/**
- * Characters the old `e.key`-based capture recorded for a shifted key, mapped
- * back to the unshifted key in the same physical position (US layout).
- */
-const UNSHIFTED_BY_SHIFTED_CHAR: Record<string, string> = {
-  '!': '1',
-  '@': '2',
-  '#': '3',
-  $: '4',
-  '%': '5',
-  '^': '6',
-  '&': '7',
-  '*': '8',
-  '(': '9',
-  ')': '0',
-  _: '-',
-  '+': '=',
-  '{': '[',
-  '}': ']',
-  ':': ';',
-  '"': "'",
-  '<': ',',
-  '>': '.',
-  '?': '/',
-  '|': '\\',
-  '~': '`',
-};
-
-/**
- * Translate a binding written by the old `e.key`-based capture into the
- * canonical form, when the old form was one that actually worked.
- *
- * A shifted key (`Ctrl+Shift+?`) matched fine under the previous matcher, which
- * also compared `e.key`, so those are migrated rather than discarded. A binding
- * holding a character no key press can produce in canonical form — an
- * Option-composed letter like `Alt+Π` — was never matchable and cannot be
- * recovered; those return null and the default takes over.
- *
- * The shifted-character mapping only applies when Shift is actually part of the
- * binding. `~`, `!` and friends require Shift to type, so without it the
- * character came from Option composition (macOS ⌥N reports `~`) and says
- * nothing about which physical key was pressed — guessing there would hand the
- * user a shortcut they never chose.
- */
-export function migrateLegacyBinding(binding: string): string | null {
-  if (!binding) return null;
-  if (isCanonicalBinding(binding)) return binding;
-
-  const parts = binding.split('+');
-  if (parts.some((p) => p === '')) return null;
-
-  const key = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1);
-  const hasShift = modifiers.includes('Shift');
-
-  let migratedKey: string;
-  if (key === ' ') {
-    migratedKey = 'Space';
-  } else if (hasShift && UNSHIFTED_BY_SHIFTED_CHAR[key]) {
-    migratedKey = UNSHIFTED_BY_SHIFTED_CHAR[key];
-  } else if (key.length === 1) {
-    migratedKey = key.toUpperCase();
-  } else {
-    return null;
-  }
-
-  const migrated = [...modifiers, migratedKey].join('+');
-  return isCanonicalBinding(migrated) ? migrated : null;
 }
 
 /**
@@ -247,11 +147,8 @@ export function formatBindingForDisplay(binding: string, isMac: boolean): string
   if (!binding) return '';
   if (!isMac) return binding;
 
-  const parts = binding.split('+');
-  const key = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1).map((m) => MAC_SYMBOLS[m] ?? m);
-
-  return `${modifiers.join('')}${key}`;
+  const { modifiers, key } = splitBinding(binding);
+  return `${modifiers.map((m) => MAC_SYMBOLS[m] ?? m).join('')}${key}`;
 }
 
 /** True when running on a macOS-like platform (browser only). */

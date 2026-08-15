@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useHotkeyStore } from '@/stores/useHotkeyStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -29,6 +29,8 @@ export function useHotkeyPreferences() {
   );
 
   const setUserBindings = useHotkeyStore((state) => state.setUserBindings);
+  /** Rows already sent for cleanup, so a stale payload cannot re-trigger one. */
+  const cleanedUp = useRef<Set<string>>(new Set());
 
   // Sync to store when data loads
   useEffect(() => {
@@ -36,26 +38,20 @@ export function useHotkeyPreferences() {
 
     setUserBindings(data.preferences);
 
-    // Bindings written by the old capture code no longer match what the runtime
-    // compares against. The store has already rewritten the salvageable ones and
-    // dropped the rest; persist both outcomes so this happens only once.
-    const { userBindings, migratedBindings } = useHotkeyStore.getState();
+    // Anything in this payload the store refused to keep can never fire — a
+    // bare key, or an Alt binding holding a macOS-composed character. Drop the
+    // row so the default stands and this resolves itself once.
+    const { userBindings } = useHotkeyStore.getState();
 
-    for (const { hotkeyId, binding } of migratedBindings) {
-      void updateHotkeyPreference(hotkeyId, binding).catch(() => {
-        // Best-effort — the store is already using the rewritten binding.
-      });
-    }
-
-    // Anything in this payload the store refused to keep was unmatchable. Derive
-    // it from the payload rather than the accumulated notice list, so a later
-    // revalidation does not re-delete rows that are already gone.
     for (const { hotkeyId } of data.preferences) {
-      if (!userBindings.has(hotkeyId)) {
-        void deleteHotkeyPreference(hotkeyId).catch(() => {
-          // Best-effort cleanup — the store already fell back to the default.
-        });
-      }
+      if (userBindings.has(hotkeyId) || cleanedUp.current.has(hotkeyId)) continue;
+
+      // Remember the attempt before awaiting: a stale row that survives a failed
+      // delete would otherwise be retried on every revalidation.
+      cleanedUp.current.add(hotkeyId);
+      void deleteHotkeyPreference(hotkeyId).catch(() => {
+        // Best-effort cleanup — the store already fell back to the default.
+      });
     }
   }, [data, setUserBindings]);
 

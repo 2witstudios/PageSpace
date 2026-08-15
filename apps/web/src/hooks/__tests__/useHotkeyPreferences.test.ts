@@ -1,10 +1,10 @@
 /**
  * useHotkeyPreferences Hook Tests
  *
- * Guards the persistence half of the legacy-binding migration: the store
- * decides what to salvage and what to drop, but the hook is what writes those
- * decisions back. A bug here is invisible in the store's own tests — the user
- * would silently re-migrate on every single load.
+ * Guards the persistence half of stale-binding cleanup: the store decides what
+ * it can honour, but the hook is what writes that decision back. A bug here is
+ * invisible in the store's own tests — the wrong call silently deletes a
+ * shortcut that works, or retries a failed delete on every revalidation.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -46,25 +46,21 @@ describe('useHotkeyPreferences', () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
   });
 
-  it('given a salvageable legacy binding, should persist the rewritten form', async () => {
+  it('given a legacy binding that still matches, should leave it alone', async () => {
     mockSWRState.data = { preferences: [{ hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' }] };
 
     renderHook(() => useHotkeyPreferences());
 
-    expect(writes()).toContainEqual([
-      'PATCH',
-      { hotkeyId: 'editing.find', binding: 'Ctrl+Shift+/' },
-    ]);
-    expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+/');
+    expect(writes()).toEqual([]);
+    expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+?');
   });
 
-  it('given an unmatchable legacy binding, should delete the row rather than rewrite it', async () => {
+  it('given an unmatchable legacy binding, should delete the row', async () => {
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
 
     renderHook(() => useHotkeyPreferences());
 
     expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
-    expect(writes().some(([method]) => method === 'PATCH')).toBe(false);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
   });
 
@@ -85,27 +81,26 @@ describe('useHotkeyPreferences', () => {
     expect(writes()).toEqual([]);
   });
 
-  it('given a revalidation after the migration landed, should write nothing more', async () => {
-    mockSWRState.data = { preferences: [{ hotkeyId: 'editing.find', binding: 'Ctrl+Shift+?' }] };
-
-    const { rerender } = renderHook(() => useHotkeyPreferences());
-    expect(writes().filter(([method]) => method === 'PATCH')).toHaveLength(1);
-
-    // SWR revalidates and returns a fresh object holding the migrated value.
-    mockFetchWithAuth.mockClear();
-    mockSWRState.data = { preferences: [{ hotkeyId: 'editing.find', binding: 'Ctrl+Shift+/' }] };
-    rerender();
-
-    expect(writes()).toEqual([]);
-  });
-
   it('given a revalidation that still returns the dropped row, should not re-delete it', async () => {
+    // A failed delete leaves the row in place. Retrying on every revalidation
+    // would hammer the endpoint for as long as the session lasts.
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
 
     const { rerender } = renderHook(() => useHotkeyPreferences());
     expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
 
-    // Once the row is gone the payload is clean — nothing left to clean up.
+    mockFetchWithAuth.mockClear();
+    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
+    rerender();
+
+    expect(writes()).toEqual([]);
+  });
+
+  it('given a revalidation after the row is gone, should write nothing and keep the notice', async () => {
+    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
+
+    const { rerender } = renderHook(() => useHotkeyPreferences());
+
     mockFetchWithAuth.mockClear();
     mockSWRState.data = { preferences: [] };
     rerender();
