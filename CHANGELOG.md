@@ -137,6 +137,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
   would have fired while you were reading, and combinations your browser keeps for itself (like
   Cmd+N) now save with a warning that they may never reach PageSpace.
+- **Cmd+Delete and friends can be recorded** — pressing Backspace, Delete or Escape while setting a
+  shortcut always meant "clear this" or "never mind", even when you were holding a modifier, so a
+  combination like ⌘⌫ could not be set at all and trying to set it switched the shortcut off
+  instead. Those still do what they always did on their own; held with a modifier, they are now
+  recorded like any other key.
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
   Creating a calendar event through an app or script without naming a timezone read it as UTC, so
