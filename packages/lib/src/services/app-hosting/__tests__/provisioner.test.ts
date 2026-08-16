@@ -26,12 +26,19 @@ vi.mock('@pagespace/db/schema/published-apps', () => ({
     subdomain: 'subdomain',
     flyAppName: 'flyAppName',
     updatedAt: 'updatedAt',
+    claimedAt: 'claimedAt',
+    claimedBy: 'claimedBy',
   },
-  appDeployTokenMints: { publishedAppId: 'publishedAppId' },
+  appDeployTokenMints: { id: 'id', publishedAppId: 'publishedAppId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
   inArray: (a: unknown, b: unknown) => ({ inArray: [a, b] }),
+  and: (...args: unknown[]) => ({ and: args }),
+  or: (...args: unknown[]) => ({ or: args }),
+  isNull: (a: unknown) => ({ isNull: a }),
+  lt: (a: unknown, b: unknown) => ({ lt: [a, b] }),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: [strings.raw, values] }),
 }));
 vi.mock('../../../logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: errorMock, debug: vi.fn() } },
@@ -41,6 +48,7 @@ import {
   createPublishedApp,
   destroyPublishedApp,
   claimPublishedAppsForWork,
+  releasePublishedAppClaim,
   mintDeployToken,
   transitionPublishedApp,
   findPublishedAppBySubdomain,
@@ -49,6 +57,13 @@ import {
 
 /** A record of every DB/Fly interaction, in order — the ordering invariant is the thing under test. */
 let callLog: string[] = [];
+/** Every patch handed to `db.update().set()`, in order. */
+let updatePatches: Record<string, unknown>[] = [];
+/** Every row handed to `db.insert().values()`, in order. */
+let insertedRows: Record<string, unknown>[] = [];
+
+/** The most recent `set()` patch. (`Array.prototype.at` is beyond this package's typecheck lib target.) */
+const lastPatch = (): Record<string, unknown> => updatePatches[updatePatches.length - 1] ?? {};
 
 function deps(overrides: Partial<ProvisionerDeps> = {}): ProvisionerDeps {
   return {
@@ -130,6 +145,8 @@ const ROW = {
 
 beforeEach(() => {
   callLog = [];
+  updatePatches = [];
+  insertedRows = [];
   selectMock.mockReset();
   insertMock.mockReset();
   updateMock.mockReset();
@@ -139,6 +156,7 @@ beforeEach(() => {
   insertMock.mockImplementation(() => ({
     values: (row: Record<string, unknown>) => {
       callLog.push('db:insert');
+      insertedRows.push(row);
       return {
         returning: () => Promise.resolve([{ ...ROW, ...row }]),
         // mintDeployToken inserts without .returning()
@@ -150,6 +168,7 @@ beforeEach(() => {
     set: (patch: Record<string, unknown>) => ({
       where: () => {
         callLog.push(`db:update:${String(patch.status ?? 'fields')}`);
+        updatePatches.push(patch);
         return {
           returning: () => Promise.resolve([{ ...ROW, ...patch }]),
           then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
@@ -188,15 +207,42 @@ describe('the kill switch — every entry point is dark when off', () => {
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
 
-  it('given hosting is disabled, claimPublishedAppsForWork returns nothing', async () => {
-    expect(await claimPublishedAppsForWork({ statuses: ['building'], limit: 5, deps: off })).toEqual([]);
+  it('given hosting is disabled, claimPublishedAppsForWork claims nothing', async () => {
+    const claim = await claimPublishedAppsForWork({ statuses: ['building'], limit: 5, deps: off });
+    expect(claim.apps).toEqual([]);
+    expect(callLog).not.toContain('db:claim');
   });
 
   it('given hosting is disabled, transitionPublishedApp denies', async () => {
-    expect(await transitionPublishedApp('app1', 'running', off)).toEqual({
+    expect(await transitionPublishedApp('app1', 'running', { deps: off })).toEqual({
       ok: false,
       reason: 'disabled',
     });
+  });
+
+  it('given hosting is disabled, createPublishedApp denies BEFORE touching the database', async () => {
+    // A dark deployment is exactly the one where published_apps may not exist yet.
+    // Querying first turns the documented denial into a thrown error.
+    selectMock.mockImplementation(() => {
+      throw new Error('relation "published_apps" does not exist');
+    });
+
+    const result = await createPublishedApp({
+      pageId: 'page1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: off,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'disabled' });
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it('given hosting is disabled, releasePublishedAppClaim writes nothing', async () => {
+    expect(await releasePublishedAppClaim(['app1'], 'token', off)).toBe(0);
+    expect(callLog.filter((c) => c.startsWith('db:update'))).toEqual([]);
   });
 
   it('given hosting is disabled, mintDeployToken denies and mints nothing', async () => {
@@ -283,6 +329,23 @@ describe('createPublishedApp — row before Fly', () => {
     expect(result.ok).toBe(true);
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
+
+  it('given a no-op, should return the row it already read rather than re-reading it', async () => {
+    mockSelect([{ ...ROW, status: 'running' }]);
+    const result = await createPublishedApp({
+      pageId: 'page1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    // Two reads left a window in which the row could be deleted, and the no-op path
+    // then returned `app: undefined` while typed as PublishedApp.
+    expect(result).toEqual({ ok: true, app: { ...ROW, status: 'running' }, noop: true });
+    expect(callLog.filter((c) => c === 'db:select')).toHaveLength(1);
+  });
 });
 
 describe('destroyPublishedApp', () => {
@@ -315,44 +378,127 @@ describe('destroyPublishedApp', () => {
 });
 
 describe('transitionPublishedApp', () => {
+  const SERVING = { imageDigest: 'sha256:abc', machineId: 'm1' };
+
   it('given a legal edge, should persist the new status', async () => {
-    mockSelect([{ ...ROW, status: 'deploying' }]);
-    const result = await transitionPublishedApp('app1', 'running', deps());
+    mockSelect([{ ...ROW, status: 'deploying', ...SERVING }]);
+    const result = await transitionPublishedApp('app1', 'running', { deps: deps() });
     expect(result.ok).toBe(true);
   });
 
   it('given an illegal edge, should refuse and write nothing', async () => {
     mockSelect([{ ...ROW, status: 'provisioning' }]);
-    const result = await transitionPublishedApp('app1', 'running', deps());
+    const result = await transitionPublishedApp('app1', 'running', { deps: deps() });
     expect(result).toEqual({ ok: false, reason: 'illegal_transition' });
     expect(callLog.filter((c) => c.startsWith('db:update'))).toEqual([]);
   });
 
   it('given a destroying app, should refuse to resurrect it', async () => {
     mockSelect([{ ...ROW, status: 'destroying' }]);
-    expect(await transitionPublishedApp('app1', 'running', deps())).toEqual({
+    expect(await transitionPublishedApp('app1', 'running', { deps: deps() })).toEqual({
       ok: false,
       reason: 'terminal_state',
     });
+  });
+
+  it('given deploying -> running with no machine id, should REFUSE rather than let the CHECK raise', async () => {
+    mockSelect([{ ...ROW, status: 'deploying', imageDigest: 'sha256:abc', machineId: null }]);
+    const result = await transitionPublishedApp('app1', 'running', { deps: deps() });
+    // published_apps_running_requires_machine would reject this write. A thrown
+    // constraint violation aborts the caller's transaction; every entry point here
+    // is documented as returning a denial instead.
+    expect(result).toEqual({ ok: false, reason: 'running_requires_machine' });
+    expect(callLog.filter((c) => c.startsWith('db:update'))).toEqual([]);
+  });
+
+  it('given deploying -> running with no image digest, should refuse as serving_requires_image', async () => {
+    mockSelect([{ ...ROW, status: 'deploying', imageDigest: null, machineId: 'm1' }]);
+    expect(await transitionPublishedApp('app1', 'running', { deps: deps() })).toEqual({
+      ok: false,
+      reason: 'serving_requires_image',
+    });
+  });
+
+  it('given the machine id supplied in the patch, should allow the transition and write both columns at once', async () => {
+    mockSelect([{ ...ROW, status: 'deploying', imageDigest: 'sha256:abc', machineId: null }]);
+    const result = await transitionPublishedApp('app1', 'running', {
+      patch: { machineId: 'm7' },
+      deps: deps(),
+    });
+
+    expect(result.ok).toBe(true);
+    // Same statement, or the CHECK rejects whichever half lands first.
+    expect(lastPatch()).toEqual({ status: 'running', machineId: 'm7' });
+  });
+
+  it('given a dedicated app being parked, should refuse — parking is a credit action a flat SKU never takes', async () => {
+    mockSelect([{ ...ROW, status: 'running', tier: 'dedicated', ...SERVING }]);
+    expect(await transitionPublishedApp('app1', 'parked', { deps: deps() })).toEqual({
+      ok: false,
+      reason: 'parked_is_metered_only',
+    });
+  });
+
+  it('given a teardown of a row with neither column, should still allow it', async () => {
+    mockSelect([{ ...ROW, status: 'provisioning', imageDigest: null, machineId: null }]);
+    const result = await transitionPublishedApp('app1', 'destroying', { deps: deps() });
+    expect(result.ok).toBe(true);
   });
 });
 
 describe('claimPublishedAppsForWork', () => {
   it('given no statuses, should claim nothing rather than lock the whole table', async () => {
     mockSelect([ROW]);
-    expect(await claimPublishedAppsForWork({ statuses: [], limit: 10, deps: deps() })).toEqual([]);
+    const claim = await claimPublishedAppsForWork({ statuses: [], limit: 10, deps: deps() });
+    expect(claim.apps).toEqual([]);
     expect(callLog).not.toContain('db:claim');
   });
 
   it('given statuses, should claim rows with a skip-locked read', async () => {
     mockSelect([ROW]);
-    const rows = await claimPublishedAppsForWork({
+    const claim = await claimPublishedAppsForWork({
       statuses: ['building'],
       limit: 10,
       deps: deps(),
     });
-    expect(rows).toEqual([ROW]);
+    expect(claim.apps).toHaveLength(1);
     expect(callLog).toContain('db:claim');
+  });
+
+  it('given claimed rows, should WRITE the claim inside the same transaction — the lock dies at commit', async () => {
+    mockSelect([ROW]);
+    const claim = await claimPublishedAppsForWork({
+      statuses: ['building'],
+      limit: 10,
+      deps: deps(),
+    });
+
+    // Without this write the transaction commits, the FOR UPDATE locks release,
+    // and the very next worker receives the same rows — before this caller has
+    // done any work with them.
+    expect(callLog).toContain('db:update:fields');
+    expect(callLog.indexOf('db:claim')).toBeLessThan(callLog.indexOf('db:update:fields'));
+    const patch = lastPatch();
+    expect(Object.keys(patch).sort()).toEqual(['claimedAt', 'claimedBy']);
+    expect(patch.claimedBy).toBe(claim.token);
+  });
+
+  it('given nothing to claim, should not write a claim marker at all', async () => {
+    mockSelect([]);
+    const claim = await claimPublishedAppsForWork({
+      statuses: ['building'],
+      limit: 10,
+      deps: deps(),
+    });
+    expect(claim.apps).toEqual([]);
+    expect(callLog.filter((c) => c.startsWith('db:update'))).toEqual([]);
+  });
+
+  it('given two claims, should mint different tokens so one worker can never release the other', async () => {
+    mockSelect([ROW]);
+    const first = await claimPublishedAppsForWork({ statuses: ['building'], limit: 1, deps: deps() });
+    const second = await claimPublishedAppsForWork({ statuses: ['building'], limit: 1, deps: deps() });
+    expect(first.token).not.toBe(second.token);
   });
 
   it('given the claim query, should ask for skipLocked so a second worker moves on rather than blocking', async () => {
@@ -376,6 +522,33 @@ describe('claimPublishedAppsForWork', () => {
   });
 });
 
+describe('releasePublishedAppClaim', () => {
+  it('given a token, should fence the release on it so a superseded worker cannot free the new holder', async () => {
+    const wheres: unknown[] = [];
+    updateMock.mockImplementation(() => ({
+      set: (patch: Record<string, unknown>) => ({
+        where: (condition: unknown) => {
+          wheres.push(condition);
+          updatePatches.push(patch);
+          return { returning: () => Promise.resolve([{ id: 'app1' }]) };
+        },
+      }),
+    }));
+
+    const released = await releasePublishedAppClaim(['app1'], 'token-a', deps());
+
+    expect(released).toBe(1);
+    expect(lastPatch()).toEqual({ claimedAt: null, claimedBy: null });
+    // The predicate carries the token, not just the ids.
+    expect(JSON.stringify(wheres)).toContain('token-a');
+  });
+
+  it('given no ids, should not issue a write at all', async () => {
+    expect(await releasePublishedAppClaim([], 'token-a', deps())).toBe(0);
+    expect(callLog.filter((c) => c.startsWith('db:update'))).toEqual([]);
+  });
+});
+
 describe('mintDeployToken', () => {
   it('given a successful mint, should record it and return the token', async () => {
     mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
@@ -390,6 +563,61 @@ describe('mintDeployToken', () => {
     // Fly returns no token id, so the mint record is the only evidence this
     // credential was ever created — writing it is part of minting.
     expect(callLog).toContain('db:insert');
+  });
+
+  it('given a mint, should write the audit row BEFORE calling Fly', async () => {
+    mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
+    await mintDeployToken({
+      publishedAppId: 'app1',
+      expiry: '48h',
+      purpose: 'build',
+      deps: deps(),
+    });
+
+    // A crash between the mint and the record loses the ONLY evidence that a live,
+    // self-renewing, app-scoped credential exists. Recording first inverts the loss
+    // into a row for a token that was never issued.
+    expect(callLog.indexOf('db:insert')).toBeLessThan(callLog.indexOf('fly:mintDeployToken'));
+    expect(insertedRows[insertedRows.length - 1]).toMatchObject({ outcome: 'pending' });
+  });
+
+  it('given a successful mint, should settle the audit row to minted', async () => {
+    mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
+    await mintDeployToken({
+      publishedAppId: 'app1',
+      expiry: '48h',
+      purpose: 'build',
+      deps: deps(),
+    });
+
+    const settle = lastPatch();
+    expect(settle.outcome).toBe('minted');
+    expect(settle.settledAt).toBeDefined();
+    expect(callLog.indexOf('fly:mintDeployToken')).toBeLessThan(
+      callLog.lastIndexOf('db:update:fields'),
+    );
+  });
+
+  it('given the settle write fails, should still return the token and log the unsettled row', async () => {
+    mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
+    updateMock.mockImplementation(() => ({
+      set: () => ({
+        where: () => Promise.reject(new Error('db gone')),
+      }),
+    }));
+
+    const result = await mintDeployToken({
+      publishedAppId: 'app1',
+      expiry: '48h',
+      purpose: 'build',
+      deps: deps(),
+    });
+
+    // The credential exists; `pending` already says "a token may exist for this
+    // app", which is the fact worth keeping. Losing the caller's token as well
+    // would strand it with no upside.
+    expect(result).toEqual({ ok: true, token: 'FlyV1 fm2_aaa,fm2_bbb' });
+    expect(errorMock).toHaveBeenCalled();
   });
 
   it('given a successful mint, should NOT persist the token value', async () => {
@@ -423,7 +651,7 @@ describe('mintDeployToken', () => {
     });
   });
 
-  it('given the Fly mint fails, should record nothing', async () => {
+  it('given the Fly mint fails, should settle the attempt as failed rather than erase it', async () => {
     mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
     const result = await mintDeployToken({
       publishedAppId: 'app1',
@@ -435,8 +663,12 @@ describe('mintDeployToken', () => {
         },
       }),
     });
+
     expect(result).toEqual({ ok: false, reason: 'fly_error', error: 'fly refused' });
-    expect(callLog).not.toContain('db:insert');
+    // An error that arrived after the mint committed would still leave a token, so
+    // the attempt stays on the record — settled, not deleted.
+    expect(callLog).toContain('db:insert');
+    expect(lastPatch()).toMatchObject({ outcome: 'failed' });
   });
 
   it('given no such app, should report not_found', async () => {

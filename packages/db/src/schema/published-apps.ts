@@ -137,6 +137,38 @@ export const publishedApps = pgTable('published_apps', {
   /** Why a `failed` row failed — the operator's first read when an app won't provision. */
   lastError: text('lastError'),
 
+  /**
+   * When a worker last took this row to work on it — the claim LEASE.
+   *
+   * `FOR UPDATE SKIP LOCKED` alone does NOT claim anything. Those locks live and
+   * die with their transaction, so a claim query that only selects hands the same
+   * rows to the next worker the instant it commits — which is before the caller has
+   * done any work. The claim has to be a WRITE inside the locking transaction, and
+   * this column is that write.
+   *
+   * A lease rather than a permanent flag because a worker that crashes mid-provision
+   * would otherwise strand its rows forever, and nothing would ever finish them.
+   * Past the lease horizon the row is claimable again — see
+   * `PUBLISHED_APP_CLAIM_LEASE_MS`.
+   */
+  claimedAt: timestamp('claimedAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * WHICH claim holds this row — a fresh opaque token per successful claim.
+   *
+   * `claimedAt` says a lease exists; this says whose it is. A worker whose work
+   * outlived its lease must not be able to release (or report on) a row the next
+   * worker legitimately took over, so every write that ends a claim carries this
+   * token as a predicate.
+   *
+   * Deliberately not `claimedAt` itself: Postgres keeps microseconds and a JS Date
+   * holds milliseconds, so a stamp read back through the driver never equals the
+   * stored value and the fence would silently match nothing — failing OPEN in the
+   * one place that must fail closed. (The same reasoning as
+   * `broadcast_recipients.claimed_by`, which this copies.)
+   */
+  claimedBy: text('claimedBy'),
+
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true })
     .defaultNow()
@@ -179,6 +211,14 @@ export const publishedApps = pgTable('published_apps', {
     'published_apps_subdomain_nonempty',
     sql`length(${table.subdomain}) > 0`,
   ),
+  // A lease with no holder cannot be fenced, and a holder with no lease never
+  // expires — either half alone is a claim that fails open. Written as a
+  // biconditional rather than a one-way implication, which would constrain only
+  // one of the two bad states.
+  claimCoherent: check(
+    'published_apps_claim_coherent',
+    sql`(${table.claimedAt} IS NULL) = (${table.claimedBy} IS NULL)`,
+  ),
 }));
 
 /**
@@ -215,7 +255,33 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
   /** Denormalized: the exact blast radius of the token that was minted. */
   flyAppName: text('flyAppName').notNull(),
 
+  /**
+   * When the mint was ATTEMPTED — this row is inserted BEFORE the Fly call, not
+   * after it. See `outcome`: until that settles, this is the instant a credential
+   * may have come into existence, not proof that one did.
+   */
   mintedAt: timestamp('mintedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+
+  /**
+   * The two-phase record: 'pending' → 'minted' | 'failed'.
+   *
+   * Writing the row after a successful mint loses the credential entirely if the
+   * process dies in between — and what is lost is the ONLY evidence a
+   * self-renewing, app-scoped token exists. So the intent is recorded first and
+   * settled second, which inverts the loss: the failure mode becomes a row
+   * describing a token that was never issued, which is noise, rather than a token
+   * nobody can account for, which is a security incident.
+   *
+   * A row still 'pending' well past its request is therefore a RECONCILIATION
+   * ITEM, not a bug: a mint may or may not have happened. The only safe resolution
+   * is at the app level — Fly hands back no token id, so a suspect app is
+   * remediated by destroying it (which revokes every token scoped to it), never by
+   * assuming the mint failed.
+   */
+  outcome: text('outcome').default('pending').notNull(),
+
+  /** When `outcome` stopped being 'pending'. NULL exactly while it is. */
+  settledAt: timestamp('settledAt', { mode: 'date', withTimezone: true }),
 
   /**
    * The `expiry` string sent to Fly, verbatim (e.g. '48h'). Fly echoes nothing
@@ -230,6 +296,16 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
   appIdx: index('app_deploy_token_mints_app_idx').on(table.publishedAppId, table.mintedAt),
   expiryNonEmpty: check('app_deploy_token_mints_expiry_nonempty', sql`length(${table.expiry}) > 0`),
   purposeNonEmpty: check('app_deploy_token_mints_purpose_nonempty', sql`length(${table.purpose}) > 0`),
+  outcomeAllowed: check(
+    'app_deploy_token_mints_outcome_allowed',
+    sql`${table.outcome} IN ('pending', 'minted', 'failed')`,
+  ),
+  // Biconditional: a settled row must say when, and a pending one must not claim
+  // it already settled. The reconciler reads exactly this pair.
+  settledCoherent: check(
+    'app_deploy_token_mints_settled_coherent',
+    sql`(${table.outcome} = 'pending') = (${table.settledAt} IS NULL)`,
+  ),
 }));
 
 /**

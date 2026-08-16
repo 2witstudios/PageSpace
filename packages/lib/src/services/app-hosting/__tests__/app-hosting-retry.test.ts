@@ -120,6 +120,43 @@ describe('planFlapsRetry', () => {
   });
 });
 
+describe('planFlapsRetry — ambiguity is only safe when the request is idempotent', () => {
+  assert({
+    given: 'a transport failure on a NON-idempotent request',
+    should: 'stop — the request may already have created the thing it would create again',
+    actual: planFlapsRetry({ status: null, attempt: 1, idempotent: false }),
+    expected: { retry: false },
+  });
+
+  assert({
+    given: 'a 500 on a NON-idempotent request',
+    should: 'stop — Fly may have processed it before failing to answer',
+    actual: planFlapsRetry({ status: 500, attempt: 1, idempotent: false }),
+    expected: { retry: false },
+  });
+
+  assert({
+    given: 'a 429 on a NON-idempotent request',
+    should: 'retry — a rate limit is the one failure Fly states it did not process',
+    actual: planFlapsRetry({ status: 429, attempt: 1, idempotent: false }),
+    expected: { retry: true, delayMs: 1000 },
+  });
+
+  assert({
+    given: 'a transport failure on an idempotent request',
+    should: 'retry, unchanged from before the distinction existed',
+    actual: planFlapsRetry({ status: null, attempt: 1, idempotent: true }),
+    expected: { retry: true, delayMs: 1000 },
+  });
+
+  assert({
+    given: 'no idempotency stated',
+    should: 'default to idempotent, matching the GET/DELETE majority of this client',
+    actual: planFlapsRetry({ status: 503, attempt: 1 }),
+    expected: { retry: true, delayMs: 1000 },
+  });
+});
+
 describe('purity', () => {
   const source = readFileSync(join(__dirname, '..', 'app-hosting-retry.ts'), 'utf8');
   const runtimeImports = source

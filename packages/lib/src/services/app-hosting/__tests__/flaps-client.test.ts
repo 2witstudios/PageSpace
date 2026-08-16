@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  FLAPS_TIMEOUT_MS,
   FlapsError,
+  acquireLease,
   createApp,
   createDeployToken,
+  createMachine,
   deleteApp,
   listMachineEvents,
   updateMachineConfig,
+  waitForMachineState,
+  waitRequestTimeoutMs,
   type FlapsTransport,
   type MachineConfig,
 } from '../flaps-client';
@@ -17,6 +22,30 @@ const transport = (fetchImpl: typeof fetch): FlapsTransport => ({
   // Keep retry-path tests from paying real backoff wall-clock time.
   sleep: async () => {},
 });
+
+/**
+ * A transport that records the timeout each request was bounded by.
+ *
+ * `AbortSignal.timeout` exposes its duration nowhere, so the only other way to ask
+ * "was this call bounded at 10s or at the 60s window it requested?" is to wait ten
+ * real seconds and see whether it aborts.
+ */
+function timeoutRecordingTransport(fetchImpl: typeof fetch): {
+  transport: FlapsTransport;
+  timeouts: number[];
+} {
+  const timeouts: number[] = [];
+  return {
+    timeouts,
+    transport: {
+      ...transport(fetchImpl),
+      abortSignalFor: (ms: number) => {
+        timeouts.push(ms);
+        return new AbortController().signal;
+      },
+    },
+  };
+}
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), {
@@ -272,6 +301,172 @@ describe('listMachineEvents', () => {
       ),
     ),
     expected: true,
+  });
+});
+
+describe('waitForMachineState — the long poll must outlive the default timeout', () => {
+  it('given a 60s wait, should bound the request by the wait window rather than the 10s default', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
+    const { transport: recording, timeouts } = timeoutRecordingTransport(
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await waitForMachineState(recording, 'pgs-app-abc', 'm1', 'started', 60);
+
+    // 10s would abort a healthy 60s long poll, retry it twice, and report a
+    // transport failure for a machine that started fine.
+    expect(timeouts).toEqual([waitRequestTimeoutMs(60)]);
+    expect(timeouts[0]).toBeGreaterThan(60_000);
+  });
+
+  it('given a caller-supplied timeout, should scale the request bound with it', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
+    const { transport: recording, timeouts } = timeoutRecordingTransport(
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await waitForMachineState(recording, 'pgs-app-abc', 'm1', 'started', 120);
+
+    expect(timeouts).toEqual([120_000 + FLAPS_TIMEOUT_MS]);
+    expect(String(fetchImpl.mock.calls[0][0])).toContain('timeout=120');
+  });
+
+  it('given any other endpoint, should keep the 10s default so a hung socket cannot stall a worker', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}, 201));
+    const { transport: recording, timeouts } = timeoutRecordingTransport(
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await createApp(recording, {
+      appName: 'pgs-app-abc',
+      orgSlug: 'pagespace',
+      network: 'published-apps',
+    });
+
+    expect(timeouts).toEqual([FLAPS_TIMEOUT_MS]);
+  });
+});
+
+describe('retry safety — an ambiguous failure must not double-create', () => {
+  it('given a transport failure on a deploy-token mint, should NOT retry — a second mint is a second live credential', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      throw new Error('socket hang up');
+    });
+
+    await expect(
+      createDeployToken(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', '48h'),
+    ).rejects.toBeInstanceOf(FlapsError);
+    // The request may well have landed; retrying it mints another token that is
+    // returned to nobody and recorded nowhere.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a 500 on a deploy-token mint, should NOT retry — Fly may have minted before failing to answer', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'internal' }, 500));
+
+    await expect(
+      createDeployToken(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', '48h'),
+    ).rejects.toBeInstanceOf(FlapsError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a 429 on a deploy-token mint, should retry — a rate limit is the one failure Fly says it did not process', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      call += 1;
+      if (call === 1) return json({ error: 'rate limited' }, 429, { 'retry-after': '1' });
+      return json({ token: 'FlyV1 fm2_aaa' });
+    });
+
+    const token = await createDeployToken(
+      transport(fetchImpl as unknown as typeof fetch),
+      'pgs-app-abc',
+      '48h',
+    );
+    expect(token).toBe('FlyV1 fm2_aaa');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a transport failure on an UNNAMED machine create, should NOT retry — every send bills another machine', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      throw new Error('socket hang up');
+    });
+
+    await expect(
+      createMachine(transport(fetchImpl as unknown as typeof fetch), {
+        appName: 'pgs-app-abc',
+        config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
+      }),
+    ).rejects.toBeInstanceOf(FlapsError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a transport failure on a NAMED machine create, should retry — the name is the idempotency key', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      call += 1;
+      if (call === 1) throw new Error('socket hang up');
+      return json({ id: 'm1', name: 'pgs-app-abc-01' });
+    });
+
+    const machine = await createMachine(transport(fetchImpl as unknown as typeof fetch), {
+      appName: 'pgs-app-abc',
+      name: 'pgs-app-abc-01',
+      config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
+    });
+
+    expect(machine.id).toBe('m1');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a named create whose first attempt already landed, should resolve by lookup rather than create a second machine', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(url)}`);
+      if (init?.method === 'POST') return json({ error: 'already_exists: machine name' }, 409);
+      // The list, resolving the machine the lost attempt created.
+      return json([
+        { id: 'other', name: 'pgs-app-abc-99' },
+        { id: 'm1', name: 'pgs-app-abc-01' },
+      ]);
+    });
+
+    const machine = await createMachine(transport(fetchImpl as unknown as typeof fetch), {
+      appName: 'pgs-app-abc',
+      name: 'pgs-app-abc-01',
+      config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
+    });
+
+    expect(machine.id).toBe('m1');
+    // Exactly one POST: the conflict is resolved by reading, never by creating again.
+    expect(calls.filter((c) => c.startsWith('POST'))).toHaveLength(1);
+  });
+
+  it('given a transport failure on a lease acquire, should NOT retry — the nonce of a lost response is unrecoverable', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      throw new Error('socket hang up');
+    });
+
+    await expect(
+      acquireLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+    ).rejects.toBeInstanceOf(FlapsError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a transport failure on an app create, should retry — the app name makes it idempotent by key', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      call += 1;
+      if (call === 1) throw new Error('socket hang up');
+      return json({}, 201);
+    });
+
+    await createApp(transport(fetchImpl as unknown as typeof fetch), {
+      appName: 'pgs-app-abc',
+      orgSlug: 'pagespace',
+      network: 'published-apps',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 

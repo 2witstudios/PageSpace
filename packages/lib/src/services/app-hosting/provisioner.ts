@@ -26,7 +26,7 @@ import {
   type PublishedApp,
   type PublishedAppStatus,
 } from '@pagespace/db/schema/published-apps';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, lt, or, sql } from '@pagespace/db/operators';
 import {
   isAppHostingEnabled,
   resolveFlyMachinesToken,
@@ -101,8 +101,20 @@ export async function createPublishedApp(
 ): Promise<CreatePublishedAppResult> {
   const deps = input.deps ?? defaultProvisionerDeps;
 
+  // THE KILL SWITCH IS READ BEFORE THE DATABASE IS TOUCHED. `planProvision` denies
+  // on it too, but only after this function has already queried — and a dark
+  // deployment is exactly the one where `published_apps` may not exist yet (the
+  // hosting migration unapplied, or the database unreachable). Querying first turns
+  // the documented `disabled` denial into a thrown error, which is not failing
+  // closed. Every other entry point checks first; this one now matches them.
+  if (!deps.isEnabled()) return { ok: false, reason: 'disabled' };
+
+  // The WHOLE row, in one read. An earlier cut selected {id, status} here and
+  // re-read the full row on the no-op path, which returned `app: undefined` — typed
+  // as `PublishedApp` — whenever the row was deleted between the two reads. One
+  // read has no window to race.
   const existing = await db
-    .select({ id: publishedApps.id, status: publishedApps.status })
+    .select()
     .from(publishedApps)
     .where(eq(publishedApps.pageId, input.pageId))
     .limit(1);
@@ -114,12 +126,7 @@ export async function createPublishedApp(
   }
 
   if (plan.action === 'noop') {
-    const [row] = await db
-      .select()
-      .from(publishedApps)
-      .where(eq(publishedApps.pageId, input.pageId))
-      .limit(1);
-    return { ok: true, app: row, noop: true };
+    return { ok: true, app: existing[0], noop: true };
   }
 
   const network = deps.resolveNetwork();
@@ -234,44 +241,163 @@ export async function destroyPublishedApp(
 }
 
 /**
+ * How long a claim holds a row before another worker may take it.
+ *
+ * Long enough that a healthy worker's unit of work — a Fly create plus a wait for
+ * the machine to reach state — never expires mid-flight; short enough that a
+ * crashed worker's apps are picked up again in minutes rather than never.
+ */
+export const PUBLISHED_APP_CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * A batch of rows claimed by one worker, and the token proving the claim is his.
+ *
+ * The token is minted here and never read back, so the value the worker believes
+ * it holds is by construction the value the rows carry — nothing is lost to driver
+ * conversion on the round trip.
+ */
+export interface PublishedAppClaim {
+  readonly token: string;
+  readonly apps: PublishedApp[];
+}
+
+/**
+ * The lease clock is POSTGRES'S, never a worker's. A lease stamped by one process
+ * and judged by another is only as good as the agreement between their clocks, and
+ * this is the mechanism preventing two workers from provisioning the same app.
+ * Reading and writing the instant in the database removes the disagreement instead
+ * of bounding it.
+ *
+ * `now()` unqualified is correct HERE specifically because these columns are
+ * `timestamp with time zone`: the value is an absolute instant, so no session
+ * TimeZone can reinterpret it. (Against a `timestamp without time zone` column the
+ * same expression would silently store local wall-clock — see
+ * `broadcast_recipients`, whose columns are naive and which must write
+ * `now() at time zone 'utc'`.)
+ */
+function dbNow() {
+  return sql`now()`;
+}
+
+/**
  * Claim published apps for background work, one worker at a time per row.
  *
- * `FOR UPDATE SKIP LOCKED` rather than a plain `FOR UPDATE`: a second worker that
- * finds a row already claimed must move on to the NEXT app, not block behind the
- * first. Blocking would serialise the whole fleet behind one slow provision, which
- * is exactly what the per-object (not global) Fly rate limit is inviting us to
- * avoid. Rows already locked are invisible to this query, so two concurrent
- * workers get disjoint sets.
+ * TWO MECHANISMS, and both are load-bearing:
  *
- * This is the repo's first `SKIP LOCKED`, hence the explanation.
+ *  - `FOR UPDATE SKIP LOCKED` makes the claim RACE-FREE. A second worker that finds
+ *    a row locked moves on to the NEXT app rather than blocking behind the first,
+ *    so one slow provision cannot serialise the fleet — which is what the
+ *    per-object (not global) Fly rate limit invites us to avoid.
+ *  - The `claimedAt`/`claimedBy` WRITE makes the claim DURABLE. Row locks live and
+ *    die with their transaction, and this transaction commits before the caller has
+ *    done a single thing with the rows it got back. A select-only claim therefore
+ *    hands the same rows to the next worker a millisecond later, and the two run
+ *    duplicate Fly operations against the same app — the exact failure the lock
+ *    appears to prevent. Persisting the claim inside the locking transaction is
+ *    what makes "two concurrent workers get disjoint sets" true after the commit
+ *    rather than only during it.
+ *
+ * The claim is a LEASE, not a flag: rows whose claim is older than `leaseMs` are
+ * claimable again, so a worker that dies mid-provision costs one lease interval
+ * instead of stranding its apps forever.
+ *
+ * Claiming bumps `updatedAt` (the ordering column), so a claimed-and-released row
+ * goes to the back of the queue rather than being re-picked ahead of its peers.
+ *
+ * @returns the claimed rows and the token that owns them. Pass the token to
+ *   `releasePublishedAppClaim` when the work is done; without it a release cannot
+ *   tell "clear MY claim" from "revoke the claim of the worker that took over after
+ *   my lease expired".
  */
 export async function claimPublishedAppsForWork({
   statuses,
   limit,
+  leaseMs = PUBLISHED_APP_CLAIM_LEASE_MS,
   deps = defaultProvisionerDeps,
 }: {
   statuses: PublishedAppStatus[];
   limit: number;
+  leaseMs?: number;
   deps?: ProvisionerDeps;
-}): Promise<PublishedApp[]> {
-  if (!deps.isEnabled()) return [];
-  if (statuses.length === 0) return [];
+}): Promise<PublishedAppClaim> {
+  const token = createId();
+  if (!deps.isEnabled()) return { token, apps: [] };
+  if (statuses.length === 0) return { token, apps: [] };
 
   return db.transaction(async (tx: Tx) => {
     const rows = await tx
-      .select()
+      .select({ id: publishedApps.id })
       .from(publishedApps)
-      .where(inArray(publishedApps.status, statuses))
+      .where(
+        and(
+          inArray(publishedApps.status, statuses),
+          // Unclaimed, or claimed by a worker whose lease has expired.
+          or(
+            isNull(publishedApps.claimedAt),
+            lt(publishedApps.claimedAt, sql`${dbNow()} - make_interval(secs => ${leaseMs / 1000})`),
+          ),
+        ),
+      )
       .orderBy(publishedApps.updatedAt)
       .limit(limit)
       .for('update', { skipLocked: true });
-    return rows;
+
+    if (rows.length === 0) return { token, apps: [] };
+
+    const apps = await tx
+      .update(publishedApps)
+      .set({ claimedAt: dbNow(), claimedBy: token })
+      .where(inArray(publishedApps.id, rows.map((row) => row.id)))
+      .returning();
+
+    return { token, apps };
   });
+}
+
+/**
+ * Release a claim, so the rows are workable again before their lease expires.
+ *
+ * FENCED ON THE TOKEN. A worker whose work outlived its lease has already been
+ * superseded, and an unfenced release would clear the NEW holder's claim and hand
+ * the row to a third worker while the second is still mid-flight. Matching on
+ * `claimedBy` makes "I once held this" fail and "I still hold this" succeed.
+ *
+ * @returns how many rows this claim actually still held.
+ */
+export async function releasePublishedAppClaim(
+  publishedAppIds: string[],
+  token: string,
+  deps: ProvisionerDeps = defaultProvisionerDeps,
+): Promise<number> {
+  if (!deps.isEnabled()) return 0;
+  if (publishedAppIds.length === 0) return 0;
+
+  const released = await db
+    .update(publishedApps)
+    .set({ claimedAt: null, claimedBy: null })
+    .where(and(inArray(publishedApps.id, publishedAppIds), eq(publishedApps.claimedBy, token)))
+    .returning({ id: publishedApps.id });
+
+  return released.length;
 }
 
 export type TransitionResult =
   | { ok: true; app: PublishedApp }
   | { ok: false; reason: TransitionRefusal | 'disabled' | 'not_found' };
+
+/**
+ * The columns a transition may write ALONGSIDE the status.
+ *
+ * Not a convenience: `running` requires a machine id and `running`/`deploying`
+ * require an image digest, as CHECK constraints. Those columns therefore have to
+ * land in the SAME statement as the status they license, or the write is rejected
+ * by the database no matter what order the caller does it in.
+ */
+export interface TransitionPatch {
+  machineId?: string | null;
+  imageDigest?: string | null;
+  lastError?: string | null;
+}
 
 /**
  * Move a published app to a new status, refusing illegal edges.
@@ -280,11 +406,22 @@ export type TransitionResult =
  * change underneath it — two crons racing to move the same app produce one winner
  * and one refusal, rather than two writes where the second silently overwrites a
  * transition the first had already validated.
+ *
+ * THE DECISION IS MADE AGAINST THE POST-WRITE ROW, not just the edge. `planTransition`
+ * is handed the columns as they will be after `patch` is applied, so a transition
+ * the database's CHECK constraints would reject comes back as a refusal VALUE
+ * (`serving_requires_image`, `running_requires_machine`, …) rather than a thrown
+ * constraint violation that aborts the transaction. Every entry point here returns
+ * a denial rather than throwing, and a legal-by-the-table edge that the database
+ * then refuses was the one hole in that contract.
  */
 export async function transitionPublishedApp(
   publishedAppId: string,
   to: PublishedAppStatus,
-  deps: ProvisionerDeps = defaultProvisionerDeps,
+  {
+    patch = {},
+    deps = defaultProvisionerDeps,
+  }: { patch?: TransitionPatch; deps?: ProvisionerDeps } = {},
 ): Promise<TransitionResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'disabled' };
 
@@ -297,12 +434,18 @@ export async function transitionPublishedApp(
       .for('update');
     if (!row) return { ok: false, reason: 'not_found' as const };
 
-    const plan = planTransition(row.status, to);
+    const plan = planTransition(row.status, to, {
+      imageDigest: patch.imageDigest === undefined ? row.imageDigest : patch.imageDigest,
+      machineId: patch.machineId === undefined ? row.machineId : patch.machineId,
+      // A transition never changes the tier; the plan reads it only because
+      // `parked` is metered-only.
+      tier: row.tier,
+    });
     if (!plan.allowed) return { ok: false, reason: plan.reason };
 
     const [updated] = await tx
       .update(publishedApps)
-      .set({ status: to })
+      .set({ status: to, ...patch })
       .where(eq(publishedApps.id, publishedAppId))
       .returning();
     return { ok: true as const, app: updated };
@@ -326,6 +469,18 @@ export type MintDeployTokenResult =
  * The token VALUE is returned to the caller and never persisted. Storing a
  * self-renewing app-scoped credential would make this audit table worth more to an
  * attacker than the apps it documents.
+ *
+ * TWO-PHASE, for the same reason the `published_apps` row precedes the Fly app: the
+ * intent row is written BEFORE the mint and settled after it. Minting first and
+ * recording second loses the entire record if the process dies in between — and
+ * what is lost is a live credential nobody can account for. Recording first inverts
+ * that: the worst case becomes a `pending` row for a token that was never issued,
+ * which is noise a reconciler can read.
+ *
+ * A row left `pending` means MAYBE MINTED. It is not evidence of failure, and the
+ * only safe remediation is at the app level — Fly returns no token id, so a
+ * suspected stray token is revoked by destroying its app, never by assuming the
+ * call did not land.
  */
 export async function mintDeployToken({
   publishedAppId,
@@ -348,22 +503,53 @@ export async function mintDeployToken({
     .limit(1);
   if (!row) return { ok: false, reason: 'not_found' };
 
+  // PHASE 1 — the intent, before Fly is called. Its id is generated here so phase 2
+  // settles exactly this row without a read-back.
+  const mintId = createId();
+  await db.insert(appDeployTokenMints).values({
+    id: mintId,
+    publishedAppId: row.id,
+    flyAppName: row.flyAppName,
+    expiry,
+    purpose,
+    outcome: 'pending',
+  });
+
   let token: string;
   try {
     token = await deps.mintFlyDeployToken(row.flyAppName, expiry);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown Fly error';
+    // PHASE 2 (failure) — settled, not deleted. A Fly error that arrived after the
+    // mint committed would still leave a token, so the attempt stays on the record.
+    await settleMint(mintId, 'failed');
     return { ok: false, reason: 'fly_error', error: message };
   }
 
-  await db.insert(appDeployTokenMints).values({
-    publishedAppId: row.id,
-    flyAppName: row.flyAppName,
-    expiry,
-    purpose,
-  });
+  // PHASE 2 (success). If this write fails the caller still gets a working token
+  // and the row stays `pending` — deliberately: `pending` already means "a
+  // credential may exist for this app", which is the truth we need to keep. Logged
+  // at error level so the unsettled row is detectable rather than merely present.
+  try {
+    await settleMint(mintId, 'minted');
+  } catch (error) {
+    loggers.api.error('Deploy token minted but its audit row could not be settled', {
+      publishedAppId: row.id,
+      flyAppName: row.flyAppName,
+      mintId,
+      error: error instanceof Error ? error.message : 'unknown database error',
+    });
+  }
 
   return { ok: true, token };
+}
+
+/** Move a mint intent out of `pending`. `settledAt` and `outcome` move together — a CHECK requires it. */
+async function settleMint(mintId: string, outcome: 'minted' | 'failed'): Promise<void> {
+  await db
+    .update(appDeployTokenMints)
+    .set({ outcome, settledAt: dbNow() })
+    .where(eq(appDeployTokenMints.id, mintId));
 }
 
 /**

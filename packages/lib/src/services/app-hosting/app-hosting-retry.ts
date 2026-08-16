@@ -68,6 +68,7 @@ export function planFlapsRetry({
   status,
   retryAfterMs = null,
   attempt,
+  idempotent = true,
   maxAttempts = MAX_FLAPS_ATTEMPTS,
   baseDelayMs = FLAPS_RETRY_BASE_DELAY_MS,
 }: {
@@ -75,14 +76,30 @@ export function planFlapsRetry({
   status: number | null;
   retryAfterMs?: number | null;
   attempt: number;
+  /**
+   * Whether re-sending this exact request is harmless.
+   *
+   * FALSE NARROWS THE RETRY SET TO 429 ALONE, and the reason is that a failure can
+   * be AMBIGUOUS rather than clean. A socket error or a 5xx says nothing about
+   * whether Fly processed the request before the answer was lost — so retrying a
+   * machine create can bill a second machine, and retrying a deploy-token mint can
+   * issue a second self-renewing credential that is never returned to anyone and
+   * appears in no audit row. A 429 is the one failure Fly states it did NOT
+   * process, which is why it stays retryable for every request.
+   */
+  idempotent?: boolean;
   maxAttempts?: number;
   baseDelayMs?: number;
 }): FlapsRetryPlan {
   if (attempt >= maxAttempts) return { retry: false };
 
-  // A transport failure never reached Fly, so it says nothing about the request —
-  // retry it like a 5xx.
-  const retryable = status === null || status === 429 || status >= 500;
+  // A transport failure never reached Fly *if it never reached Fly* — which is
+  // precisely what cannot be known from this side. For an idempotent request that
+  // ambiguity is harmless and a retry is right; for a mutating one it is the whole
+  // problem, so only the unambiguous 429 survives.
+  const retryable = idempotent
+    ? status === null || status === 429 || status >= 500
+    : status === 429;
   if (!retryable) return { retry: false };
 
   const delayMs = retryAfterMs ?? flapsRetryDelayMs(attempt, baseDelayMs);

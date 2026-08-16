@@ -9,7 +9,7 @@
  * by a test in __tests__ — the same arrangement as billing's credit-core.
  */
 
-import type { PublishedAppStatus } from '@pagespace/db/schema/published-apps';
+import type { PublishedAppStatus, PublishedAppTier } from '@pagespace/db/schema/published-apps';
 
 /**
  * The Fly app name for a published app.
@@ -72,7 +72,63 @@ export const PUBLISHED_APP_TRANSITIONS: Readonly<
   failed: ['provisioning', 'destroying'],
 };
 
-export type TransitionRefusal = 'same_state' | 'terminal_state' | 'illegal_transition';
+/**
+ * The columns the database COUPLES to `status`, and therefore the ones a status
+ * change has to be judged against rather than in isolation.
+ *
+ * A status is not a free variable: three CHECK constraints on `published_apps`
+ * make certain (status, column) pairs unrepresentable. A transition table that
+ * ignores them describes a machine the database does not implement.
+ */
+export interface PublishedAppStatusColumns {
+  imageDigest: string | null;
+  machineId: string | null;
+  tier: PublishedAppTier;
+}
+
+/**
+ * A refusal that mirrors a CHECK constraint, one name per constraint so the
+ * refusal and the thing that would have raised are greppable as a pair.
+ */
+export type StatusInvariantViolation =
+  | 'serving_requires_image'
+  | 'running_requires_machine'
+  | 'parked_is_metered_only';
+
+/**
+ * Would a row in this (status, columns) shape survive the CHECK constraints?
+ *
+ * THIS IS A MIRROR, and it is only worth anything while it stays one: every clause
+ * here restates a constraint in `published_apps`, and the pair is pinned by a test
+ * that writes each rejected shape to a real Postgres. Adding a status-coupled
+ * CHECK without adding a clause here re-opens exactly the bug this closes — a
+ * transition the pure layer calls legal and the database then throws on, turning a
+ * documented refusal value into an exception that aborts the caller's transaction.
+ */
+export function checkStatusInvariants(
+  status: PublishedAppStatus,
+  columns: PublishedAppStatusColumns,
+): StatusInvariantViolation | null {
+  // published_apps_serving_requires_image
+  if ((status === 'running' || status === 'deploying') && columns.imageDigest === null) {
+    return 'serving_requires_image';
+  }
+  // published_apps_running_requires_machine
+  if (status === 'running' && columns.machineId === null) {
+    return 'running_requires_machine';
+  }
+  // published_apps_parked_is_metered_only
+  if (status === 'parked' && columns.tier !== 'metered') {
+    return 'parked_is_metered_only';
+  }
+  return null;
+}
+
+export type TransitionRefusal =
+  | 'same_state'
+  | 'terminal_state'
+  | 'illegal_transition'
+  | StatusInvariantViolation;
 
 export type TransitionPlan =
   | { allowed: true }
@@ -82,10 +138,17 @@ export type TransitionPlan =
  * Decide whether a status change is legal. Never throws — an illegal transition is
  * a value the caller reports, not an exception, because these are driven by cron
  * ticks and user actions racing each other and a refusal is an ordinary outcome.
+ *
+ * `next` is the row AS IT WOULD BE AFTER THE WRITE, not as it is now: a transition
+ * to `running` that also supplies the machine id is legal, and the same transition
+ * without it is not. Requiring the argument is the point — an edge cannot be judged
+ * legal without the columns the database judges it against, so there is deliberately
+ * no two-argument form that would let a caller skip the question.
  */
 export function planTransition(
   from: PublishedAppStatus,
   to: PublishedAppStatus,
+  next: PublishedAppStatusColumns,
 ): TransitionPlan {
   if (from === to) return { allowed: false, reason: 'same_state' };
   if (PUBLISHED_APP_TRANSITIONS[from].length === 0) {
@@ -94,6 +157,8 @@ export function planTransition(
   if (!PUBLISHED_APP_TRANSITIONS[from].includes(to)) {
     return { allowed: false, reason: 'illegal_transition' };
   }
+  const violation = checkStatusInvariants(to, next);
+  if (violation !== null) return { allowed: false, reason: violation };
   return { allowed: true };
 }
 

@@ -1849,6 +1849,13 @@
       "when": 1786984523744,
       "tag": "0263_drive_envs_reclaim_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 264,
+      "version": "7",
+      "when": 1786853756115,
+      "tag": "0264_smooth_pyro",
+      "breakpoints": true
     }
   ]
 }
