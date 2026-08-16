@@ -2,12 +2,19 @@
  * Keyboard Shortcuts settings page — the reset notice.
  *
  * The banner is derived from the preferences payload, so there is no in-memory
- * copy to keep in step and nothing to re-arm it. What is left to get wrong is
- * the destructive half: dismissing deletes the rows that keep the notice alive,
- * and the list it deletes from must come from a fresh read. SWR does not
- * revalidate on focus here, so a tab left open on this page never learns that
- * another tab re-bound the shortcut — deleting from what it is rendering would
- * throw away the binding the user had just set.
+ * copy to keep in step and nothing to re-arm it. That also means the banner
+ * assertions here mostly restate a pure function that `unusablePreferences`
+ * already covers directly — they are here to show the wiring, not to guard it.
+ *
+ * What these tests actually guard is the destructive half, and it is the
+ * `mockDelete` and `mockToast` expectations that carry it:
+ *
+ *  - the list to delete comes from a *fresh* read, never the rendered payload.
+ *    SWR does not revalidate on focus here, so a tab left open on this page
+ *    never learns another tab re-bound the shortcut, and deleting from what it
+ *    is rendering would throw away the binding the user had just set;
+ *  - a failure before the deletes is reported and deletes nothing;
+ *  - a failure *after* them is not reported, because the dismiss succeeded.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -46,7 +53,14 @@ import HotkeysSettingsPage from '../page';
 function serverHolds(preferences: { hotkeyId: string; binding: string }[]) {
   mockSWRState.data = { preferences };
   mockFetch.mockImplementation(async () => mockSWRState.data.preferences);
-  mockMutate.mockImplementation(async () => mockSWRState.data);
+  // Model SWR's optimistic form: an updater rewrites the cached payload, and
+  // the banner is derived from that, so the cache is what the page renders.
+  mockMutate.mockImplementation(async (updater?: unknown) => {
+    if (typeof updater === 'function') {
+      mockSWRState.data = (updater as (c: unknown) => typeof mockSWRState.data)(mockSWRState.data);
+    }
+    return mockSWRState.data;
+  });
 }
 
 function renderPage(preferences: { hotkeyId: string; binding: string }[]) {
@@ -105,6 +119,24 @@ describe('HotkeysSettingsPage reset notice', () => {
     await clickDismiss();
 
     expect(mockDelete).toHaveBeenCalledWith('pages.quick-create');
+    rerender(<HotkeysSettingsPage />);
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  });
+
+  it('given a refetch that fails after the rows are gone, should not call it a failure', async () => {
+    // The dismiss succeeded — the rows are deleted. A revalidation that fails
+    // afterwards must not tell the user to try again, and must not leave the
+    // banner up as though nothing happened.
+    const { rerender } = renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
+    mockDelete.mockImplementation(async () => {
+      mockSWRState.data = { preferences: [] };
+    });
+    mockMutate.mockRejectedValue(new Error('offline'));
+
+    await clickDismiss();
+
+    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create');
+    expect(mockToast.error).not.toHaveBeenCalled();
     rerender(<HotkeysSettingsPage />);
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });

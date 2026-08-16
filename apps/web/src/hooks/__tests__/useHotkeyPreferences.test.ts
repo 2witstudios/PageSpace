@@ -90,14 +90,23 @@ describe('useHotkeyPreferences', () => {
   });
 
   it('given a revalidation that still returns the row, should still not delete it', async () => {
+    // A fresh payload object, so the effect genuinely re-runs — the previous
+    // version reused the same reference, so nothing ran and it could not fail.
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
-
     const { rerender } = renderHook(() => useHotkeyPreferences());
 
     mockFetchWithAuth.mockClear();
+    mockSWRState.data = {
+      preferences: [
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+        { hotkeyId: 'editing.find', binding: 'N' },
+      ],
+    };
     rerender();
 
     expect(writes()).toEqual([]);
+    expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+    expect(getEffectiveBinding('editing.find')).toBe('Ctrl+F');
   });
 });
 

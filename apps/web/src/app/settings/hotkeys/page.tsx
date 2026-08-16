@@ -69,7 +69,19 @@ export default function HotkeysSettingsPage() {
       } else {
         toast.success('Hotkey updated');
       }
-      mutate();
+      // Fold the saved binding into the cached payload rather than waiting for
+      // the revalidation: the notice is derived from that payload, so until it
+      // updates the banner keeps telling the user to set a shortcut they have
+      // just set. Revalidation still follows and remains the source of truth.
+      void mutate(
+        (current) => ({
+          preferences: [
+            ...(current?.preferences ?? []).filter((p) => p.hotkeyId !== hotkeyId),
+            { hotkeyId, binding },
+          ],
+        }),
+        { revalidate: true }
+      ).catch(() => {});
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to update hotkey');
     }
@@ -87,12 +99,22 @@ export default function HotkeysSettingsPage() {
     try {
       const unusable = unusablePreferences(await fetchHotkeyPreferences());
       await Promise.all(unusable.map(({ hotkeyId }) => deleteHotkeyPreference(hotkeyId)));
-      await mutate();
+
+      // Past this point the dismiss has succeeded. Drop the deleted rows from
+      // the cached payload so the banner goes now, and keep the revalidation
+      // out of the try — a refetch that fails afterwards must not report a
+      // completed dismiss as a failure and leave the banner standing.
+      const deleted = new Set(unusable.map(({ hotkeyId }) => hotkeyId));
+      void mutate(
+        (current) => ({
+          preferences: (current?.preferences ?? []).filter((p) => !deleted.has(p.hotkeyId)),
+        }),
+        { revalidate: true }
+      ).catch(() => {});
     } catch {
-      // The rows survived, so the notice will still be there after the refetch.
-      // Say why, rather than leaving it looking like the button did nothing.
+      // The rows survived, so the notice is still true and still showing. Say
+      // why, rather than leaving it looking like the button did nothing.
       toast.error('Could not dismiss the notice — please try again');
-      void mutate().catch(() => {});
     }
   };
 
