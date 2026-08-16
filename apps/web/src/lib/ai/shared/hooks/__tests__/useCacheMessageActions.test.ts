@@ -249,6 +249,28 @@ describe('useCacheMessageActions handleRetry', () => {
     applyDeleteSpy.mockRestore();
   });
 
+  // A deliberate WIDENING over the ref this replaced, worth pinning because it is easy to read
+  // as an accident. The latch is "a send is in flight for this conversation", and an ordinary
+  // send counts. It has to: during the submitted window no stream exists yet, so `planRetry`
+  // sees nothing live, takes the just-sent user turn as the one to retry, and fires a
+  // regeneration alongside the send that has not even landed — two generations, billed twice.
+  it('given an ordinary send in flight for this conversation, should not start a retry', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    // What the composer's Send does — the same `wrapSend`, no retry involved.
+    act(() => { useEditingStore.getState().startPendingSend('conv-1'); });
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).not.toHaveBeenCalled();
+
+    applyDeleteSpy.mockRestore();
+  });
+
   // The other half of the guard, and the obvious objection to it: a latch that suppresses is
   // only correct if it also RELEASES. It has no release path of its own by design — it is the
   // pendingSend, so `useSendHandoff` releases it (stream handoff, error, unmount, or the 15s
