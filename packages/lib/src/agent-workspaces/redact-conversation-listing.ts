@@ -20,8 +20,15 @@
  * session conversations for a viewer (`listWorkspaceWorkers` /
  * `listSharedWorkspaces` in `apps/web/src/lib/ai/tools/session-tools-runtime.ts`)
  * must route titles through this function rather than re-deriving the rule.
- * TRANSCRIPT content is a separate, stricter gate (`openOwnSession` — owner
- * only) that this rule never widens.
+ *
+ * ADDRESSABILITY IS THE SAME RULE. The worker verbs
+ * (`send_session`/`read_session`/`kill_session`) reach a foreign worker only
+ * when {@link isConversationVisibleToViewer} says yes — so what an agent may
+ * ADDRESS is exactly what it may SEE THE TITLE OF, by construction rather than
+ * by two predicates kept in step by hand. Transcript content used to be a
+ * separate, stricter gate (owner-only); it is this gate now, which is why the
+ * two must not drift. The verbs additionally require drive access to the
+ * workspace, so this rule narrows that access — it never widens it.
  */
 
 /** What a foreign private thread's title reads as. Fixed — never derived from the real title. */
@@ -52,10 +59,33 @@ export function redactConversationTitleForViewer({
   workspaceOwnerId,
   conversation,
 }: ConversationTitleRedactionInput): string | null {
-  const viewerIsWorkspaceOwner = viewerId.length > 0 && viewerId === workspaceOwnerId;
-  const viewerOwnsThread = viewerId.length > 0 && viewerId === conversation.ownerId;
-  if (viewerIsWorkspaceOwner || viewerOwnsThread || conversation.isShared) {
+  if (isConversationVisibleToViewer({ viewerId, workspaceOwnerId, conversation })) {
     return conversation.title;
   }
   return PRIVATE_THREAD_REDACTION;
+}
+
+/**
+ * The rule itself, as a boolean — whether this viewer may see this conversation
+ * AT ALL, which is now the same question as whether they may address it.
+ *
+ * Extracted so the listing and the worker verbs cannot answer it differently.
+ * They used to: the listing redacted a foreign private thread's title while the
+ * verbs gated on ownership, and when the verbs widened to drive membership the
+ * two rules would have disagreed — an agent shown `(private thread)` for a row
+ * it could nonetheless message. One function, one answer.
+ *
+ * Three ways to qualify, unchanged from the redaction rule this came out of:
+ * you own the workspace, you own the thread, or the thread was DELIBERATELY
+ * shared (`conversations.isShared`). Fails CLOSED: an empty viewer id matches no
+ * owner, so an unidentified viewer sees only explicitly shared threads.
+ */
+export function isConversationVisibleToViewer({
+  viewerId,
+  workspaceOwnerId,
+  conversation,
+}: ConversationTitleRedactionInput): boolean {
+  const viewerIsWorkspaceOwner = viewerId.length > 0 && viewerId === workspaceOwnerId;
+  const viewerOwnsThread = viewerId.length > 0 && viewerId === conversation.ownerId;
+  return viewerIsWorkspaceOwner || viewerOwnsThread || conversation.isShared;
 }

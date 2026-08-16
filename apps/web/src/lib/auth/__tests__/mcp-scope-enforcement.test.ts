@@ -187,6 +187,42 @@ describe('MCP Scope Enforcement', () => {
 
       expect(result).toEqual(['drive-1', 'drive-2']);
     });
+
+    it('given service auth carrying an inherited ceiling, should return that ceiling', () => {
+      // THE escalation guard for agent dispatch. A worker spawned by a
+      // drive-scoped MCP token runs in a fresh request under service auth; if
+      // this fell through to the session branch below it would read as `[]` =
+      // FULL ACCESS, and the scoped token's worker would reach every drive its
+      // user can — an escalation, not a convenience.
+      const result = getAllowedDriveIds({
+        tokenType: 'service',
+        service: 'agent-dispatch',
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 1,
+        allowedDriveIds: ['drive-1', 'drive-2'],
+        originatingMcpTokenId: 'mcp-token-1',
+      });
+
+      expect(result).toEqual(['drive-1', 'drive-2']);
+    });
+
+    it('given service auth with no ceiling, should return empty array (full access)', () => {
+      // A dispatch that started from a session or an unscoped token inherits no
+      // ceiling — the same `[]` convention every other credential shape uses.
+      const result = getAllowedDriveIds({
+        tokenType: 'service',
+        service: 'agent-dispatch',
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 1,
+        allowedDriveIds: [],
+      });
+
+      expect(result).toEqual([]);
+    });
   });
 
   // ===========================================================================

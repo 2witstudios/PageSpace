@@ -160,35 +160,44 @@ export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
 ];
 
 /**
- * The DISPATCH-DEPENDENT subset of the session family: these two relay the
- * caller's own credentials through the chat pipeline
- * (`dispatchThroughChatPipeline` forwards cookie/CSRF from the live request),
- * so they only function inside an authenticated USER request. Background
- * surfaces with no user cookie (cron/webhook/calendar/task workflow fires)
- * must strip them rather than advertise tools whose dispatch always refuses
- * (review #2326). list/read/kill_session stay out of this set — they are
- * direct DB/stream operations with no dispatch hop.
+ * The two session verbs that CREATE OR FEED A WORKER — the ones that leave
+ * something running after they return. list/read/kill_session stay out of this
+ * set: they are direct DB/stream operations that start nothing.
  */
-export const DISPATCH_DEPENDENT_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
+export const WORKER_DISPATCH_TOOL_NAMES: ReadonlySet<string> = new Set([
   'spawn_session',
   'send_session',
 ]);
 
 /**
- * Strip the dispatch-dependent session pair when the current execution cannot
- * dispatch as the user — i.e. it does not run inside that user's own
- * authenticated browser request (MCP/API-key surfaces, background workflow
- * fires, a manual workflow run by someone other than the workspace owner).
- * Advertising a tool whose dispatch unconditionally refuses is the failure
- * mode this prevents.
+ * Strip the worker-dispatch pair from an execution whose WORKSPACE DOES NOT
+ * OUTLIVE IT.
+ *
+ * This used to be `filterToolsForDispatchCredentials`, and it used to guard a
+ * credential: dispatch relayed the calling user's browser cookie, so any surface
+ * without one advertised two tools whose dispatch could only refuse (review
+ * #2326). That reason is GONE — dispatch signs its own hop now and needs no
+ * ambient credential — and MCP/API-key surfaces no longer strip anything.
+ *
+ * What remains is the reason that was always structural rather than incidental,
+ * and it applies to workflow runs only: a run executes against a RUN-SCOPED
+ * session that its `finally` ends the moment the run finishes. A fire-and-forget
+ * worker dispatched without `wait: true` would outlive its own workspace —
+ * losing its Sprite mid-call, or re-provisioning after cleanup already ran. A
+ * workflow run is a single bounded turn; it delegates by finishing, not by
+ * leaving detached workers behind.
+ *
+ * Lifting this is a real change with a real fix (teach `releaseWorkflowSession`
+ * to skip teardown while the run-scoped workspace still holds workers other than
+ * the run's own), deliberately not bundled with the credential work.
  */
-export function filterToolsForDispatchCredentials<T>(
+export function filterToolsForEphemeralWorkspace<T>(
   tools: Record<string, T>,
-  hasUserDispatchCredentials: boolean
+  workspaceOutlivesRun: boolean
 ): Record<string, T> {
-  if (hasUserDispatchCredentials) return tools;
+  if (workspaceOutlivesRun) return tools;
   return Object.fromEntries(
-    Object.entries(tools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name))
+    Object.entries(tools).filter(([name]) => !WORKER_DISPATCH_TOOL_NAMES.has(name))
   );
 }
 

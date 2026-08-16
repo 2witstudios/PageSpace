@@ -271,6 +271,7 @@ describe('createWorkerSession — placement', () => {
     ownerId: 'user-1',
     agentPageId: null as string | null,
     name: 'worker',
+    allowedDriveIds: [] as string[],
   };
 
   test('workspace omitted: resolves the caller\'s own session and creates the worker there', async () => {
@@ -434,18 +435,47 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
     mockAbortConversationStreams.mockResolvedValue(undefined);
 
     const deps = buildSessionToolsDeps();
-    const result = await deps.killWorker({ conversationId: 'conv-worker', userId: 'user-1' });
+    const result = await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'user-1',
+      actingUserId: 'user-1',
+    });
 
     expect(result).toEqual({ ok: true, spriteTornDown: false });
     expect(mockAbortConversationStreams).toHaveBeenCalledWith({ conversationId: 'conv-worker', userId: 'user-1' });
     expect(mockEndSession).not.toHaveBeenCalled();
   });
 
+  test('aborts as the WORKER\'S OWNER, not the caller — otherwise a drive admin\'s kill silently no-ops', async () => {
+    // `abortConversationStreams` filters `ai_stream_sessions` by user id, so
+    // passing the acting admin here would match zero rows: the worker would keep
+    // running and `kill_session` would report success. Authorization for the
+    // cross-member kill is settled before this call (`checkWorkspaceEndAccess`);
+    // this is only about addressing the right rows.
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'worker-owner',
+      actingUserId: 'drive-admin',
+    });
+
+    expect(mockAbortConversationStreams).toHaveBeenCalledWith({
+      conversationId: 'conv-worker',
+      userId: 'worker-owner',
+    });
+  });
+
   test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {
     mockAbortConversationStreams.mockRejectedValue(new Error('realtime unreachable'));
 
     const deps = buildSessionToolsDeps();
-    const result = await deps.killWorker({ conversationId: 'conv-worker', userId: 'user-1' });
+    const result = await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'user-1',
+      actingUserId: 'user-1',
+    });
 
     expect(result).toEqual({ ok: true, spriteTornDown: false });
     expect(mockEndSession).not.toHaveBeenCalled();
@@ -517,7 +547,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     expect(mockListSessions).not.toHaveBeenCalled();
   });
 
-  test('worker titles route through the ONE redaction rule: the member sees their own and deliberately-shared titles, and "(private thread)" for another member\'s private one — the row (agent slot + activity) survives', async () => {
+  test('worker titles route through the ONE redaction rule, which is ALSO the addressability rule: own and deliberately-shared titles, "(private thread)" for another member\'s private one', async () => {
     mockGetDriveIdsForUser.mockResolvedValue(['drive-member']);
     mockResolveDriveMembership.mockResolvedValue('member');
     mockListSessions.mockResolvedValue([sharedSession]);
@@ -545,6 +575,25 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     expect(JSON.stringify(shared[0])).not.toContain('their secret');
     // Activity time survives redaction — the orchestration signal.
     expect(shared[0].workers[2].lastActiveAt).toBe('2026-08-01T12:00:00.000Z');
+  });
+
+  test('the redaction marker and unaddressability are the SAME predicate — a redacted row is one the verbs refuse', async () => {
+    // The invariant that keeps this listing honest to an agent: it must never
+    // print a name for a row the verbs would refuse, nor redact one they would
+    // accept. Both read `isConversationVisibleToViewer`, so this pins the two
+    // never being computed separately again.
+    const { isConversationVisibleToViewer, redactConversationTitleForViewer, PRIVATE_THREAD_REDACTION } =
+      await import('@pagespace/lib/agent-workspaces/redact-conversation-listing');
+
+    for (const isShared of [true, false]) {
+      const input = {
+        viewerId: VIEWER,
+        workspaceOwnerId: OTHER_OWNER,
+        conversation: { ownerId: OTHER_OWNER, isShared, title: 'their secret' },
+      };
+      const named = redactConversationTitleForViewer(input) !== PRIVATE_THREAD_REDACTION;
+      expect(named).toBe(isConversationVisibleToViewer(input));
+    }
   });
 
   test('the member-visible set carries its own explicit bound (100, newest activity first) — unlike the own set, nothing structural caps it', async () => {

@@ -20,6 +20,10 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
   isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
+  // Same boolean as isScopedMCPAuth for these fixtures; the real helper reads
+  // through getAllowedDriveIds so it also covers dispatched service auth.
+  isDriveScopedPrincipal: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
+  isServiceAuthResult: vi.fn((result: { tokenType?: string }) => result?.tokenType === 'service'),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));

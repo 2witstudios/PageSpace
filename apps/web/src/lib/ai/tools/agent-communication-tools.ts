@@ -22,6 +22,7 @@ import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } fr
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
+import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { guardReadPageToolForVision } from './read-page-vision-output';
@@ -79,6 +80,14 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     ...searchTools,
     ...taskManagementTools,
     ...agentTools,
+    // The session family, so an @-mentioned agent can delegate like any other.
+    // It was absent for a structural reason that is now gone: this engine runs
+    // detached from any request (a channel message triggers it), and dispatch
+    // used to require the calling user's live browser credential — so
+    // spawn_session/send_session could only ever have refused here. Dispatch
+    // signs its own hop now. Still gated per agent by `enabledTools` below, so
+    // adding it here widens nothing on its own.
+    ...buildSessionTools(),
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };
   

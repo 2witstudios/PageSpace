@@ -18,12 +18,18 @@ import { authedContext, gotoChatPage } from './chat.fixture';
  *
  * ## What lives here
  *
- * - {@link dispatchMessage} — the "second actor": a server-side message injection that mirrors
- *   `dispatchThroughChatPipeline`'s POST exactly (same routes, same body shape, same synthetic
- *   `X-Browser-Session-Id`), but authenticated through the FRONT DOOR: session cookie + the
- *   session-bound CSRF token from `seedUser()`, rather than the forwarded-header + internally
- *   minted CSRF hop the runtime does. The routes cannot tell the difference — which is the
- *   point: the persistence/broadcast path under test is identical.
+ * - {@link dispatchMessage} — the "second actor": a server-side message injection that enters
+ *   through the FRONT DOOR (session cookie + the session-bound CSRF token from `seedUser()`),
+ *   with the same body shape and the same synthetic `X-Browser-Session-Id` a dispatch carries.
+ *
+ *   It no longer "mirrors `dispatchThroughChatPipeline`'s POST exactly", and that claim was
+ *   left here rather than deleted because it USED to be true and its passing is the thing a
+ *   reader might otherwise assume. The runtime now signs a payload and POSTs
+ *   `/api/internal/agent-dispatch`; it does not forward credentials or mint a CSRF token, and
+ *   it does not touch the public chat URL at all. What this fixture still exercises is what it
+ *   was always FOR: the persistence and broadcast path a dispatched turn lands on, which both
+ *   entry points share downstream of auth. The signing hop itself is unit-tested in
+ *   `session-tools-dispatch.test.ts` and `api/internal/agent-dispatch/__tests__/route.test.ts`.
  * - {@link openChatPane} / {@link renderedMessages} — open an AI_CHAT page's pane in its own
  *   browser context and read back what the pane actually rendered.
  * - {@link openTwoWindows} — two independent browser contexts (two "windows") for the same

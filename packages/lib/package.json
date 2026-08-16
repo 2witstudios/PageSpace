@@ -97,6 +97,11 @@
       "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
       "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
     },
+    "./agent-workspaces/credential-scope": {
+      "types": "./dist/agent-workspaces/credential-scope.d.ts",
+      "import": "./dist/agent-workspaces/credential-scope.js",
+      "require": "./dist/agent-workspaces/credential-scope.js"
+    },
     "./agent-workspaces/decide-workspace-access": {
       "types": "./dist/agent-workspaces/decide-workspace-access.d.ts",
       "import": "./dist/agent-workspaces/decide-workspace-access.js",
@@ -476,6 +481,11 @@
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
+    },
+    "./auth/agent-dispatch-payload": {
+      "types": "./dist/auth/agent-dispatch-payload.d.ts",
+      "import": "./dist/auth/agent-dispatch-payload.js",
+      "require": "./dist/auth/agent-dispatch-payload.js"
     },
     "./repositories/account-repository": {
       "types": "./dist/repositories/account-repository.d.ts",
@@ -2004,6 +2014,9 @@
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
+      ],
+      "auth/agent-dispatch-payload": [
+        "./dist/auth/agent-dispatch-payload.d.ts"
       ],
       "services/pending-uploads": [
         "./dist/services/pending-uploads.d.ts"

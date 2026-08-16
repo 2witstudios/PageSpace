@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
-import { mcpTokens } from '@pagespace/db/schema/auth';
+import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { oauthAccessTokens } from '@pagespace/db/schema/oauth';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionService, type SessionClaims, type SessionFailureReason } from '@pagespace/lib/auth/session-service';
@@ -24,7 +24,7 @@ import {
 } from './token-prefixes';
 export { MCP_TOKEN_PREFIX, SESSION_TOKEN_PREFIX, OAUTH_ACCESS_TOKEN_PREFIX };
 
-export type TokenType = 'mcp' | 'session' | 'oauth';
+export type TokenType = 'mcp' | 'session' | 'oauth' | 'service';
 
 interface BaseAuthDetails {
   userId: string;
@@ -62,7 +62,34 @@ export interface OAuthAuthResult extends OAuthAuthDetails {
   tokenType: 'oauth';
 }
 
-export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult;
+/**
+ * A SERVICE proved itself over an HMAC and NAMED the user it is acting for.
+ *
+ * The signature authenticates the service, never the person — exactly the model
+ * `/api/internal/voice/bridge` already runs on. So nothing here is a claim ABOUT
+ * the user: `role`, `tokenVersion` and `adminRoleVersion` are read from the live
+ * user row by {@link loadServicePrincipal} at the moment of use, never carried
+ * in the signed payload, and a suspended user is refused there.
+ *
+ * `allowedDriveIds` is a CEILING INHERITED from whatever credential started the
+ * chain, not an entitlement this result confers: a worker dispatched by a
+ * drive-scoped MCP token must stay inside that token's drives across the hop.
+ * `[]` means "no ceiling", matching the convention on the MCP and OAuth results.
+ * See the service branch in {@link getAllowedDriveIds} — without it this type
+ * would inherit session auth's full access and silently widen every scoped
+ * caller.
+ */
+export interface ServiceAuthResult extends BaseAuthDetails {
+  tokenType: 'service';
+  /** Audit vocabulary — which service signed. Never consulted for authorization. */
+  service: 'agent-dispatch';
+  /** Inherited drive ceiling; `[]` = no ceiling. */
+  allowedDriveIds: string[];
+  /** Set when the chain STARTED at a scoped MCP token, so its RBAC ceiling survives the hop. */
+  originatingMcpTokenId?: string;
+}
+
+export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult | ServiceAuthResult;
 
 export interface AuthError {
   error: NextResponse;
@@ -77,7 +104,15 @@ export interface AuthError {
 
 export type AuthenticationResult = AuthResult | AuthError;
 
-export type AllowedTokenType = TokenType;
+/**
+ * What a ROUTE may admit. Deliberately NOT `TokenType`: `'service'` is absent,
+ * so there is no `allow` list any route can write — and no code path inside
+ * {@link authenticateRequestWithOptions} — that could produce or accept a
+ * {@link ServiceAuthResult}. Service auth is constructed at exactly one place
+ * (`POST /api/internal/agent-dispatch`, after verifying an HMAC over the raw
+ * body) and never by parsing a request's own credentials.
+ */
+export type AllowedTokenType = Exclude<TokenType, 'service'>;
 
 export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
@@ -95,6 +130,61 @@ export function getBearerToken(request: Request): string | null {
     return null;
   }
   return authHeader.slice(BEARER_PREFIX.length);
+}
+
+/**
+ * Resolve the acting user for a SERVICE-signed request into a full
+ * {@link ServiceAuthResult}.
+ *
+ * The signed payload names a user id and NOTHING about that user's privileges.
+ * Every privilege-bearing field is read here, from the live row, at the moment
+ * of use — the same columns {@link validateMCPToken} reads — so a role change or
+ * a suspension takes effect on the next dispatch rather than whenever the signer
+ * happened to mint its claim.
+ *
+ * Fails closed: an unknown user and a suspended user both return `null`, and the
+ * caller answers with a fixed refusal that distinguishes neither.
+ */
+export async function loadServicePrincipal(input: {
+  userId: string;
+  service: 'agent-dispatch';
+  allowedDriveIds: string[];
+  originatingMcpTokenId?: string;
+}): Promise<ServiceAuthResult | null> {
+  if (!input.userId) return null;
+
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, input.userId),
+    columns: {
+      id: true,
+      role: true,
+      tokenVersion: true,
+      adminRoleVersion: true,
+      suspendedAt: true,
+    },
+  });
+
+  if (!user) return null;
+
+  if (user.suspendedAt) {
+    logSecurityEvent('unauthorized', {
+      reason: 'service_dispatch_user_suspended',
+      userId: input.userId,
+      authType: 'service',
+    });
+    return null;
+  }
+
+  return {
+    tokenType: 'service',
+    service: input.service,
+    userId: user.id,
+    role: user.role as 'user' | 'admin',
+    tokenVersion: user.tokenVersion,
+    adminRoleVersion: user.adminRoleVersion,
+    allowedDriveIds: input.allowedDriveIds,
+    ...(input.originatingMcpTokenId ? { originatingMcpTokenId: input.originatingMcpTokenId } : {}),
+  };
 }
 
 export async function validateMCPToken(token: string): Promise<MCPAuthDetails | null> {
@@ -438,6 +528,10 @@ export function isSessionAuthResult(result: AuthenticationResult): result is Ses
   return !('error' in result) && result.tokenType === 'session';
 }
 
+export function isServiceAuthResult(result: AuthenticationResult): result is ServiceAuthResult {
+  return !isAuthError(result) && result.tokenType === 'service';
+}
+
 export function isOAuthAuthResult(result: AuthenticationResult): result is OAuthAuthResult {
   return !('error' in result) && result.tokenType === 'oauth';
 }
@@ -669,6 +763,14 @@ export function getAllowedDriveIds(auth: AuthResult): string[] {
   if (isOAuthAuthResult(auth)) {
     return auth.allowedDriveIds; // Empty for the `account` scope = full access
   }
+  // A dispatched worker inherits the CEILING of whatever credential started the
+  // chain. This branch is load bearing: without it, service auth falls through
+  // to the session `return []` below — full access — and a worker spawned by a
+  // drive-scoped MCP token would run UNSCOPED across the internal hop, which is
+  // a privilege escalation, not a convenience.
+  if (isServiceAuthResult(auth)) {
+    return auth.allowedDriveIds;
+  }
   return []; // Session auth = full access
 }
 
@@ -826,6 +928,7 @@ export function checkMCPCreateScope(
 // Re-export from other auth modules
 export {
   isScopedMCPAuth,
+  isDriveScopedPrincipal,
   isScopedOAuthAuth,
   getPrincipalAccessLevel,
   canPrincipalViewPage,

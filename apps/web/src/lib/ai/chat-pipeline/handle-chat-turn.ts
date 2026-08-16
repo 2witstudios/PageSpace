@@ -223,17 +223,59 @@ export async function handleChatTurn(
     return unparseableBody(error, auth, isPageSurface, Date.now() - startTime);
   }
 
+  // 5. The strategy decision, and the turn itself.
+  return dispatchChatTurn({
+    request,
+    auth,
+    browserSessionId,
+    body,
+    surface: opts.surface,
+    urlConversationId: opts.urlConversationId,
+  });
+}
+
+/**
+ * The strategy decision and the turn — everything after "who is this, and is
+ * the body readable".
+ *
+ * Split from {@link handleChatTurn} so a caller that has ALREADY established
+ * its actor by some other means can reach the same decision without inventing a
+ * second one. There is exactly one such caller: `POST
+ * /api/internal/agent-dispatch`, which authenticates a SERVICE over an HMAC and
+ * takes the acting user from the signed payload. It must not re-derive the
+ * strategy, or worker dispatch and browser traffic could diverge on which turn
+ * a conversation gets.
+ *
+ * Everything here is byte-identical to what `handleChatTurn` used to run
+ * inline; the extraction moves no decision and changes no wire contract.
+ */
+export async function dispatchChatTurn({
+  request,
+  auth,
+  browserSessionId,
+  body,
+  surface,
+  urlConversationId,
+}: {
+  request: Request;
+  auth: AuthResult;
+  browserSessionId: string;
+  body: Record<string, unknown>;
+  surface: ChatTurnSurface;
+  urlConversationId?: string;
+}): Promise<Response> {
+  const isPageSurface = surface === 'page-chat';
+
   if (!isPageSurface) {
     return runGlobalChatTurn({
       request,
       auth,
       browserSessionId,
       body,
-      urlConversationId: opts.urlConversationId,
+      urlConversationId,
     });
   }
 
-  // 5. The strategy decision, on the page surface.
   //
   //    A request that names a `chatId` is a page-agent turn by definition —
   //    that is what the field has always meant — so it goes straight through

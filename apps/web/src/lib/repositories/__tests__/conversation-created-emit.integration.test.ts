@@ -364,6 +364,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       name: 'spawned worker',
       // undefined = the caller's own workspace (the epic-central spawn shape).
       workspace: undefined,
+        allowedDriveIds: [],
     });
     if (!spawned.ok) throw new Error(`createWorkerSession failed: ${spawned.reason}`);
     expect(spawned.workspaceId).toBe(ensured.session.id);
@@ -442,6 +443,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
       agentPageId: agentPage.id,
       name: 'page worker',
       workspace: session.session.id,
+      allowedDriveIds: [],
     });
     if (!spawned.ok) throw new Error(`createWorkerSession failed: ${spawned.reason}`);
     expect(spawned.workspaceId).toBe(session.session.id);
