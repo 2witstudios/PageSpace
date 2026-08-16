@@ -3,7 +3,6 @@ import {
   abortActiveStreamByConversation,
   abortActiveStreamByMessageId,
   reportAbortOutcome,
-  type AbortResult,
 } from '@/lib/ai/core/client';
 import { ABORT_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
 import { decideStopAction } from '@/lib/ai/streams/decideStopAction';
@@ -91,7 +90,7 @@ export interface UseStopStreamResult {
  *     duplicated.
  *   - the conversation being switched away from. These surfaces keep one hook instance across a
  *     switch, so a Stop on A must not disable B's Stop button.
- *   - any abort outcome that is not a confirmed `aborted` — see `releaseUnlessAbortConfirmed`.
+ *   - any abort outcome that is not a confirmed `aborted` — see handleStop's release below.
  *   - `STOPPING_FEEDBACK_TIMEOUT_MS`, so a socket that never arrives cannot wedge the button.
  *
  * Between them they also cover the outcome that is silent BY DESIGN and had no feedback
@@ -186,24 +185,6 @@ export const useStopStream = ({
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
 
-  /**
-   * Hold the affordance ONLY on a positive confirmation that a stop is on its way.
-   *
-   * The abort helpers do not throw on failure — they resolve `{ code: 'unconfirmed' }` (see
-   * NETWORK_FAILURE in stream-abort-client), which made the catch below unreachable for exactly
-   * the case that most needs releasing: the user has just been TOLD the generation may still be
-   * running and still billing, and the one control that could stop it was disabled for the whole
-   * backstop. `not_found` is the mirror image — the server says nothing is running, so there is
-   * nothing to be stopping. Only `aborted` means teardown is genuinely inbound, and only it
-   * keeps waiting on `chat:stream_complete`.
-   */
-  const releaseUnlessAbortConfirmed = useCallback(
-    (result: AbortResult, conversationId: string | null) => {
-      if (result.code !== 'aborted') releaseStoppingFor(conversationId);
-    },
-    [releaseStoppingFor],
-  );
-
   const handleStop = useCallback(async () => {
     // FIRST, synchronously, before any await: the click has to change the screen within a frame.
     // Says "stopping", never "stopped" — see the docblock. Nothing else here touches the
@@ -228,12 +209,22 @@ export const useStopStream = ({
         : await abortActiveStreamByConversation({ conversationId: action.conversationId });
 
       reportAbortOutcome(result);
-      releaseUnlessAbortConfirmed(result, stoppedConversationId);
+
+      // HOLD THE AFFORDANCE ONLY ON POSITIVE CONFIRMATION THAT A STOP IS ON ITS WAY.
+      //
+      // The abort helpers do not throw on failure — they resolve `{ code: 'unconfirmed' }` (see
+      // NETWORK_FAILURE in stream-abort-client), which made the catch below unreachable for
+      // exactly the case that most needs releasing: the user has just been TOLD the generation
+      // may still be running and still billing, and the one control that could stop it was
+      // disabled for the whole backstop. `not_found` is the mirror image — the server says
+      // nothing is running, so there is nothing to be stopping. Only `aborted` means teardown is
+      // genuinely inbound, and only it keeps waiting on `chat:stream_complete`.
+      if (result.code !== 'aborted') releaseStoppingFor(stoppedConversationId);
     } catch (error) {
       // Kept for a genuinely unexpected throw (the helpers swallow network failure into
-      // 'unconfirmed', which `releaseUnlessAbortConfirmed` handles). No socket is coming for it:
-      // release now rather than making the user wait out the backstop — but only if this Stop's
-      // affordance is still the one showing.
+      // 'unconfirmed', released just above). No socket is coming for it: release now rather than
+      // making the user wait out the backstop — but only if this Stop's affordance is still the
+      // one showing.
       releaseStoppingFor(stoppedConversationId);
       throw error;
     }
@@ -242,7 +233,6 @@ export const useStopStream = ({
     pendingSendConversationId,
     stopTargetConversationId,
     raiseStopping,
-    releaseUnlessAbortConfirmed,
     releaseStoppingFor,
   ]);
 
