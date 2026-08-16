@@ -49,6 +49,20 @@ export function useHotkeyPreferences() {
   };
 }
 
+/**
+ * Read the stored preferences without touching the SWR cache.
+ *
+ * Deliberately not `mutate()`: that writes the response into the cache, which
+ * the hook's effect then feeds into the store. A caller checking what is on the
+ * server *before* deleting rows would therefore re-arm the reset notice from
+ * the very rows it is about to remove — and, because a later payload that omits
+ * a row preserves its notice by design, the banner would never clear again.
+ */
+export async function fetchHotkeyPreferences(): Promise<HotkeyPreference[]> {
+  const { preferences } = await fetcher('/api/settings/hotkey-preferences');
+  return preferences ?? [];
+}
+
 export async function updateHotkeyPreference(hotkeyId: string, binding: string): Promise<void> {
   const res = await fetchWithAuth('/api/settings/hotkey-preferences', {
     method: 'PATCH',

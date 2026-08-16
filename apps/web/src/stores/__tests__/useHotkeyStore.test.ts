@@ -161,18 +161,30 @@ describe('useHotkeyStore', () => {
     });
 
     it('given a payload that no longer names the shortcut, should keep the notice until dismissed', () => {
-      // Acknowledging the notice is what deletes the row. A revalidation that
-      // lands while that delete is in flight returns a payload with nothing
-      // wrong in it, and must not erase a notice the user has not read.
+      // Another tab may have deleted the row. This tab's user has still not
+      // read the notice, and a payload that merely goes quiet about a shortcut
+      // is not evidence that it works — so the notice stands.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);
-      useHotkeyStore.getState().removeBinding('pages.quick-create');
       useHotkeyStore.getState().setUserBindings([]);
 
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
 
       useHotkeyStore.getState().dismissResetNotice();
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+    });
+
+    it('given the row is deleted here, should drop the notice with it', () => {
+      // Deleting the row is the acknowledgement — it is the thing that kept
+      // the notice alive across reloads. Holding the id afterwards let a read
+      // taken before the delete re-arm a banner that had just been dismissed,
+      // which the accumulate leg then preserved for the rest of the session.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+      useHotkeyStore.getState().removeBinding('pages.quick-create');
+
       expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
   });

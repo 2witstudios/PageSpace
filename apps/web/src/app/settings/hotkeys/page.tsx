@@ -5,7 +5,12 @@ import { useState } from 'react';
 import { ArrowLeft, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useHotkeyPreferences, updateHotkeyPreference, deleteHotkeyPreference } from '@/hooks/useHotkeyPreferences';
+import {
+  useHotkeyPreferences,
+  updateHotkeyPreference,
+  deleteHotkeyPreference,
+  fetchHotkeyPreferences,
+} from '@/hooks/useHotkeyPreferences';
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
 import { getEffectiveBinding, resolvePlatformBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
@@ -76,22 +81,26 @@ export default function HotkeysSettingsPage() {
   // focus, so a tab left open never learns that another tab already re-bound
   // the shortcut. Deleting from the stale list would throw away the binding
   // the user had just set.
+  //
+  // The read bypasses SWR on purpose — see `fetchHotkeyPreferences`.
   const handleDismissResetNotice = async () => {
     try {
-      const fresh = await mutate();
-      const unusable = (fresh?.preferences ?? []).filter(
+      const fresh = await fetchHotkeyPreferences();
+      const unusable = fresh.filter(
         ({ binding }) => binding !== '' && !isUsableBinding(binding)
       );
 
-      dismissResetNotice();
+      // Dismiss after the deletes, so the banner stays up while the work
+      // happens and a failure leaves it standing.
       await Promise.all(unusable.map(({ hotkeyId }) => deleteHotkeyPreference(hotkeyId)));
-      mutate();
+      dismissResetNotice();
+      void mutate().catch(() => {});
     } catch {
       // The notice is rebuilt from the payload on the next load, so a failure
       // here means it comes back. Say so rather than letting it reappear on
       // its own and look like the button did nothing.
       toast.error('Could not dismiss the notice — please try again');
-      mutate();
+      void mutate().catch(() => {});
     }
   };
 

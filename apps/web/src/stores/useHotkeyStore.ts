@@ -97,7 +97,14 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
     set((state) => {
       const newMap = new Map(state.userBindings);
       newMap.delete(hotkeyId);
-      return { userBindings: newMap };
+      return {
+        userBindings: newMap,
+        // Deleting the row *is* the acknowledgement — it is the thing that was
+        // keeping the notice alive across reloads. Leaving the id here meant a
+        // payload read before the delete could re-arm a banner that had just
+        // been dismissed, and the accumulate leg then preserved it forever.
+        resetHotkeys: state.resetHotkeys.filter((id) => id !== hotkeyId),
+      };
     });
   },
 

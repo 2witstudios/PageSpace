@@ -89,11 +89,13 @@ export function resolveEventKey(event: BindingEventLike): string {
     // a result, which is the trade Alt forces on us: e.key carries no usable
     // signal here.
     //
-    // The numpad is deliberately not folded into the top-row digit. That would
-    // buy parity with the `e.key` path and cost two real false positives: with
-    // NumLock off the key reports "End", and Alt+numpad is how Windows types a
-    // character by its code point. No stored binding wants it either — the old
-    // capture read `e.key` only, so "Alt+Numpad1" cannot exist in the database.
+    // That includes the numpad: `Alt+Numpad1` is a binding in its own right,
+    // distinct from `Alt+1`. Folding it into the digit would be a special case
+    // carved out of an otherwise uniform rule, and it would make Alt+numpad —
+    // which is how Windows types a character by its code point — fire a
+    // shortcut mid-sequence. The residual asymmetry is real and accepted:
+    // `Meta+1` fires from both the numpad and the top row because `e.key`
+    // reports "1" for both, while `Alt+1` fires only from the top row.
     if (!MODIFIER_CODE.test(event.code)) return event.code;
     return '';
   }
