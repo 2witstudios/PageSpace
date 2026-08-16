@@ -51,6 +51,15 @@ on:
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
       - 'apps/web/src/lib/agent-workspaces/**'
+      # The published-app hosting layer, same story. Its claim/transition suite
+      # (`provisioner-claim.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere. `published_apps` rows
+      # are claimed by concurrent workers and gated by CHECK constraints — both
+      # Postgres guarantees — and without these entries a PR touching only the
+      # provisioner would never trigger this workflow and never run them.
+      - 'packages/lib/src/services/app-hosting/**'
+      - 'packages/db/src/schema/published-apps.ts'
   pull_request:
     # BASE branches, not head. This branch listed itself here and it bought
     # nothing: its PR targets `master`, which is already listed, so the suite
@@ -109,6 +118,15 @@ on:
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
       - 'apps/web/src/lib/agent-workspaces/**'
+      # The published-app hosting layer, same story. Its claim/transition suite
+      # (`provisioner-claim.integration.test.ts`) is excluded from
+      # @pagespace/lib's default config and matched by no other config, so the
+      # `test:db` step below is its ONLY runner anywhere. `published_apps` rows
+      # are claimed by concurrent workers and gated by CHECK constraints — both
+      # Postgres guarantees — and without these entries a PR touching only the
+      # provisioner would never trigger this workflow and never run them.
+      - 'packages/lib/src/services/app-hosting/**'
+      - 'packages/db/src/schema/published-apps.ts'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -207,6 +225,19 @@ jobs:
       # CAS from one that silently matches nothing. This runs them for real.
       - name: Run agent-session store integration tests
         run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The published-app claim is what stops two workers provisioning the same
+      # app on Fly, and its guarantee is Postgres's: FOR UPDATE SKIP LOCKED plus
+      # a claim written inside the locking transaction. A mocked test can only
+      # pin the statements we emit — it cannot show that a second worker gets
+      # nothing after the first transaction COMMITS, which is the entire point.
+      # The same file checks that every transition the pure core allows is one
+      # the status CHECK constraints accept, by attempting each refused write.
+      - name: Run published-app claim and transition integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
