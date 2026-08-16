@@ -212,10 +212,9 @@ export function useMessageActions({
       // requestMessages from client" (global-chat-turn.ts), "Used ONLY to extract new user
       // message, NOT for conversation history" (page-chat-turn.ts). Nothing server-side
       // supersedes the trailing assistant rows on a regenerate, either. Race the DELETEs against
-      // the POST and the model is handed
-      // its own previous answer as the newest turn — it rewrites or continues that answer instead
-      // of re-answering the user, and does it nondeterministically, depending on which request
-      // reached the DB first.
+      // the POST and the model is handed its own previous answer as the newest turn — it rewrites
+      // or continues that answer instead of re-answering the user, and does it
+      // nondeterministically, depending on which request reached the DB first.
       //
       // The round trip is real and it is paid. What it is NOT any more is INVISIBLE: the whole
       // retry now runs inside the surface's `wrapSend`, so the composer locks and offers Stop
@@ -256,21 +255,21 @@ export function useMessageActions({
       // Reported per ROW, not as one flag, so the caller can put back exactly what the server
       // still holds. A partial failure is the interesting case: some rows really are gone, and
       // restoring those too would leave the cache claiming messages that no longer exist.
-      const undeletedIds = assistantMessagesToDelete
+      const stillPresent = assistantMessagesToDelete
         .map((msg, i) => ({ id: msg.id, outcome: outcomes[i] }))
         .filter(({ outcome }) =>
           outcome.status === 'rejected' &&
           !(outcome.reason instanceof ApiRequestError && outcome.reason.status === 404));
 
-      if (undeletedIds.length > 0) {
-        for (const { id, outcome } of undeletedIds) {
+      if (stillPresent.length > 0) {
+        for (const { id, outcome } of stillPresent) {
           console.error('Failed to delete old assistant message:', id, (outcome as PromiseRejectedResult).reason);
         }
         toast.error('Could not clear the previous reply, so the retry was not started.');
         return {
           dispatched: false,
           reason: 'delete-failed',
-          undeletedIds: undeletedIds.map(({ id }) => id),
+          undeletedIds: stillPresent.map(({ id }) => id),
         };
       }
 

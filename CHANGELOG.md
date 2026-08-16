@@ -82,7 +82,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   vanishing, which looks like a failure rather than like work in progress. Retry now behaves exactly
   like sending a message: the composer locks and offers Stop from the click onward. Retry is also
   disabled while it is running, so a double-click can no longer start (and bill for) two
-  regenerations.
+  regenerations — and that holds across surfaces, so the dashboard and the sidebar can no longer
+  each start one for the same conversation.
+
+  Because Retry now offers you a Stop, that Stop does what it says. Pressing it while the retry is
+  still clearing the old answer cancels the retry: no new reply is generated and you are not billed
+  for one. And if clearing the old answer fails, the retry does not start at all and tells you so,
+  rather than going ahead and handing the model its own previous answer to rewrite.
 
 - **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
   endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered
