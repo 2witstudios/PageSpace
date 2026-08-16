@@ -1,0 +1,2 @@
+ALTER TABLE "published_apps" ADD COLUMN "imageSizeBytes" bigint;--> statement-breakpoint
+ALTER TABLE "published_apps" ADD CONSTRAINT "published_apps_image_size_nonneg" CHECK ("published_apps"."imageSizeBytes" IS NULL OR "published_apps"."imageSizeBytes" >= 0);

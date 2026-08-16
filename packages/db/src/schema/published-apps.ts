@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, index, pgEnum, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, bigint, timestamp, index, pgEnum, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -146,6 +146,24 @@ export const publishedApps = pgTable('published_apps', {
    */
   imageDigest: text('imageDigest'),
 
+  /**
+   * The registry size of `imageDigest`, in bytes (config blob + every layer, as
+   * the manifest reports them). NULL until a build records one.
+   *
+   * THIS IS THE IDLE-COST LEVER, which is why it is a persisted column rather
+   * than something the economics dashboard derives on demand. A published app
+   * that is stopped costs nothing per second and still costs rootfs storage at
+   * $0.15/GB-month — for the fleet, that fixed drip is the whole per-app floor,
+   * and it is set by whatever the build pushed. Recording it at build time is
+   * also the only moment the number is knowable cheaply: reading it later means
+   * a registry round-trip per app, and reading it after the image is replaced
+   * means it is gone.
+   *
+   * Written in the SAME statement as `imageDigest`, because a size attributed to
+   * the wrong digest is worse than no size at all.
+   */
+  imageSizeBytes: bigint('imageSizeBytes', { mode: 'number' }),
+
   tier: publishedAppTier('tier').default('metered').notNull(),
 
   /** The current Fly machine. NULL before the first create and between blue/green swaps. */
@@ -231,6 +249,13 @@ export const publishedApps = pgTable('published_apps', {
   guestPresetAllowed: check(
     'published_apps_guest_preset_allowed',
     sql`${table.guestPreset} IN ('shared-cpu-1x-512')`,
+  ),
+  // A negative image size is not a small number, it is a corrupt one — and it
+  // would land in the economics dashboard's SUM as a silent credit against every
+  // other app's storage cost.
+  imageSizeNonNeg: check(
+    'published_apps_image_size_nonneg',
+    sql`${table.imageSizeBytes} IS NULL OR ${table.imageSizeBytes} >= 0`,
   ),
   subdomainNonEmpty: check(
     'published_apps_subdomain_nonempty',

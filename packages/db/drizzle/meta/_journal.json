@@ -1870,6 +1870,13 @@
       "when": 1787029398074,
       "tag": "0266_foamy_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 267,
+      "version": "7",
+      "when": 1787047433075,
+      "tag": "0267_chief_starfox",
+      "breakpoints": true
     }
   ]
 }
