@@ -248,4 +248,32 @@ describe('useCacheMessageActions handleRetry', () => {
     mockState.handleRetryBaseResolve?.();
     applyDeleteSpy.mockRestore();
   });
+
+  // The other half of the guard, and the obvious objection to it: a latch that suppresses is
+  // only correct if it also RELEASES. It has no release path of its own by design — it is the
+  // pendingSend, so `useSendHandoff` releases it (stream handoff, error, unmount, or the 15s
+  // safety timeout). This asserts the consequence: once the send is no longer pending, Retry
+  // works again rather than staying wedged for the life of the mount.
+  it('given the pending send has resolved, should allow a retry again', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // What useSendHandoff does when the stream takes over (or the request errors, or the safety
+    // timeout fires): the conversation is no longer pending.
+    act(() => { useEditingStore.getState().endPendingSend('conv-1'); });
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(2);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
 });
