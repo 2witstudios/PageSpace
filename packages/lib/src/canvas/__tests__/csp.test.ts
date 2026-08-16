@@ -99,10 +99,10 @@ describe('buildCanvasCsp', () => {
     );
   });
 
-  it('treats a null or undefined flag as not site mode, never as a widened policy', () => {
-    // `pages.siteMode` is nullable, and a null read must not fall through to the
-    // permissive site policy.
-    expect(buildCanvasCsp(null)).toBe(buildBaselineCsp());
+  it('treats an absent flag as not site mode, never as a widened policy', () => {
+    // `renderCanvasDocument` takes `siteMode` as optional, so a caller that omits
+    // it must land on the restrictive policy, not the permissive one.
+    expect(buildCanvasCsp()).toBe(buildBaselineCsp());
     expect(buildCanvasCsp(undefined)).toBe(buildBaselineCsp());
   });
 

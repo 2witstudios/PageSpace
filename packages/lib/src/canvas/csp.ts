@@ -92,7 +92,11 @@ export function buildDocumentCsp(): string {
  * enforce the INTERSECTION of every policy delivered, so two hand-copied
  * ternaries silently withhold whatever the copies disagree about, with no error
  * anywhere. One expression, two callers.
+ *
+ * The flag is optional because `renderCanvasDocument` takes it that way — an
+ * absent flag is not site mode, so it can never fall through to the permissive
+ * policy.
  */
-export function buildCanvasCsp(siteMode: boolean | null | undefined, formActionOrigin?: string): string {
+export function buildCanvasCsp(siteMode?: boolean, formActionOrigin?: string): string {
   return siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin);
 }
