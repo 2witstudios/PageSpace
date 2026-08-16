@@ -3,46 +3,87 @@ import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useCacheMessageActions, type UseCacheMessageActionsOptions } from '../useCacheMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 // vi.mock factories are hoisted above module-scope declarations — a plain `let` here would
 // throw a TDZ ReferenceError at transform time. vi.hoisted lifts this state alongside the mock.
-const mockState = vi.hoisted(() => ({
-  handleRetryBaseResolve: undefined as (() => void) | undefined,
-  handleRetryBase: undefined as ReturnType<typeof vi.fn> | undefined,
-}));
+const mockState = vi.hoisted(() => {
+  const state = {
+    handleRetryBaseResolve: undefined as (() => void) | undefined,
+    // TYPED FROM THE REAL SIGNATURE, not `ReturnType<typeof vi.fn>` (CodeRabbit). Untyped, the
+    // `mockResolvedValueOnce` calls below accept any shape, so a change to `RetryOutcome` leaves
+    // these stubs describing a contract that no longer exists and typecheck says nothing. That
+    // is not hypothetical: this file's stubs returned bare booleans until `handleRetry` grew a
+    // named outcome, and only running the suite caught it.
+    handleRetryBase: undefined as
+      | ReturnType<typeof vi.fn<() => Promise<import('../useMessageActions').RetryOutcome>>>
+      | undefined,
+  };
+  // ONE spy for the life of the file, not a fresh one per render. The hook re-renders (and
+  // re-invokes this factory) on every prop change, so a spy created inside it silently reset
+  // its own call count mid-test — which is invisible until a test spans a re-render.
+  //
+  // A real regenerate's underlying Promise resolves only once the new stream finishes
+  // (ai SDK makeRequest reads the response to completion) — held open here so the test
+  // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
+  state.handleRetryBase = vi.fn(
+    () => new Promise<import('../useMessageActions').RetryOutcome>((resolve) => {
+      // Held open, and resolved with a DISPATCHED outcome: the cases that hold this promise are
+      // asserting what happens while a retry is in flight, and a retry that got as far as
+      // `regenerate` is what they are describing.
+      state.handleRetryBaseResolve = () => resolve({ dispatched: true });
+    }),
+  );
+  return state;
+});
 
 vi.mock('../useMessageActions', () => ({
   useMessageActions: () => ({
     handleEdit: vi.fn(),
     handleDelete: vi.fn(),
-    // A real regenerate's underlying Promise resolves only once the new stream finishes
-    // (ai SDK makeRequest reads the response to completion) — held open here so the test
-    // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
-    handleRetry: (mockState.handleRetryBase = vi.fn(
-      () => new Promise<void>((resolve) => { mockState.handleRetryBaseResolve = resolve; }),
-    )),
+    handleRetry: mockState.handleRetryBase,
   }),
 }));
 
 const userMsg = (id: string): UIMessage => ({ id, role: 'user', parts: [{ type: 'text', text: 'hi' }] });
 const assistantMsg = (id: string): UIMessage => ({ id, role: 'assistant', parts: [{ type: 'text', text: 'reply' }] });
 
+/**
+ * Faithful to `useSendHandoff.wrapSend`, because the retry latch now IS its pendingSend
+ * registration: it registers synchronously, keyed by conversation, before invoking the send.
+ * A bare passthrough here would silently disable the very guard these cases exercise.
+ */
+const makeWrapSend = (conversationId: string | null) => <T,>(sendFn: () => T): T | undefined => {
+  if (!conversationId) return undefined;
+  useEditingStore.getState().startPendingSend(conversationId);
+  return sendFn();
+};
+
 const baseOptions = (
   overrides: Partial<UseCacheMessageActionsOptions> = {},
-): UseCacheMessageActionsOptions => ({
-  agentId: 'agent-1',
-  conversationId: 'conv-1',
-  renderedMessages: [
-    { mode: 'confirmed', message: userMsg('u1') },
-    { mode: 'confirmed', message: assistantMsg('a1') },
-  ],
-  regenerate: vi.fn(),
-  ...overrides,
-});
+): UseCacheMessageActionsOptions => {
+  // Resolved once so the default `wrapSend` is keyed to whatever conversation these options
+  // actually describe — an override has to move both together or the stub registers under a
+  // conversation the hook is not looking at.
+  const conversationId = overrides.conversationId === undefined ? 'conv-1' : overrides.conversationId;
+  return {
+    agentId: 'agent-1',
+    conversationId,
+    renderedMessages: [
+      { mode: 'confirmed', message: userMsg('u1') },
+      { mode: 'confirmed', message: assistantMsg('a1') },
+    ],
+    regenerate: vi.fn(),
+    wrapSend: makeWrapSend(conversationId),
+    releasePendingSend: vi.fn(),
+    ...overrides,
+  };
+};
 
 describe('useCacheMessageActions handleRetry', () => {
   beforeEach(() => {
     mockState.handleRetryBaseResolve = undefined;
+    useEditingStore.setState({ pendingSends: new Set() });
   });
 
   it('given a retry, should apply the cache deletes BEFORE handleRetryBase (regenerate) settles, not after', async () => {
@@ -104,4 +145,310 @@ describe('useCacheMessageActions handleRetry', () => {
   // `regenerate` composes its request from the store's settled view at call time, which is
   // what that hydration was manually arranging. The cross-conversation content leak it
   // guarded against needed a shared `Chat` to be possible at all.
+
+  // Retry never went through the surface's optimistic path: `regenerate` was called bare, so
+  // pendingSendConversationId stayed null, every surface's displayIsStreaming stayed FALSE for
+  // the whole window, and the composer sat there with an enabled textarea and a Send button
+  // while a regeneration was already under way.
+  it('given a retry, should issue it through wrapSend so the composer locks like a send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    // Counted around the wrapped call: proves the retry runs INSIDE the registration rather
+    // than merely after it, which is the whole point — the composer has to be locked while the
+    // network work happens, not once it is done.
+    let retriesBeforeInner = -1;
+    let retriesAfterInner = -1;
+    let wrapSendCalls = 0;
+    // Not vi.fn: wrapping erases the generic, and `wrapSend` has to stay generic to satisfy
+    // the option's signature.
+    const inner = makeWrapSend('conv-1');
+    const wrapSend = <T,>(sendFn: () => T): T | undefined => {
+      wrapSendCalls += 1;
+      retriesBeforeInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
+      const returned = inner(sendFn);
+      retriesAfterInner = mockState.handleRetryBase?.mock.calls.length ?? -1;
+      return returned;
+    };
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ wrapSend })));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(wrapSendCalls).toBe(1);
+    expect(retriesBeforeInner).toBe(0);
+    expect(retriesAfterInner).toBe(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // Double-click. Every other guard is state-derived and only closes after a render, so both
+  // clicks land inside the same await window — two regenerations, billed twice.
+  it('given a second retry while the first is still in flight, should fire only one regenerate', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    let wrapSendCalls = 0;
+    const inner = makeWrapSend('conv-1');
+    const wrapSend = <T,>(sendFn: () => T): T | undefined => {
+      wrapSendCalls += 1;
+      return inner(sendFn);
+    };
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ wrapSend })));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => {
+      void result.current.handleRetry();
+      void result.current.handleRetry();
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(wrapSendCalls).toBe(1);
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The dashboard and sidebar keep ONE instance of this hook across a conversation switch, and
+  // concurrent sends in different conversations are supported by design. A single boolean latch
+  // let a retry still awaiting A's DELETEs silently swallow a Retry click in B.
+  it('given a retry in flight for one conversation, should not block a retry in another', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    const { result, rerender } = renderHook(
+      ({ conversationId }: { conversationId: string }) =>
+        useCacheMessageActions(baseOptions({ conversationId })),
+      { initialProps: { conversationId: 'conv-1' } },
+    );
+    mockState.handleRetryBase?.mockClear();
+
+    // A's retry is in flight — handleRetryBase's promise is held open, so the latch is still set.
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // Same hook instance, conversation B now on screen.
+    rerender({ conversationId: 'conv-2' });
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(2);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The cross-SURFACE case (CodeRabbit). GlobalAssistantView and SidebarChatTab each mount
+  // their own instance of this hook for the same conversation, so a per-instance ref left two
+  // Retry buttons unaware of each other. The server cannot save us there: its per-conversation
+  // takeover is a check-then-act and says so — "two near-simultaneous sends can BOTH find zero
+  // in-flight rows and BOTH proceed: two generations, two sets of tool calls, two bills".
+  it('given two hook instances on the same conversation, should run only one retry', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    // Two independent mounts, exactly as the dashboard and the sidebar produce.
+    const dashboard = renderHook(() => useCacheMessageActions(baseOptions()));
+    const sidebar = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void dashboard.result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // The other surface's Retry, while the first is still in flight.
+    act(() => { void sidebar.result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The wiring for the one retry that registers and then declines to dispatch: a Stop landed
+  // while `useMessageActions.handleRetry` was deleting the superseded rows, so it returns false
+  // rather than starting a generation the user just asked not to start. Nothing else clears the
+  // pendingSend on that path — the handoff effect is keyed on state it never moved — and the
+  // composer renders only Stop while one stands, so the conversation would sit locked until
+  // unmount.
+  it('given the retry declined to dispatch, should release the pending send it registered', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).toHaveBeenCalledTimes(1);
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The cache write was a claim about the server, and a failed delete means the server does not
+  // agree. It has to be taken back — not for tidiness, but because the NEXT retry plans its
+  // deletes from this same cache: leave it lying and that retry finds nothing to delete,
+  // dispatches, and hands the model its own previous answer. The same corruption the refusal
+  // just prevented, one click later.
+  it('given the deletes failed, should put the rows it removed back in the cache', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed', undeletedIds: ['a1'] });
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).toHaveBeenCalledWith('conv-1', expect.objectContaining({ id: 'a1' }));
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  // A PARTIAL failure is where naming the rows earns its keep: restoring one the server did
+  // manage to delete would leave the cache claiming a message that exists nowhere.
+  it('given only some deletes failed, should restore only the rows the server still holds', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed', undeletedIds: ['a2'] });
+
+    const { result } = renderHook(() =>
+      useCacheMessageActions(
+        baseOptions({
+          renderedMessages: [
+            { mode: 'confirmed', message: userMsg('u1') },
+            { mode: 'confirmed', message: assistantMsg('a1') },
+            { mode: 'confirmed', message: assistantMsg('a2') },
+          ],
+        }),
+      ),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy).toHaveBeenCalledWith('conv-1', expect.objectContaining({ id: 'a2' }));
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  // A stopped retry deleted the rows for real, so putting them back would be the lie in the
+  // other direction — the user asked for that answer to go, and it went.
+  it('given a stopped retry, should leave the cache deleted', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  it('given the retry dispatched, should not release the pending send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: true });
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // Same failure family as the P1 and P2 above, one level further out: this release runs AFTER
+  // an await, and `releasePendingSend` guards on a ref shared across renders — so the stale copy
+  // this closure holds would release whatever send is registered NOW, which after a switch
+  // belongs to the other conversation. `useSendHandoff`'s own conversation-change cleanup has
+  // already released ours by then, so there is nothing here to do but stay out of the way.
+  it('given the surface switched conversations before the retry declined, should not release the other conversation\'s send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
+    const releasePendingSend = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ conversationId }: { conversationId: string }) =>
+        useCacheMessageActions(baseOptions({ conversationId, releasePendingSend })),
+      { initialProps: { conversationId: 'conv-1' } },
+    );
+
+    // A's retry starts, then the user moves to B while it is still awaiting.
+    act(() => { void result.current.handleRetry(); });
+    rerender({ conversationId: 'conv-2' });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // Why the check is `=== false` and not falsy. With no conversation `wrapSend` never calls its
+  // argument and returns `undefined` — it registered nothing, so there is nothing to release,
+  // and releasing anyway would clear a pendingSend belonging to something else.
+  it('given no conversation, should not release anything', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() =>
+      useCacheMessageActions(baseOptions({ conversationId: null, releasePendingSend })),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // A deliberate WIDENING over the ref this replaced, worth pinning because it is easy to read
+  // as an accident. The latch is "a send is in flight for this conversation", and an ordinary
+  // send counts. It has to: during the submitted window no stream exists yet, so `planRetry`
+  // sees nothing live, takes the just-sent user turn as the one to retry, and fires a
+  // regeneration alongside the send that has not even landed — two generations, billed twice.
+  it('given an ordinary send in flight for this conversation, should not start a retry', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    // What the composer's Send does — the same `wrapSend`, no retry involved.
+    act(() => { useEditingStore.getState().startPendingSend('conv-1'); });
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).not.toHaveBeenCalled();
+
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The other half of the guard, and the obvious objection to it: a latch that suppresses is
+  // only correct if it also RELEASES. It has no release path of its own by design — it is the
+  // pendingSend, so `useSendHandoff` releases it (stream handoff, error, unmount, or the 15s
+  // safety timeout). This asserts the consequence: once the send is no longer pending, Retry
+  // works again rather than staying wedged for the life of the mount.
+  it('given the pending send has resolved, should allow a retry again', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+    mockState.handleRetryBase?.mockClear();
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
+
+    // What useSendHandoff does when the stream takes over (or the request errors, or the safety
+    // timeout fires): the conversation is no longer pending.
+    act(() => { useEditingStore.getState().endPendingSend('conv-1'); });
+
+    act(() => { void result.current.handleRetry(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockState.handleRetryBase).toHaveBeenCalledTimes(2);
+
+    mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
 });
