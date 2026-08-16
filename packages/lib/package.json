@@ -97,6 +97,11 @@
       "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
       "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
     },
+    "./drive-boxes/box-sprite-key": {
+      "types": "./dist/drive-boxes/box-sprite-key.d.ts",
+      "import": "./dist/drive-boxes/box-sprite-key.js",
+      "require": "./dist/drive-boxes/box-sprite-key.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",

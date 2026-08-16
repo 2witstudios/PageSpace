@@ -1,11 +1,22 @@
 /**
- * The agent-session sandbox lifecycle, as a pure planner.
+ * The sprite-holder sandbox lifecycle, as a pure planner.
  *
- * Every `if` that decides whether a session gets a VM, keeps one, adopts one, or
+ * Every `if` that decides whether a holder gets a VM, keeps one, adopts one, or
  * kills one lives HERE, as data-in/data-out. The runtime wrapper owns no policy:
  * it reads the row, observes the live Sprite (when it has one), asks for a
  * verdict, executes it, and writes the verdict's stamps. Web and realtime call
  * the same function, so they cannot diverge.
+ *
+ * A **sprite holder** is any row that owns exactly one Sprite under a
+ * deterministic name. Today that is an agent session (`agent_workspaces`);
+ * per-drive boxes are the next one. The planner never learns which: it decides
+ * on pointers and stamps alone, so a second holder kind is a new caller, not a
+ * new branch.
+ *
+ * The session-flavored `planAgentSessionLifecycle` is NOT kept as a second
+ * exported name for the same body: both its call sites live in this package, so
+ * the alias would buy no call-site stability, and the repo's knip gate (rightly)
+ * refuses two exported names for one symbol. One name, one lifecycle.
  *
  * It absorbs the decision branches of two proven predecessors:
  *  - `planMachineLifecycle` (services/sandbox/machine-session-manager.ts) — the
@@ -33,14 +44,20 @@
  */
 
 /**
- * The slice of an `agent_workspaces` row the lifecycle decides on. Everything here
- * is a pointer or a stamp; nothing is derived.
+ * The slice of a sprite-holder row the lifecycle decides on — an
+ * `agent_workspaces` session today, a `drive_boxes` box next. Everything here is
+ * a pointer or a stamp; nothing is derived, and nothing names a table.
  */
-export interface AgentSessionLifecycleRow {
-  /** ≡ the conversation id (see `contract.ts`). */
-  workspaceId: string;
+export interface SpriteHolderLifecycleRow {
   /**
-   * The derived Sprite NAME this session provisions under. Deterministic, so it
+   * The holder's own id — the session id (`agent_workspaces.id`) or the box id.
+   * The planner never reads it; it is here because every verdict the caller
+   * executes is written back against this row, and a row slice that cannot say
+   * WHICH row it describes is a foot-gun at the call site.
+   */
+  holderId: string;
+  /**
+   * The derived Sprite NAME this holder provisions under. Deterministic, so it
    * is unchanged across a VM replacement — which is exactly why an identity CAS
    * needs it, and why a row that somehow lacks it cannot be reconciled.
    */
@@ -140,8 +157,8 @@ export type AgentSessionLifecyclePlan =
   | { action: 'deny'; reason: AgentSessionDenyReason; stamps: AgentSessionRowStamps }
   | { action: 'noop'; reason: AgentSessionNoopReason; stamps: AgentSessionRowStamps };
 
-export interface PlanAgentSessionLifecycleInput {
-  row: AgentSessionLifecycleRow | null;
+export interface PlanSpriteHolderLifecycleInput {
+  row: SpriteHolderLifecycleRow | null;
   intent: AgentSessionIntent;
   /**
    * The caller's freshly-computed code-execution authorization (see
@@ -160,7 +177,7 @@ export interface PlanAgentSessionLifecycleInput {
  * at different moments: `endedAt` records the user's intent, `spriteTornDownAt`
  * records a CONFIRMED kill, and a crash between them must still read as ended.
  */
-function isEnded(row: AgentSessionLifecycleRow): boolean {
+function isEnded(row: SpriteHolderLifecycleRow): boolean {
   return row.endedAt !== null || row.spriteTornDownAt !== null;
 }
 
@@ -196,7 +213,7 @@ export function planSessionReopen(): AgentSessionRowStamps {
 }
 
 /** Has the VM behind this session's name changed since the row last looked? */
-function instanceMoved(row: AgentSessionLifecycleRow, live: LiveSpriteInstance): boolean {
+function instanceMoved(row: SpriteHolderLifecycleRow, live: LiveSpriteInstance): boolean {
   return live.sandboxId !== row.sandboxId || (live.spriteInstanceId ?? null) !== (row.spriteInstanceId ?? null);
 }
 
@@ -210,7 +227,7 @@ function instanceMoved(row: AgentSessionLifecycleRow, live: LiveSpriteInstance):
  * condition the user cannot act on — and it is confined to this one branch.
  */
 function resolveLiveInstance(
-  row: AgentSessionLifecycleRow,
+  row: SpriteHolderLifecycleRow,
   sandboxId: string,
   liveInstance: LiveSpriteInstance | null | undefined,
   now: Date,
@@ -238,13 +255,13 @@ function resolveLiveInstance(
   };
 }
 
-export function planAgentSessionLifecycle({
+export function planSpriteHolderLifecycle({
   row,
   intent,
   canRun,
   now,
   liveInstance = null,
-}: PlanAgentSessionLifecycleInput): AgentSessionLifecyclePlan {
+}: PlanSpriteHolderLifecycleInput): AgentSessionLifecyclePlan {
   // Cleanup first, and unconditionally: authorization gates ACQUIRING compute,
   // never releasing it. An actor who just lost the right to a session must still
   // be able to end it, and so must every automated path.

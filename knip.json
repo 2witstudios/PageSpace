@@ -299,6 +299,7 @@
         "src/content/tree-utils.ts",
         "src/content/version-resolver.ts",
         "src/deployment-mode.ts",
+        "src/drive-boxes/box-sprite-key.ts",
         "src/email-templates/BroadcastEmail.tsx",
         "src/email-templates/FeedbackNotificationEmail.tsx",
         "src/email-templates/MagicLinkEmail.tsx",

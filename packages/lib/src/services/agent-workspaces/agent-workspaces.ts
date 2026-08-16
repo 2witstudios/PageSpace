@@ -14,13 +14,13 @@
  * session of its own on first sandbox touch — are exactly the conflation the
  * un-conflation removed: they minted one environment per chat thread.
  *
- * Every lifecycle decision here comes from `planAgentSessionLifecycle`; this
+ * Every lifecycle decision here comes from `planSpriteHolderLifecycle`; this
  * module executes verdicts and writes what they say to write.
  */
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
-import { planAgentSessionLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { planSpriteHolderLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionDTO } from '../../agent-workspaces/session-contract';
 import { deriveSandboxStatus } from './workspace-status';
 import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
@@ -138,8 +138,8 @@ export async function endAgentSession({
   for (let attempt = 0; attempt < MAX_END_ATTEMPTS; attempt += 1) {
     const row = await deps.store.findById(workspaceId);
     const now = deps.now();
-    const plan = planAgentSessionLifecycle({
-      row: row === null ? null : { ...row, workspaceId: row.id },
+    const plan = planSpriteHolderLifecycle({
+      row: row === null ? null : { ...row, holderId: row.id },
       intent: 'end',
       // Ignored for `end` — the planner handles cleanup BEFORE the authorization
       // gate. Passing `true` documents that this path deliberately does not gate.

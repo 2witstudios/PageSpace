@@ -1,12 +1,24 @@
 /**
- * Per-session Sprite provisioning (IO, dependency-injected) — the ONE code path
- * both the web app and the realtime bridge use to give an agent session its
- * sandbox.
+ * Sprite provisioning for a SPRITE HOLDER (IO, dependency-injected) — the ONE
+ * code path that gives a holder its sandbox.
+ *
+ * A **sprite holder** is any row that owns exactly one Sprite under a
+ * deterministic name: an agent session (`agent_workspaces`) today, a per-drive
+ * box (`drive_boxes`) next. The provisioning core below knows nothing about
+ * which — it is handed a store slice, a key-derivation function, an
+ * authorization function and a quota check, and it runs the same
+ * probe → plan → provision → CAS machinery over whatever they address.
  *
  * That "one path" is not a style preference: the CAS below only serializes
  * concurrent provisioners if every provisioner runs it. Two surfaces with two
- * copies of this logic would race each other into two live VMs under one
- * session, and only one of them would ever be pointed at.
+ * copies of this logic would race each other into two live VMs under one holder,
+ * and only one of them would ever be pointed at. This is exactly why a second
+ * holder kind must be a set of DEPS rather than a second provisioner — a box
+ * with its own copy of this flow would be correct against itself and race
+ * against nothing, right up until two sessions opened in one box at once.
+ * `ensureAgentSessionSandbox` is therefore a thin session-flavored wrapper, not
+ * an alternative implementation: the web app and the realtime bridge keep
+ * calling it, and it keeps calling the one core.
  *
  * Ported from `services/machines/agent-terminal-sprites.ts`, with two structural
  * changes:
@@ -24,15 +36,15 @@
  *     exists (a session has no parent VM), for a CLI that is not what a session's
  *     chat surface runs.
  *
- * What is kept, deliberately and unchanged in substance: provisioning under
- * `deriveAgentSessionSpriteKey`, the egress-enablement gate and the
+ * What is kept, deliberately and unchanged in substance: provisioning under the
+ * holder's derived Sprite key, the egress-enablement gate and the
  * `egressPolicyToken` proof round-trip, the identity CAS with its ABA guard, and
  * the reconcile-before-kill that stops a lost race from destroying the winner's
  * live VM (rescuing the pointer to the reclaim outbox when a cleanup kill cannot
  * be confirmed).
  *
- * **No lifecycle branches live here.** Whether a session creates, resumes,
- * adopts or is denied is decided by `planAgentSessionLifecycle`
+ * **No lifecycle branches live here.** Whether a holder creates, resumes,
+ * adopts or is denied is decided by `planSpriteHolderLifecycle`
  * (`agent-workspaces/plan-workspace-lifecycle.ts`); this module observes, asks, and
  * executes the verdict — including which columns the verdict says to stamp.
  */
@@ -44,13 +56,43 @@ import type { FullEgressEnablement } from '../sandbox/containment';
 import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
 import { deriveAgentSessionSpriteKey } from '../../agent-workspaces/workspace-sprite-key';
 import {
-  planAgentSessionLifecycle,
+  planSpriteHolderLifecycle,
   type AgentSessionDenyReason,
-  type AgentSessionLifecycleRow,
+  type AgentSessionRowStamps,
   type LiveSpriteInstance,
+  type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
 import { loggers } from '../../logging/logger-config';
+
+/**
+ * The store slice the provisioner needs, addressed by HOLDER id — the identity
+ * CAS, the stamp write, the pointer re-read, and the reclaim outbox. Deliberately
+ * the whole surface and nothing more: a holder kind that cannot supply these four
+ * cannot be provisioned, and one that supplies more does not get to use it here.
+ *
+ * It mirrors `AgentSessionStore`'s methods of the same names (see that module for
+ * the CAS semantics each one owes); the session wrapper below is the adapter.
+ */
+export interface SpriteHolderStore {
+  updateSpriteIdentity(input: {
+    holderId: string;
+    previousSandboxId: string | null;
+    spriteKey: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    egressPolicyToken: string | null;
+    stamps: AgentSessionRowStamps;
+    now: Date;
+  }): Promise<boolean>;
+  applyStamps(input: {
+    holderId: string;
+    stamps: AgentSessionRowStamps;
+    cas?: { sandboxId?: string | null; endedAt?: Date | null };
+  }): Promise<boolean>;
+  reloadSpritePointer(holderId: string): Promise<{ sandboxId: string | null; spriteInstanceId: string | null } | null>;
+  enqueueReclaim(input: { sandboxId: string; spriteInstanceId: string | null }): Promise<void>;
+}
 
 /** The actor a provision runs as. Only what the Sprite key and the authorization gate need — a session has no clone to audit and no git token to resolve. */
 export interface AgentSessionActorContext {
@@ -59,7 +101,66 @@ export interface AgentSessionActorContext {
 }
 
 /** The intents that can hand back a sandbox. `'end'` is not one of them — teardown lives in `agent-workspaces.ts`, and its verdict is unconditional on authorization. */
-export type AgentSessionProvisionIntent = 'ensure' | 'attach' | 'reprovision';
+export type SpriteHolderProvisionIntent = 'ensure' | 'attach' | 'reprovision';
+
+/** The session-flavored name for the same intents (web and realtime already speak it). */
+export type AgentSessionProvisionIntent = SpriteHolderProvisionIntent;
+
+/**
+ * Everything the holder-neutral core needs from the outside. Each dep is the
+ * seam where a holder kind differs; nothing below this line branches on which
+ * kind is being provisioned.
+ */
+export interface SpriteHolderSpriteDeps {
+  /** The identity/stamp slice of the holder's store — this module never reads or writes anything else. */
+  store: SpriteHolderStore;
+  /** The provider-neutral Sprite lifecycle seam. */
+  host: SandboxHost;
+  substrate: SandboxSubstrateSpec;
+  options: SandboxCreateOptions;
+  /**
+   * The holder's deterministic Sprite NAME. Injected rather than derived here
+   * because the namespace is what keeps holder kinds from colliding: sessions
+   * fold `agent-session-sprite:v2`, boxes fold `drive-box-sprite:v1`, and a core
+   * that picked for itself would be one `if` away from provisioning a box onto a
+   * session Sprite awaiting reclaim. Only consulted when the row carries no key.
+   */
+  deriveSpriteKey: (holderId: string) => string;
+  /**
+   * Authorization for the CURRENT actor against THIS holder, applied BEFORE any
+   * Sprite is provisioned OR handed back. Must never throw (the centralized
+   * checkers are fail-closed by construction). Its answer is passed to the
+   * planner as `canRun` rather than acted on here, so that "re-authorize before
+   * returning a warm holder" is a property of the planner, not a habit each call
+   * site has to remember. `reason` is surfaced as the denial's `detail`.
+   */
+  authorize: () => Promise<{ ok: boolean; reason?: string }>;
+  /** REQUIRED full-egress enablement gate — a holder's Sprite runs open egress. */
+  checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
+  /**
+   * REQUIRED allowance check, applied where a VM is actually MINTED. Required for
+   * the same reason as the egress gate above: this is the one function every
+   * first touch funnels through — web routes, the sandbox and session tools, AND
+   * the realtime shell bridge, which calls this module directly rather than
+   * through the web app's wrapper. A gate placed at any single call site would
+   * leave the others free to provision past the tier ceiling, so it is a dep of
+   * the shared provisioner and not optional: a future caller cannot forget what
+   * it cannot omit.
+   *
+   * Returning `{ allowed: false }` refuses the provision; a resume is exempt (the
+   * row's sandbox is already counted), which the quota module itself decides from
+   * `alreadyProvisioned`.
+   */
+  checkQuota: (input: { alreadyProvisioned: boolean }) => Promise<{ allowed: boolean; reason?: string }>;
+  /**
+   * Optional opportunistic storage measurement. While the Sprite is ALREADY
+   * awake right after a provision, capture its used bytes onto the holder's row so
+   * the storage reconcile can bill them — without ever waking a hibernating
+   * Sprite. Best-effort and fire-and-forget; omitting it disables measurement.
+   */
+  measureStorage?: (input: { holderId: string; handle: SandboxHandle }) => Promise<void>;
+  now: () => Date;
+}
 
 export interface AgentSessionSpriteDeps {
   /** Only the identity/stamp slice of the session store — this module never reads or writes anything else. */
@@ -71,39 +172,26 @@ export interface AgentSessionSpriteDeps {
   /** Server-held `SANDBOX_SESSION_SECRET` for Sprite-key derivation. */
   secret: string;
   /**
-   * Centralized code-execution authorization for the CURRENT actor, applied
-   * BEFORE any Sprite is provisioned OR handed back. Must never throw (the
-   * centralized checker is fail-closed by construction). Its answer is passed to
-   * the planner as `canRun` rather than acted on here, so that "re-authorize
-   * before returning a warm session" is a property of the planner, not a habit
-   * each call site has to remember.
+   * Centralized code-execution authorization for the CURRENT actor. See
+   * `SpriteHolderSpriteDeps.authorize` — this is the session-shaped form of it,
+   * called with the row's drive/owner and `requestOrigin: 'user'`.
    */
   authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
   /** REQUIRED full-egress enablement gate — a session Sprite runs open egress. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /**
-   * REQUIRED per-owner live-session ceiling, applied where a VM is actually
-   * MINTED. Required for the same reason as the egress gate above: this is the
-   * one function every first touch funnels through — web routes, the sandbox and
-   * session tools, AND the realtime shell bridge, which calls this module
-   * directly rather than through the web app's wrapper. A gate placed at any
-   * single call site would leave the others free to provision past the tier
-   * ceiling, so it is a dep of the shared provisioner and not optional: a future
-   * caller cannot forget what it cannot omit.
-   *
-   * Returning `{ allowed: false }` refuses the provision; a resume is exempt
-   * (the row's sandbox is already counted), which the quota module itself
-   * decides from `alreadyProvisioned`.
+   * REQUIRED per-owner live-session ceiling — the session flavor of
+   * `SpriteHolderSpriteDeps.checkQuota`, counted against the ROW's owner rather
+   * than the actor (a drive member provisioning inside someone else's agent still
+   * consumes the session owner's allocation, not their own).
    */
   checkConcurrency: (input: {
     ownerId: string;
     alreadyProvisioned: boolean;
   }) => Promise<{ allowed: boolean; reason?: string }>;
   /**
-   * Optional opportunistic storage measurement. While the Sprite is ALREADY
-   * awake right after a provision, capture its used bytes onto the session row so
-   * the storage reconcile can bill them — without ever waking a hibernating
-   * Sprite. Best-effort and fire-and-forget; omitting it disables measurement.
+   * Optional opportunistic storage measurement — see
+   * `SpriteHolderSpriteDeps.measureStorage`.
    */
   measureSessionStorage?: (input: {
     workspaceId: string;
@@ -112,7 +200,7 @@ export interface AgentSessionSpriteDeps {
   now: () => Date;
 }
 
-export type EnsureAgentSessionSandboxResult =
+export type EnsureSpriteHolderSandboxResult =
   | { ok: true; sandboxId: string; resumed: boolean }
   | {
       ok: false;
@@ -127,11 +215,14 @@ export type EnsureAgentSessionSandboxResult =
       detail?: string;
     };
 
+/** The session-flavored name for the same result (web already speaks it). */
+export type EnsureAgentSessionSandboxResult = EnsureSpriteHolderSandboxResult;
+
 /**
  * Destroy a Sprite we hold that is genuinely unreferenced — and, when the kill
  * CANNOT be confirmed, RESCUE its pointer into the reclaim outbox.
  *
- * At every call site here the session row does NOT point at this Sprite (the
+ * At every call site here the holder's row does NOT point at this Sprite (the
  * identity was never persisted, or a re-provision cleared it), so no AFTER-DELETE
  * trigger and no row-based cross-check could ever discover the VM. A
  * fire-and-forget kill that swallowed its error would leak a billed VM forever on
@@ -140,7 +231,7 @@ export type EnsureAgentSessionSandboxResult =
  * which means a replacement already took the name and our target is already gone.
  */
 async function killUnreferencedOrEnqueue(
-  deps: Pick<AgentSessionSpriteDeps, 'host' | 'store'>,
+  deps: Pick<SpriteHolderSpriteDeps, 'host' | 'store'>,
   handle: SandboxHandle,
 ): Promise<void> {
   try {
@@ -168,11 +259,11 @@ async function killUnreferencedOrEnqueue(
 }
 
 /**
- * Has a concurrent provisioner of the SAME session already recorded the Sprite WE
+ * Has a concurrent provisioner of the SAME holder already recorded the Sprite WE
  * hold?
  *
- * `SandboxHost.provision` is NAME-keyed on the session's deterministic key, so
- * two concurrent provisions of one unprovisioned session can hold the SAME
+ * `SandboxHost.provision` is NAME-keyed on the holder's deterministic key, so
+ * two concurrent provisions of one unprovisioned holder can hold the SAME
  * physical VM. A row is a genuine shared winner ONLY when its `spriteInstanceId`
  * MATCHES our handle's instance (both non-null): the true race shares one VM ⇒
  * same instance ⇒ resume against it. A different or absent instance — including a
@@ -180,11 +271,11 @@ async function killUnreferencedOrEnqueue(
  * — is NOT our generation. Pure reload + compare; kills nothing.
  */
 async function findPersistedWinner(
-  deps: Pick<AgentSessionSpriteDeps, 'store'>,
-  workspaceId: string,
+  deps: Pick<SpriteHolderSpriteDeps, 'store'>,
+  holderId: string,
   handle: SandboxHandle,
 ): Promise<{ sandboxId: string } | null> {
-  const winner = await deps.store.reloadSpritePointer(workspaceId).catch(() => null);
+  const winner = await deps.store.reloadSpritePointer(holderId).catch(() => null);
   const ourInstance = handle.spriteInstanceId ?? null;
   if (winner?.sandboxId && ourInstance !== null && winner.spriteInstanceId === ourInstance) {
     return { sandboxId: winner.sandboxId };
@@ -205,14 +296,14 @@ async function findPersistedWinner(
  */
 async function reconcileBeforeKill({
   deps,
-  workspaceId,
+  holderId,
   handle,
 }: {
-  deps: Pick<AgentSessionSpriteDeps, 'store' | 'host'>;
-  workspaceId: string;
+  deps: Pick<SpriteHolderSpriteDeps, 'store' | 'host'>;
+  holderId: string;
   handle: SandboxHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
-  const winner = await findPersistedWinner(deps, workspaceId, handle);
+  const winner = await findPersistedWinner(deps, holderId, handle);
   // The row records OUR instance — the live, referenced VM we hold. Must NOT
   // kill; resume against it.
   if (winner) return { kind: 'resumed', sandboxId: winner.sandboxId };
@@ -250,9 +341,9 @@ export type SpriteProbeOutcome =
  * VM, so we leave the pointer alone and let a retry settle it.
  */
 export function intentForProbeOutcome(
-  intent: AgentSessionProvisionIntent,
+  intent: SpriteHolderProvisionIntent,
   probe: SpriteProbeOutcome,
-): AgentSessionProvisionIntent {
+): SpriteHolderProvisionIntent {
   if (probe.kind === 'vanished' && intent === 'ensure') return 'reprovision';
   return intent;
 }
@@ -271,8 +362,8 @@ function observedInstance(probe: SpriteProbeOutcome): LiveSpriteInstance | null 
  * planner's `adopt` verdict exists for).
  */
 async function probeRecordedSprite(
-  row: AgentSessionLifecycleRow,
-  deps: Pick<AgentSessionSpriteDeps, 'host'>,
+  row: SpriteHolderLifecycleRow,
+  deps: Pick<SpriteHolderSpriteDeps, 'host'>,
 ): Promise<SpriteProbeOutcome> {
   if (row.sandboxId === null || row.spriteTornDownAt !== null) return { kind: 'unprobed' };
   try {
@@ -284,51 +375,45 @@ async function probeRecordedSprite(
   }
 }
 
-/** The row slice this module needs — the lifecycle columns, plus who to authorize against. */
-export type AgentSessionSpriteRow = AgentSessionLifecycleRow &
-  // `ownerId` is here for the concurrency ceiling: the quota counts an OWNER's
-  // live sessions, and the owner is a fact of the row, never of the actor
-  // (a drive member provisioning inside someone else's agent still consumes the
-  // session owner's allocation, not their own).
-  Pick<AgentSessionRecord, 'driveId' | 'egressPolicyToken' | 'ownerId'>;
+/**
+ * The row slice a session provision needs — the lifecycle columns under the
+ * session's own names, plus who to authorize and meter against.
+ */
+export type AgentSessionSpriteRow = Omit<SpriteHolderLifecycleRow, 'holderId'> & {
+  /** The session's id — its `holderId`. Kept under this name so call sites do not churn. */
+  workspaceId: string;
+} & Pick<AgentSessionRecord, 'driveId' | 'egressPolicyToken' | 'ownerId'>;
+// `ownerId` is here for the concurrency ceiling: the quota counts an OWNER's
+// live sessions, and the owner is a fact of the row, never of the actor
+// (a drive member provisioning inside someone else's agent still consumes the
+// session owner's allocation, not their own).
 
 /**
- * Ensure this session's sandbox exists (or resume/adopt the one it has), and
+ * Ensure this holder's sandbox exists (or resume/adopt the one it has), and
  * record the result on its row.
  *
- * Idempotent by the session's own id: the Sprite key folds it, so a re-provision
+ * Idempotent by the holder's own id: the Sprite key folds it, so a re-provision
  * of a vanished Sprite lands on the same name — same identity, fresh filesystem.
  * On EVERY failure path the row is left with a NULL `sandboxId` (or its previous
- * pointer untouched) and a typed reason comes back: a session is never left
+ * pointer untouched) and a typed reason comes back: a holder is never left
  * believing it owns a VM it does not.
  */
-export async function ensureAgentSessionSandbox({
+export async function ensureSpriteHolderSandbox({
   row,
   intent,
-  actor,
   deps,
 }: {
-  row: AgentSessionSpriteRow;
-  intent: AgentSessionProvisionIntent;
-  actor: AgentSessionActorContext;
-  deps: AgentSessionSpriteDeps;
-}): Promise<EnsureAgentSessionSandboxResult> {
+  row: SpriteHolderLifecycleRow;
+  intent: SpriteHolderProvisionIntent;
+  deps: SpriteHolderSpriteDeps;
+}): Promise<EnsureSpriteHolderSandboxResult> {
   // Authorization is computed for THIS request and handed to the planner, which
-  // applies it before any warm session is returned. Resolved with
-  // `requestOrigin: 'user'` to match the realtime attach path's check. The
-  // drive is a fact of the ROW now (a session is drive-scoped; null = a
-  // user-scoped global-assistant session), so there is nothing to resolve
-  // through an agent page any more.
-  const authorized = await deps.authorize({
-    userId: actor.userId,
-    driveId: row.driveId ?? undefined,
-    ownerId: row.ownerId,
-    requestOrigin: 'user',
-  });
+  // applies it before any warm holder is returned.
+  const authorized = await deps.authorize();
 
   const probe = await probeRecordedSprite(row, deps);
   const now = deps.now();
-  const plan = planAgentSessionLifecycle({
+  const plan = planSpriteHolderLifecycle({
     row,
     intent: intentForProbeOutcome(intent, probe),
     canRun: authorized.ok,
@@ -351,7 +436,7 @@ export async function ensureAgentSessionSandbox({
       // predecessor's habit of healing here is how restored sessions ended up
       // sharing one Sprite). Resuming would hand back a dead pointer that fails
       // later, at PTY open, where it reads as a platform fault rather than a
-      // session that needs re-provisioning. Say so here instead.
+      // holder that needs re-provisioning. Say so here instead.
       if (probe.kind === 'vanished') {
         return { ok: false, reason: 'provision_failed', detail: 'sandbox_vanished' };
       }
@@ -363,11 +448,11 @@ export async function ensureAgentSessionSandbox({
       // here is the mirror-image of the end path's race (review #2261/1). A
       // refusal is not a failure: the identity being resumed is unchanged
       // either way, only the freshness touch is skipped.
-      await deps.store.applyStamps({ workspaceId: row.workspaceId, stamps: plan.stamps, cas: { endedAt: null } });
+      await deps.store.applyStamps({ holderId: row.holderId, stamps: plan.stamps, cas: { endedAt: null } });
       return { ok: true, sandboxId: plan.sandboxId, resumed: true };
 
     case 'adopt': {
-      // A DIFFERENT VM answers to this session's name. CAS the live identity onto
+      // A DIFFERENT VM answers to this holder's name. CAS the live identity onto
       // the row before anything treats it as resumed: leaving the stale instance
       // there makes every later teardown politely miss, and the live replacement
       // then bills forever with nothing pointing at it.
@@ -380,13 +465,11 @@ export async function ensureAgentSessionSandbox({
       // The key is deterministic and unchanged across a replacement, so deriving
       // it when the row somehow lacks one yields the same value the row would
       // have carried — never a second source of truth.
-      const spriteKey =
-        row.spriteKey ??
-        deriveAgentSessionSpriteKey({ tenantId: actor.tenantId, workspaceId: row.workspaceId, secret: deps.secret });
+      const spriteKey = row.spriteKey ?? deps.deriveSpriteKey(row.holderId);
       let recorded: boolean;
       try {
         recorded = await deps.store.updateSpriteIdentity({
-          workspaceId: row.workspaceId,
+          holderId: row.holderId,
           previousSandboxId: plan.previousSandboxId,
           spriteKey,
           sandboxId: plan.sandboxId,
@@ -396,7 +479,7 @@ export async function ensureAgentSessionSandbox({
           now,
         });
       } catch (error) {
-        const outcome = await reconcileBeforeKill({ deps, workspaceId: row.workspaceId, handle });
+        const outcome = await reconcileBeforeKill({ deps, holderId: row.holderId, handle });
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'persist_failed', detail: error instanceof Error ? error.message : String(error) };
       }
@@ -404,7 +487,7 @@ export async function ensureAgentSessionSandbox({
         // Lost to a concurrent adopt. If that winner recorded OUR exact instance
         // the VM is referenced and live (resume); otherwise ours is unreferenced
         // and must not be left billing untracked.
-        const outcome = await reconcileBeforeKill({ deps, workspaceId: row.workspaceId, handle });
+        const outcome = await reconcileBeforeKill({ deps, holderId: row.holderId, handle });
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'race_lost' };
       }
@@ -415,13 +498,12 @@ export async function ensureAgentSessionSandbox({
       // Both gates sit HERE, where a VM is actually minted — a resume/adopt
       // inherits an allocation that is already counted and a lockdown already
       // proven for its Sprite.
-      const quota = await deps.checkConcurrency({
-        ownerId: row.ownerId,
-        // MUST match `AgentSessionStore.countLive`'s predicate exactly
+      const quota = await deps.checkQuota({
+        // MUST match the store's live-count predicate exactly
         // (`sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`). Teardown
         // stamps `spriteTornDownAt` and deliberately LEAVES `sandboxId` in
         // place, so a `sandboxId !== null` test alone would treat every ENDED
-        // session as already-counted and exempt it — letting an owner end N
+        // holder as already-counted and exempt it — letting an owner end N
         // sessions, re-provision them all, and hold N live sandboxes past their
         // ceiling. The exemption is only sound for an allocation the count can
         // actually see.
@@ -432,18 +514,14 @@ export async function ensureAgentSessionSandbox({
           ok: false,
           reason: 'denied',
           denial: 'session_limit_reached',
-          detail:
-            quota.reason ??
-            'live agent-session limit reached for your plan — end an existing session before starting another',
+          detail: quota.reason,
         };
       }
 
       const enablement = await deps.checkFullEgressEnablement();
       if (!enablement.ok) return { ok: false, reason: 'egress_denied', detail: enablement.reason };
 
-      const spriteKey =
-        row.spriteKey ??
-        deriveAgentSessionSpriteKey({ tenantId: actor.tenantId, workspaceId: row.workspaceId, secret: deps.secret });
+      const spriteKey = row.spriteKey ?? deps.deriveSpriteKey(row.holderId);
 
       let handle: SandboxHandle;
       try {
@@ -452,7 +530,7 @@ export async function ensureAgentSessionSandbox({
           substrate: deps.substrate,
           options: deps.options,
           // The egress-lockdown proof round-trip: hand back what was confirmed
-          // for this session's VM so a warm resume skips the redundant push, and
+          // for this holder's VM so a warm resume skips the redundant push, and
           // record whatever the host confirms this time below.
           appliedEgressToken: row.egressPolicyToken ?? null,
         });
@@ -461,13 +539,13 @@ export async function ensureAgentSessionSandbox({
       }
 
       // Persist the identity under a CAS on the row's CURRENT pointer, so two
-      // concurrent provisions of the same session cannot both win. The sandbox
+      // concurrent provisions of the same holder cannot both win. The sandbox
       // starts empty at $HOME — there is nothing to clone, so this is the first
       // thing that happens after the VM exists.
       let recorded: boolean;
       try {
         recorded = await deps.store.updateSpriteIdentity({
-          workspaceId: row.workspaceId,
+          holderId: row.holderId,
           previousSandboxId: plan.previousSandboxId,
           spriteKey,
           sandboxId: handle.sandboxId,
@@ -481,14 +559,14 @@ export async function ensureAgentSessionSandbox({
         // NULL row pointer — billing forever, invisible to the reclaim trigger
         // (which needs a non-null sandboxId). But a blind kill has the shared-
         // winner hazard, so reconcile first.
-        const outcome = await reconcileBeforeKill({ deps, workspaceId: row.workspaceId, handle });
+        const outcome = await reconcileBeforeKill({ deps, holderId: row.holderId, handle });
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'persist_failed', detail: error instanceof Error ? error.message : String(error) };
       }
       if (!recorded) {
-        // Our CAS lost — another provisioner recorded a Sprite for this session
+        // Our CAS lost — another provisioner recorded a Sprite for this holder
         // first, and may hold our EXACT name-keyed physical VM.
-        const outcome = await reconcileBeforeKill({ deps, workspaceId: row.workspaceId, handle });
+        const outcome = await reconcileBeforeKill({ deps, holderId: row.holderId, handle });
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'race_lost' };
       }
@@ -496,9 +574,9 @@ export async function ensureAgentSessionSandbox({
       // Measure while the Sprite is still awake right after provisioning — the
       // one moment its bytes are free to read. Fire-and-forget: a billing concern
       // must never be awaited by, or fail, a provision.
-      if (deps.measureSessionStorage) {
+      if (deps.measureStorage) {
         void deps
-          .measureSessionStorage({ workspaceId: row.workspaceId, handle })
+          .measureStorage({ holderId: row.holderId, handle })
           .catch(() => {
             /* Best-effort: the seam already logs; provisioning must never fail on it. */
           });
@@ -513,4 +591,72 @@ export async function ensureAgentSessionSandbox({
       // job, because it must run unconditional on authorization.
       return { ok: false, reason: 'provision_failed', detail: `unexpected_lifecycle_verdict:${plan.action}` };
   }
+}
+
+/** What a refused live-session ceiling says when the quota module offers no wording of its own. */
+const SESSION_LIMIT_DETAIL =
+  'live agent-session limit reached for your plan — end an existing session before starting another';
+
+/**
+ * Ensure THIS SESSION's sandbox exists — the entry point web and realtime call.
+ *
+ * A wrapper, not an implementation: it names the session's flavor of each seam
+ * (its Sprite keyspace, its code-execution gate, its per-owner live-session
+ * ceiling, its store's `workspaceId` column name) and hands them to the one
+ * provisioning core. Adding a holder kind means adding a sibling wrapper, never a
+ * second copy of the CAS.
+ */
+export async function ensureAgentSessionSandbox({
+  row,
+  intent,
+  actor,
+  deps,
+}: {
+  row: AgentSessionSpriteRow;
+  intent: AgentSessionProvisionIntent;
+  actor: AgentSessionActorContext;
+  deps: AgentSessionSpriteDeps;
+}): Promise<EnsureAgentSessionSandboxResult> {
+  const { measureSessionStorage } = deps;
+  return ensureSpriteHolderSandbox({
+    row: { ...row, holderId: row.workspaceId },
+    intent,
+    deps: {
+      store: {
+        updateSpriteIdentity: ({ holderId, ...identity }) =>
+          deps.store.updateSpriteIdentity({ workspaceId: holderId, ...identity }),
+        applyStamps: ({ holderId, stamps, cas }) => deps.store.applyStamps({ workspaceId: holderId, stamps, cas }),
+        reloadSpritePointer: (holderId) => deps.store.reloadSpritePointer(holderId),
+        enqueueReclaim: (input) => deps.store.enqueueReclaim(input),
+      },
+      host: deps.host,
+      substrate: deps.substrate,
+      options: deps.options,
+      deriveSpriteKey: (holderId) =>
+        deriveAgentSessionSpriteKey({ tenantId: actor.tenantId, workspaceId: holderId, secret: deps.secret }),
+      // Resolved with `requestOrigin: 'user'` to match the realtime attach path's
+      // check. The drive is a fact of the ROW (a session is drive-scoped; null =
+      // a user-scoped global-assistant session), so there is nothing to resolve
+      // through an agent page any more.
+      authorize: async () => {
+        const authorized = await deps.authorize({
+          userId: actor.userId,
+          driveId: row.driveId ?? undefined,
+          ownerId: row.ownerId,
+          requestOrigin: 'user',
+        });
+        return authorized.ok ? { ok: true } : { ok: false, reason: authorized.reason };
+      },
+      checkFullEgressEnablement: deps.checkFullEgressEnablement,
+      checkQuota: async ({ alreadyProvisioned }) => {
+        const quota = await deps.checkConcurrency({ ownerId: row.ownerId, alreadyProvisioned });
+        if (quota.allowed) return { allowed: true };
+        return { allowed: false, reason: quota.reason ?? SESSION_LIMIT_DETAIL };
+      },
+      measureStorage: measureSessionStorage
+        ? ({ holderId, handle }) => measureSessionStorage({ workspaceId: holderId, handle })
+        : undefined,
+      now: deps.now,
+    },
+  });
 }
