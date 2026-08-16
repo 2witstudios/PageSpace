@@ -50,10 +50,15 @@ const PERMISSION_BATCH_SIZE = 200;
  * than the real rules or channels vanish before anyone asks about them, which
  * is why a page_permissions grant qualifies on its own: an explicit grant beats
  * membership in resolvePagePermissionRow, and sharing a single channel with
- * someone outside the drive is exactly what that path is for. It deliberately
- * ignores `expiresAt` and over-includes instead — an expired grant is denied a
- * few lines later by the helper that owns expiry, and matching the ORM's
- * timestamp binding by hand in raw SQL is how timezone bugs get written.
+ * someone outside the drive is exactly what that path is for. Expiry is matched
+ * too, so the candidate set does not carry rows the helper will only deny.
+ *
+ * `now() at time zone 'utc'` rather than `now()`: these columns store UTC wall
+ * clock as `timestamp without time zone`, while bare `now()` is a timestamptz
+ * rendered in the session's zone. Comparing the two is wrong in both directions
+ * — measured, a naive comparison keeps an expired grant alive in
+ * America/Los_Angeles and drops a live one in Asia/Tokyo — and invisible on
+ * UTC CI and production.
  *
  * A `mute` filter, when one exists, belongs as another predicate on
  * `user_channels` — nothing else here needs to change for it.
@@ -66,7 +71,10 @@ async function countChannelUnread(userId: string): Promise<number> {
       INNER JOIN drives d ON d.id = p."driveId"
       LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
       LEFT JOIN page_permissions pp
-        ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
+        ON pp."pageId" = p.id
+        AND pp."userId" = ${userId}
+        AND pp."canView" = true
+        AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
       WHERE p.type = 'CHANNEL'
         AND p."isTrashed" = false
         AND (

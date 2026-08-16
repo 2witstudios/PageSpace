@@ -64,9 +64,14 @@ export async function GET(request: Request) {
           -- Candidate filter only; getBatchPagePermissions below is the access
           -- decision. An explicit grant beats membership there, so a channel
           -- shared with someone outside the drive must survive to be asked
-          -- about. Expiry is deliberately left to that helper.
+          -- about. Expiry uses now() at time zone utc because expiresAt is a
+          -- UTC wall clock stored without a zone: a bare now() would compare it
+          -- against the session zone and be wrong in both directions.
           LEFT JOIN page_permissions pp
-            ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
+            ON pp."pageId" = p.id
+            AND pp."userId" = ${userId}
+            AND pp."canView" = true
+            AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
@@ -248,7 +253,10 @@ export async function GET(request: Request) {
             LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
             -- Candidate filter only; see the drive-scoped query above.
             LEFT JOIN page_permissions pp
-              ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
+              ON pp."pageId" = p.id
+              AND pp."userId" = ${userId}
+              AND pp."canView" = true
+              AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
             WHERE p.type = 'CHANNEL'
               AND p."isTrashed" = false
               AND (
