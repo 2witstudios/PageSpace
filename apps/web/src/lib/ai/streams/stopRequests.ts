@@ -20,8 +20,12 @@
  * Keyed by conversation for the same reason everything else in this path is: concurrent sends in
  * different conversations are supported by design, and a Stop in A must not cancel a retry in B.
  *
- * Module state rather than a store: nothing renders off this, so a subscription would only add
- * re-renders. It is read at dispatch time, like `useEditingStore.getState()` next to it.
+ * Module state rather than a store — the one stateful thing in this directory, and deliberately
+ * so. Nothing renders off it, so a store subscription would buy nothing but re-renders; it is
+ * read at dispatch time, exactly like the `useEditingStore.getState()` call next to it. Nothing
+ * is ever removed because nothing can be: an entry is one integer, gained only when the user
+ * actually presses Stop in a conversation, in a map that dies with the page. Any eviction rule
+ * would be a second thing that has to be right for Stop to stay honest.
  */
 const stopEpochs = new Map<string, number>();
 
