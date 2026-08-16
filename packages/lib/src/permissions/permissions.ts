@@ -966,20 +966,6 @@ export async function usersShareDrive(
 }
 
 /**
- * Batch permission lookup for multiple pages in a single DB round-trip.
- *
- * One SQL statement joins `pages`, `drives`, `drive_members` (for ADMIN role,
- * accepted members only), and `page_permissions` (with `expires_at` filter)
- * across all requested page IDs. Ordering is irrelevant; the result map keys
- * on pageId.
- *
- * Returns an entry for every `pageId` in input — pages the user cannot access
- * (including non-existent, trashed, or expired-grant pages) are represented
- * with all four flags set to `false`. Callers can therefore read
- * `map.get(pageId)?.canView` without conditional-path handling for missing
- * entries.
- */
-/**
  * One joined row of page + drive + this user's membership/grants, as selected by
  * both page-permission queries below.
  */
@@ -1060,6 +1046,20 @@ export function resolvePagePermissionRow(
   return null;
 }
 
+/**
+ * Batch permission lookup for multiple pages in a single DB round-trip.
+ *
+ * One SQL statement joins `pages`, `drives`, `drive_members` (for ADMIN role,
+ * accepted members only), and `page_permissions` (with `expires_at` filter)
+ * across all requested page IDs. Ordering is irrelevant; the result map keys
+ * on pageId.
+ *
+ * Returns an entry for every `pageId` in input — pages the user cannot access
+ * (including non-existent, trashed, or expired-grant pages) are represented
+ * with all four flags set to `false`. Callers can therefore read
+ * `map.get(pageId)?.canView` without conditional-path handling for missing
+ * entries.
+ */
 export async function getBatchPagePermissions(
   userId: string,
   pageIds: string[]
