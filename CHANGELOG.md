@@ -152,7 +152,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   key those keyboards do not have.
 - **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
   would have fired while you were reading, and combinations your browser keeps for itself (like
-  Cmd+N) now save with a warning that they may never reach PageSpace.
+  Cmd+N) now save with a warning that they may never reach PageSpace. A key the app cannot record
+  at all — an accent key that waits for a second keystroke, say — now says so instead of looking
+  like it ignored you.
 - **Cmd+Delete and friends can be recorded** — pressing Backspace, Delete or Escape while setting a
   shortcut always meant "clear this" or "never mind", even when you were holding a modifier, so a
   combination like ⌘⌫ could not be set at all and trying to set it switched the shortcut off
