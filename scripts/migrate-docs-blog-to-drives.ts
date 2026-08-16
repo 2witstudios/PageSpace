@@ -232,12 +232,15 @@ async function uploadImage(driveId: string, absPath: string, parentId: string | 
     if (!put.ok) throw new Error(`PUT ${filename} → ${put.status} ${put.statusText}`);
   }
 
-  const page = await api<PageRef>('POST', '/api/upload/complete', {
+  // Note the envelope: /api/upload/complete answers `{ success, page }`,
+  // unlike /api/pages which returns the page object bare.
+  const done = await api<{ success: boolean; page: PageRef }>('POST', '/api/upload/complete', {
     jobId: presign.jobId,
     title: filename,
     parentId,
   });
-  return page.id;
+  if (!done.page?.id) throw new Error(`upload/complete returned no page id for ${filename}`);
+  return done.page.id;
 }
 
 async function migrateBlog(driveId: string | undefined, posts: ExtractedPost[]): Promise<void> {
