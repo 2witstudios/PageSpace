@@ -124,17 +124,29 @@ export async function DELETE(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { hotkeyId } = body;
+    const { hotkeyId, ifBinding } = body;
 
     if (!hotkeyId || typeof hotkeyId !== 'string') {
       return NextResponse.json({ error: 'hotkeyId is required' }, { status: 400 });
     }
 
+    if (ifBinding !== undefined && typeof ifBinding !== 'string') {
+      return NextResponse.json({ error: 'ifBinding must be a string' }, { status: 400 });
+    }
+
+    // `ifBinding` makes the delete conditional on the row still holding the
+    // value the caller inspected — the binding is its own version token.
+    // Settings uses it when dismissing the "these were reset" notice: it reads
+    // the server, decides which rows cannot fire, then deletes them, and
+    // another tab can save a real shortcut in between. Without the condition
+    // that save is discarded. Omitting it deletes unconditionally, which is
+    // what the per-shortcut Reset button means.
     await db
       .delete(userHotkeyPreferences)
       .where(and(
         eq(userHotkeyPreferences.userId, userId),
-        eq(userHotkeyPreferences.hotkeyId, hotkeyId)
+        eq(userHotkeyPreferences.hotkeyId, hotkeyId),
+        ...(ifBinding === undefined ? [] : [eq(userHotkeyPreferences.binding, ifBinding)])
       ));
 
     audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });

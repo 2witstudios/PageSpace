@@ -97,8 +97,14 @@ export default function HotkeysSettingsPage() {
   // from a stale list would throw away the binding the user had just set.
   const handleDismissResetNotice = async () => {
     try {
+      // Each delete is conditional on the binding this read saw. Between the
+      // read and the delete another tab can save a real shortcut, and deleting
+      // unconditionally would throw it away — the read narrows that window but
+      // cannot close it.
       const unusable = unusablePreferences(await fetchHotkeyPreferences());
-      await Promise.all(unusable.map(({ hotkeyId }) => deleteHotkeyPreference(hotkeyId)));
+      await Promise.all(
+        unusable.map(({ hotkeyId, binding }) => deleteHotkeyPreference(hotkeyId, binding))
+      );
 
       // Past this point the dismiss has succeeded. Drop the deleted rows from
       // the cached payload so the banner goes now, and do NOT await the

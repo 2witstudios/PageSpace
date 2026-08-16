@@ -32,7 +32,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args) => args),
 }));
 vi.mock('@pagespace/db/schema/hotkeys', () => ({
-  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
+  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId', binding: 'binding' },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -275,6 +275,54 @@ describe('DELETE /api/settings/hotkey-preferences', () => {
 
     expect(response.status).toBe(200);
     expect(mockDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('given ifBinding, should scope the delete to that exact stored value', async () => {
+    // Between deciding a row is unusable and deleting it, another tab can save
+    // a real shortcut. The condition is what stops that save being discarded.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: 'Alt+\u03a0' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(200);
+    expect(mockWhere).toHaveBeenCalledWith([
+      { field: 'userId', value: 'user-1' },
+      { field: 'hotkeyId', value: 'tabs.cycle-next' },
+      { field: 'binding', value: 'Alt+\u03a0' },
+    ]);
+  });
+
+  it('given no ifBinding, should delete unconditionally', async () => {
+    // What the per-shortcut Reset button means: drop whatever is stored.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    await DELETE(request);
+
+    expect(mockWhere).toHaveBeenCalledWith([
+      { field: 'userId', value: 'user-1' },
+      { field: 'hotkeyId', value: 'tabs.cycle-next' },
+    ]);
+  });
+
+  it('given a non-string ifBinding, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: { not: 'a string' } }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(400);
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 
   it('given no hotkeyId, should return 400', async () => {

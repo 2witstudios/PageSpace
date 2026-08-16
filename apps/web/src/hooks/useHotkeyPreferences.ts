@@ -107,13 +107,25 @@ export async function updateHotkeyPreference(hotkeyId: string, binding: string):
   useHotkeyStore.getState().updateBinding(hotkeyId, binding);
 }
 
-export async function deleteHotkeyPreference(hotkeyId: string): Promise<void> {
+/**
+ * Remove a stored override.
+ *
+ * `ifBinding` makes the delete conditional on the row still holding that exact
+ * value, which closes the window between deciding a row is unusable and saying
+ * so: another tab can save a real shortcut in between, and an unconditional
+ * delete would discard it. Callers acting on the user's direct instruction for
+ * one shortcut — the Reset button — omit it.
+ */
+export async function deleteHotkeyPreference(
+  hotkeyId: string,
+  ifBinding?: string
+): Promise<void> {
   const res = await fetchWithAuth('/api/settings/hotkey-preferences', {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ hotkeyId }),
+    body: JSON.stringify(ifBinding === undefined ? { hotkeyId } : { hotkeyId, ifBinding }),
   });
 
   if (!res.ok) {

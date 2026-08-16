@@ -47,7 +47,7 @@ vi.mock('@/hooks/useHotkeyPreferences', async (importOriginal) => {
       mutate: mockMutate,
     }),
     updateHotkeyPreference: (id: string, binding: string) => mockSave(id, binding),
-    deleteHotkeyPreference: (id: string) => mockDelete(id),
+    deleteHotkeyPreference: (id: string, ifBinding?: string) => mockDelete(id, ifBinding),
     fetchHotkeyPreferences: () => mockFetch(),
   };
 });
@@ -127,7 +127,7 @@ describe('HotkeysSettingsPage reset notice', () => {
 
     await clickDismiss();
 
-    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create');
+    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create', 'Alt+Π');
     rerender(<HotkeysSettingsPage />);
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
@@ -141,7 +141,7 @@ describe('HotkeysSettingsPage reset notice', () => {
 
     await clickDismiss();
 
-    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create');
+    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create', 'Alt+Π');
     expect(mockToast.error).not.toHaveBeenCalled();
     rerender(<HotkeysSettingsPage />);
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
@@ -181,6 +181,18 @@ describe('HotkeysSettingsPage reset notice', () => {
     expect(mockSave).toHaveBeenCalledWith('pages.quick-create', 'Alt+P');
     rerender(<HotkeysSettingsPage />);
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  });
+
+  it('given a save that lands after the read, should delete conditionally so it survives', async () => {
+    // The fresh read narrows the window between deciding a row is unusable and
+    // deleting it, but cannot close it: another tab can save a real shortcut in
+    // between. The delete carries the binding the read saw, so the server drops
+    // the row only if it still holds that exact value.
+    renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
+
+    await clickDismiss();
+
+    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create', 'Alt+Π');
   });
 
   it('given the read fails, should delete nothing rather than guess', async () => {
