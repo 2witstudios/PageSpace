@@ -1,35 +1,13 @@
-import { blogPosts } from "@/app/blog/[slug]/data";
+import { docsUrl, blogUrl } from "@/lib/sites";
 import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export interface SearchEntry {
   title: string;
   description: string;
   href: string;
-  category: "Docs" | "Blog" | "FAQ" | "Pages";
+  category: "Docs" | "FAQ" | "Pages";
   /** Extra text for cmdk to match against (hidden from display) */
   keywords?: string;
-}
-
-/** Strip markdown syntax for plain-text search matching */
-function stripMarkdown(md: string): string {
-  return md
-    .replace(/#{1,6}\s/g, "")
-    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
-    .replace(/`{1,3}[^`]*`{1,3}/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/\n{2,}/g, " ")
-    .replace(/\n/g, " ")
-    .trim();
-}
-
-function buildBlogEntries(): SearchEntry[] {
-  return Object.values(blogPosts).map((post) => ({
-    title: post.title,
-    description: post.description,
-    href: `/blog/${post.slug}`,
-    category: "Blog",
-    keywords: stripMarkdown(post.content).slice(0, 500),
-  }));
 }
 
 const docsEntries: SearchEntry[] = [
@@ -37,7 +15,7 @@ const docsEntries: SearchEntry[] = [
     title: "Getting Started",
     description:
       "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
-    href: "/docs/getting-started",
+    href: docsUrl("/getting-started"),
     category: "Docs",
     keywords:
       "sign up account workspace document page agent channels tasks quick start setup",
@@ -46,7 +24,7 @@ const docsEntries: SearchEntry[] = [
     title: "Page Types",
     description:
       "PageSpace has 9 page types — Folder, Document, Channel, AI Chat, Canvas, File, Sheet, Task List, and Code.",
-    href: "/docs/page-types",
+    href: docsUrl("/page-types"),
     category: "Docs",
     keywords:
       "folder document channel ai chat canvas file sheet task list code tiptap monaco spreadsheet",
@@ -55,7 +33,7 @@ const docsEntries: SearchEntry[] = [
     title: "Features",
     description:
       "Behaviours every page shares — pages, drives, AI, sharing, search, accounts.",
-    href: "/docs/features",
+    href: docsUrl("/features"),
     category: "Docs",
     keywords:
       "features pages drives workspaces ai sharing permissions search accounts sign in",
@@ -64,7 +42,7 @@ const docsEntries: SearchEntry[] = [
     title: "Integrations",
     description:
       "Google Calendar, GitHub, and MCP — the three ways PageSpace connects outward and inward.",
-    href: "/docs/integrations",
+    href: docsUrl("/integrations"),
     category: "Docs",
     keywords:
       "integrations google calendar github mcp desktop external tools connect",
@@ -73,7 +51,7 @@ const docsEntries: SearchEntry[] = [
     title: "Google Calendar Integration",
     description:
       "Two-way sync of Google calendars into PageSpace; agents read availability and schedule.",
-    href: "/docs/integrations/google-calendar",
+    href: docsUrl("/integrations/google-calendar"),
     category: "Docs",
     keywords:
       "google calendar events schedule availability meetings sync",
@@ -82,7 +60,7 @@ const docsEntries: SearchEntry[] = [
     title: "GitHub Integration",
     description:
       "Give agents a GitHub identity to browse repos, file issues, and leave PR reviews.",
-    href: "/docs/integrations/github",
+    href: docsUrl("/integrations/github"),
     category: "Docs",
     keywords:
       "github repositories issues pull requests code review oauth",
@@ -91,7 +69,7 @@ const docsEntries: SearchEntry[] = [
     title: "MCP Integration",
     description:
       "Connect AI tools to your PageSpace workspace using Model Context Protocol, or add external MCP servers to PageSpace Desktop.",
-    href: "/docs/integrations/mcp",
+    href: docsUrl("/integrations/mcp"),
     category: "Docs",
     keywords:
       "mcp model context protocol token claude cursor desktop npx pagespace-mcp server filesystem github postgresql tools",
@@ -238,7 +216,7 @@ const pageEntries: SearchEntry[] = [
   {
     title: "Blog",
     description: "Articles about PageSpace, AI, and productivity.",
-    href: "/blog",
+    href: blogUrl(),
     category: "Pages",
   },
   {
@@ -257,9 +235,11 @@ const pageEntries: SearchEntry[] = [
   },
 ];
 
+// Individual blog POSTS are no longer indexed here: their bodies lived in this
+// app and now live in the blog drive, and there is no build-time source for
+// them. The palette still links out to the blog itself (see pageEntries).
 export const searchEntries: SearchEntry[] = [
   ...docsEntries,
-  ...buildBlogEntries(),
   ...faqEntries,
   ...pageEntries,
 ];

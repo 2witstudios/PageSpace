@@ -6,6 +6,7 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
 import { FAQHashOpener } from "./hash-opener";
+import { docsUrl } from "@/lib/sites";
 
 export const metadata = pageMetadata.faq;
 
@@ -245,7 +246,7 @@ const faqs: FAQItem[] = [
         schedule meetings), GitHub (agents can browse repos, open issues, and
         review PRs), and MCP (plug PageSpace into Claude, Cursor, or any other
         AI client that supports Model Context Protocol). See the{" "}
-        {docsLink("/docs/integrations", "full list")}.
+        {docsLink(docsUrl("/integrations"), "full list")}.
       </>
     ),
     category: "Integrations",
@@ -260,7 +261,7 @@ const faqs: FAQItem[] = [
         write your workspace using the same tools the built-in agents use. The
         same token doubles as an OpenAI-compatible API key, so you can call any
         of your agents as a model from your own code.{" "}
-        {docsLink("/docs/integrations/mcp", "Setup guide")}.
+        {docsLink(docsUrl("/integrations/mcp"), "Setup guide")}.
       </>
     ),
     category: "Integrations",
@@ -348,7 +349,7 @@ export default function FAQPage() {
                 </Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link href="/docs">Browse Documentation</Link>
+                <Link href={docsUrl()}>Browse Documentation</Link>
               </Button>
             </div>
           </div>

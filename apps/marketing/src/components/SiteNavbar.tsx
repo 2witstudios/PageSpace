@@ -4,11 +4,12 @@ import { Search } from "lucide-react";
 import { SearchTrigger } from "@/components/SearchTrigger";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { NavbarAuthButtons } from "@/components/NavbarAuthButtons";
+import { docsUrl, blogUrl } from "@/lib/sites";
 
 const navLinks = [
   { href: "/pricing", label: "Pricing" },
-  { href: "/docs", label: "Docs" },
-  { href: "/blog", label: "Blog" },
+  { href: docsUrl(), label: "Docs" },
+  { href: blogUrl(), label: "Blog" },
   { href: "/faq", label: "FAQ" },
 ];
 

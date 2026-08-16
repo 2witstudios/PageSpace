@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { APP_URL } from "@/lib/metadata";
+import { docsUrl, blogUrl } from "@/lib/sites";
 
 export function CTASection() {
   return (
@@ -37,8 +38,8 @@ export function CTASection() {
           <div className="flex flex-wrap items-center justify-center gap-6 pt-8 border-t border-border">
             {[
               { icon: Download, label: "Desktop Apps", href: "/downloads" },
-              { icon: FileText, label: "Documentation", href: "/docs" },
-              { icon: Zap, label: "Blog", href: "/blog" },
+              { icon: FileText, label: "Documentation", href: docsUrl() },
+              { icon: Zap, label: "Blog", href: blogUrl() },
             ].map((link) => (
               <Link key={link.label} href={link.href} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
                 <link.icon className="h-4 w-4" />

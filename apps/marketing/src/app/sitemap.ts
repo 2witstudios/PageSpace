@@ -1,5 +1,4 @@
 import type { MetadataRoute } from "next";
-import { blogPosts } from "./blog/[slug]/data";
 
 const BASE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 
@@ -64,65 +63,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   ];
 
-  // Documentation pages
-  const docPaths = [
-    "/docs",
-    "/docs/getting-started",
-    "/docs/core-concepts",
-    // Page Types
-    "/docs/page-types",
-    "/docs/page-types/document",
-    "/docs/page-types/folder",
-    "/docs/page-types/ai-chat",
-    "/docs/page-types/channel",
-    "/docs/page-types/sheet",
-    "/docs/page-types/canvas",
-    "/docs/page-types/code",
-    "/docs/page-types/task-list",
-    "/docs/page-types/file",
-    // Features
-    "/docs/features",
-    "/docs/features/pages",
-    "/docs/features/drives",
-    "/docs/features/ai",
-    "/docs/features/sharing",
-    "/docs/features/search",
-    "/docs/features/accounts",
-    // Integrations
-    "/docs/integrations",
-    "/docs/integrations/google-calendar",
-    "/docs/integrations/github",
-    "/docs/integrations/mcp",
-    "/docs/integrations/mcp/desktop",
-    // Security & Trust
-    "/docs/security",
-    "/docs/security/authentication",
-    "/docs/security/permissions",
-    "/docs/security/zero-trust",
-  ];
-
-  const docsRoutes: MetadataRoute.Sitemap = docPaths.map((path) => ({
-    url: `${BASE_URL}${path}`,
-    lastModified,
-    changeFrequency: "weekly" as const,
-    priority: path === "/docs" ? 0.8 : 0.6,
-  }));
-
-  // Blog routes - derived from blog data
-  const blogRoutes: MetadataRoute.Sitemap = [
-    {
-      url: `${BASE_URL}/blog`,
-      lastModified,
-      changeFrequency: "weekly",
-      priority: 0.7,
-    },
-    ...Object.keys(blogPosts).map((slug) => ({
-      url: `${BASE_URL}/blog/${slug}`,
-      lastModified,
-      changeFrequency: "monthly" as const,
-      priority: 0.6,
-    })),
-  ];
-
-  return [...staticRoutes, ...docsRoutes, ...blogRoutes];
+  // Docs and blog are NOT listed here. They are published PageSpace drives on
+  // their own hosts now, and each emits its own sitemap.xml
+  // (packages/lib/src/canvas/site-files.ts) with canonical URLs on that host.
+  // Re-listing them under pagespace.ai would advertise URLs that only 301.
+  return staticRoutes;
 }
