@@ -215,6 +215,23 @@ describe('HotkeysSettingsPage reset notice', () => {
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
+  it('given a delete that fails partway, should refetch rather than show rows that are gone', async () => {
+    // `Promise.all` fails fast, so the first row can be gone while the second
+    // is not — and the fold never runs. Without a refetch the banner keeps
+    // naming a shortcut that no longer exists.
+    renderPage([
+      { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      { hotkeyId: 'editing.find', binding: 'N' },
+    ]);
+    mockDelete.mockRejectedValue(new Error('offline'));
+    mockMutate.mockClear();
+
+    await clickDismiss();
+
+    expect(mockToast.error).toHaveBeenCalled();
+    expect(mockMutate).toHaveBeenCalled();
+  });
+
   it('given the read fails, should delete nothing rather than guess', async () => {
     renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
     mockFetch.mockRejectedValue(new Error('offline'));

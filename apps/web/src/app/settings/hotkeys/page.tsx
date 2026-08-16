@@ -109,15 +109,16 @@ export default function HotkeysSettingsPage() {
         }))
       );
 
-      // Past this point the dismiss has succeeded. Drop the deleted rows from
-      // the cached payload so the banner goes now, and do NOT await the
-      // revalidation: a refetch failing afterwards must not report a completed
-      // dismiss as a failure. It is the `void` and the `.catch` that guarantee
-      // that, not where the call sits — awaiting it here would put the reject
-      // back into the catch below and reintroduce exactly that bug.
-      // Only the rows that actually went. A conditional delete that matched
-      // nothing means the row holds something newer than this read saw, so
-      // hiding it here would blank a shortcut that is alive and well.
+      // Past this point the dismiss has succeeded. Fold the rows that actually
+      // went out of the cached payload so the banner goes now — only those,
+      // because a conditional delete that matched nothing means the row holds
+      // something newer than this read saw, and hiding it would blank a
+      // shortcut that is alive and well.
+      //
+      // The revalidation is deliberately not awaited: a refetch failing
+      // afterwards must not report a completed dismiss as a failure. It is the
+      // `void` and the `.catch` that guarantee that, not where the call sits —
+      // awaiting it would put the rejection back into the catch below.
       const deleted = new Set(outcomes.filter((o) => o.removed).map((o) => o.hotkeyId));
       void mutate(
         (current) => ({
@@ -126,9 +127,13 @@ export default function HotkeysSettingsPage() {
         { revalidate: true }
       ).catch(() => {});
     } catch {
-      // The rows survived, so the notice is still true and still showing. Say
-      // why, rather than leaving it looking like the button did nothing.
+      // Say why, rather than leaving it looking like the button did nothing.
       toast.error('Could not dismiss the notice — please try again');
+
+      // `Promise.all` fails fast, so some rows may already be gone while
+      // others are not, and the fold above never ran. Refetch rather than
+      // leave the banner naming shortcuts that no longer exist.
+      void mutate().catch(() => {});
     }
   };
 
