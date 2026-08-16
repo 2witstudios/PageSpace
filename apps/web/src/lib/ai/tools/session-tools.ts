@@ -954,7 +954,11 @@ export function createSessionTools(deps: SessionToolsDeps): {
     context: ToolExecutionContext | undefined,
     conversationId: string,
   ): Promise<
-    | { ok: true; actor: { userId: string }; row: WorkerRow }
+    // The ok row's `workspaceId` is narrowed to a string on purpose: the
+    // workspace-less refusal below is what makes it non-null, and callers that
+    // need the workspace (kill's END check) should read that from the TYPE
+    // rather than re-asserting an invariant that could be reordered away.
+    | { ok: true; actor: { userId: string }; row: WorkerRow & { workspaceId: string } }
     | { ok: false; error: { success: false; error: string } }
   > => {
     const actor = readActor(context);
@@ -1002,7 +1006,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     if (row.isClosed) {
       return { ok: false, error: workerListingClosed(conversationId) };
     }
-    return { ok: true, actor, row };
+    return { ok: true, actor, row: { ...row, workspaceId: row.workspaceId } };
   };
 
   /**
@@ -1466,9 +1470,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         if (opened.row.ownerId !== opened.actor.userId) {
           const canEnd = await deps.checkWorkspaceEndAccess(
             opened.actor.userId,
-            // Non-null by construction: `openAddressableSession` refuses a
-            // workspace-less row before returning ok.
-            opened.row.workspaceId as string,
+            opened.row.workspaceId,
           );
           if (!canEnd.allowed) return cannotStopOthersWorker(sessionId);
         }
