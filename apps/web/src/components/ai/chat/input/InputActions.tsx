@@ -49,18 +49,23 @@ export function InputActions({
   const buttonContent = isStreaming ? (
     <Button
       data-testid="chat-stop"
-      onClick={onStop}
-      // Disabled while the first Stop is in flight: a second one names the same stream and
-      // changes nothing, and an unlatched button reads as "that click did nothing".
-      disabled={isStopping}
+      // Inert while the first Stop is in flight: a second one names the same stream and changes
+      // nothing, and an unlatched button reads as "that click did nothing". The guard is here
+      // rather than on `disabled` deliberately — see below.
+      onClick={isStopping ? undefined : onStop}
+      // `aria-disabled`, NOT `disabled`, and the difference is the entire point of this state.
+      // A natively disabled button is removed from the focus path, so a keyboard user who
+      // pressed Stop loses focus to the body and never hears the relabel — the feedback this
+      // exists to give is precisely what `disabled` would swallow (CodeRabbit). Focusable and
+      // announced, with the click guarded above, is the same protection without the silence.
+      aria-disabled={isStopping || undefined}
       data-stopping={isStopping ? 'true' : undefined}
-      // The whole point of this state is feedback, so it has to be announceable — a disabled
-      // button with a reworded label is not reliably read out. `aria-busy` is the standard
-      // signal for "this control is working on the thing you asked for".
+      // `aria-busy` is the standard signal for "this control is working on the thing you asked
+      // for", and pairs with the relabel: what it is doing, and that it is still doing it.
       aria-busy={isStopping}
       variant="destructive"
       size="icon"
-      className="h-9 w-9 shrink-0 disabled:opacity-100"
+      className="h-9 w-9 shrink-0 aria-disabled:cursor-not-allowed"
       title={isStopping ? 'Stopping…' : 'Stop generating'}
       aria-label={isStopping ? 'Stopping' : 'Stop generating'}
     >

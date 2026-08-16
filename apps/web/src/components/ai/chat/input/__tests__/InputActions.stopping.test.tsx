@@ -32,6 +32,21 @@ describe('InputActions — stopping affordance', () => {
     expect(stop).toHaveAttribute('data-stopping', 'true');
     // Feedback that only exists visually is not feedback for everyone.
     expect(stop).toHaveAttribute('aria-busy', 'true');
+    expect(stop).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  // The a11y half of the same requirement. A natively disabled button is removed from the focus
+  // path, so a keyboard user who pressed Stop would lose focus to the body and never hear the
+  // relabel — the announcement this state exists to make is exactly what `disabled` would
+  // swallow. It stays focusable and the click is guarded instead.
+  it('given a stop in flight, should stay focusable so the relabel is announced', () => {
+    render(<InputActions isStreaming isStopping onSend={() => {}} onStop={() => {}} />);
+
+    const stop = screen.getByTestId('chat-stop');
+    expect(stop).not.toBeDisabled();
+
+    stop.focus();
+    expect(stop).toHaveFocus();
   });
 
   it('given a stop in flight, should not accept a second Stop click', () => {
@@ -39,6 +54,9 @@ describe('InputActions — stopping affordance', () => {
     render(<InputActions isStreaming isStopping onSend={() => {}} onStop={onStop} />);
 
     fireEvent.click(screen.getByTestId('chat-stop'));
+    // Keyboard activation lands as a click too, and would bypass anything that only styled the
+    // button as unavailable.
+    fireEvent.keyDown(screen.getByTestId('chat-stop'), { key: 'Enter' });
 
     expect(onStop).not.toHaveBeenCalled();
   });
