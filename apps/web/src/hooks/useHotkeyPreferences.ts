@@ -138,6 +138,14 @@ export async function deleteHotkeyPreference(
   const body = await res.json().catch(() => null);
   const deleted = body?.deleted === undefined ? true : body.deleted > 0;
 
-  if (deleted) useHotkeyStore.getState().removeBinding(hotkeyId);
+  // Gate the local removal on the row count only when the caller asked for a
+  // conditional delete: there, a miss means the row holds something newer and
+  // erasing it locally would blank a live shortcut. An unconditional delete is
+  // the user asking for no override at all, and that end state holds whether
+  // or not a row happened to still be there.
+  if (ifBinding === undefined || deleted) {
+    useHotkeyStore.getState().removeBinding(hotkeyId);
+  }
+
   return deleted;
 }

@@ -142,6 +142,49 @@ describe('deleteHotkeyPreference', () => {
     expect(writes()).toEqual([['DELETE', { hotkeyId: 'pages.quick-create' }]]);
   });
 
+  it('given a row that went, should report it and drop the local override', async () => {
+    useHotkeyStore.getState().setUserBindings([
+      { hotkeyId: 'pages.quick-create', binding: 'Alt+P' },
+    ]);
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ success: true, deleted: 1 }) });
+
+    await expect(deleteHotkeyPreference('pages.quick-create', 'Alt+P')).resolves.toBe(true);
+    expect(useHotkeyStore.getState().userBindings.has('pages.quick-create')).toBe(false);
+  });
+
+  it('given a conditional delete that matched nothing, should say so and leave the override alone', async () => {
+    // The row holds something newer than the caller saw. Erasing it locally
+    // would blank a shortcut that is alive — which is the whole reason the
+    // delete was made conditional.
+    useHotkeyStore.getState().setUserBindings([
+      { hotkeyId: 'pages.quick-create', binding: 'Ctrl+Shift+J' },
+    ]);
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ success: true, deleted: 0 }) });
+
+    await expect(deleteHotkeyPreference('pages.quick-create', 'Alt+Π')).resolves.toBe(false);
+    expect(useHotkeyStore.getState().userBindings.get('pages.quick-create')).toBe('Ctrl+Shift+J');
+  });
+
+  it('given an unconditional delete that matched nothing, should still drop the override', async () => {
+    // The Reset button. Another tab may have reset it first; the end state the
+    // user asked for is the same either way.
+    useHotkeyStore.getState().setUserBindings([
+      { hotkeyId: 'pages.quick-create', binding: 'Alt+P' },
+    ]);
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ success: true, deleted: 0 }) });
+
+    await deleteHotkeyPreference('pages.quick-create');
+
+    expect(useHotkeyStore.getState().userBindings.has('pages.quick-create')).toBe(false);
+  });
+
+  it('given a response with no count, should assume the row went', async () => {
+    // Talking to a server from before the count existed.
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+
+    await expect(deleteHotkeyPreference('pages.quick-create', 'Alt+Π')).resolves.toBe(true);
+  });
+
   it('given a failure, should throw rather than report a delete that did not happen', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: false, json: async () => ({}) });
 

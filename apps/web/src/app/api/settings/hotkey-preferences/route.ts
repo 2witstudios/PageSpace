@@ -154,6 +154,7 @@ export async function DELETE(request: Request) {
     // edge: two tabs dismissing the same notice, or a dismiss racing another
     // tab's save. Logging it as a settings change would put two records
     // against one mutation, in exactly the cases this condition exists for.
+
     if (deleted.length > 0) {
       audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
     }

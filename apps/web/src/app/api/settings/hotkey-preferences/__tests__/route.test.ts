@@ -277,6 +277,8 @@ describe('DELETE /api/settings/hotkey-preferences', () => {
 
     expect(response.status).toBe(200);
     expect(mockDelete).toHaveBeenCalledTimes(1);
+    // A row went, so the change is on the record.
+    expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
   });
 
   it('given ifBinding, should scope the delete to that exact stored value', async () => {
