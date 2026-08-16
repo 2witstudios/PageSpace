@@ -9,7 +9,7 @@ import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 import { buildPreviewResponseHeaders } from '@pagespace/lib/canvas/preview-headers';
-import { buildSiteCsp, buildBaselineCsp } from '@pagespace/lib/canvas/csp';
+import { buildCanvasCsp } from '@pagespace/lib/canvas/csp';
 import {
   extractDashboardFileViewRefs,
   rewriteDashboardFileViewLinks,
@@ -121,10 +121,13 @@ export async function GET(
   // and then works once published. Resolved exactly as `publishCanvasPage` does.
   // Site mode needs no origin — `buildSiteCsp` already permits `form-action`
   // and `connect-src` to any https host.
+  //
+  // `buildCanvasCsp` is the SAME call `renderCanvasDocument` makes for the
+  // document's own <meta> policy below, not a copy of it: browsers enforce the
+  // intersection of every policy delivered, so a header and a meta chosen by two
+  // hand-copied ternaries withhold whatever the copies disagree about.
   const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
-  const headers = buildPreviewResponseHeaders(
-    page.siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin),
-  );
+  const headers = buildPreviewResponseHeaders(buildCanvasCsp(page.siteMode, formActionOrigin));
 
   // FAIL CLOSED. This route runs under middleware `skipCSP`, so the app does not
   // supply a policy of its own — an absent policy here would mean an unpoliced
@@ -153,6 +156,19 @@ export async function GET(
     // not want.
     escapeBridge: true,
     siteMode: page.siteMode,
+    // Must match the origin baked into the response header above, for the same
+    // intersection reason: a header that permits `form-action` while the meta
+    // still says `'none'` is inert. Ignored under siteMode, which permits any
+    // https origin without needing one.
+    //
+    // The inputs are threaded rather than the finished policy handed over as
+    // `cspOverride`, which would make the two identical by construction: an
+    // override is a whole-contract switch, and for a SITE-MODE page it also
+    // turns off the CSS handling site mode grants, rewriting the external
+    // `url()`/`@import` values such a page is allowed to keep. This route serves
+    // both kinds of page from one call, so it cannot take that trade. What holds
+    // the inputs together is the meta/header invariant test in this route's suite.
+    formActionOrigin,
   });
 
   return new NextResponse(html, { status: 200, headers });
