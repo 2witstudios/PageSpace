@@ -21,11 +21,18 @@ const MODIFIER_ORDER = ['Ctrl', 'Meta', 'Alt', 'Shift'] as const;
 /**
  * Keys that are modifiers themselves and can never be the main key.
  *
- * This is the modifier-key list from the UI Events spec, not just the four the
- * widget used to exclude. `AltGraph` is the one that bites: on X11 AltGr fires
- * `key: "AltGraph"` with `altKey === false`, so it takes the `e.key` path and
- * would otherwise be recorded as a main key. The lock keys are here for the
- * same reason `CapsLock` is — bound, they shadow a default and never fire.
+ * Wider than the four the old widget excluded. `AltGraph` is the one that
+ * bites: on X11 AltGr fires `key: "AltGraph"` with `altKey === false`, so it
+ * takes the `e.key` path and would otherwise be recordable as a main key. The
+ * rest are the remaining modifier names the UI Events spec defines, kept here
+ * so the `e.key` and `e.code` paths agree — `MODIFIER_CODE` already excludes
+ * their codes under Alt.
+ *
+ * `NumLock` and `ScrollLock` are deliberately absent even though the spec calls
+ * them modifiers: nothing in this module stops them resolving, so a legacy
+ * `Ctrl+NumLock` binding still fires, and rejecting it would reset a shortcut
+ * that works. `CapsLock` is here because `MODIFIER_CODE` already excluded it,
+ * so it could not fire either way.
  */
 const MODIFIER_KEY_NAMES = new Set([
   'Control',
@@ -34,8 +41,6 @@ const MODIFIER_KEY_NAMES = new Set([
   'AltGraph',
   'Shift',
   'CapsLock',
-  'NumLock',
-  'ScrollLock',
   'Fn',
   'FnLock',
   'Hyper',

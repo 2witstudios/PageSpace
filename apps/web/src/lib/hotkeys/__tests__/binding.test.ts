@@ -212,8 +212,17 @@ describe('isCanonicalBinding', () => {
     // e.key path and would otherwise be recorded as a main key.
     expect(resolveEventKey(keyEvent({ ctrlKey: true, key: 'AltGraph', code: 'AltRight' }))).toBe('');
     expect(isCanonicalBinding('Ctrl+AltGraph')).toBe(false);
-    expect(isCanonicalBinding('Ctrl+NumLock')).toBe(false);
     expect(isCanonicalBinding('Ctrl+OS')).toBe(false);
+    expect(isCanonicalBinding('Ctrl+Super')).toBe(false);
+  });
+
+  it('given a lock key that still resolves, should keep it', () => {
+    // The spec calls NumLock and ScrollLock modifiers, but nothing here stops
+    // them resolving, so a legacy "Ctrl+NumLock" still fires. Rejecting it
+    // would reset a working shortcut — the mistake this module keeps making.
+    expect(resolveEventKey(keyEvent({ ctrlKey: true, key: 'NumLock', code: 'NumLock' }))).toBe('NumLock');
+    expect(isCanonicalBinding('Ctrl+NumLock')).toBe(true);
+    expect(isCanonicalBinding('Ctrl+ScrollLock')).toBe(true);
   });
 
   it('given a modifier name as the main key, should reject it', () => {
