@@ -281,13 +281,40 @@ describe('useCacheMessageActions handleRetry', () => {
   it('given the deletes failed, should put the rows it removed back in the cache', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
     const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
-    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed' });
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed', undeletedIds: ['a1'] });
 
     const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
 
     await act(async () => { await result.current.handleRetry(); });
 
     expect(restoreSpy).toHaveBeenCalledWith('conv-1', expect.objectContaining({ id: 'a1' }));
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  // A PARTIAL failure is where naming the rows earns its keep: restoring one the server did
+  // manage to delete would leave the cache claiming a message that exists nowhere.
+  it('given only some deletes failed, should restore only the rows the server still holds', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed', undeletedIds: ['a2'] });
+
+    const { result } = renderHook(() =>
+      useCacheMessageActions(
+        baseOptions({
+          renderedMessages: [
+            { mode: 'confirmed', message: userMsg('u1') },
+            { mode: 'confirmed', message: assistantMsg('a1') },
+            { mode: 'confirmed', message: assistantMsg('a2') },
+          ],
+        }),
+      ),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy).toHaveBeenCalledWith('conv-1', expect.objectContaining({ id: 'a2' }));
     applyDeleteSpy.mockRestore();
     restoreSpy.mockRestore();
   });

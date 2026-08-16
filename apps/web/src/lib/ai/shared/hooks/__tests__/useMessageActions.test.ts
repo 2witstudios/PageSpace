@@ -181,7 +181,7 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
     await act(async () => { outcome = await result.current.handleRetry(); });
 
     expect(regenerate).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ dispatched: false, reason: 'delete-failed' });
+    expect(outcome).toEqual({ dispatched: false, reason: 'delete-failed', undeletedIds: ['a1'] });
     // Not silent: the cache row is already gone, so the user would otherwise watch their answer
     // vanish with nothing replacing it and no idea why.
     expect(toast.error).toHaveBeenCalled();

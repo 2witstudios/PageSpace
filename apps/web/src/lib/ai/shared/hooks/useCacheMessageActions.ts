@@ -205,11 +205,12 @@ export function useCacheMessageActions({
     // nothing to delete, dispatches, and hands the model its own previous answer: the exact
     // corruption the refusal above just prevented, one click later.
     //
-    // Restoring rows that a PARTIALLY failed delete did remove server-side is the safe
-    // direction: an over-reporting cache costs one redundant DELETE on the next retry, which
-    // answers 404, which that path already treats as the row being in the state it wanted.
+    // Only the rows the server STILL HOLDS, which is why the outcome names them. A partial
+    // failure is the case that makes the distinction earn its keep: restoring the ones that did
+    // delete would leave the cache claiming messages that no longer exist anywhere.
     if (outcome.reason === 'delete-failed' && conversationId) {
       for (const message of deletedRows) {
+        if (!outcome.undeletedIds.includes(message.id)) continue;
         conversationMessagesActions.applyConfirmedMessage(conversationId, message);
       }
     }

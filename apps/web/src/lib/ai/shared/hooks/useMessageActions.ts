@@ -51,7 +51,9 @@ interface UseMessageActionsOptions {
  */
 export type RetryOutcome =
   | { dispatched: true }
-  | { dispatched: false; reason: 'no-conversation' | 'stopped' | 'delete-failed' };
+  | { dispatched: false; reason: 'no-conversation' | 'stopped' }
+  /** `undeletedIds` are the rows the server still holds — exactly what the cache must show. */
+  | { dispatched: false; reason: 'delete-failed'; undeletedIds: string[] };
 
 interface UseMessageActionsResult {
   /** Edit a message's content */
@@ -250,17 +252,26 @@ export function useMessageActions({
       // happen". This route answers 404 'Message not found' for a row that is already gone, and
       // gone is precisely the state we were asking for: a collaborator or a second tab having
       // deleted it first must not block the retry or raise an error over it.
-      const stillPresent = outcomes.filter(
-        (outcome) =>
+      //
+      // Reported per ROW, not as one flag, so the caller can put back exactly what the server
+      // still holds. A partial failure is the interesting case: some rows really are gone, and
+      // restoring those too would leave the cache claiming messages that no longer exist.
+      const undeletedIds = assistantMessagesToDelete
+        .map((msg, i) => ({ id: msg.id, outcome: outcomes[i] }))
+        .filter(({ outcome }) =>
           outcome.status === 'rejected' &&
-          !(outcome.reason instanceof ApiRequestError && outcome.reason.status === 404),
-      );
-      if (stillPresent.length > 0) {
-        for (const outcome of stillPresent) {
-          console.error('Failed to delete old assistant message:', (outcome as PromiseRejectedResult).reason);
+          !(outcome.reason instanceof ApiRequestError && outcome.reason.status === 404));
+
+      if (undeletedIds.length > 0) {
+        for (const { id, outcome } of undeletedIds) {
+          console.error('Failed to delete old assistant message:', id, (outcome as PromiseRejectedResult).reason);
         }
         toast.error('Could not clear the previous reply, so the retry was not started.');
-        return { dispatched: false, reason: 'delete-failed' };
+        return {
+          dispatched: false,
+          reason: 'delete-failed',
+          undeletedIds: undeletedIds.map(({ id }) => id),
+        };
       }
 
       // No local array to prune — `useCacheMessageActions` deletes the same rows from the
