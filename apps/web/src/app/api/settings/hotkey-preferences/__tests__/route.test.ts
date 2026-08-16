@@ -62,6 +62,7 @@ vi.mock('@/lib/hotkeys/registry', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 // Test fixtures
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
@@ -258,7 +259,8 @@ describe('DELETE /api/settings/hotkey-preferences', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDelete.mockReturnValue({ where: mockWhere });
-    mockWhere.mockResolvedValue(undefined);
+    mockWhere.mockReturnValue({ returning: mockReturning });
+    mockReturning.mockResolvedValue([{ hotkeyId: 'tabs.cycle-next' }]);
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
     vi.mocked(isAuthError).mockReturnValue(false);
@@ -296,6 +298,25 @@ describe('DELETE /api/settings/hotkey-preferences', () => {
     ]);
   });
 
+  it('given a conditional delete that matches nothing, should not log a settings change', async () => {
+    // Two tabs dismissing the same notice, or a dismiss racing another tab's
+    // save, are expected outcomes here — not mutations to record.
+    mockReturning.mockResolvedValue([]);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: 'Alt+\u03a0' }),
+    });
+
+    const response = await DELETE(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.deleted).toBe(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+
   it('given no ifBinding, should delete unconditionally', async () => {
     // What the per-shortcut Reset button means: drop whatever is stored.
     const request = new Request('https://example.com/api/settings/hotkey-preferences', {
@@ -306,9 +327,12 @@ describe('DELETE /api/settings/hotkey-preferences', () => {
 
     await DELETE(request);
 
+    // `and()` ignores an undefined condition, so the unconditional path passes
+    // one — what matters is that no binding predicate is built.
     expect(mockWhere).toHaveBeenCalledWith([
       { field: 'userId', value: 'user-1' },
       { field: 'hotkeyId', value: 'tabs.cycle-next' },
+      undefined,
     ]);
   });
 

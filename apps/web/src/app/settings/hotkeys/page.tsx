@@ -102,8 +102,11 @@ export default function HotkeysSettingsPage() {
       // unconditionally would throw it away — the read narrows that window but
       // cannot close it.
       const unusable = unusablePreferences(await fetchHotkeyPreferences());
-      await Promise.all(
-        unusable.map(({ hotkeyId, binding }) => deleteHotkeyPreference(hotkeyId, binding))
+      const outcomes = await Promise.all(
+        unusable.map(async ({ hotkeyId, binding }) => ({
+          hotkeyId,
+          removed: await deleteHotkeyPreference(hotkeyId, binding),
+        }))
       );
 
       // Past this point the dismiss has succeeded. Drop the deleted rows from
@@ -112,7 +115,10 @@ export default function HotkeysSettingsPage() {
       // dismiss as a failure. It is the `void` and the `.catch` that guarantee
       // that, not where the call sits — awaiting it here would put the reject
       // back into the catch below and reintroduce exactly that bug.
-      const deleted = new Set(unusable.map(({ hotkeyId }) => hotkeyId));
+      // Only the rows that actually went. A conditional delete that matched
+      // nothing means the row holds something newer than this read saw, so
+      // hiding it here would blank a shortcut that is alive and well.
+      const deleted = new Set(outcomes.filter((o) => o.removed).map((o) => o.hotkeyId));
       void mutate(
         (current) => ({
           preferences: (current?.preferences ?? []).filter((p) => !deleted.has(p.hotkeyId)),

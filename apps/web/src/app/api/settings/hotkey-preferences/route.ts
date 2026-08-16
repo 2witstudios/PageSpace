@@ -141,16 +141,24 @@ export async function DELETE(request: Request) {
     // another tab can save a real shortcut in between. Without the condition
     // that save is discarded. Omitting it deletes unconditionally, which is
     // what the per-shortcut Reset button means.
-    await db
+    const deleted = await db
       .delete(userHotkeyPreferences)
       .where(and(
         eq(userHotkeyPreferences.userId, userId),
         eq(userHotkeyPreferences.hotkeyId, hotkeyId),
-        ...(ifBinding === undefined ? [] : [eq(userHotkeyPreferences.binding, ifBinding)])
-      ));
+        ifBinding === undefined ? undefined : eq(userHotkeyPreferences.binding, ifBinding)
+      ))
+      .returning({ hotkeyId: userHotkeyPreferences.hotkeyId });
 
-    audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
-    return NextResponse.json({ success: true });
+    // A conditional delete matching nothing is an expected outcome, not an
+    // edge: two tabs dismissing the same notice, or a dismiss racing another
+    // tab's save. Logging it as a settings change would put two records
+    // against one mutation, in exactly the cases this condition exists for.
+    if (deleted.length > 0) {
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
+    }
+
+    return NextResponse.json({ success: true, deleted: deleted.length });
   } catch (error) {
     loggers.api.error('Error deleting hotkey preference:', error as Error);
     return NextResponse.json(

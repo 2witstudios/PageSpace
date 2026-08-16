@@ -86,7 +86,8 @@ describe('HotkeysSettingsPage reset notice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSWRState.revalidationFails = false;
-    mockDelete.mockResolvedValue(undefined);
+    // Resolves to whether the row actually went — see `deleteHotkeyPreference`.
+    mockDelete.mockResolvedValue(true);
     mockSave.mockResolvedValue(undefined);
   });
 
@@ -183,16 +184,31 @@ describe('HotkeysSettingsPage reset notice', () => {
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
-  it('given a save that lands after the read, should delete conditionally so it survives', async () => {
+  it('given a save that lands after the read, should leave the new binding alone', async () => {
     // The fresh read narrows the window between deciding a row is unusable and
-    // deleting it, but cannot close it: another tab can save a real shortcut in
-    // between. The delete carries the binding the read saw, so the server drops
-    // the row only if it still holds that exact value.
-    renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
+    // deleting it, but cannot close it. Here the other tab saves *after* the
+    // read: the server's condition misses, nothing is deleted, and the payload
+    // that comes back carries the shortcut the user just set.
+    const { rerender } = renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
+
+    mockDelete.mockImplementation(async (_id: string, ifBinding?: string) => {
+      // The other tab got there first, so the row no longer holds `ifBinding`.
+      mockSWRState.data = {
+        preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Ctrl+Shift+J' }],
+      };
+      expect(ifBinding).toBe('Alt+Π');
+      return false; // the condition missed, so nothing was removed
+    });
 
     await clickDismiss();
 
-    expect(mockDelete).toHaveBeenCalledWith('pages.quick-create', 'Alt+Π');
+    rerender(<HotkeysSettingsPage />);
+    // The row the other tab saved is still there, so the notice is no longer
+    // true and goes — rather than the shortcut being deleted under them.
+    expect(mockSWRState.data.preferences).toEqual([
+      { hotkeyId: 'pages.quick-create', binding: 'Ctrl+Shift+J' },
+    ]);
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
   it('given the read fails, should delete nothing rather than guess', async () => {

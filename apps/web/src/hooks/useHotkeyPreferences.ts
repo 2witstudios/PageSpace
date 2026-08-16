@@ -108,7 +108,7 @@ export async function updateHotkeyPreference(hotkeyId: string, binding: string):
 }
 
 /**
- * Remove a stored override.
+ * Remove a stored override. Resolves to whether the row was actually removed.
  *
  * `ifBinding` makes the delete conditional on the row still holding that exact
  * value, which closes the window between deciding a row is unusable and saying
@@ -119,7 +119,7 @@ export async function updateHotkeyPreference(hotkeyId: string, binding: string):
 export async function deleteHotkeyPreference(
   hotkeyId: string,
   ifBinding?: string
-): Promise<void> {
+): Promise<boolean> {
   const res = await fetchWithAuth('/api/settings/hotkey-preferences', {
     method: 'DELETE',
     headers: {
@@ -132,5 +132,12 @@ export async function deleteHotkeyPreference(
     throw new Error('Failed to delete hotkey preference');
   }
 
-  useHotkeyStore.getState().removeBinding(hotkeyId);
+  // Says whether the row actually went. A conditional delete that matched
+  // nothing is a success — the row simply holds something newer — and callers
+  // must not treat it as one they can erase from what they are showing.
+  const body = await res.json().catch(() => null);
+  const deleted = body?.deleted === undefined ? true : body.deleted > 0;
+
+  if (deleted) useHotkeyStore.getState().removeBinding(hotkeyId);
+  return deleted;
 }

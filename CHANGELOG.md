@@ -138,9 +138,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   character the key produced rather than the key you pressed, so on a Mac an Option combination was
   stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
   choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
-  agree on what a key is called. Shortcuts already saved in the broken form are detected on load,
-  put back to their default and named in Settings → Keyboard Shortcuts so you can set them again.
-  Every other shortcut you have saved keeps working exactly as it did, untouched.
+  agree on what a key is called. Shortcuts already saved in a form that can never fire are detected
+  on load, put back to their default and named in Settings → Keyboard Shortcuts so you can set them
+  again — that covers an Option combination stored as the character Option makes, one saved with no
+  modifier at all, and one bound to a key that is only a modifier (Caps Lock, AltGr). The notice
+  stays until you set the shortcut again or dismiss it, so it is still there the next time you open
+  the page. Everything else you have saved — punctuation, Pause, Print Screen, media keys — keeps
+  working exactly as it did, untouched.
 - **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
   but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
 - **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃

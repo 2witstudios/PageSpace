@@ -32,7 +32,11 @@ vi.mock('swr', () => ({
   }),
 }));
 
-import { useHotkeyPreferences, unusablePreferences } from '../useHotkeyPreferences';
+import {
+  useHotkeyPreferences,
+  unusablePreferences,
+  deleteHotkeyPreference,
+} from '../useHotkeyPreferences';
 import { useHotkeyStore, getEffectiveBinding } from '@/stores/useHotkeyStore';
 
 /** Requests the hook made, as [method, body] pairs. */
@@ -107,6 +111,41 @@ describe('useHotkeyPreferences', () => {
     expect(writes()).toEqual([]);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
     expect(getEffectiveBinding('editing.find')).toBe('Ctrl+F');
+  });
+});
+
+describe('deleteHotkeyPreference', () => {
+  // The joint between the two ends of the conditional delete. The page passes
+  // a second argument and the route honours an `ifBinding` field, but only
+  // this line puts one on the wire — and if it stopped, both of those tests
+  // would still pass while the delete silently became unconditional again.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useHotkeyStore.getState().reset();
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
+  });
+
+  it('given a binding to match, should send it as ifBinding', async () => {
+    await deleteHotkeyPreference('pages.quick-create', 'Alt+Π');
+
+    expect(writes()).toEqual([
+      ['DELETE', { hotkeyId: 'pages.quick-create', ifBinding: 'Alt+Π' }],
+    ]);
+  });
+
+  it('given no binding to match, should omit ifBinding entirely', async () => {
+    // The Reset button: delete whatever is stored, unconditionally. Sending
+    // `ifBinding: undefined` would be the same on the wire, but sending an
+    // empty string would silently make it conditional on a disabled shortcut.
+    await deleteHotkeyPreference('pages.quick-create');
+
+    expect(writes()).toEqual([['DELETE', { hotkeyId: 'pages.quick-create' }]]);
+  });
+
+  it('given a failure, should throw rather than report a delete that did not happen', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: false, json: async () => ({}) });
+
+    await expect(deleteHotkeyPreference('pages.quick-create', 'Alt+Π')).rejects.toThrow();
   });
 });
 
