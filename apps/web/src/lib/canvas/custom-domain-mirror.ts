@@ -50,9 +50,25 @@ function isSiteFileKey(key: string): boolean {
 /**
  * Return all active custom domain records for a drive. Only domains with
  * `status = 'active'` (DNS-verified + cert provisioned) are included.
- * Excludes `platformOwned` rows (e.g. pagespace.ai) — those are an additional
- * serving alias, never the drive's canonical/SEO identity, so they must never
- * win primary-host selection (`resolvePrimaryPublishedHost`).
+ *
+ * A `platformOwned` row is normally an additional serving ALIAS, not the
+ * drive's identity: registering `pagespace.ai` to surface one page at
+ * `pagespace.ai/<path>` must not retitle the whole drive's canonical URLs, so
+ * such rows are excluded from primary-host selection
+ * (`resolvePrimaryPublishedHost`) by default.
+ *
+ * The one exception is a platform domain a platform admin has EXPLICITLY
+ * flagged `isPrimary`. That flag only ever gets set by an admin PATCH against
+ * `/api/drives/[driveId]/domains/[domainId]`, and it means the opposite thing:
+ * this host IS the drive's public identity. That is how the platform's own
+ * documentation and blog drives claim `docs.pagespace.ai` / `blog.pagespace.ai`
+ * as canonical while still publishing to their `*.pagespace.site` subdomain as
+ * a mirror — without it, every `<link rel=canonical>`, `og:url` and
+ * `sitemap.xml <loc>` on those sites would point at the mirror instead.
+ *
+ * Un-flagged platform rows keep the old behaviour exactly, so `pagespace.ai`
+ * aliases never affect canonicalization.
+ *
  * Exported so publish-page.ts can resolve the primary host without a
  * duplicate DB query.
  */
@@ -69,7 +85,7 @@ export async function getActiveDomainRecords(driveId: string): Promise<ActiveDom
     .where(eq(customDomains.driveId, driveId));
 
   return rows
-    .filter((r) => r.status === 'active' && !r.platformOwned)
+    .filter((r) => r.status === 'active' && (!r.platformOwned || r.isPrimary))
     .map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
 }
 

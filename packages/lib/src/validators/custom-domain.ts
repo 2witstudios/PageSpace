@@ -26,8 +26,17 @@ const BLOCKED_PATTERN = /\.pagespace\./;
  * drive's published content onto the app's own domain. Shared by the domains
  * API route so "what bypasses the blocklist" and "what gets inserted as
  * `platformOwned`" never drift apart.
+ *
+ * ⚠️ EXACT-MATCH ALLOWLIST — never widen this to a suffix or wildcard test.
+ * A published page runs author JS on its own real origin, and the session
+ * cookies are scoped to `.pagespace.ai` (`COOKIE_DOMAIN`), with `ps_logged_in`
+ * deliberately NOT httpOnly so client code can read it. Any host admitted here
+ * can therefore read and write that cookie for every other `*.pagespace.ai`
+ * origin. That is acceptable only because each entry is a platform-owned drive
+ * serving our own content; admitting a customer-controlled `*.pagespace.ai`
+ * host would hand them a cross-origin foothold on the app.
  */
-export const PLATFORM_OWNED_DOMAINS = ['pagespace.ai'];
+export const PLATFORM_OWNED_DOMAINS = ['pagespace.ai', 'docs.pagespace.ai', 'blog.pagespace.ai'];
 
 /**
  * Normalize a raw hostname input:
