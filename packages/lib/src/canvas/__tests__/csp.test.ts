@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildBaselineCsp, buildDocumentCsp, buildSiteCsp } from '../csp';
+import { buildBaselineCsp, buildCanvasCsp, buildDocumentCsp, buildSiteCsp } from '../csp';
 
 describe('buildBaselineCsp', () => {
   it('defaults to form-action \'none\' when no origin is given', () => {
@@ -85,5 +85,28 @@ describe('buildDocumentCsp', () => {
     expect(csp).toContain('font-src https://fonts.gstatic.com');
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("base-uri 'none'");
+  });
+});
+
+describe('buildCanvasCsp', () => {
+  it('serves the site policy for a site-mode page', () => {
+    expect(buildCanvasCsp(true)).toBe(buildSiteCsp());
+  });
+
+  it('serves the baseline policy scoped to the origin otherwise', () => {
+    expect(buildCanvasCsp(false, 'https://app.pagespace.ai')).toBe(
+      buildBaselineCsp('https://app.pagespace.ai'),
+    );
+  });
+
+  it('treats a null or undefined flag as not site mode, never as a widened policy', () => {
+    // `pages.siteMode` is nullable, and a null read must not fall through to the
+    // permissive site policy.
+    expect(buildCanvasCsp(null)).toBe(buildBaselineCsp());
+    expect(buildCanvasCsp(undefined)).toBe(buildBaselineCsp());
+  });
+
+  it('ignores the origin under site mode, which needs none', () => {
+    expect(buildCanvasCsp(true, 'https://app.pagespace.ai')).toBe(buildCanvasCsp(true));
   });
 });
