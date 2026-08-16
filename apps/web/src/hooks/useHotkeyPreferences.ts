@@ -56,11 +56,15 @@ export function useHotkeyPreferences() {
  *
  * Derived from the payload rather than remembered, which is only possible
  * because the rows are deliberately not deleted on load — the row *is* the
- * record that the reset happened, so it outlives the tab for free. Every bug
- * this notice has had came from keeping a second copy of that fact in memory
- * and trying to keep the two in step: it went stale when another tab re-bound
- * the shortcut, it re-armed itself from a read taken before its own deletes,
- * and it survived a logout. None of those are expressible now.
+ * record that the reset happened, so it outlives the tab for free. The bugs
+ * this notice had came from keeping a second copy of that fact in memory and
+ * trying to keep the two in step: it went stale when another tab re-bound the
+ * shortcut, and it re-armed itself from a read taken before its own deletes.
+ * Neither is expressible against a value derived on every render.
+ *
+ * It does not make the notice user-scoped on its own — the payload it derives
+ * from is an SWR cache entry, which outlives a sign-out in the same document.
+ * That is why `logout` clears the entry as well as the store.
  */
 export function unusablePreferences(preferences: HotkeyPreference[]): HotkeyPreference[] {
   return preferences.filter(({ binding }) => binding !== '' && !isUsableBinding(binding));
