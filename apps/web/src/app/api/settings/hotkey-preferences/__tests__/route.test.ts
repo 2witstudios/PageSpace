@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, PATCH } from '../route';
+import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 const mockSelect = vi.hoisted(() => vi.fn());
@@ -12,12 +12,14 @@ const mockUpdate = vi.hoisted(() => vi.fn());
 const mockSet = vi.hoisted(() => vi.fn());
 const mockReturning = vi.hoisted(() => vi.fn());
 const mockFindFirst = vi.hoisted(() => vi.fn());
+const mockDelete = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
+    delete: mockDelete,
     query: {
       userHotkeyPreferences: {
         findFirst: mockFindFirst,
@@ -30,7 +32,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args) => args),
 }));
 vi.mock('@pagespace/db/schema/hotkeys', () => ({
-  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
+  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId', binding: 'binding' },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -60,6 +62,7 @@ vi.mock('@/lib/hotkeys/registry', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 // Test fixtures
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
@@ -193,5 +196,186 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const response = await PATCH(request);
 
     expect(response.status).toBe(400);
+  });
+
+  it('given a binding that could never match a key event, should return 400', async () => {
+    // What the old capture code produced for macOS Option+P.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Π' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('given a bare key with no modifier, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'N' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('given a bare "+" from the numpad Add key, should return 400', async () => {
+    // "+" is both the separator and a key, so this is the one bare binding that
+    // can look modified to a naive parser.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: '+' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('given an empty binding (disable), should accept it', async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockReturning.mockResolvedValue([{ hotkeyId: 'tabs.cycle-next', binding: '' }]);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: '' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe('DELETE /api/settings/hotkey-preferences', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDelete.mockReturnValue({ where: mockWhere });
+    mockWhere.mockReturnValue({ returning: mockReturning });
+    mockReturning.mockResolvedValue([{ hotkeyId: 'tabs.cycle-next' }]);
+
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('given a hotkeyId, should remove the override', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(200);
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    // A row went, so the change is on the record.
+    expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+  });
+
+  it('given ifBinding, should scope the delete to that exact stored value', async () => {
+    // Between deciding a row is unusable and deleting it, another tab can save
+    // a real shortcut. The condition is what stops that save being discarded.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: 'Alt+\u03a0' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(200);
+    expect(mockWhere).toHaveBeenCalledWith([
+      { field: 'userId', value: 'user-1' },
+      { field: 'hotkeyId', value: 'tabs.cycle-next' },
+      { field: 'binding', value: 'Alt+\u03a0' },
+    ]);
+  });
+
+  it('given a conditional delete that matches nothing, should not log a settings change', async () => {
+    // Two tabs dismissing the same notice, or a dismiss racing another tab's
+    // save, are expected outcomes here — not mutations to record.
+    mockReturning.mockResolvedValue([]);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: 'Alt+\u03a0' }),
+    });
+
+    const response = await DELETE(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.deleted).toBe(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+
+  it('given no ifBinding, should delete unconditionally', async () => {
+    // What the per-shortcut Reset button means: drop whatever is stored.
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    await DELETE(request);
+
+    // `and()` ignores an undefined condition, so the unconditional path passes
+    // one — what matters is that no binding predicate is built.
+    expect(mockWhere).toHaveBeenCalledWith([
+      { field: 'userId', value: 'user-1' },
+      { field: 'hotkeyId', value: 'tabs.cycle-next' },
+      undefined,
+    ]);
+  });
+
+  it('given a non-string ifBinding, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', ifBinding: { not: 'a string' } }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(400);
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('given no hotkeyId, should return 400', async () => {
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(400);
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('given unauthenticated request, should return 401', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+    vi.mocked(isAuthError).mockReturnValue(true);
+
+    const request = new Request('https://example.com/api/settings/hotkey-preferences', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next' }),
+    });
+
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(401);
   });
 });

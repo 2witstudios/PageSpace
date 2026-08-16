@@ -160,6 +160,32 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   stall clears and the assistant starts writing again mid-cleanup, the reply stays put, stays
   joinable and stays stoppable.
 
+- **A keyboard shortcut you set yourself now actually fires** — recording a shortcut wrote down the
+  character the key produced rather than the key you pressed, so on a Mac an Option combination was
+  stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
+  choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
+  agree on what a key is called. Shortcuts already saved in a form that can never fire are detected
+  on load, put back to their default and named in Settings → Keyboard Shortcuts so you can set them
+  again — that covers an Option combination stored as the character Option makes, one saved with no
+  modifier at all, and one bound to a key that is only a modifier (Caps Lock, AltGr). The notice
+  stays until you set the shortcut again or dismiss it, so it is still there the next time you open
+  the page. Everything else you have saved — punctuation, Pause, Print Screen, media keys — keeps
+  working exactly as it did, untouched.
+- **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
+  but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
+- **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃
+  symbols on a Mac, and the built-in defaults now use Ctrl on Windows and Linux instead of a Command
+  key those keyboards do not have.
+- **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
+  would have fired while you were reading, and combinations your browser keeps for itself (like
+  Cmd+N) now save with a warning that they may never reach PageSpace. A key the app cannot record
+  at all — an accent key that waits for a second keystroke, say — now says so instead of looking
+  like it ignored you.
+- **Cmd+Delete and friends can be recorded** — pressing Backspace, Delete or Escape while setting a
+  shortcut always meant "clear this" or "never mind", even when you were holding a modifier, so a
+  combination like ⌘⌫ could not be set at all and trying to set it switched the shortcut off
+  instead. Those still do what they always did on their own; held with a modifier, they are now
+  recorded like any other key.
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
   Creating a calendar event through an app or script without naming a timezone read it as UTC, so
