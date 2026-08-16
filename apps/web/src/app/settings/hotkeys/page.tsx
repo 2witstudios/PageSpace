@@ -31,10 +31,10 @@ export default function HotkeysSettingsPage() {
 
   // The notice is a view of what the server holds, not a thing to keep in step
   // with it: any preference still stored in a shape that cannot fire.
-  const resetHotkeys = unusablePreferences(preferences).map((p) => p.hotkeyId);
+  const resetHotkeyIds = unusablePreferences(preferences).map((p) => p.hotkeyId);
 
   // Name the shortcuts in the notice — "one shortcut" leaves the user hunting.
-  const resetLabels = resetHotkeys
+  const resetLabels = resetHotkeyIds
     .map((id) => HOTKEY_REGISTRY.find((h) => h.id === id)?.label ?? id)
     .map((label) => `"${label}"`)
     .join(', ');
@@ -147,12 +147,12 @@ export default function HotkeysSettingsPage() {
         <p className="text-muted-foreground">
           Customize keyboard shortcuts for common actions. Click a shortcut to edit it.
         </p>
-        {resetHotkeys.length > 0 && (
+        {resetHotkeyIds.length > 0 && (
           <div className="mt-3 flex items-start gap-3 rounded-md border bg-muted/50 px-3 py-2">
             <p className="flex-1 text-sm text-muted-foreground">
-              {resetLabels} {resetHotkeys.length === 1 ? 'was' : 'were'} saved in a format that could
-              never be triggered, so {resetHotkeys.length === 1 ? 'it has' : 'they have'} been restored
-              to the default. Set {resetHotkeys.length === 1 ? 'it' : 'them'} again below.
+              {resetLabels} {resetHotkeyIds.length === 1 ? 'was' : 'were'} saved in a format that could
+              never be triggered, so {resetHotkeyIds.length === 1 ? 'it has' : 'they have'} been restored
+              to the default. Set {resetHotkeyIds.length === 1 ? 'it' : 'them'} again below.
             </p>
             <Button variant="ghost" size="sm" onClick={handleDismissResetNotice}>
               Dismiss
