@@ -12,8 +12,11 @@ import { recordStopRequest, readStopEpoch } from '../stopRequests';
  * than assuming zero, which is exactly how a caller must use it.
  */
 describe('stopRequests', () => {
-  it('given no Stop, should read the same epoch twice', () => {
-    expect(readStopEpoch('quiet')).toBe(readStopEpoch('quiet'));
+  // Zero, specifically. A caller snapshots before the first Stop a conversation has ever seen,
+  // so an unknown conversation has to read as a usable baseline rather than as absent.
+  it('given no Stop, should read zero and not move on read', () => {
+    expect(readStopEpoch('quiet')).toBe(0);
+    expect(readStopEpoch('quiet')).toBe(0);
   });
 
   it('given a Stop, should move that conversation on', () => {

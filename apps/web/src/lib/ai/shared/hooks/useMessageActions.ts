@@ -212,16 +212,36 @@ export function useMessageActions({
       // The deletes are already concurrent WITH EACH OTHER — one Promise.allSettled over N
       // independent requests, not N sequential awaits — so the cost here is one round trip, not
       // one per superseded message.
-      await Promise.allSettled(
+      const outcomes = await Promise.allSettled(
         assistantMessagesToDelete.map((msg) => {
           const url = isAgentMode
             ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
             : `/api/ai/global/${conversationId}/messages/${msg.id}`;
-          return del(url, undefined, { headers: browserSessionHeaders() }).catch((error) => {
-            console.error('Failed to delete old assistant message:', error);
-          });
+          return del(url, undefined, { headers: browserSessionHeaders() });
         })
       );
+
+      // A FAILED DELETE BREAKS THE SAME INVARIANT AS A RACED ONE (CodeRabbit).
+      //
+      // The rejections used to be swallowed into a console line, which made the ordering above
+      // load-bearing only when the network cooperated: a row that failed to delete is still in
+      // the database, the server rebuilds history FROM the database, and the model is handed its
+      // own previous answer as the newest turn — the exact corruption the await is here to
+      // prevent, arrived by a different route. Awaiting something and then ignoring what it said
+      // is not an ordering guarantee.
+      //
+      // So a failed delete refuses the dispatch, and says so. Silence would be worse than the
+      // old console line: the cache row is already gone (`useCacheMessageActions` applied it
+      // synchronously), so the user would see their answer vanish and nothing replace it, with
+      // no idea why or that a reload will bring it back.
+      const failed = outcomes.filter((outcome) => outcome.status === 'rejected');
+      if (failed.length > 0) {
+        for (const outcome of failed) {
+          console.error('Failed to delete old assistant message:', outcome.reason);
+        }
+        toast.error('Could not clear the previous reply, so the retry was not started.');
+        return false;
+      }
 
       // No local array to prune — `useCacheMessageActions` deletes the same rows from the
       // cache, which is both what renders and what `regenerate` composes its request from.

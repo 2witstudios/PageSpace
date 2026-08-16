@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { del } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import { recordStopRequest } from '@/lib/ai/streams/stopRequests';
 import { useMessageActions } from '../useMessageActions';
 
@@ -154,6 +155,52 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
     await act(async () => { await result.current.handleRetry(); });
 
     expect(regenerate).toHaveBeenCalledWith({ body: { conversationId: 'conv-2' } });
+  });
+
+  // A FAILED delete breaks the same invariant as a raced one: the row is still in the database,
+  // the server rebuilds history FROM the database, and the model gets its own previous answer as
+  // the newest turn. Awaiting something and then ignoring what it said is not an ordering
+  // guarantee (CodeRabbit).
+  it('given a delete that fails, should not regenerate', async () => {
+    const regenerate = vi.fn();
+    vi.mocked(del).mockRejectedValue(new Error('500'));
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-4',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    let dispatched: boolean | undefined;
+    await act(async () => { dispatched = await result.current.handleRetry(); });
+
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(dispatched).toBe(false);
+    // Not silent: the cache row is already gone, so the user would otherwise watch their answer
+    // vanish with nothing replacing it and no idea why.
+    expect(toast.error).toHaveBeenCalled();
+  });
+
+  it('given every delete succeeds, should regenerate and say nothing', async () => {
+    const regenerate = vi.fn();
+    vi.mocked(del).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-5',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(regenerate).toHaveBeenCalledWith({ body: { conversationId: 'conv-5' } });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   // Keyed by conversation for the same reason everything else in this path is: concurrent sends
