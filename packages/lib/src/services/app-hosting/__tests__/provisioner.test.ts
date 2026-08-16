@@ -671,6 +671,30 @@ describe('mintDeployToken', () => {
     expect(lastPatch()).toMatchObject({ outcome: 'failed' });
   });
 
+  it('given BOTH the Fly mint and the settle write fail, should still return the denial rather than throw', async () => {
+    mockSelect([{ id: 'app1', flyAppName: 'pgs-app-app1' }]);
+    updateMock.mockImplementation(() => ({
+      set: () => ({ where: () => Promise.reject(new Error('db gone')) }),
+    }));
+
+    // Bookkeeping runs after the outcome is decided. A failed settle must not
+    // replace the reason Fly gave with a thrown database error — every entry point
+    // here is documented as returning a value.
+    const result = await mintDeployToken({
+      publishedAppId: 'app1',
+      expiry: '48h',
+      purpose: 'build',
+      deps: deps({
+        mintFlyDeployToken: async () => {
+          throw new Error('fly refused');
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'fly_error', error: 'fly refused' });
+    expect(errorMock).toHaveBeenCalled();
+  });
+
   it('given no such app, should report not_found', async () => {
     mockSelect([]);
     expect(

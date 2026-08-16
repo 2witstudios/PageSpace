@@ -277,6 +277,14 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
    * is at the app level — Fly hands back no token id, so a suspect app is
    * remediated by destroying it (which revokes every token scoped to it), never by
    * assuming the mint failed.
+   *
+   * NO BACKFILL accompanies the migration that added this column, and none is
+   * possible: the migration that CREATES this table (0262) is in the same
+   * unreleased release, so no database has ever held a row here. `runMigrations`
+   * applies every pending entry in one invocation, which means 0262 and 0264 land
+   * together on every deployment, empty table first. Were legacy rows possible they
+   * would have to be stamped `outcome = 'minted', settledAt = "mintedAt"`, since
+   * the pre-two-phase code only ever inserted after a successful mint.
    */
   outcome: text('outcome').default('pending').notNull(),
 

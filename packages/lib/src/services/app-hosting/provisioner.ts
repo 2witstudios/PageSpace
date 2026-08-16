@@ -522,34 +522,49 @@ export async function mintDeployToken({
     const message = error instanceof Error ? error.message : 'unknown Fly error';
     // PHASE 2 (failure) — settled, not deleted. A Fly error that arrived after the
     // mint committed would still leave a token, so the attempt stays on the record.
-    await settleMint(mintId, 'failed');
+    await settleMint(mintId, 'failed', row);
     return { ok: false, reason: 'fly_error', error: message };
   }
 
-  // PHASE 2 (success). If this write fails the caller still gets a working token
-  // and the row stays `pending` — deliberately: `pending` already means "a
-  // credential may exist for this app", which is the truth we need to keep. Logged
-  // at error level so the unsettled row is detectable rather than merely present.
-  try {
-    await settleMint(mintId, 'minted');
-  } catch (error) {
-    loggers.api.error('Deploy token minted but its audit row could not be settled', {
-      publishedAppId: row.id,
-      flyAppName: row.flyAppName,
-      mintId,
-      error: error instanceof Error ? error.message : 'unknown database error',
-    });
-  }
+  // PHASE 2 (success).
+  await settleMint(mintId, 'minted', row);
 
   return { ok: true, token };
 }
 
-/** Move a mint intent out of `pending`. `settledAt` and `outcome` move together — a CHECK requires it. */
-async function settleMint(mintId: string, outcome: 'minted' | 'failed'): Promise<void> {
-  await db
-    .update(appDeployTokenMints)
-    .set({ outcome, settledAt: dbNow() })
-    .where(eq(appDeployTokenMints.id, mintId));
+/**
+ * Move a mint intent out of `pending`. `settledAt` and `outcome` move together —
+ * a CHECK requires it.
+ *
+ * NEVER THROWS, and that is why the try/catch lives in here rather than at the two
+ * call sites. Settling is bookkeeping that happens after the outcome is already
+ * decided: on the success path the caller holds a working token, and on the failure
+ * path it holds a `fly_error` denial. Letting a failed bookkeeping write replace
+ * either of those with a thrown database error breaks the module's contract that
+ * every entry point returns a value — and on the failure path it would do so while
+ * discarding the reason Fly gave. The row simply stays `pending`, which already
+ * carries the fact worth keeping ("a credential may exist for this app"), logged at
+ * error level so an unsettled row is detectable rather than merely present.
+ */
+async function settleMint(
+  mintId: string,
+  outcome: 'minted' | 'failed',
+  row: { id: string; flyAppName: string },
+): Promise<void> {
+  try {
+    await db
+      .update(appDeployTokenMints)
+      .set({ outcome, settledAt: dbNow() })
+      .where(eq(appDeployTokenMints.id, mintId));
+  } catch (error) {
+    loggers.api.error('Deploy token mint could not be settled; audit row left pending', {
+      publishedAppId: row.id,
+      flyAppName: row.flyAppName,
+      mintId,
+      intendedOutcome: outcome,
+      error: error instanceof Error ? error.message : 'unknown database error',
+    });
+  }
 }
 
 /**
