@@ -526,6 +526,9 @@ const GlobalAssistantView: React.FC = () => {
     },
     // Retry inherits send's optimistic path — see useCacheMessageActions.
     wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming

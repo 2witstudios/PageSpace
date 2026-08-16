@@ -259,6 +259,9 @@ export function useAgentSessionChat({
     },
     // Retry inherits send's optimistic path — see useCacheMessageActions.
     wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
   });
 
   const lastAssistantMessageId = useMemo(

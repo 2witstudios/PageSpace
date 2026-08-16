@@ -53,6 +53,16 @@ export interface UseCacheMessageActionsOptions {
    * handleRetry.
    */
   wrapSend: <T>(sendFn: () => T) => T | undefined;
+  /**
+   * The surface's `useSendHandoff.releasePendingSend` — the SAME one its send uses.
+   *
+   * Required because a retry can now decline to dispatch: a Stop pressed while the superseded
+   * assistant rows are being deleted server-side has nothing for the server to abort (no stream
+   * row exists yet), so `handleRetry` refuses to start the generation. That return path moves
+   * none of the handoff effect's dependencies, and the composer renders only Stop while a
+   * pendingSend stands — so without this the conversation would sit locked until unmount.
+   */
+  releasePendingSend: () => void;
 }
 
 /**
@@ -88,6 +98,7 @@ export function useCacheMessageActions({
   renderedMessages,
   regenerate,
   wrapSend,
+  releasePendingSend,
 }: UseCacheMessageActionsOptions): UseCacheMessageActionsResult {
   const stableMessages = useMemo(
     () => renderedMessages.filter((r) => r.mode !== 'streaming').map((r) => r.message),
@@ -170,8 +181,15 @@ export function useCacheMessageActions({
     // leave that whole round trip unfeedbacked — the exact dead window this is here to close.
     // From this call the surface's `displayIsStreaming` is true, so the composer locks and
     // offers Stop within a frame, same as a send.
-    await wrapSend(() => handleRetryBase());
-  }, [renderedMessages, handleRetryBase, conversationId, wrapSend]);
+    const dispatched = await wrapSend(() => handleRetryBase());
+
+    // `false` — not `undefined`, which only means `wrapSend` had no conversation to register
+    // under and therefore never registered anything to release. An explicit false is a retry
+    // that registered and then declined to dispatch (a Stop landed during its DELETEs), and
+    // nothing else will clear the pendingSend for it: the handoff effect is keyed on state this
+    // path never moved, so the composer would show Stop until unmount.
+    if (dispatched === false) releasePendingSend();
+  }, [renderedMessages, handleRetryBase, conversationId, wrapSend, releasePendingSend]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };
 }

@@ -63,6 +63,7 @@ const baseOptions = (
     ],
     regenerate: vi.fn(),
     wrapSend: makeWrapSend(conversationId),
+    releasePendingSend: vi.fn(),
     ...overrides,
   };
 };
@@ -250,6 +251,55 @@ describe('useCacheMessageActions handleRetry', () => {
     expect(mockState.handleRetryBase).toHaveBeenCalledTimes(1);
 
     mockState.handleRetryBaseResolve?.();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // The wiring for the one retry that registers and then declines to dispatch: a Stop landed
+  // while `useMessageActions.handleRetry` was deleting the superseded rows, so it returns false
+  // rather than starting a generation the user just asked not to start. Nothing else clears the
+  // pendingSend on that path — the handoff effect is keyed on state it never moved — and the
+  // composer renders only Stop while one stands, so the conversation would sit locked until
+  // unmount.
+  it('given the retry declined to dispatch, should release the pending send it registered', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce(false);
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).toHaveBeenCalledTimes(1);
+    applyDeleteSpy.mockRestore();
+  });
+
+  it('given the retry dispatched, should not release the pending send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce(true);
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+  });
+
+  // Why the check is `=== false` and not falsy. With no conversation `wrapSend` never calls its
+  // argument and returns `undefined` — it registered nothing, so there is nothing to release,
+  // and releasing anyway would clear a pendingSend belonging to something else.
+  it('given no conversation, should not release anything', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const releasePendingSend = vi.fn();
+
+    const { result } = renderHook(() =>
+      useCacheMessageActions(baseOptions({ conversationId: null, releasePendingSend })),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
     applyDeleteSpy.mockRestore();
   });
 

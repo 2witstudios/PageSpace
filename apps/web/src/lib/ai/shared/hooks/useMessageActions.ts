@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
+import { readStopEpoch } from '@/lib/ai/streams/stopRequests';
 
 const browserSessionHeaders = (): Record<string, string> => ({
   'X-Browser-Session-Id': getBrowserSessionId(),
@@ -43,8 +44,12 @@ interface UseMessageActionsResult {
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   /** Delete a message */
   handleDelete: (messageId: string) => Promise<void>;
-  /** Retry/regenerate the last response */
-  handleRetry: () => Promise<void>;
+  /**
+   * Retry/regenerate the last response. Resolves FALSE when nothing was dispatched — no
+   * conversation, or a Stop landed while the superseded rows were being deleted — so a caller
+   * holding a pendingSend can release it (see `useSendHandoff.releasePendingSend`).
+   */
+  handleRetry: () => Promise<boolean>;
   /** Get the last assistant message ID */
   lastAssistantMessageId: string | undefined;
   /** Get the last user message ID */
@@ -163,9 +168,18 @@ export function useMessageActions({
     [isAgentMode, agentId, conversationId]
   );
 
-  // Retry/regenerate the last response
-  const handleRetry = useCallback(async () => {
-    if (!conversationId) return;
+  // Retry/regenerate the last response.
+  //
+  // Reports whether it DISPATCHED, like `handleSend`: a caller holding a pendingSend has to know,
+  // because a wrapped callback that returns without dispatching moves none of the handoff
+  // effect's dependencies and would leave the composer showing Stop until unmount. See
+  // `useSendHandoff.releasePendingSend`.
+  const handleRetry = useCallback(async (): Promise<boolean> => {
+    if (!conversationId) return false;
+
+    // Snapshot BEFORE the DELETE round trip below, checked after it — see stopRequests, and the
+    // dispatch guard at the bottom of this function.
+    const stopEpochAtStart = readStopEpoch(conversationId);
 
     const currentMessages = messagesRef.current;
 
@@ -213,6 +227,17 @@ export function useMessageActions({
       // cache, which is both what renders and what `regenerate` composes its request from.
     }
 
+    // THE STOP THE SERVER COULD NOT HONOUR. Retry now runs inside `wrapSend`, so the composer
+    // has been offering Stop for the whole DELETE round trip above — but no stream row exists
+    // yet, so `markAbortRequested` matches nothing, the abort answers `not_found`, and
+    // `reportAbortOutcome` is deliberately silent about that. Dispatching here anyway would make
+    // that Stop a lie of exactly the kind this epic deleted `rawStop` over: the press appeared to
+    // do nothing and a generation started regardless.
+    //
+    // The deletes have already committed and cannot be taken back, so a stopped retry leaves the
+    // superseded answer gone and nothing regenerating — which is what the user asked for.
+    if (readStopEpoch(conversationId) !== stopEpochAtStart) return false;
+
     // Now regenerate with a clean slate. conversationId is included for both
     // modes — global mode's useChat transport is frozen at first construction
     // (see global-chat-request-body.ts), so the body is what actually
@@ -228,6 +253,7 @@ export function useMessageActions({
             conversationId,
           },
     });
+    return true;
   }, [isAgentMode, agentId, conversationId, regenerate]);
 
   // Compute last message IDs for UI

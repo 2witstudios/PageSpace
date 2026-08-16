@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import type { UIMessage } from 'ai';
+import { del } from '@/lib/auth/auth-fetch';
+import { recordStopRequest } from '@/lib/ai/streams/stopRequests';
 import { useMessageActions } from '../useMessageActions';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -79,6 +82,105 @@ describe('useMessageActions — handleRetry regenerate body', () => {
     expect(regenerate).toHaveBeenCalledWith({
       body: { chatId: 'agent-1', conversationId: 'agent-conv-1' },
     });
+  });
+});
+
+/**
+ * THE STOP THE SERVER CANNOT HONOUR.
+ *
+ * Retry now runs inside `wrapSend`, so the composer offers Stop for the whole DELETE round trip
+ * below — but no stream row exists yet, so `markAbortRequested` matches nothing and the abort
+ * answers `not_found`, which the UI is deliberately silent about. Dispatching the regenerate
+ * anyway would mean the press did nothing visible and a generation started regardless.
+ */
+describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const assistantAfterUser = (): UIMessage[] => [
+    { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+    { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'reply' }] },
+  ];
+
+  it('given a Stop while the superseded rows are being deleted, should not regenerate', async () => {
+    const regenerate = vi.fn();
+    let releaseDeletes: (() => void) | undefined;
+    vi.mocked(del).mockImplementation(
+      () => new Promise((resolve) => { releaseDeletes = () => resolve(undefined); }),
+    );
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-1',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    let retry: Promise<boolean> | undefined;
+    act(() => { retry = result.current.handleRetry(); });
+
+    // The press, landing while the DELETEs are still in flight — exactly the window the
+    // composer has been showing Stop for.
+    act(() => { recordStopRequest('conv-1'); });
+
+    await act(async () => { releaseDeletes?.(); await retry; });
+
+    expect(regenerate).not.toHaveBeenCalled();
+    // FALSE, so the caller releases the pendingSend it is holding — nothing else will, and the
+    // composer renders only Stop while it stands.
+    await expect(retry).resolves.toBe(false);
+  });
+
+  // The mirror image, and the reason this is a counter compared against a snapshot rather than a
+  // flag anyone has to clear: stopping a stream and THEN retrying it is the ordinary path.
+  it('given a Stop that happened BEFORE the retry, should still regenerate', async () => {
+    const regenerate = vi.fn();
+    vi.mocked(del).mockResolvedValue(undefined);
+
+    recordStopRequest('conv-2');
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-2',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(regenerate).toHaveBeenCalledWith({ body: { conversationId: 'conv-2' } });
+  });
+
+  // Keyed by conversation for the same reason everything else in this path is: concurrent sends
+  // in different conversations are supported by design.
+  it('given a Stop in another conversation, should still regenerate this one', async () => {
+    const regenerate = vi.fn();
+    let releaseDeletes: (() => void) | undefined;
+    vi.mocked(del).mockImplementation(
+      () => new Promise((resolve) => { releaseDeletes = () => resolve(undefined); }),
+    );
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-3',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    let retry: Promise<boolean> | undefined;
+    act(() => { retry = result.current.handleRetry(); });
+    act(() => { recordStopRequest('conv-elsewhere'); });
+
+    await act(async () => { releaseDeletes?.(); await retry; });
+
+    expect(regenerate).toHaveBeenCalledWith({ body: { conversationId: 'conv-3' } });
   });
 });
 

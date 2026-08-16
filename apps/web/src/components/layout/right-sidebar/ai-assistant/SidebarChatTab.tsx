@@ -449,6 +449,9 @@ const SidebarChatTab: React.FC = () => {
     // Retry inherits send's optimistic path — the SAME wrapSend a send uses, so the composer
     // locks and offers Stop from the click instead of after the deletes.
     wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming

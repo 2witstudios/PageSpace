@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useStopStream, STOPPING_FEEDBACK_TIMEOUT_MS } from '../useStopStream';
+import { readStopEpoch } from '@/lib/ai/streams/stopRequests';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 const abortByMessageId = vi.fn();
@@ -310,5 +311,57 @@ describe('useStopStream — isStopping', () => {
     // Asserted after the queue has drained rather than via waitFor: this is a "stays true"
     // claim, and waitFor would pass on the first tick without ever proving it survived.
     expect(result.current.isStopping).toBe(true);
+  });
+});
+
+/**
+ * The half of Stop the SERVER cannot perform.
+ *
+ * `markAbortRequested` only marks rows that already exist as 'streaming', so a Stop pressed
+ * before the POST is out matches nothing and answers `not_found` — which the UI is deliberately
+ * silent about. A retry spends a whole DELETE round trip in that window with Stop on screen, so
+ * the press has to be recorded somewhere the retry can see it before it dispatches.
+ */
+describe('useStopStream — recording the request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    abortByMessageId.mockResolvedValue(OK);
+    abortByConversation.mockResolvedValue(OK);
+  });
+
+  it('given a Stop in the TTFB window, should record it against the conversation it named', async () => {
+    const before = readStopEpoch('conv-record-1');
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: 'conv-record-1' }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-1')).toBe(before + 1);
+  });
+
+  it('given a live own stream, should record against its conversation, not its messageId', async () => {
+    const before = readStopEpoch('conv-record-2');
+    const stream = { messageId: 'msg-r2', conversationId: 'conv-record-2', isOwn: true } as ActiveStream;
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: stream, pendingSendConversationId: null }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-2')).toBe(before + 1);
+  });
+
+  // Nothing live and nothing sent: there is no conversation to name, so there is nothing to
+  // record either — and recording under some placeholder would cancel an unrelated retry.
+  it('given nothing to stop, should record nothing', async () => {
+    const before = readStopEpoch('conv-record-3');
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: null }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-3')).toBe(before);
   });
 });

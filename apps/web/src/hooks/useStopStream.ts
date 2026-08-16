@@ -6,6 +6,7 @@ import {
 } from '@/lib/ai/core/client';
 import { ABORT_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
 import { decideStopAction } from '@/lib/ai/streams/decideStopAction';
+import { recordStopRequest } from '@/lib/ai/streams/stopRequests';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 /**
@@ -195,7 +196,15 @@ export const useStopStream = ({
     // Captured, not re-read: everything after the await must act on the conversation this Stop
     // was pressed for, which by then may no longer be the one on screen.
     const stoppedConversationId = stopTargetConversationId;
-    if (stoppedConversationId !== null) raiseStopping(stoppedConversationId);
+    if (stoppedConversationId !== null) {
+      raiseStopping(stoppedConversationId);
+      // Recorded for the abort the SERVER cannot perform. `markAbortRequested` only marks rows
+      // that already exist as 'streaming', so a Stop pressed before the POST is out matches
+      // nothing and answers `not_found` — while a retry, which spends a whole DELETE round trip
+      // in that window with Stop on screen, would then go on and start the generation anyway.
+      // This is what it checks before dispatching. See stopRequests.
+      recordStopRequest(stoppedConversationId);
+    }
 
     const action = decideStopAction({ activeStream, pendingSendConversationId });
 
