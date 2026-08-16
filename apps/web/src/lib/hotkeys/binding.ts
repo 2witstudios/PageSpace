@@ -84,13 +84,16 @@ export function resolveEventKey(event: BindingEventLike): string {
   if (event.altKey && event.code) {
     if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
     if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
-    // A numpad digit resolves to the digit, so one Alt binding covers both the
-    // numpad and the top row — the parity the `e.key` path gets for free, and
-    // which Alt would otherwise be alone in dropping.
-    if (/^Numpad[0-9]$/.test(event.code)) return event.code.slice(6);
-    // Punctuation, named and navigation keys keep their code ("Slash", "Tab").
-    // Alt bindings are therefore layout-independent, which is the trade Alt
-    // forces on us: e.key carries no usable signal here.
+    // Everything else keeps its code — punctuation, named and navigation keys
+    // ("Slash", "Tab"), and the numpad. Alt bindings are layout-independent as
+    // a result, which is the trade Alt forces on us: e.key carries no usable
+    // signal here.
+    //
+    // The numpad is deliberately not folded into the top-row digit. That would
+    // buy parity with the `e.key` path and cost two real false positives: with
+    // NumLock off the key reports "End", and Alt+numpad is how Windows types a
+    // character by its code point. No stored binding wants it either — the old
+    // capture read `e.key` only, so "Alt+Numpad1" cannot exist in the database.
     if (!MODIFIER_CODE.test(event.code)) return event.code;
     return '';
   }
@@ -195,6 +198,18 @@ export function isCanonicalBinding(binding: string): boolean {
  */
 export function hasModifier(binding: string): boolean {
   return splitBinding(binding).modifiers.length > 0;
+}
+
+/**
+ * True when a stored binding can still fire.
+ *
+ * One rule in one place: the store decides what to honour with it, the PATCH
+ * route decides what to accept with it, and the settings page decides which
+ * rows are safe to delete with it. `''` means "disabled" and is deliberate, so
+ * callers that allow a disable check for it before asking.
+ */
+export function isUsableBinding(binding: string): boolean {
+  return isCanonicalBinding(binding) && hasModifier(binding);
 }
 
 /**

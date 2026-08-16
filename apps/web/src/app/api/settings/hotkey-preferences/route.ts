@@ -6,7 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
-import { hasModifier, isCanonicalBinding } from '@/lib/hotkeys/binding';
+import { isUsableBinding } from '@/lib/hotkeys/binding';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -64,7 +64,7 @@ export async function PATCH(request: Request) {
 
     // An empty binding disables the hotkey. Anything else must be in the
     // canonical format so it can actually match a key event.
-    if (binding !== '' && (!isCanonicalBinding(binding) || !hasModifier(binding))) {
+    if (binding !== '' && !isUsableBinding(binding)) {
       return NextResponse.json(
         { error: 'Binding must be a supported key combination with at least one modifier' },
         { status: 400 }

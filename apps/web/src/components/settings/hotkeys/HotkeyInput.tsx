@@ -3,7 +3,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { eventToBinding, formatBindingForDisplay, hasModifier } from '@/lib/hotkeys/binding';
+import {
+  eventToBinding,
+  formatBindingForDisplay,
+  hasModifier,
+  resolveEventKey,
+} from '@/lib/hotkeys/binding';
 import { useIsMac } from '@/hooks/useIsMac';
 
 interface HotkeyInputProps {
@@ -49,8 +54,18 @@ export function HotkeyInput({ initialValue, onSave, onCancel }: HotkeyInputProps
       // recorded here is exactly what will be compared against future presses.
       const captured = eventToBinding(e);
 
-      // Modifiers alone aren't a binding — keep waiting for the main key.
-      if (!captured) return;
+      // `eventToBinding` returns '' for two different reasons. Modifiers alone
+      // mean the user is mid-chord, so keep waiting quietly. But a press that
+      // resolved a main key and was still refused — a dead key, a composed
+      // Option character on a keyboard that reports no e.code — needs saying
+      // out loud, or the widget pulses "Press keys..." forever however many
+      // times they try.
+      if (!captured) {
+        if (resolveEventKey(e)) {
+          setHint('That key cannot be recorded — try a different combination');
+        }
+        return;
+      }
 
       // A bare key would fire against the global listeners while browsing.
       if (!hasModifier(captured)) {

@@ -9,7 +9,7 @@ import { useHotkeyPreferences, updateHotkeyPreference, deleteHotkeyPreference } 
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
 import { getEffectiveBinding, resolvePlatformBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
-import { RESERVED_BINDINGS, formatBindingForDisplay } from '@/lib/hotkeys/binding';
+import { RESERVED_BINDINGS, formatBindingForDisplay, isUsableBinding } from '@/lib/hotkeys/binding';
 import { useIsMac } from '@/hooks/useIsMac';
 import { toast } from 'sonner';
 
@@ -70,11 +70,29 @@ export default function HotkeysSettingsPage() {
   // The stale rows are what make the notice survive a reload — the store is
   // in-memory, so they are the only durable record that the reset happened.
   // Acknowledging is therefore what deletes them.
+  //
+  // Which rows to delete comes from a fresh read, never from `resetHotkeys`:
+  // that list is per-tab and accumulate-only, and SWR does not revalidate on
+  // focus, so a tab left open never learns that another tab already re-bound
+  // the shortcut. Deleting from the stale list would throw away the binding
+  // the user had just set.
   const handleDismissResetNotice = async () => {
-    const stale = [...resetHotkeys];
-    dismissResetNotice();
-    await Promise.allSettled(stale.map((id) => deleteHotkeyPreference(id)));
-    mutate();
+    try {
+      const fresh = await mutate();
+      const unusable = (fresh?.preferences ?? []).filter(
+        ({ binding }) => binding !== '' && !isUsableBinding(binding)
+      );
+
+      dismissResetNotice();
+      await Promise.all(unusable.map(({ hotkeyId }) => deleteHotkeyPreference(hotkeyId)));
+      mutate();
+    } catch {
+      // The notice is rebuilt from the payload on the next load, so a failure
+      // here means it comes back. Say so rather than letting it reappear on
+      // its own and look like the button did nothing.
+      toast.error('Could not dismiss the notice — please try again');
+      mutate();
+    }
   };
 
   const handleReset = async (hotkeyId: string) => {

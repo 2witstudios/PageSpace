@@ -62,6 +62,27 @@ describe('HotkeyInput', () => {
     expect(screen.getByText('Disabled')).toBeDefined();
   });
 
+  it('given a press that cannot be recorded, should say so rather than pulse forever', () => {
+    // A dead key resolves a main key ("Dead") but is refused by validation, so
+    // it captures as ''. Without a hint that is indistinguishable from having
+    // pressed nothing, however many times the user tries.
+    render(<HotkeyInput initialValue="Meta+W" onSave={onSave} onCancel={onCancel} />);
+
+    press({ key: 'Dead', code: 'Backquote', ctrlKey: true });
+
+    expect(screen.getByText('That key cannot be recorded — try a different combination')).toBeDefined();
+    expect(screen.getByText('Press keys...')).toBeDefined();
+  });
+
+  it('given modifiers alone, should wait quietly for the main key', () => {
+    render(<HotkeyInput initialValue="Meta+W" onSave={onSave} onCancel={onCancel} />);
+
+    press({ key: 'Control', code: 'ControlLeft', ctrlKey: true });
+
+    expect(screen.queryByText(/cannot be recorded/)).toBeNull();
+    expect(screen.getByText('Press keys...')).toBeDefined();
+  });
+
   it('given a bare letter, should keep capturing and ask for a modifier', () => {
     render(<HotkeyInput initialValue="Meta+W" onSave={onSave} onCancel={onCancel} />);
 

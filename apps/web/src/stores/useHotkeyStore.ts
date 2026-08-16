@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
 import {
-  hasModifier,
-  isCanonicalBinding,
   isMacPlatform,
+  isUsableBinding,
   resolveEventKey,
   splitBinding,
 } from '@/lib/hotkeys/binding';
@@ -55,7 +54,7 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
       // character ("Alt+Π"), which never matched anything and cannot be traced
       // back to a physical key. Everything else — including shifted punctuation
       // and long-tail named keys — still matches and is kept untouched.
-      if (!hasModifier(binding) || !isCanonicalBinding(binding)) {
+      if (!isUsableBinding(binding)) {
         wasReset.push(hotkeyId);
         continue;
       }

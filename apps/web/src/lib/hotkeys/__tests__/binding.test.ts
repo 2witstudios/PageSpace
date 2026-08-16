@@ -4,6 +4,7 @@ import {
   formatBindingForDisplay,
   hasModifier,
   isCanonicalBinding,
+  isUsableBinding,
   resolveEventKey,
 } from '../binding';
 import { HOTKEY_REGISTRY } from '../registry';
@@ -144,12 +145,13 @@ describe('capture and validation agree', () => {
       const event = keyEvent(press as unknown as Partial<KeyboardEvent> & { key: string });
       const captured = eventToBinding(event);
 
-      // `eventToBinding` refuses anything non-canonical, so asserting
-      // `isCanonicalBinding(captured)` here would be a tautology. The two legs
-      // worth asserting are that the press was recordable at all, and that the
-      // runtime matcher fires on the string that was recorded.
+      // Three legs, one per consumer of the string: the widget can record it,
+      // the PATCH validator accepts it, and the runtime matcher fires on it.
+      // `eventToBinding` guarantees the middle one internally, so on its own
+      // that assertion would be a tautology — but it is the only place the
+      // table checks the API's actual gate, so it stays alongside the matcher.
       expect(captured, 'should capture something').not.toBe('');
-      expect(hasModifier(captured), `${captured} should carry a modifier`).toBe(true);
+      expect(isUsableBinding(captured), `${captured} should pass the API's gate`).toBe(true);
       expect(matchesKeyEvent(captured, event), `${captured} should match its own press`).toBe(true);
     });
   }
@@ -199,11 +201,11 @@ describe('isCanonicalBinding', () => {
     expect(isCanonicalBinding('Ctrl++')).toBe(true);
   });
 
-  it('given an Alt binding on a digit, should fire from the numpad as well', () => {
-    // The e.key path gives numpad parity for free; Alt resolves through e.code,
-    // so it has to map Numpad1 back to the digit or the same rebind would
-    // silently drop the numpad half.
-    expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Numpad1' }))).toBe('1');
+  it('given an Alt binding on the numpad, should keep the numpad key distinct', () => {
+    // Folding Numpad1 into "1" would buy parity with the e.key path and cost
+    // two false positives: with NumLock off the key reports "End", and
+    // Alt+numpad is how Windows types a character by its code point.
+    expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Numpad1' }))).toBe('Numpad1');
     expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Digit1' }))).toBe('1');
   });
 
