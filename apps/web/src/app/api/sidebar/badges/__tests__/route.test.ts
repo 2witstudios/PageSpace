@@ -214,8 +214,8 @@ describe('GET /api/sidebar/badges — channels', () => {
     expect(await getChannels()).toBe(3);
     // and every candidate was actually evaluated, none dropped
     const evaluated = vi
-      .mocked(getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>)
-      .mock.calls.flatMap((call) => call[1] as string[]);
+      .mocked(getBatchPagePermissions)
+      .mock.calls.flatMap((call) => call[1]);
     expect(evaluated).toHaveLength(rows.length);
     expect(evaluated).toContain('ch_visible');
   });

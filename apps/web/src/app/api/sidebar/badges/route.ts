@@ -45,6 +45,16 @@ const PERMISSION_BATCH_SIZE = 200;
  * because this endpoint is hit on every page load, and one message in an
  * N-member drive schedules N of these.
  *
+ * `user_channels` is a cheap candidate filter, not the access decision — that
+ * stays with getBatchPagePermissions below. It must therefore be no NARROWER
+ * than the real rules or channels vanish before anyone asks about them, which
+ * is why a page_permissions grant qualifies on its own: an explicit grant beats
+ * membership in resolvePagePermissionRow, and sharing a single channel with
+ * someone outside the drive is exactly what that path is for. It deliberately
+ * ignores `expiresAt` and over-includes instead — an expired grant is denied a
+ * few lines later by the helper that owns expiry, and matching the ORM's
+ * timestamp binding by hand in raw SQL is how timezone bugs get written.
+ *
  * A `mute` filter, when one exists, belongs as another predicate on
  * `user_channels` — nothing else here needs to change for it.
  */
@@ -55,9 +65,15 @@ async function countChannelUnread(userId: string): Promise<number> {
       FROM pages p
       INNER JOIN drives d ON d.id = p."driveId"
       LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+      LEFT JOIN page_permissions pp
+        ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
       WHERE p.type = 'CHANNEL'
         AND p."isTrashed" = false
-        AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+        AND (
+          d."ownerId" = ${userId}
+          OR dm."userId" IS NOT NULL
+          OR pp."userId" IS NOT NULL
+        )
     )
     SELECT uc.id, x.unread_count
     FROM user_channels uc

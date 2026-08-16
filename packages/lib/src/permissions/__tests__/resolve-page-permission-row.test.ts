@@ -118,5 +118,23 @@ describe('resolvePagePermissionRow', () => {
       // Custom roles never confer delete.
       expect(resolved?.canDelete).toBe(false);
     });
+
+    it('falls back to the custom role drive-wide grant when the page has no entry', () => {
+      // resolveCustomRolePermissions takes two inputs — the per-page entry and
+      // the drive-wide default. Only the former is exercised above, and the
+      // fallback is the half a second implementation is likeliest to drop.
+      const resolved = resolvePagePermissionRow(
+        row({
+          memberRole: 'MEMBER',
+          isPrivate: true,
+          customRolePerms: {},
+          customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: false },
+        }),
+        USER
+      );
+      expect(resolved?.canView).toBe(true);
+      expect(resolved?.canEdit).toBe(true);
+      expect(resolved?.canDelete).toBe(false);
+    });
   });
 });

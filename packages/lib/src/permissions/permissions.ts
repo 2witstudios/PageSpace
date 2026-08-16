@@ -1146,6 +1146,14 @@ export async function getBatchPagePermissions(
 }
 
 /**
+ * Chunk size for the candidate list. Callers build it from drive membership,
+ * which is unbounded — the channel fan-out's own findMany carries a lint
+ * exemption saying so — and a whole drive's worth of ids in one `IN` list is
+ * the thing to avoid. Mirrors PERMISSION_BATCH_SIZE in the sidebar badges route.
+ */
+const VIEWER_BATCH_SIZE = 200;
+
+/**
  * Which of `candidateUserIds` can view `pageId` — the inverse of
  * getBatchPagePermissions, for fan-out paths that must decide who to notify.
  *
@@ -1161,58 +1169,61 @@ export async function getUsersWhoCanViewPage(
   if (candidateUserIds.length === 0) return viewers;
 
   try {
-    const rows = await db
-      .select({
-        pageId: pages.id,
-        userId: users.id,
-        isTrashed: pages.isTrashed,
-        isPrivate: pages.isPrivate,
-        pageType: pages.type,
-        driveOwnerId: drives.ownerId,
-        memberRole: driveMembers.role,
-        explicitCanView: pagePermissions.canView,
-        explicitCanEdit: pagePermissions.canEdit,
-        explicitCanShare: pagePermissions.canShare,
-        explicitCanDelete: pagePermissions.canDelete,
-        customRolePerms: driveRoles.permissions,
-        customRoleDriveWidePerms: driveRoles.driveWidePermissions,
-      })
-      .from(pages)
-      // One row per candidate user for this single page, so every candidate is
-      // evaluated even when they have no membership or grant rows at all.
-      .innerJoin(users, inArray(users.id, candidateUserIds))
-      .leftJoin(drives, eq(drives.id, pages.driveId))
-      .leftJoin(
-        driveMembers,
-        and(
-          eq(driveMembers.driveId, pages.driveId),
-          eq(driveMembers.userId, users.id),
-          isNotNull(driveMembers.acceptedAt)
-        )
-      )
-      .leftJoin(
-        pagePermissions,
-        and(
-          eq(pagePermissions.pageId, pages.id),
-          eq(pagePermissions.userId, users.id),
-          or(
-            isNull(pagePermissions.expiresAt),
-            gt(pagePermissions.expiresAt, new Date())
+    for (let i = 0; i < candidateUserIds.length; i += VIEWER_BATCH_SIZE) {
+      const chunk = candidateUserIds.slice(i, i + VIEWER_BATCH_SIZE);
+      const rows = await db
+        .select({
+          pageId: pages.id,
+          userId: users.id,
+          isTrashed: pages.isTrashed,
+          isPrivate: pages.isPrivate,
+          pageType: pages.type,
+          driveOwnerId: drives.ownerId,
+          memberRole: driveMembers.role,
+          explicitCanView: pagePermissions.canView,
+          explicitCanEdit: pagePermissions.canEdit,
+          explicitCanShare: pagePermissions.canShare,
+          explicitCanDelete: pagePermissions.canDelete,
+          customRolePerms: driveRoles.permissions,
+          customRoleDriveWidePerms: driveRoles.driveWidePermissions,
+        })
+        .from(pages)
+        // One row per candidate user for this single page, so every candidate is
+        // evaluated even when they have no membership or grant rows at all.
+        .innerJoin(users, inArray(users.id, chunk))
+        .leftJoin(drives, eq(drives.id, pages.driveId))
+        .leftJoin(
+          driveMembers,
+          and(
+            eq(driveMembers.driveId, pages.driveId),
+            eq(driveMembers.userId, users.id),
+            isNotNull(driveMembers.acceptedAt)
           )
         )
-      )
-      .leftJoin(
-        driveRoles,
-        and(
-          eq(driveRoles.id, driveMembers.customRoleId),
-          eq(driveRoles.driveId, pages.driveId)
+        .leftJoin(
+          pagePermissions,
+          and(
+            eq(pagePermissions.pageId, pages.id),
+            eq(pagePermissions.userId, users.id),
+            or(
+              isNull(pagePermissions.expiresAt),
+              gt(pagePermissions.expiresAt, new Date())
+            )
+          )
         )
-      )
-      .where(eq(pages.id, pageId));
+        .leftJoin(
+          driveRoles,
+          and(
+            eq(driveRoles.id, driveMembers.customRoleId),
+            eq(driveRoles.driveId, pages.driveId)
+          )
+        )
+        .where(eq(pages.id, pageId));
 
-    for (const row of rows) {
-      if (resolvePagePermissionRow(row, row.userId)?.canView) {
-        viewers.add(row.userId);
+      for (const row of rows) {
+        if (resolvePagePermissionRow(row, row.userId)?.canView) {
+          viewers.add(row.userId);
+        }
       }
     }
   } catch (error) {

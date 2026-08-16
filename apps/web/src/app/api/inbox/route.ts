@@ -61,10 +61,20 @@ export async function GET(request: Request) {
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
           LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          -- Candidate filter only; getBatchPagePermissions below is the access
+          -- decision. An explicit grant beats membership there, so a channel
+          -- shared with someone outside the drive must survive to be asked
+          -- about. Expiry is deliberately left to that helper.
+          LEFT JOIN page_permissions pp
+            ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
-            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+            AND (
+              d."ownerId" = ${userId}
+              OR dm."userId" IS NOT NULL
+              OR pp."userId" IS NOT NULL
+            )
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -236,9 +246,16 @@ export async function GET(request: Request) {
             FROM pages p
             INNER JOIN drives d ON d.id = p."driveId"
             LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+            -- Candidate filter only; see the drive-scoped query above.
+            LEFT JOIN page_permissions pp
+              ON pp."pageId" = p.id AND pp."userId" = ${userId} AND pp."canView" = true
             WHERE p.type = 'CHANNEL'
               AND p."isTrashed" = false
-              AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+              AND (
+                d."ownerId" = ${userId}
+                OR dm."userId" IS NOT NULL
+                OR pp."userId" IS NOT NULL
+              )
           ),
           channel_last_messages AS (
             SELECT DISTINCT ON (cm."pageId")
