@@ -22,21 +22,41 @@ const fetcher = async (url: string): Promise<SidebarBadges> => {
 
 const EMPTY: SidebarBadges = { dms: 0, channels: 0, files: 0, tasks: 0, calendar: 0 };
 
+const SOCKET_EVENTS = [
+  'notification:new',
+  'inbox:dm_updated',
+  'inbox:channel_updated',
+  'inbox:thread_updated',
+  'inbox:read_status_changed',
+] as const;
+
+const REVALIDATE_DEBOUNCE_MS = 250;
+
 export function useSidebarBadges(): SidebarBadges {
   const socket = useSocket();
   const { data, mutate } = useSWR<SidebarBadges>('/api/sidebar/badges', fetcher);
 
-  // Revalidate when socket events arrive (new notifications, DM updates)
+  // Revalidate when socket events arrive. `inbox:channel_updated` is the one
+  // that fans out to every viewable member on a new channel message — without
+  // it the Channels badge only moved on mentions and stayed stale until reload.
+  //
+  // Debounced because channel traffic is burstier than DM/notification traffic
+  // and each event triggers a full /api/sidebar/badges refetch; undebounced, a
+  // busy channel fires one request per message.
   useEffect(() => {
     if (!socket) return;
-    const revalidate = () => void mutate();
-    socket.on('notification:new', revalidate);
-    socket.on('inbox:dm_updated', revalidate);
-    socket.on('inbox:read_status_changed', revalidate);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const revalidate = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void mutate();
+      }, REVALIDATE_DEBOUNCE_MS);
+    };
+    for (const event of SOCKET_EVENTS) socket.on(event, revalidate);
     return () => {
-      socket.off('notification:new', revalidate);
-      socket.off('inbox:dm_updated', revalidate);
-      socket.off('inbox:read_status_changed', revalidate);
+      if (timer) clearTimeout(timer);
+      for (const event of SOCKET_EVENTS) socket.off(event, revalidate);
     };
   }, [socket, mutate]);
 
