@@ -46,7 +46,10 @@ const PERMISSION_BATCH_SIZE = 200;
  * N-member drive schedules N of these.
  *
  * `user_channels` is a cheap candidate filter, not the access decision — that
- * stays with getBatchPagePermissions below. It must therefore be no NARROWER
+ * stays with getBatchPagePermissions below. Its join and predicate are shared
+ * verbatim with both channel queries in apps/web/src/app/api/inbox/route.ts,
+ * which is what makes this badge and those pills agree about which channels
+ * exist; change one and change all three. It must therefore be no NARROWER
  * than the real rules or channels vanish before anyone asks about them, which
  * is why a page_permissions grant qualifies on its own: an explicit grant beats
  * membership in resolvePagePermissionRow, and sharing a single channel with

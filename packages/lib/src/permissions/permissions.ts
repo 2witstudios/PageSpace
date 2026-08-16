@@ -980,8 +980,12 @@ export interface PagePermissionRow {
   explicitCanEdit: boolean | null;
   explicitCanShare: boolean | null;
   explicitCanDelete: boolean | null;
-  customRolePerms: unknown;
-  customRoleDriveWidePerms: unknown;
+  // Typed, not `unknown`: drive_roles.permissions and .driveWidePermissions
+  // carry $type annotations that are structurally CustomRolePerms and PagePerm,
+  // so both selects already yield these — nullable because they arrive through a
+  // leftJoin. Declaring them here keeps the decision function free of casts.
+  customRolePerms: CustomRolePerms | null;
+  customRoleDriveWidePerms: PagePerm | null;
 }
 
 /**
@@ -1021,10 +1025,11 @@ export function resolvePagePermissionRow(
   }
 
   if (row.customRolePerms) {
-    const perms = row.customRolePerms as CustomRolePerms;
-    const driveWide = row.customRoleDriveWidePerms as PagePerm | null;
     const resolved = resolveCustomRolePermissions(
-      { permissions: perms, driveWidePermissions: driveWide },
+      {
+        permissions: row.customRolePerms,
+        driveWidePermissions: row.customRoleDriveWidePerms,
+      },
       row.pageId,
     );
     if (resolved !== null) {
@@ -1227,7 +1232,7 @@ export async function getUsersWhoCanViewPage(
       }
     }
   } catch (error) {
-    loggers.api.error('[BATCH_PERMISSIONS] Error resolving page viewers', {
+    loggers.api.error('[PAGE_VIEWERS] Error resolving page viewers', {
       pageId,
       candidateCount: candidateUserIds.length,
       error: error instanceof Error ? error.message : String(error),

@@ -251,7 +251,11 @@ export async function GET(request: Request) {
             FROM pages p
             INNER JOIN drives d ON d.id = p."driveId"
             LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
-            -- Candidate filter only; see the drive-scoped query above.
+            -- Candidate filter only. Same join and predicate as the drive-scoped
+            -- query above and as countChannelUnread in
+            -- apps/web/src/app/api/sidebar/badges/route.ts, which is why the nav
+            -- badge and these pills agree about which channels exist; change one
+            -- and change all three.
             LEFT JOIN page_permissions pp
               ON pp."pageId" = p.id
               AND pp."userId" = ${userId}
