@@ -1,0 +1,1 @@
+ALTER TABLE "ai_stream_sessions" ADD COLUMN "reap_claimed_at" timestamp;

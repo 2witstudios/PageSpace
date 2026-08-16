@@ -75,16 +75,12 @@ export const takeOverConversationStreams = async ({
         // The stream's OWNER — not the caller. See the abort loop below.
         userId: aiStreamSessions.userId,
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
+        // Enough to decide LIVENESS and to abort as the owner, and deliberately nothing more.
+        // The content columns (`parts`, `rawPartsCount`) used to ride along for the
+        // materialization branch; the materializer reads them itself now, as part of the same
+        // statement that claims the row, so carrying a stale copy from here would only invite
+        // someone to act on it.
         startedAt: aiStreamSessions.startedAt,
-        // The debounced parts snapshot — needed only if this row ends up in `reconcile` and gets
-        // materialized into an interrupted message. Selected unconditionally since it rides the
-        // same query as everything else here and there are at most a handful of in-flight rows
-        // per conversation.
-        parts: aiStreamSessions.parts,
-        // How many frames that snapshot reflects. Rides the same query for the same reason,
-        // and is what lets the materializer tell a SHORT durable frame log (a writer that
-        // gave up early) from a complete one — see `recoverParts`.
-        rawPartsCount: aiStreamSessions.rawPartsCount,
       })
       .from(aiStreamSessions)
       .where(and(
@@ -160,17 +156,10 @@ export const takeOverConversationStreams = async ({
       // landed, and reporting every id as reconciled regardless would be exactly the misreporting
       // bug this module's own docblock warns against.
       const materializedIds = (await Promise.all(provablyDead.map(async (messageId) => {
-        const row = rowById.get(messageId);
-        if (!row) return null;
-        const ok = await materializeInterruptedStream({
-          messageId,
-          channelId,
-          conversationId,
-          userId: row.userId,
-          parts: row.parts,
-          rawPartsCount: row.rawPartsCount,
-          startedAt: row.startedAt,
-        });
+        // messageId only: the materializer claims the row itself, so what it acts on is the row
+        // as it stood when the claim was won rather than the copy this function SELECTed before
+        // spending a whole abort round trip. See stream-reap-claim.ts.
+        const ok = await materializeInterruptedStream({ messageId });
         return ok ? messageId : null;
       }))).filter((id): id is string => id !== null);
 

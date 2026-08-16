@@ -275,16 +275,18 @@ export const awaitAbortSettled = async ({
  * Marking a running stream 'aborted' and wiping its parts would hide it from every subscriber and
  * destroy its only crash-recovery snapshot, while it kept on generating.
  *
- * Re-selects the full row (channelId, conversationId, userId, parts) fresh rather than threading
- * them through `decideAbortOutcome`'s messageId-only contract — that keeps this the only place
- * that needs the wider column set, and re-applies the same `status='streaming'` guard against
- * whatever landed between the caller's read and here.
+ * NO LONGER RE-SELECTS THE ROW. It used to run its own wide SELECT (channelId, conversationId,
+ * userId, parts, rawPartsCount, startedAt) and hand the result to the materializer — one of
+ * three identical copies of that query across the reap paths, each of them acting on a row that
+ * was already seconds old by the time the destructive write landed. The materializer now takes
+ * the messageId and claims the row itself, so the read and the fence are the same statement.
+ * See stream-reap-claim.ts.
  *
  * Returns the messageIds actually driven terminal — a subset of `messageIds`, never assumed to
- * be all of them. `materializeInterruptedStream` never throws but can still fail partway (and
- * report so via its own return value); a caller that reports every requested id as "reconciled"
- * regardless of whether the row read even found it, or the write actually landed, would silently
- * misreport a retryable ghost row as handled.
+ * be all of them. `materializeInterruptedStream` never throws but can still fail partway, be
+ * fenced off, or find nothing to claim (and reports so via its own return value); a caller that
+ * reported every requested id as "reconciled" regardless would silently misreport a retryable
+ * ghost row as handled.
  */
 export const reconcileDeadStreamRows = async ({
   messageIds,
@@ -293,42 +295,13 @@ export const reconcileDeadStreamRows = async ({
 }): Promise<string[]> => {
   if (messageIds.length === 0) return [];
 
-  let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[]; rawPartsCount: number; startedAt: Date }[];
-  try {
-    rows = await db
-      .select({
-        messageId: aiStreamSessions.messageId,
-        channelId: aiStreamSessions.channelId,
-        conversationId: aiStreamSessions.conversationId,
-        userId: aiStreamSessions.userId,
-        parts: aiStreamSessions.parts,
-        // Lets the materializer compare the snapshot's reach against the durable frame log's
-        // before choosing between them — see `recoverParts`.
-        rawPartsCount: aiStreamSessions.rawPartsCount,
-        startedAt: aiStreamSessions.startedAt,
-      })
-      .from(aiStreamSessions)
-      .where(and(
-        inArray(aiStreamSessions.messageId, [...messageIds]),
-        // Conditional on status, so a stream that terminated on its own between the read and here
-        // is not retroactively relabelled.
-        eq(aiStreamSessions.status, 'streaming'),
-      ));
-  } catch (error) {
-    loggers.ai.warn('cross-instance abort: could not read dead stream row(s) for materialization', {
-      messageIds,
-      error: error instanceof Error ? error.message : 'unknown',
-    });
-    return [];
-  }
-
   // Concurrent, not sequential — `materializeInterruptedStream` never throws (it catches and
   // logs its own DB failures per step) and each row is independent, so there is no correctness
   // reason to serialize a mass-crash-recovery batch (potentially dozens of rows after an
   // instance dies) into N sequential round trips.
-  const results = await Promise.all(rows.map(async (row) => {
-    const ok = await materializeInterruptedStream(row);
-    return ok ? row.messageId : null;
+  const results = await Promise.all(messageIds.map(async (messageId) => {
+    const ok = await materializeInterruptedStream({ messageId });
+    return ok ? messageId : null;
   }));
 
   return results.filter((id): id is string => id !== null);

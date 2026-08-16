@@ -31,6 +31,23 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+/**
+ * The session row `stream-join-context` falls back to on a registry miss.
+ *
+ * Defaults to "no row", so every pre-existing case keeps exercising exactly the path it did:
+ * the registry answers, or nothing does. The cross-instance cases opt in.
+ */
+const mockSessionRow = vi.fn<() => Promise<unknown[]>>();
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: () => mockSessionRow() }),
+      }),
+    }),
+  },
+}));
+
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -109,6 +126,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     // Default: the caller owns the stream (canSubscribeToStream short-circuits on that).
     mockCanSubscribeToStream.mockResolvedValue(true);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    mockSessionRow.mockResolvedValue([]);
   });
 
   describe('authentication', () => {
@@ -140,7 +158,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
   describe('stream lookup', () => {
     it('given an unknown messageId, should return 404', async () => {
-      // Registry has no entry for mockMessageId
+      // No registry entry AND no session row — the only honest 404.
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(response.status).toBe(404);
@@ -154,6 +172,91 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  /**
+   * THE ORDERING THIS LEAF EXISTS TO FIX.
+   *
+   * The registry lookup used to sit AHEAD of the authz block — structurally, because the authz
+   * inputs (pageId, conversationId, the stream's owner) lived in the same in-memory entry as
+   * the frames. At N>1 a registry miss is the ORDINARY case, so an entire class of live streams
+   * 404'd before anyone asked who the caller was. These pin that a DB-sourced context runs the
+   * SAME authz block, verbatim, over the SAME `StreamMeta` shape.
+   */
+  describe('cross-instance authorization (registry miss, session row present)', () => {
+    const remoteRow = (over: Record<string, unknown> = {}) => [{
+      channelId: mockPageId,
+      userId: 'user-other',
+      displayName: 'Someone Else',
+      conversationId: mockConversationId,
+      browserSessionId: 'session-other',
+      status: 'streaming',
+      ...over,
+    }];
+
+    it('runs canUserViewPage against the pageId the ROW carries, not an in-memory entry', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+    });
+
+    it('runs canSubscribeToStream with the row\'s OWNER, so a co-member\'s private conversation is still private', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
+        userId: mockUserId,
+        streamOwnerId: 'user-other',
+        conversationId: mockConversationId,
+      });
+    });
+
+    it('given no page access to a remote stream, 403s — the same audited denial a local one gets', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('given page access but no conversation access, 404s without an audit denial', async () => {
+      // Deliberately NOT an audited 403: a member asking for a co-member's private stream is
+      // the ordinary consequence of a page-wide broadcast, and auditing it would write a row
+      // per member per assistant message.
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(404);
+      expect(auditRequest).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'authz.access.denied' }),
+      );
+    });
+
+    it('given a global-assistant channel owned by someone else, 403s on the synthetic channel id', async () => {
+      // `parseGlobalChannelId` short-circuits page access for `user:<id>:global` channels, and
+      // it now runs over a channelId that came from the DB. A row belonging to another user's
+      // global assistant must not be joinable.
+      mockSessionRow.mockResolvedValue(remoteRow({ channelId: 'user:user-other:global' }));
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('given a locally-owned channel, never reads the session row at all', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockSessionRow).not.toHaveBeenCalled();
     });
   });
 

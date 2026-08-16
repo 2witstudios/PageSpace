@@ -317,7 +317,12 @@ export const createStreamLifecycle = async (
     // agreeing; leaving them would let a recovery materialize the superseded generation's
     // reply under a messageId whose row already says 'aborted'. Fire-and-forget, like the rest
     // of this branch's cleanup: it never rejects, and the retention backstop covers a failure.
-    void releaseFramesForMessage(messageId);
+    //
+    // `own-superseded-attempt`, not a reap claim: this is the generation path itself discarding
+    // an attempt it superseded a few lines ago, in the same request. There is no other party to
+    // fence against — and no claim to take either, since the row's heartbeat is seconds old, so
+    // a reap claim would (correctly) refuse.
+    void releaseFramesForMessage(messageId, { kind: 'own-superseded-attempt' });
 
     // Nothing has subscribed yet — the channel opened a moment ago and broadcastAiStreamStart
     // has not fired — so closing it here is a plain cleanup, not a notification to a live client.

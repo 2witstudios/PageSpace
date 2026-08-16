@@ -147,7 +147,17 @@ export const buildCSPPolicy = (nonce: string): string => {
   // (packages/lib/src/canvas/csp.ts) — so author-linked Google Fonts stylesheets
   // need to be allowed here too, not just in the canvas baseline policy.
   const styleSrc = ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'];
-  const frameSrc: string[] = [];
+  // `'self'` FIRST and unconditionally. The in-app canvas view frames a real
+  // same-origin URL (`/api/canvas/[pageId]/preview`) rather than inlining the
+  // document with `srcDoc`, and `frame-src` does NOT fall back to `default-src`
+  // once it is present — so the moment any external origin is appended below,
+  // an allowlist without `'self'` blocks every canvas page from rendering.
+  // That is exactly what happened in cloud, where the Google/Stripe entries are
+  // added and nothing else was: the directive existed, `'self'` was not in it.
+  // Onprem and tenant were unaffected only by accident — the list stayed empty
+  // there, the directive was omitted, and the `default-src 'self'` fallback
+  // carried it.
+  const frameSrc: string[] = ["'self'"];
 
   // Cloud-only: Google and Stripe external origins
   if (IS_CLOUD) {
@@ -180,7 +190,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
-    ...(frameSrc.length > 0 ? { 'frame-src': frameSrc } : {}),
+    'frame-src': frameSrc,
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

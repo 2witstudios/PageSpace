@@ -1,5 +1,4 @@
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
@@ -13,51 +12,33 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
 import { readFrames } from '@/lib/ai/core/frame-log';
 import { releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
+import { claimDeadStream, reapClaimFence, type ReapClaim } from '@/lib/ai/core/stream-reap-claim';
 import { foldChunksToParts } from '@/lib/ai/streams/foldChunksToParts';
 import type { UIMessagePart } from '@/lib/ai/core/stream-channel-registry';
-
-/**
- * An `ai_stream_sessions` row the CALLER has already proven dead (`isProvablyDead` —
- * stream-liveness.ts). This module does not re-derive eligibility; it only re-guards the
- * one invariant that survives even a correct eligibility call: the #2022 race where the old
- * worker's own terminal write lands between the caller's read and this write.
- */
-export interface MaterializableStreamRow {
-  messageId: string;
-  /** The stream's channel — a real pageId for page-chat, or a synthetic `user:<id>:global`
-   *  id for the global assistant (see `parseGlobalChannelId`). Decides which message table
-   *  this row belongs to. */
-  channelId: string;
-  conversationId: string;
-  /** The stream's owner. For a global-assistant row this doubles as `messages.userId`
-   *  (NOT NULL there) — the same field the normal save path already uses. */
-  userId: string;
-  /** The last debounced parts snapshot — possibly stale by up to one checkpoint interval,
-   *  never by more (see PR 1's time-based cadence). The fallback when the durable frame log
-   *  cannot serve this message, and — see `recoverParts` — sometimes the RICHER of the two. */
-  parts: unknown[];
-  /**
-   * How many frames that `parts` snapshot reflects. The comparable measure to the frame log's
-   * own length, and the only thing that can decide which of the two records is further along.
-   *
-   * Optional so a caller that does not project the column degrades to "trust the frame log"
-   * (0) rather than to a crash — the same defensive shape `lastHeartbeatAt` uses in
-   * stream-liveness.ts. Every in-tree caller passes it.
-   */
-  rawPartsCount?: number;
-  /** The stream's actual start time. Used ONLY as the `createdAt` for the defensive
-   *  insert-if-missing branch below (the placeholder row should already exist per PR 2, but a
-   *  failed placeholder insert is the one case this function must still degrade gracefully
-   *  for) — never reap/takeover time, or a recovered reply can sort after a user's later
-   *  follow-up message that was saved in the interim. */
-  startedAt: Date;
-}
 
 /**
  * Turn a provably-dead stream into an honest, terminal assistant message instead of a
  * silent loss.
  *
- * Three things happen, in an order chosen so a failure at any step leaves the row eligible
+ * ── IT TAKES A messageId AND CLAIMS THE ROW ITSELF ──────────────────────────────────────────
+ *
+ * It used to take a wide, pre-read row, and all three callers (`reconcileDeadStreamRows`,
+ * `takeOverConversationStreams`, the `/active-streams` lazy sweep) ran their own SELECT of the
+ * same seven columns to produce one. That was duplication with teeth rather than duplication as
+ * a wart: the row a caller handed in was read seconds before the destructive write landed, so
+ * every caller independently owned the same TOCTOU — and at N>1 the window is exactly where a
+ * live generation on another instance gets destroyed.
+ *
+ * So the claim is taken HERE, and `RETURNING` supplies the row. What gets acted on is what the
+ * row held at the instant the claim was won, in one statement, on Postgres's clock.
+ *
+ * THE CALLER STILL DECIDES ELIGIBILITY. `claimDeadStream`'s SQL predicate is deliberately
+ * narrower than `isProvablyDead` — it cannot cheaply express `heartbeatStoppedAtCap` or
+ * `isBeyondReconcileBackstop`, and a stream still alive at the heartbeat cap looks identical to
+ * a dead one through it. Callers gate on `isProvablyDead` FIRST; the claim is the fence that
+ * makes their (correct, but stale) decision safe to act on. See stream-reap-claim.ts.
+ *
+ * Three things then happen, in an order chosen so a failure at any step leaves the row eligible
  * for the NEXT sweep to retry rather than half-materialized:
  *
  *   1. Build the message payload from the parts snapshot (`buildAssistantPersistencePayload`,
@@ -78,7 +59,17 @@ export interface MaterializableStreamRow {
  *   3. Only once the message write is confirmed: settle the `ai_stream_sessions` row
  *      terminal (`status: 'aborted'`, parts cleared) and broadcast `stream_complete`.
  *      Settling first would let a crashed sweep lose the row's only content — the session
- *      row would read terminal while no terminal message ever got written.
+ *      row would read terminal while no terminal message ever got written. The settle carries
+ *      the reap fence, so a claim that has been superseded — or an owner that started beating
+ *      again after the claim committed — matches zero rows instead of hiding a live stream.
+ *
+ * THE RESIDUAL RACE, named rather than glossed: a heartbeat landing between the claim
+ * committing and the fenced writes is caught by the FENCE, so neither the settle nor the frame
+ * delete lands — but step 2's `messages` write has already happened by then, prematurely
+ * marking the reply `'interrupted'`. That is recoverable and self-healing: the still-live
+ * generation's own `saveUnifiedPageMessage` carries no `setWhere`, so its terminal write
+ * overwrites the premature one with the real content. The row stays `'streaming'` throughout,
+ * so the stream also stays visible, joinable and Stoppable in the meantime.
  *
  * Never throws. Every step logs and degrades — a reap that fails partway must not take
  * down the caller's loop over the rest of its batch (takeover, the abort-mark reconciler,
@@ -111,7 +102,7 @@ export interface MaterializableStreamRow {
  * Global-assistant rows never reach this (a global conversation has no page mention surface,
  * and the global save path has no mentionNotify seam either).
  */
-const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: string): Promise<void> => {
+const notifyMentionsBestEffort = async (row: ReapClaim, content: string): Promise<void> => {
   try {
     // The same readers the live paths use (never re-derived selects, per the reuse rail):
     // pageRepository.findById excludes trashed pages by default, so a page trashed between
@@ -170,11 +161,11 @@ const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: s
  * means equal content, and the log is the losslessly-folded original rather than a snapshot
  * that has already been through a fold.
  */
-const recoverParts = async (row: MaterializableStreamRow): Promise<UIMessagePart[]> => {
+const recoverParts = async (row: ReapClaim): Promise<UIMessagePart[]> => {
   const frames = await readFrames(row.messageId);
   if (frames === null) return row.parts as UIMessagePart[];
 
-  const snapshotFrames = row.rawPartsCount ?? 0;
+  const snapshotFrames = row.rawPartsCount;
   if (frames.length < snapshotFrames) {
     loggers.ai.warn('materializeInterruptedStream: frame log is shorter than the checkpoint — using the snapshot', {
       messageId: row.messageId,
@@ -187,8 +178,23 @@ const recoverParts = async (row: MaterializableStreamRow): Promise<UIMessagePart
   return foldChunksToParts(frames);
 };
 
-export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<boolean> => {
+export const materializeInterruptedStream = async ({
+  messageId,
+  staleAfterMs,
+}: {
+  messageId: string;
+  /** Overrides the staleness horizon the claim is taken at. Tests only — production callers
+   *  share `STREAM_HEARTBEAT_STALE_MS` with `isProvablyDead`, and a caller that widened one
+   *  without the other would gate on a different horizon than it reaps at. */
+  staleAfterMs?: number;
+}): Promise<boolean> => {
   const now = new Date();
+
+  // Nothing below runs without a won claim. A `null` here is not a failure: it means the row
+  // settled itself, its heartbeat is fresh after all, or another instance is already reaping it
+  // — and in all three the correct action is to do nothing.
+  const row = await claimDeadStream({ messageId, staleAfterMs });
+  if (row === null) return false;
 
   try {
     const payload = buildAssistantPersistencePayload(row.messageId, await recoverParts(row));
@@ -277,24 +283,27 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
   // a retry re-reads no frames and falls back to `parts`, which is the same content one fold
   // earlier. Ordering it the other way would leave frames behind on exactly the rows that get
   // retried most.
-  await releaseFramesForMessage(row.messageId);
+  await releaseFramesForMessage(row.messageId, { kind: 'reap-claim', claim: row });
 
   let settled: boolean;
   try {
     const result = await db
       .update(aiStreamSessions)
       .set({ status: 'aborted', completedAt: now, parts: [], rawPartsCount: 0, abortRequestedAt: null })
-      .where(and(
-        eq(aiStreamSessions.messageId, row.messageId),
-        // Conditional so a row that reached a terminal status by some other path between the
-        // caller's read and here is not retroactively relabelled.
-        eq(aiStreamSessions.status, 'streaming'),
-      ));
+      // THE FENCE, not merely `status = 'streaming'`. That predicate alone cannot stop the
+      // write this function exists to make safe: a LIVE owner has not changed its status, so a
+      // reaper that misjudged it would win a status-only CAS every time and settle a generating
+      // stream to `aborted` with `parts: []` — hiding it from /active-streams, making it
+      // unjoinable, and making it un-Stoppable (`markAbortRequested` carries
+      // `eq(status,'streaming')`). `reapClaimFence` adds the two clauses that CAN say no: we
+      // still hold the claim, and the owner has not beaten since we took it.
+      .where(reapClaimFence(row));
     // A conditional UPDATE that matches zero rows does not throw — it succeeds and changes
-    // nothing. That happens when a concurrent reap (another instance's takeover, or a second
-    // sweep racing this one) already settled this exact row first. `rowCount` is the only way
-    // to tell "I settled it" from "someone else already had" — matching the established
-    // pattern for the same class of conditional update (compaction-repository.ts).
+    // nothing. Under the fence that now means one of two things, and BOTH are correct outcomes:
+    // the row already left 'streaming' by another path, or the fence itself said no (the claim
+    // was superseded, or the owner beat again and was never dead). `rowCount` is the only way to
+    // tell "I settled it" from "I was fenced off" — matching the established pattern for the
+    // same class of conditional update (compaction-repository.ts).
     settled = (result.rowCount ?? 0) > 0;
   } catch (error) {
     settled = false;
@@ -304,22 +313,38 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     });
   }
 
-  const streamCompletePayload = {
-    messageId: row.messageId,
-    pageId: row.channelId,
-    conversationId: row.conversationId,
-    aborted: true,
-  };
-  broadcastAiStreamComplete(streamCompletePayload).catch((error) => {
-    loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
+  // ANNOUNCE ONLY WHAT ACTUALLY HAPPENED.
+  //
+  // This broadcast used to be unconditional, which quietly undid the fence it sits behind.
+  // `stream_complete` is not advisory: clients handle it by ending the session, aborting the
+  // join and dropping the live stream entry. So on a fenced-off settle — the case where the
+  // owner beat again and is STILL GENERATING — the row correctly stayed `'streaming'` while
+  // this told every viewer the reply was over. The bubble would vanish mid-generation and not
+  // come back until some later reconciliation, which is the precise user-visible symptom this
+  // whole PR exists to remove, reintroduced two statements after the fix (review finding —
+  // chatgpt-codex-connector, PR #2419).
+  //
+  // Nothing is lost by gating it. `settled === false` has exactly two causes, and neither wants
+  // this event: the fence rejected us (the stream is alive — announcing its end is a lie), or
+  // another path already drove the row terminal (and that path fired its own broadcast).
+  if (settled) {
+    const streamCompletePayload = {
       messageId: row.messageId,
-      error: error instanceof Error ? error.message : 'unknown',
+      pageId: row.channelId,
+      conversationId: row.conversationId,
+      aborted: true,
+    };
+    broadcastAiStreamComplete(streamCompletePayload).catch((error) => {
+      loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
+        messageId: row.messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     });
-  });
-  // Transitional conv-room mirror — same as stream-lifecycle.ts's finish().
-  conversationEvents
-    .streamLifecycleMirror(row.conversationId, 'chat:stream_complete', streamCompletePayload)
-    .catch(() => {});
+    // Transitional conv-room mirror — same as stream-lifecycle.ts's finish().
+    conversationEvents
+      .streamLifecycleMirror(row.conversationId, 'chat:stream_complete', streamCompletePayload)
+      .catch(() => {});
+  }
 
   return settled;
 };
