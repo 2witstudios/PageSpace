@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, or, isNull, isNotNull, gt, inArray } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
+import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
@@ -978,6 +979,87 @@ export async function usersShareDrive(
  * `map.get(pageId)?.canView` without conditional-path handling for missing
  * entries.
  */
+/**
+ * One joined row of page + drive + this user's membership/grants, as selected by
+ * both page-permission queries below.
+ */
+export interface PagePermissionRow {
+  pageId: string;
+  isTrashed: boolean | null;
+  isPrivate: boolean | null;
+  pageType: string | null;
+  driveOwnerId: string | null;
+  memberRole: string | null;
+  explicitCanView: boolean | null;
+  explicitCanEdit: boolean | null;
+  explicitCanShare: boolean | null;
+  explicitCanDelete: boolean | null;
+  customRolePerms: unknown;
+  customRoleDriveWidePerms: unknown;
+}
+
+/**
+ * The page-access decision itself, with no database in it.
+ *
+ * Extracted so the two directions of the same question — "which of these pages
+ * can this user see?" (getBatchPagePermissions) and "which of these users can
+ * see this page?" (getUsersWhoCanViewPage) — resolve through one implementation
+ * and cannot drift apart. They had drifted: the channel inbox fan-out grew its
+ * own recipient query that knew about owners, admins and explicit grants but
+ * not about rule 4 or custom roles, so ordinary drive members silently stopped
+ * receiving events for channels they can plainly read.
+ *
+ * Returns null when the row grants nothing (the caller's default deny stands).
+ */
+export function resolvePagePermissionRow(
+  row: PagePermissionRow,
+  userId: string
+): PermissionLevel | null {
+  if (row.isTrashed) return null;
+
+  const isOwner = row.driveOwnerId === userId;
+  const isAdmin = row.memberRole === 'ADMIN';
+  const isMember = row.memberRole !== null;
+
+  if (isOwner || isAdmin) {
+    return { canView: true, canEdit: true, canShare: true, canDelete: true };
+  }
+
+  if (row.explicitCanView !== null) {
+    return {
+      canView: row.explicitCanView ?? false,
+      canEdit: row.explicitCanEdit ?? false,
+      canShare: row.explicitCanShare ?? false,
+      canDelete: row.explicitCanDelete ?? false,
+    };
+  }
+
+  if (row.customRolePerms) {
+    const perms = row.customRolePerms as CustomRolePerms;
+    const driveWide = row.customRoleDriveWidePerms as PagePerm | null;
+    const resolved = resolveCustomRolePermissions(
+      { permissions: perms, driveWidePermissions: driveWide },
+      row.pageId,
+    );
+    if (resolved !== null) {
+      return { ...resolved, canDelete: false };
+    }
+  }
+
+  // Rule 4: any accepted drive member gets access to non-private pages.
+  // Channels grant canEdit so members can post messages (Discord/Slack semantics).
+  if (isMember && !row.isPrivate) {
+    return {
+      canView: true,
+      canEdit: row.pageType === 'CHANNEL',
+      canShare: false,
+      canDelete: false,
+    };
+  }
+
+  return null;
+}
+
 export async function getBatchPagePermissions(
   userId: string,
   pageIds: string[]
@@ -1046,57 +1128,9 @@ export async function getBatchPagePermissions(
       .where(inArray(pages.id, pageIds));
 
     for (const row of rows) {
-      if (row.isTrashed) {
-        continue;
-      }
-
-      const isOwner = row.driveOwnerId === userId;
-      const isAdmin = row.memberRole === 'ADMIN';
-      const isMember = row.memberRole !== null;
-
-      if (isOwner || isAdmin) {
-        results.set(row.pageId, {
-          canView: true,
-          canEdit: true,
-          canShare: true,
-          canDelete: true,
-        });
-        continue;
-      }
-
-      if (row.explicitCanView !== null) {
-        results.set(row.pageId, {
-          canView: row.explicitCanView ?? false,
-          canEdit: row.explicitCanEdit ?? false,
-          canShare: row.explicitCanShare ?? false,
-          canDelete: row.explicitCanDelete ?? false,
-        });
-        continue;
-      }
-
-      if (row.customRolePerms) {
-        const perms = row.customRolePerms as CustomRolePerms;
-        const driveWide = row.customRoleDriveWidePerms as PagePerm | null;
-        const resolved = resolveCustomRolePermissions(
-          { permissions: perms, driveWidePermissions: driveWide },
-          row.pageId,
-        );
-        if (resolved !== null) {
-          results.set(row.pageId, { ...resolved, canDelete: false });
-          continue;
-        }
-      }
-
-      // Rule 4: any accepted drive member gets access to non-private pages.
-      // Channels grant canEdit so members can post messages (Discord/Slack semantics).
-      if (isMember && !row.isPrivate) {
-        const canEdit = row.pageType === 'CHANNEL';
-        results.set(row.pageId, {
-          canView: true,
-          canEdit,
-          canShare: false,
-          canDelete: false,
-        });
+      const resolved = resolvePagePermissionRow(row, userId);
+      if (resolved) {
+        results.set(row.pageId, resolved);
       }
     }
 
@@ -1109,4 +1143,86 @@ export async function getBatchPagePermissions(
     });
     return results;
   }
+}
+
+/**
+ * Which of `candidateUserIds` can view `pageId` — the inverse of
+ * getBatchPagePermissions, for fan-out paths that must decide who to notify.
+ *
+ * Same joins, pivoted over users instead of pages, and the same decision via
+ * resolvePagePermissionRow, so the two can never disagree about who has access.
+ * Fails closed: on error nobody is returned.
+ */
+export async function getUsersWhoCanViewPage(
+  pageId: string,
+  candidateUserIds: string[]
+): Promise<Set<string>> {
+  const viewers = new Set<string>();
+  if (candidateUserIds.length === 0) return viewers;
+
+  try {
+    const rows = await db
+      .select({
+        pageId: pages.id,
+        userId: users.id,
+        isTrashed: pages.isTrashed,
+        isPrivate: pages.isPrivate,
+        pageType: pages.type,
+        driveOwnerId: drives.ownerId,
+        memberRole: driveMembers.role,
+        explicitCanView: pagePermissions.canView,
+        explicitCanEdit: pagePermissions.canEdit,
+        explicitCanShare: pagePermissions.canShare,
+        explicitCanDelete: pagePermissions.canDelete,
+        customRolePerms: driveRoles.permissions,
+        customRoleDriveWidePerms: driveRoles.driveWidePermissions,
+      })
+      .from(pages)
+      // One row per candidate user for this single page, so every candidate is
+      // evaluated even when they have no membership or grant rows at all.
+      .innerJoin(users, inArray(users.id, candidateUserIds))
+      .leftJoin(drives, eq(drives.id, pages.driveId))
+      .leftJoin(
+        driveMembers,
+        and(
+          eq(driveMembers.driveId, pages.driveId),
+          eq(driveMembers.userId, users.id),
+          isNotNull(driveMembers.acceptedAt)
+        )
+      )
+      .leftJoin(
+        pagePermissions,
+        and(
+          eq(pagePermissions.pageId, pages.id),
+          eq(pagePermissions.userId, users.id),
+          or(
+            isNull(pagePermissions.expiresAt),
+            gt(pagePermissions.expiresAt, new Date())
+          )
+        )
+      )
+      .leftJoin(
+        driveRoles,
+        and(
+          eq(driveRoles.id, driveMembers.customRoleId),
+          eq(driveRoles.driveId, pages.driveId)
+        )
+      )
+      .where(eq(pages.id, pageId));
+
+    for (const row of rows) {
+      if (resolvePagePermissionRow(row, row.userId)?.canView) {
+        viewers.add(row.userId);
+      }
+    }
+  } catch (error) {
+    loggers.api.error('[BATCH_PERMISSIONS] Error resolving page viewers', {
+      pageId,
+      candidateCount: candidateUserIds.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new Set<string>();
+  }
+
+  return viewers;
 }

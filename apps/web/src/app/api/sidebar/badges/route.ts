@@ -15,13 +15,15 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 type ChannelUnreadRow = { id: string; unread_count: string };
 
 /**
- * Bound on channels-with-unread carried back from one badge request. The badge
- * renders "99+" past two digits, so no reachable number of channels changes what
- * the user sees — this only stops an unbounded id list reaching the `inArray` in
- * getBatchPagePermissions (the hazard apps/web/eslint.config.mjs guards for
- * `findMany`, which cannot see a raw `db.execute`).
+ * Chunk size for the permission batch. What needs bounding is the `inArray`
+ * inside getBatchPagePermissions — the hazard apps/web/eslint.config.mjs guards
+ * for `findMany` but cannot see on a raw `db.execute`. Capping the candidate
+ * rows instead would be wrong: the cap would apply before permission filtering,
+ * so a user whose first N channels were all denied would be undercounted, or
+ * report zero, while unread messages they can plainly see sat past the cut.
+ * Chunking bounds each query without dropping any channel.
  */
-const MAX_UNREAD_CHANNELS = 500;
+const PERMISSION_BATCH_SIZE = 200;
 
 /**
  * Total unread channel messages across every drive the user owns or belongs to.
@@ -78,7 +80,6 @@ async function countChannelUnread(userId: string): Promise<number> {
         )
     ) x
     WHERE x.unread_count > 0
-    LIMIT ${MAX_UNREAD_CHANNELS}
   `);
 
   const rows = result.rows;
@@ -86,16 +87,21 @@ async function countChannelUnread(userId: string): Promise<number> {
 
   // Drive membership is not page access: a channel can be permissioned away
   // from a member. Filter through the centralized helper, never hand-rolled SQL.
-  const permissions = await getBatchPagePermissions(
-    userId,
-    rows.map((row) => row.id)
-  );
+  let total = 0;
+  for (let i = 0; i < rows.length; i += PERMISSION_BATCH_SIZE) {
+    const chunk = rows.slice(i, i + PERMISSION_BATCH_SIZE);
+    const permissions = await getBatchPagePermissions(
+      userId,
+      chunk.map((row) => row.id)
+    );
+    for (const row of chunk) {
+      if (permissions.get(row.id)?.canView) {
+        total += Number(row.unread_count) || 0;
+      }
+    }
+  }
 
-  return rows.reduce(
-    (sum, row) =>
-      permissions.get(row.id)?.canView ? sum + (Number(row.unread_count) || 0) : sum,
-    0
-  );
+  return total;
 }
 
 export async function GET(req: Request) {

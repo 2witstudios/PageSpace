@@ -196,6 +196,30 @@ describe('GET /api/sidebar/badges — channels', () => {
     expect(badges.calendar).toBe(SELECT_COUNTS[3]);
   });
 
+  it('counts viewable channels beyond the permission batch size', async () => {
+    // The bound is on the permission query, not on the candidate set. Capping
+    // candidates would undercount — or report zero — when the denied channels
+    // happen to sort first, while readable unread sat past the cut.
+    const DENIED = 250; // > PERMISSION_BATCH_SIZE, so the readable one lands in a later chunk
+    const rows = [
+      ...Array.from({ length: DENIED }, (_, i) => ({ id: `ch_denied_${i}`, unread_count: '7' })),
+      { id: 'ch_visible', unread_count: '3' },
+    ];
+    withUnreadRows(rows);
+    setPermissions({
+      ...Object.fromEntries(rows.map((r) => [r.id, false])),
+      ch_visible: true,
+    });
+
+    expect(await getChannels()).toBe(3);
+    // and every candidate was actually evaluated, none dropped
+    const evaluated = vi
+      .mocked(getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls.flatMap((call) => call[1] as string[]);
+    expect(evaluated).toHaveLength(rows.length);
+    expect(evaluated).toContain('ch_visible');
+  });
+
   it('keeps each badge wired to its own query', async () => {
     // Guards the positional destructuring of the Promise.all, which this
     // route's change had to renumber. Each db.select() resolves to a distinct

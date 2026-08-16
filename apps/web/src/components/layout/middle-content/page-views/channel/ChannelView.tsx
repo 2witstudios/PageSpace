@@ -206,9 +206,15 @@ function ChannelView({ page }: ChannelViewProps) {
     }, MARK_READ_DEBOUNCE_MS);
   }, [markChannelRead]);
 
+  // Keyed on page.id, not [], because CenterPanel reuses this component across
+  // channels: a timer left pending from the channel you just left would post a
+  // read for it a second after it stopped being on screen.
   useEffect(() => () => {
-    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
-  }, []);
+    if (markReadTimerRef.current) {
+      clearTimeout(markReadTimerRef.current);
+      markReadTimerRef.current = null;
+    }
+  }, [page.id]);
 
   // Coming back to a tab that was hidden while messages arrived: those are on
   // screen now, so clear them rather than waiting for the next message.
