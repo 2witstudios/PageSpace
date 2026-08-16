@@ -181,10 +181,12 @@ export function useMessageActions({
       // prefix, and dropping the await would take a whole round trip off the retry.
       //
       // It would also silently corrupt the retry. The regenerate POST does NOT regenerate from
-      // the messages the client sends: `handleChatTurn` loads the conversation from the DATABASE
-      // and says so ("We use database-loaded messages, NOT requestMessages from client",
-      // global-chat-turn.ts / page-chat-turn.ts), and nothing server-side supersedes the trailing
-      // assistant rows on a regenerate. Race the DELETEs against the POST and the model is handed
+      // the messages the client sends: `handleChatTurn` loads the conversation from the DATABASE,
+      // and both surfaces say so at their history load — "We use database-loaded messages, NOT
+      // requestMessages from client" (global-chat-turn.ts), "Used ONLY to extract new user
+      // message, NOT for conversation history" (page-chat-turn.ts). Nothing server-side
+      // supersedes the trailing assistant rows on a regenerate, either. Race the DELETEs against
+      // the POST and the model is handed
       // its own previous answer as the newest turn — it rewrites or continues that answer instead
       // of re-answering the user, and does it nondeterministically, depending on which request
       // reached the DB first.
