@@ -487,7 +487,7 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
     // tamper-evident log rather than only the console.
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventType: 'admin.session.terminated',
+        eventType: 'admin.session.terminate.success',
         userId: 'drive-admin',
         resourceType: 'agent_worker',
         resourceId: 'conv-worker',
@@ -507,6 +507,30 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
     });
 
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  test('a cross-member kill whose abort REJECTS records the failure, not a termination — the tamper-evident log may not claim a stop that did not land', async () => {
+    // `killWorker` returns ok: true either way (the transcript survives
+    // regardless), so nothing downstream can tell these apart. If the record
+    // were written before the abort, the one log built to be trustworthy would
+    // be the one asserting a worker stopped while it kept running.
+    mockAbortConversationStreams.mockRejectedValue(new Error('realtime unreachable'));
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'worker-owner',
+      actingUserId: 'drive-admin',
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'admin.session.terminate.failure',
+        userId: 'drive-admin',
+        resourceId: 'conv-worker',
+        details: expect.objectContaining({ workerOwnerId: 'worker-owner' }),
+      }),
+    );
   });
 
   test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {

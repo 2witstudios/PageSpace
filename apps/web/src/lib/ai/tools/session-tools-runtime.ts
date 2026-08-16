@@ -1126,9 +1126,22 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // survive log rotation and show up in audit queries and exports. A plain
       // `loggers.ai.warn` reaches neither, and on the default console
       // destination may not be retained at all (PR review, #2423).
+      //
+      // AFTER the abort, and carrying its OUTCOME. Recording first would write
+      // "terminated" into a tamper-evident log whose whole value is that it does
+      // not say things that did not happen — and the abort's failure is
+      // swallowed here (the return below is `ok: true` either way, deliberately:
+      // the conversation and transcript survive regardless). A failed
+      // cross-member stop is not a non-event, though — an admin reaching into
+      // another member's worker is worth a row whichever way it lands — so the
+      // two outcomes get two event types rather than one type and one silence
+      // (PR review, #2423).
+      const aborted = await abortConversationStreams({ conversationId, userId: streamOwnerId })
+        .then(() => true)
+        .catch(() => false);
       if (actingUserId !== streamOwnerId) {
         audit({
-          eventType: 'admin.session.terminated',
+          eventType: aborted ? 'admin.session.terminate.success' : 'admin.session.terminate.failure',
           // The ACTOR is the subject of an audit row, always — the owner rides
           // in details, so "what did this admin do" is one indexed query.
           userId: actingUserId,
@@ -1141,7 +1154,6 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           riskScore: 0.5,
         });
       }
-      await abortConversationStreams({ conversationId, userId: streamOwnerId }).catch(() => {});
       // Deliberately NO sandbox teardown: a worker works in its SPAWNER's
       // workspace, so tearing "its" sandbox down would destroy a working context
       // that is not this worker's to release.
