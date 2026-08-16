@@ -179,10 +179,14 @@ jobs:
   # proved by Playwright specs that, until this job, ran only when a human remembered to run
   # them. The specs' own headers said so ("There is no e2e job in CI, so these run locally").
   #
-  # SCOPE: specs 15/16/17 only, not the whole e2e suite. These three are the epic's gate; the
+  # SCOPE: specs 15-19 only, not the whole e2e suite. These are the live-delivery gate; the
   # metering and storage specs (09-14, 08) need Stripe and real S3 credentials and cost far
   # more runner time than their regression risk here justifies. Widening the list means
   # widening `E2E_SPECS` below AND the citations in the evidence manifest.
+  #
+  # 19 joins for the same reason 18 did: the sidebar Channels count is delivered over the
+  # same socket topology, both ends of its seam are unit- and integration-tested, and a typo
+  # in an event name or room fails silently as "no unread" rather than as a red test.
   #
   # The topology is reproduced deliberately and every piece of it is load-bearing — see the
   # comments on each step. Getting it wrong does not fail loudly; it makes the live-delivery
@@ -229,7 +233,7 @@ jobs:
       # NEXT_PUBLIC_REALTIME_URL is deliberately UNSET. See the proxy step.
       E2E_WEB_TARGET: http://127.0.0.1:3100
       E2E_REALTIME_TARGET: http://127.0.0.1:3001
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

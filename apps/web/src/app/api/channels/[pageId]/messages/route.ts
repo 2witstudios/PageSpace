@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, isNull, gt, inArray } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
+import { driveMembers } from '@pagespace/db/schema/members'
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 // canUserViewPage below is only used for mention RECIPIENTS (other users), not
 // the requesting principal — those checks are keyed to arbitrary user ids and
 // must stay user-level.
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canUserViewPage, getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -58,40 +58,17 @@ async function fanOutChannelInboxUpdate(
   }
   const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
 
-  const viewableUserIds = new Set<string>();
   if (otherMemberIds.length === 0) {
-    return viewableUserIds;
+    return new Set<string>();
   }
 
-  if (driveOwnerId && otherMemberIds.includes(driveOwnerId)) {
-    viewableUserIds.add(driveOwnerId);
-  }
-
-  const adminMembers = await db.select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      inArray(driveMembers.userId, otherMemberIds),
-      eq(driveMembers.role, 'ADMIN')
-    ));
-  for (const admin of adminMembers) {
-    viewableUserIds.add(admin.userId);
-  }
-
-  const remainingIds = otherMemberIds.filter((id) => !viewableUserIds.has(id));
-  if (remainingIds.length > 0) {
-    const permittedMembers = await db.select({ userId: pagePermissions.userId })
-      .from(pagePermissions)
-      .where(and(
-        eq(pagePermissions.pageId, pageId),
-        inArray(pagePermissions.userId, remainingIds),
-        eq(pagePermissions.canView, true),
-        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-      ));
-    for (const pm of permittedMembers) {
-      viewableUserIds.add(pm.userId);
-    }
-  }
+  // Recipients come from the centralized permission rules, not a local copy of
+  // them. The hand-written version this replaces knew about drive owners,
+  // admins and explicit page_permissions rows, but not about custom roles or
+  // the rule that any accepted member can view a non-private page — so an
+  // ordinary member of a public channel, the most common reader there is, was
+  // never sent an inbox event and their sidebar count stayed stale.
+  const viewableUserIds = await getUsersWhoCanViewPage(pageId, otherMemberIds);
 
   await Promise.all(
     otherMemberIds
