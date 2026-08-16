@@ -47,7 +47,11 @@ vi.mock('@/hooks/useHotkeyPreferences', async (importOriginal) => {
       mutate: mockMutate,
     }),
     updateHotkeyPreference: (id: string, binding: string) => mockSave(id, binding),
-    deleteHotkeyPreference: (id: string, ifBinding?: string) => mockDelete(id, ifBinding),
+    // Forward whatever production actually passes, so an unconditional Reset
+    // reaches the spy as a one-argument call rather than with an explicit
+    // `undefined` — and so a signature change fails typecheck here.
+    deleteHotkeyPreference: (...args: Parameters<typeof actual.deleteHotkeyPreference>) =>
+      mockDelete(...args),
     fetchHotkeyPreferences: () => mockFetch(),
   };
 });
