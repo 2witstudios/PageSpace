@@ -286,6 +286,10 @@
     "./schema/machine-sprite-reclaims": {
       "types": "./dist/schema/machine-sprite-reclaims.d.ts",
       "default": "./dist/schema/machine-sprite-reclaims.js"
+    },
+    "./schema/published-apps": {
+      "types": "./dist/schema/published-apps.d.ts",
+      "default": "./dist/schema/published-apps.js"
     }
   },
   "scripts": {
