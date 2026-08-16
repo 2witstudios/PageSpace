@@ -10,7 +10,14 @@ import { useEditingStore } from '@/stores/useEditingStore';
 const mockState = vi.hoisted(() => {
   const state = {
     handleRetryBaseResolve: undefined as (() => void) | undefined,
-    handleRetryBase: undefined as ReturnType<typeof vi.fn> | undefined,
+    // TYPED FROM THE REAL SIGNATURE, not `ReturnType<typeof vi.fn>` (CodeRabbit). Untyped, the
+    // `mockResolvedValueOnce` calls below accept any shape, so a change to `RetryOutcome` leaves
+    // these stubs describing a contract that no longer exists and typecheck says nothing. That
+    // is not hypothetical: this file's stubs returned bare booleans until `handleRetry` grew a
+    // named outcome, and only running the suite caught it.
+    handleRetryBase: undefined as
+      | ReturnType<typeof vi.fn<() => Promise<import('../useMessageActions').RetryOutcome>>>
+      | undefined,
   };
   // ONE spy for the life of the file, not a fresh one per render. The hook re-renders (and
   // re-invokes this factory) on every prop change, so a spy created inside it silently reset
@@ -20,7 +27,12 @@ const mockState = vi.hoisted(() => {
   // (ai SDK makeRequest reads the response to completion) — held open here so the test
   // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
   state.handleRetryBase = vi.fn(
-    () => new Promise<void>((resolve) => { state.handleRetryBaseResolve = resolve; }),
+    () => new Promise<import('../useMessageActions').RetryOutcome>((resolve) => {
+      // Held open, and resolved with a DISPATCHED outcome: the cases that hold this promise are
+      // asserting what happens while a retry is in flight, and a retry that got as far as
+      // `regenerate` is what they are describing.
+      state.handleRetryBaseResolve = () => resolve({ dispatched: true });
+    }),
   );
   return state;
 });
