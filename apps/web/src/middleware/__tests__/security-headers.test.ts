@@ -191,7 +191,24 @@ describe('Security Headers', () => {
     it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
-      expect(csp).toContain('frame-src https://accounts.google.com https://js.stripe.com');
+      expect(csp).toContain('https://accounts.google.com https://js.stripe.com');
+    });
+
+    /**
+     * The in-app canvas view frames a real same-origin URL
+     * (`/api/canvas/[pageId]/preview`), and `frame-src` does not fall back to
+     * `default-src` once it is present. An allowlist carrying only the external
+     * cloud origins therefore blocks every canvas page from rendering at all —
+     * which is what shipped, because the directive only appeared in cloud mode.
+     */
+    it('keeps same-origin framing allowed alongside the external origins', () => {
+      const frameSrc = buildCSPPolicy('test-nonce')
+        .split(';')
+        .map((directive: string) => directive.trim())
+        .find((directive: string) => directive.startsWith('frame-src'));
+
+      expect(frameSrc).toBeDefined();
+      expect(frameSrc).toContain("'self'");
     });
 
     it('blocks plugins via object-src none', () => {
