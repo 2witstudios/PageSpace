@@ -121,6 +121,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   more. Tool calls and reasoning steps come back in the same shape they were rendered in. Nothing
   changes for a reply that finishes normally — the record is deleted the moment the finished message
   is safely saved, and a reply that never had a chance to save is the one case it is kept for.
+- **A reply that is still being written is no longer mistaken for an abandoned one** — if the
+  database stalled for a couple of minutes while the assistant was mid-answer, the cleanup that
+  tidies away replies orphaned by a crash could not tell the two apart, and tidied away a live one.
+  You watched the reply freeze, get replaced by a shortened version of itself, and the composer
+  flip back to Send — while the assistant carried on working, and billing, out of sight. It could
+  not be stopped, because as far as the app was concerned it had already finished.
+
+  Whether a reply is genuinely abandoned is now decided by the database at the moment of tidying
+  up, rather than by a judgement made moments earlier somewhere else — so a reply that is still
+  being written wins, and a cleanup that arrives late does nothing instead of doing damage. If the
+  stall clears and the assistant starts writing again mid-cleanup, the reply stays put, stays
+  joinable and stays stoppable.
 
 - **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
   ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
