@@ -168,6 +168,20 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.workflows).toBeDefined();
   });
 
+  it('schema object contains drive-boxes tables', () => {
+    // Registered the moment the table landed, not when its first writer does.
+    // An unregistered table is absent from `schema` for every consumer that
+    // reaches for it by name (the drift guards over the GDPR and tenant
+    // exports both enumerate this object at runtime), and "nothing writes it
+    // yet" is a state that expires quietly.
+    expect(schemaModule.schema.driveBoxes).toBeDefined();
+  });
+
+  it('re-exports the drive box kind enum', () => {
+    expect(schemaModule.driveBoxKind).toBeDefined();
+    expect(schemaModule.driveBoxKind.enumValues).toEqual(['dev', 'staging', 'deploy']);
+  });
+
   it('re-exports auth enums', () => {
     expect(schemaModule.userRole).toBeDefined();
     expect(schemaModule.authProvider).toBeDefined();

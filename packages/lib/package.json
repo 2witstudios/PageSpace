@@ -72,6 +72,11 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./drive-boxes/box-kind": {
+      "types": "./dist/drive-boxes/box-kind.d.ts",
+      "import": "./dist/drive-boxes/box-kind.js",
+      "require": "./dist/drive-boxes/box-kind.js"
+    },
     "./agent-workspaces/workspace-fractions": {
       "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
       "import": "./dist/agent-workspaces/workspace-fractions.js",

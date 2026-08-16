@@ -1,8 +1,9 @@
-import { pgTable, text, timestamp, boolean, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, bigint, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
+import { driveBoxes } from './drive-boxes';
 
 /**
  * Agent Sessions
@@ -80,6 +81,23 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
 
   /** Display label only (auto-named at spawn). Deliberately NOT unique and never an address. */
   name: text('name'),
+
+  /**
+   * The persistent BOX this session runs inside, or NULL for the default
+   * ephemeral session that owns its own Sprite. A box-bound session has no
+   * Sprite of its own — it borrows the box's, sharing that filesystem with
+   * every other session in the same box (see `drive_boxes`).
+   *
+   * `on delete set null`, NOT cascade. A session row is HISTORY: it outlives
+   * the Sprite it pointed at by design (that is why a killed session keeps its
+   * row), and it must outlive its box for the same reason — its conversations
+   * stay readable after the environment they ran in is gone. Refusing to
+   * delete a box while sessions are live is an APPLICATION guard with a
+   * `force` escape (`plan-box-delete`), deliberately not an FK: an FK would
+   * make the refusal permanent and unforceable, and cascading would delete a
+   * user's chat history as a side effect of reclaiming a machine.
+   */
+  boxId: text('boxId').references(() => driveBoxes.id, { onDelete: 'set null' }),
 
   // The session's pane tree lives in `agent_workspace_nodes` behind
   // `agent_workspace_node_revs` — see `agent-workspace-nodes.ts`. It was a
@@ -165,6 +183,37 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   liveSpriteIdx: index('agent_workspaces_live_sprite_idx')
     .on(table.sandboxId, table.spriteTornDownAt)
     .where(sql`${table.sandboxId} IS NOT NULL AND ${table.spriteTornDownAt} IS NULL`),
+  boxIdIdx: index('agent_workspaces_box_id_idx').on(table.boxId),
+
+  /**
+   * **A Sprite belongs to exactly one row**, stated where it can be violated.
+   *
+   * A box-bound session borrows its box's VM, so it must hold no pointer of
+   * its own. Without this, a `boxId` row that also carried a `sandboxId` would
+   * make two rows claim one Sprite, and everything downstream breaks in the
+   * expensive direction: the end planner would see a pointer and tear down the
+   * SHARED box filesystem when one session closed, the AFTER DELETE triggers
+   * on BOTH tables would enqueue the same name, and the orphan reconciler
+   * would be handed a live VM that another row still believes it owns.
+   *
+   * The three identity columns, matching `drive_boxes_sprite_kind_check` —
+   * `sandboxId` addresses, `spriteKey` derives, `spriteInstanceId` guards.
+   *
+   * Ships NOT VALID (see the migration): `agent_workspaces` is POPULATED, so
+   * per the repo's two-stage rule (precedent 0249/0250 → 0251) release N adds
+   * the constraint — fully enforced for every new and updated row from the
+   * moment it lands — and release N+1 runs `VALIDATE CONSTRAINT` against the
+   * legacy corpus. Both stages cannot ship together: every pending migration
+   * runs in ONE invocation, so a same-release VALIDATE is not a second stage
+   * at all. Every existing row satisfies it vacuously (`boxId` did not exist
+   * until this migration, so it is NULL everywhere), which is exactly why the
+   * validation is cheap and uncontroversial — it is staged for the rule, not
+   * because the corpus is in doubt.
+   */
+  boxNoSpriteCheck: check(
+    'agent_workspaces_box_no_sprite_check',
+    sql`${table.boxId} IS NULL OR (${table.sandboxId} IS NULL AND ${table.spriteKey} IS NULL AND ${table.spriteInstanceId} IS NULL)`,
+  ),
 }));
 
 /**
@@ -244,6 +293,11 @@ export const agentWorkspacesRelations = relations(agentWorkspaces, ({ one, many 
   owner: one(users, {
     fields: [agentWorkspaces.ownerId],
     references: [users.id],
+  }),
+  /** The persistent box this session runs inside, or none. The FK lives on this side, so the relation does too — see `driveBoxesRelations`. */
+  box: one(driveBoxes, {
+    fields: [agentWorkspaces.boxId],
+    references: [driveBoxes.id],
   }),
   // NO `conversations: many(...)`. A workspace hosts threads, but the row that
   // says so is a node in `agent_workspace_nodes` (`targetKind = 'chat'`), not a

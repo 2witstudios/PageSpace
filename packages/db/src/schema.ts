@@ -55,6 +55,7 @@ export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 export * from './schema/agent-workspaces';
 export * from './schema/agent-workspace-nodes';
+export * from './schema/drive-boxes';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -113,6 +114,7 @@ import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 import * as agentWorkspaces from './schema/agent-workspaces';
 import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
+import * as driveBoxes from './schema/drive-boxes';
 
 export const schema = {
   ...auth,
@@ -172,4 +174,5 @@ export const schema = {
   ...pageWebhooks,
   ...agentWorkspaces,
   ...agentWorkspaceNodes,
+  ...driveBoxes,
 };
