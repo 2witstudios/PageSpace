@@ -64,10 +64,19 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
 
     set((state) => ({
       userBindings: map,
-      // Accumulate rather than replace: a payload that no longer mentions the
-      // shortcut — a revalidation racing the delete that acknowledging fires —
-      // must not erase a notice the user has not read yet.
-      resetHotkeys: [...new Set([...state.resetHotkeys, ...wasReset])],
+      // Accumulate, but reconcile against what this payload actually says.
+      //
+      // Accumulate, because a payload that simply stops mentioning a shortcut
+      // — a revalidation racing the delete that acknowledging fires — must not
+      // erase a notice the user has not read yet.
+      //
+      // Reconcile, because a payload that carries a *valid* binding for that
+      // shortcut is positive evidence the reset no longer stands: another tab
+      // re-bound it, or the user did. Keeping the id would show a notice for a
+      // shortcut that is working.
+      resetHotkeys: [
+        ...new Set([...state.resetHotkeys.filter((id) => !map.has(id)), ...wasReset]),
+      ],
       loaded: true,
     }));
   },

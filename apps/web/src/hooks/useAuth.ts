@@ -142,6 +142,16 @@ export function useAuth(): {
         // Non-critical
       }
 
+      // Hotkey overrides are per-user. Left in place, the next person to sign
+      // in through this same document gets the previous user's shortcuts until
+      // their own preferences load, and any reset notice from that session.
+      try {
+        const { useHotkeyStore } = await import('@/stores/useHotkeyStore');
+        useHotkeyStore.getState().reset();
+      } catch {
+        // Non-critical
+      }
+
       endSession();
       router.push('/auth/signin');
     }

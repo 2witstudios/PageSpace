@@ -122,6 +122,35 @@ describe('useHotkeyStore', () => {
       expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
+    it('given a later payload with a valid binding, should drop the notice', () => {
+      // Another tab re-bound it, so the payload is positive evidence that the
+      // reset no longer stands. Keeping the id shows a notice — and, before
+      // the settings page re-read the server, deleted a working binding.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Ctrl+Shift+J' },
+      ]);
+
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+      expect(getEffectiveBinding('pages.quick-create')).toBe('Ctrl+Shift+J');
+    });
+
+    it('given a later payload that disables the shortcut, should drop the notice too', () => {
+      // '' is a deliberate "off", not a broken binding.
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
+      ]);
+      useHotkeyStore.getState().setUserBindings([
+        { hotkeyId: 'pages.quick-create', binding: '' },
+      ]);
+
+      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+    });
+
     it('given a re-saved binding, should clear its reset notice', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
