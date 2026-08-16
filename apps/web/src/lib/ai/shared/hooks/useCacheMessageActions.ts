@@ -20,7 +20,7 @@
  * explicit cache write the action would render no change. A base-call failure
  * rolls back inside useMessageActions and leaves the cache untouched.
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { useMessageActions } from './useMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
@@ -105,6 +105,12 @@ export function useCacheMessageActions({
     [renderedMessages],
   );
 
+  // The LIVE conversation, for reads that happen after an await — where the closure's captured
+  // `conversationId` is a snapshot of the retry, not of what is on screen now. See handleRetry's
+  // release.
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
+
   const {
     handleEdit: handleEditBase,
     handleDelete: handleDeleteBase,
@@ -188,7 +194,14 @@ export function useCacheMessageActions({
     // that registered and then declined to dispatch (a Stop landed during its DELETEs), and
     // nothing else will clear the pendingSend for it: the handoff effect is keyed on state this
     // path never moved, so the composer would show Stop until unmount.
-    if (dispatched === false) releasePendingSend();
+    //
+    // Scoped to the conversation this retry was for, like every other post-await step in this
+    // epic. `releasePendingSend` names whatever conversation it was BUILT for but guards on a
+    // ref shared across renders, so the stale copy this closure holds would happily release a
+    // send belonging to the conversation the user has since switched to. If the surface has
+    // moved on, `useSendHandoff`'s own conversation-change cleanup already released ours and
+    // there is nothing here to do.
+    if (dispatched === false && conversationIdRef.current === conversationId) releasePendingSend();
   }, [renderedMessages, handleRetryBase, conversationId, wrapSend, releasePendingSend]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };

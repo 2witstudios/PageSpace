@@ -286,6 +286,31 @@ describe('useCacheMessageActions handleRetry', () => {
     applyDeleteSpy.mockRestore();
   });
 
+  // Same failure family as the P1 and P2 above, one level further out: this release runs AFTER
+  // an await, and `releasePendingSend` guards on a ref shared across renders — so the stale copy
+  // this closure holds would release whatever send is registered NOW, which after a switch
+  // belongs to the other conversation. `useSendHandoff`'s own conversation-change cleanup has
+  // already released ours by then, so there is nothing here to do but stay out of the way.
+  it('given the surface switched conversations before the retry declined, should not release the other conversation\'s send', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce(false);
+    const releasePendingSend = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ conversationId }: { conversationId: string }) =>
+        useCacheMessageActions(baseOptions({ conversationId, releasePendingSend })),
+      { initialProps: { conversationId: 'conv-1' } },
+    );
+
+    // A's retry starts, then the user moves to B while it is still awaiting.
+    act(() => { void result.current.handleRetry(); });
+    rerender({ conversationId: 'conv-2' });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(releasePendingSend).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+  });
+
   // Why the check is `=== false` and not falsy. With no conversation `wrapSend` never calls its
   // argument and returns `undefined` — it registered nothing, so there is nothing to release,
   // and releasing anyway would clear a pendingSend belonging to something else.
