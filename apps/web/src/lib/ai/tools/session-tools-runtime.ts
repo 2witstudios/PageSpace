@@ -44,6 +44,7 @@ import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/cr
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import {
   AGENT_DISPATCH_SIGNATURE_HEADER,
   signAgentDispatch,
@@ -1118,11 +1119,26 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // owner sees only an aborted stream, and the abort itself is recorded under
       // THEIR id (above), so the row cannot say who did it. Record the acting
       // user here — it is the only place both identities are in hand (PR review).
+      //
+      // Through `audit()` rather than the ordinary logger, because this is a
+      // cross-user ADMINISTRATIVE action: the audit pipeline dual-writes to the
+      // tamper-evident `security_audit_log`, which is what makes the event
+      // survive log rotation and show up in audit queries and exports. A plain
+      // `loggers.ai.warn` reaches neither, and on the default console
+      // destination may not be retained at all (PR review, #2423).
       if (actingUserId !== streamOwnerId) {
-        loggers.ai.warn('kill_session: a worker was stopped by someone other than its owner', {
-          conversationId,
-          workerOwnerId: streamOwnerId,
-          actingUserId,
+        audit({
+          eventType: 'admin.session.terminated',
+          // The ACTOR is the subject of an audit row, always — the owner rides
+          // in details, so "what did this admin do" is one indexed query.
+          userId: actingUserId,
+          resourceType: 'agent_worker',
+          resourceId: conversationId,
+          details: { workerOwnerId: streamOwnerId },
+          // Authorized (`checkWorkspaceEndAccess` cleared it upstream) but
+          // cross-user, so it warns rather than informs: worth a look, not an
+          // alarm. `audit()` picks the level off this threshold.
+          riskScore: 0.5,
         });
       }
       await abortConversationStreams({ conversationId, userId: streamOwnerId }).catch(() => {});

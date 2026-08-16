@@ -90,12 +90,13 @@ vi.mock('../shell-io', () => ({
   createShellIo: vi.fn(),
   realtimeShellIoTransport: {},
 }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
 import { resolveCallerSessionForWorker, buildSessionToolsDeps } from '../session-tools-runtime';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 const sessionRow = { id: 'ses-1', ownerId: 'user-1', endedAt: null };
 const globalConversation = { id: 'conv-g', type: 'global', userId: 'user-1', isActive: true, contextId: null };
@@ -481,12 +482,16 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
       actingUserId: 'drive-admin',
     });
 
-    expect(loggers.ai.warn).toHaveBeenCalledWith(
-      expect.stringContaining('stopped by someone other than its owner'),
+    // Through the AUDIT pipeline, not the ordinary logger: this is the record
+    // a dispute or incident review queries, so it has to reach the
+    // tamper-evident log rather than only the console.
+    expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
-        conversationId: 'conv-worker',
-        workerOwnerId: 'worker-owner',
-        actingUserId: 'drive-admin',
+        eventType: 'admin.session.terminated',
+        userId: 'drive-admin',
+        resourceType: 'agent_worker',
+        resourceId: 'conv-worker',
+        details: expect.objectContaining({ workerOwnerId: 'worker-owner' }),
       }),
     );
   });
@@ -501,7 +506,7 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
       actingUserId: 'user-1',
     });
 
-    expect(loggers.ai.warn).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 
   test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {
