@@ -262,7 +262,7 @@ describe('useCacheMessageActions handleRetry', () => {
   // unmount.
   it('given the retry declined to dispatch, should release the pending send it registered', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
-    mockState.handleRetryBase?.mockResolvedValueOnce(false);
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
     const releasePendingSend = vi.fn();
 
     const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
@@ -273,9 +273,44 @@ describe('useCacheMessageActions handleRetry', () => {
     applyDeleteSpy.mockRestore();
   });
 
+  // The cache write was a claim about the server, and a failed delete means the server does not
+  // agree. It has to be taken back — not for tidiness, but because the NEXT retry plans its
+  // deletes from this same cache: leave it lying and that retry finds nothing to delete,
+  // dispatches, and hands the model its own previous answer. The same corruption the refusal
+  // just prevented, one click later.
+  it('given the deletes failed, should put the rows it removed back in the cache', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'delete-failed' });
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).toHaveBeenCalledWith('conv-1', expect.objectContaining({ id: 'a1' }));
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  // A stopped retry deleted the rows for real, so putting them back would be the lie in the
+  // other direction — the user asked for that answer to go, and it went.
+  it('given a stopped retry, should leave the cache deleted', async () => {
+    const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
+    const restoreSpy = vi.spyOn(conversationMessagesActions, 'applyConfirmedMessage').mockImplementation(() => {});
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
+
+    const { result } = renderHook(() => useCacheMessageActions(baseOptions()));
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(restoreSpy).not.toHaveBeenCalled();
+    applyDeleteSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
   it('given the retry dispatched, should not release the pending send', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
-    mockState.handleRetryBase?.mockResolvedValueOnce(true);
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: true });
     const releasePendingSend = vi.fn();
 
     const { result } = renderHook(() => useCacheMessageActions(baseOptions({ releasePendingSend })));
@@ -293,7 +328,7 @@ describe('useCacheMessageActions handleRetry', () => {
   // already released ours by then, so there is nothing here to do but stay out of the way.
   it('given the surface switched conversations before the retry declined, should not release the other conversation\'s send', async () => {
     const applyDeleteSpy = vi.spyOn(conversationMessagesActions, 'applyDelete').mockImplementation(() => {});
-    mockState.handleRetryBase?.mockResolvedValueOnce(false);
+    mockState.handleRetryBase?.mockResolvedValueOnce({ dispatched: false, reason: 'stopped' });
     const releasePendingSend = vi.fn();
 
     const { result, rerender } = renderHook(

@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useRef } from 'react';
-import { patch, del } from '@/lib/auth/auth-fetch';
+import { patch, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -39,17 +39,27 @@ interface UseMessageActionsOptions {
   onEditVersionChange?: () => void;
 }
 
+/**
+ * What a retry did, because it can now decline — and the CALLER has to act differently per
+ * reason, so a bare boolean would not carry enough.
+ *
+ * Every non-dispatch leaves a pendingSend registered that nothing else will clear (the handoff
+ * effect is keyed on state these paths never move), so all of them need releasing. Only
+ * `delete-failed` additionally leaves the CACHE lying: the superseded rows were removed from it
+ * synchronously, and if the server still holds them the next retry would plan no deletes at all
+ * and regenerate straight over them — the same corruption, one click later.
+ */
+export type RetryOutcome =
+  | { dispatched: true }
+  | { dispatched: false; reason: 'no-conversation' | 'stopped' | 'delete-failed' };
+
 interface UseMessageActionsResult {
   /** Edit a message's content */
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   /** Delete a message */
   handleDelete: (messageId: string) => Promise<void>;
-  /**
-   * Retry/regenerate the last response. Resolves FALSE when nothing was dispatched — no
-   * conversation, or a Stop landed while the superseded rows were being deleted — so a caller
-   * holding a pendingSend can release it (see `useSendHandoff.releasePendingSend`).
-   */
-  handleRetry: () => Promise<boolean>;
+  /** Retry/regenerate the last response. */
+  handleRetry: () => Promise<RetryOutcome>;
   /** Get the last assistant message ID */
   lastAssistantMessageId: string | undefined;
   /** Get the last user message ID */
@@ -174,8 +184,8 @@ export function useMessageActions({
   // because a wrapped callback that returns without dispatching moves none of the handoff
   // effect's dependencies and would leave the composer showing Stop until unmount. See
   // `useSendHandoff.releasePendingSend`.
-  const handleRetry = useCallback(async (): Promise<boolean> => {
-    if (!conversationId) return false;
+  const handleRetry = useCallback(async (): Promise<RetryOutcome> => {
+    if (!conversationId) return { dispatched: false, reason: 'no-conversation' };
 
     // Snapshot BEFORE the DELETE round trip below, checked after it — see stopRequests, and the
     // dispatch guard at the bottom of this function.
@@ -234,13 +244,23 @@ export function useMessageActions({
       // old console line: the cache row is already gone (`useCacheMessageActions` applied it
       // synchronously), so the user would see their answer vanish and nothing replace it, with
       // no idea why or that a reload will bring it back.
-      const failed = outcomes.filter((outcome) => outcome.status === 'rejected');
-      if (failed.length > 0) {
-        for (const outcome of failed) {
-          console.error('Failed to delete old assistant message:', outcome.reason);
+      //
+      // 404 IS NOT A FAILURE HERE, and conflating the two would be its own bug — the same
+      // distinction `markAbortRequested` draws between "nothing matched" and "the write did not
+      // happen". This route answers 404 'Message not found' for a row that is already gone, and
+      // gone is precisely the state we were asking for: a collaborator or a second tab having
+      // deleted it first must not block the retry or raise an error over it.
+      const stillPresent = outcomes.filter(
+        (outcome) =>
+          outcome.status === 'rejected' &&
+          !(outcome.reason instanceof ApiRequestError && outcome.reason.status === 404),
+      );
+      if (stillPresent.length > 0) {
+        for (const outcome of stillPresent) {
+          console.error('Failed to delete old assistant message:', (outcome as PromiseRejectedResult).reason);
         }
         toast.error('Could not clear the previous reply, so the retry was not started.');
-        return false;
+        return { dispatched: false, reason: 'delete-failed' };
       }
 
       // No local array to prune — `useCacheMessageActions` deletes the same rows from the
@@ -256,7 +276,9 @@ export function useMessageActions({
     //
     // The deletes have already committed and cannot be taken back, so a stopped retry leaves the
     // superseded answer gone and nothing regenerating — which is what the user asked for.
-    if (readStopEpoch(conversationId) !== stopEpochAtStart) return false;
+    if (readStopEpoch(conversationId) !== stopEpochAtStart) {
+      return { dispatched: false, reason: 'stopped' };
+    }
 
     // Now regenerate with a clean slate. conversationId is included for both
     // modes — global mode's useChat transport is frozen at first construction
@@ -273,7 +295,7 @@ export function useMessageActions({
             conversationId,
           },
     });
-    return true;
+    return { dispatched: true };
   }, [isAgentMode, agentId, conversationId, regenerate]);
 
   // Compute last message IDs for UI

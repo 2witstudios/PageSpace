@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
-import { del } from '@/lib/auth/auth-fetch';
+import { del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { recordStopRequest } from '@/lib/ai/streams/stopRequests';
-import { useMessageActions } from '../useMessageActions';
+import { useMessageActions, type RetryOutcome } from '../useMessageActions';
 
-vi.mock('@/lib/auth/auth-fetch', () => ({
+// Partial: `ApiRequestError` is a real class the hook does an `instanceof` against, so a stub
+// would make every rejection look like a plain Error and collapse the 404 distinction under test.
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/auth-fetch')>()),
   fetchWithAuth: vi.fn(),
   patch: vi.fn(),
   del: vi.fn().mockResolvedValue(undefined),
@@ -120,7 +123,7 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
       }),
     );
 
-    let retry: Promise<boolean> | undefined;
+    let retry: Promise<RetryOutcome> | undefined;
     act(() => { retry = result.current.handleRetry(); });
 
     // The press, landing while the DELETEs are still in flight — exactly the window the
@@ -130,9 +133,9 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
     await act(async () => { releaseDeletes?.(); await retry; });
 
     expect(regenerate).not.toHaveBeenCalled();
-    // FALSE, so the caller releases the pendingSend it is holding — nothing else will, and the
-    // composer renders only Stop while it stands.
-    await expect(retry).resolves.toBe(false);
+    // Named, not merely false: the caller releases the pendingSend on every non-dispatch, but
+    // only a delete failure additionally means the cache is lying about what the server holds.
+    await expect(retry).resolves.toEqual({ dispatched: false, reason: 'stopped' });
   });
 
   // The mirror image, and the reason this is a counter compared against a snapshot rather than a
@@ -174,14 +177,36 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
       }),
     );
 
-    let dispatched: boolean | undefined;
-    await act(async () => { dispatched = await result.current.handleRetry(); });
+    let outcome: RetryOutcome | undefined;
+    await act(async () => { outcome = await result.current.handleRetry(); });
 
     expect(regenerate).not.toHaveBeenCalled();
-    expect(dispatched).toBe(false);
+    expect(outcome).toEqual({ dispatched: false, reason: 'delete-failed' });
     // Not silent: the cache row is already gone, so the user would otherwise watch their answer
     // vanish with nothing replacing it and no idea why.
     expect(toast.error).toHaveBeenCalled();
+  });
+
+  // 404 is not a failure here, and conflating them would be its own bug: the route answers
+  // 'Message not found' for a row that is already gone, and gone is the state the delete was
+  // asking for. A collaborator or a second tab getting there first must not block the retry.
+  it('given a delete that 404s because the row is already gone, should still regenerate', async () => {
+    const regenerate = vi.fn();
+    vi.mocked(del).mockRejectedValue(new ApiRequestError('Message not found', 404));
+
+    const { result } = renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-6',
+        messages: assistantAfterUser(),
+        regenerate,
+      }),
+    );
+
+    await act(async () => { await result.current.handleRetry(); });
+
+    expect(regenerate).toHaveBeenCalledWith({ body: { conversationId: 'conv-6' } });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('given every delete succeeds, should regenerate and say nothing', async () => {
@@ -221,7 +246,7 @@ describe('useMessageActions — handleRetry and a Stop mid-DELETE', () => {
       }),
     );
 
-    let retry: Promise<boolean> | undefined;
+    let retry: Promise<RetryOutcome> | undefined;
     act(() => { retry = result.current.handleRetry(); });
     act(() => { recordStopRequest('conv-elsewhere'); });
 

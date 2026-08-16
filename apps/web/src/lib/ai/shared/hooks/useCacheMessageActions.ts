@@ -176,6 +176,10 @@ export function useCacheMessageActions({
     // reads the response to completion), so awaiting it first would leave the old assistant
     // rows visible in the cache/UI alongside the new streaming reply for the whole
     // regeneration (PR 6 review, CodeRabbit).
+    // Kept so the cache can be put back if the server deletes turn out not to have happened —
+    // see the restore below. The rows themselves, not just their ids: an id cannot be un-deleted.
+    const deletedRows = stableMessages.filter((m) => assistantIdsToDelete.includes(m.id));
+
     if (conversationId) {
       for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
     }
@@ -187,13 +191,31 @@ export function useCacheMessageActions({
     // leave that whole round trip unfeedbacked — the exact dead window this is here to close.
     // From this call the surface's `displayIsStreaming` is true, so the composer locks and
     // offers Stop within a frame, same as a send.
-    const dispatched = await wrapSend(() => handleRetryBase());
+    const outcome = await wrapSend(() => handleRetryBase());
 
-    // `false` — not `undefined`, which only means `wrapSend` had no conversation to register
-    // under and therefore never registered anything to release. An explicit false is a retry
-    // that registered and then declined to dispatch (a Stop landed during its DELETEs), and
-    // nothing else will clear the pendingSend for it: the handoff effect is keyed on state this
-    // path never moved, so the composer would show Stop until unmount.
+    // `undefined` means `wrapSend` had no conversation to register under, so it never called its
+    // argument and there is nothing here to undo. Everything below is about a retry that DID
+    // register and then declined.
+    if (!outcome || outcome.dispatched) return;
+
+    // THE CACHE HAS TO BE PUT BACK when the server deletes did not happen. It was written
+    // synchronously above so the superseded answer would disappear at the click, and that write
+    // is now a claim the server does not agree with — which matters beyond cosmetics, because
+    // the NEXT retry plans its deletes from this same cache. Leave it lying and that retry finds
+    // nothing to delete, dispatches, and hands the model its own previous answer: the exact
+    // corruption the refusal above just prevented, one click later.
+    //
+    // Restoring rows that a PARTIALLY failed delete did remove server-side is the safe
+    // direction: an over-reporting cache costs one redundant DELETE on the next retry, which
+    // answers 404, which that path already treats as the row being in the state it wanted.
+    if (outcome.reason === 'delete-failed' && conversationId) {
+      for (const message of deletedRows) {
+        conversationMessagesActions.applyConfirmedMessage(conversationId, message);
+      }
+    }
+
+    // Nothing else will clear the pendingSend on these paths: the handoff effect is keyed on
+    // state they never moved, so the composer would show Stop until unmount.
     //
     // Scoped to the conversation this retry was for, like every other post-await step in this
     // epic. `releasePendingSend` names whatever conversation it was BUILT for but guards on a
@@ -201,8 +223,8 @@ export function useCacheMessageActions({
     // send belonging to the conversation the user has since switched to. If the surface has
     // moved on, `useSendHandoff`'s own conversation-change cleanup already released ours and
     // there is nothing here to do.
-    if (dispatched === false && conversationIdRef.current === conversationId) releasePendingSend();
-  }, [renderedMessages, handleRetryBase, conversationId, wrapSend, releasePendingSend]);
+    if (conversationIdRef.current === conversationId) releasePendingSend();
+  }, [renderedMessages, stableMessages, handleRetryBase, conversationId, wrapSend, releasePendingSend]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };
 }
