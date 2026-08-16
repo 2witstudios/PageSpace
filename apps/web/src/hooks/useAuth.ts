@@ -143,13 +143,14 @@ export function useAuth(): {
       }
 
       // Hotkey overrides are per-user. Left in place, the next person to sign
-      // in through this same document gets the previous user's shortcuts until
-      // their own preferences load, and any reset notice from that session.
+      // in through this same document gets the previous user's shortcuts —
+      // and, since the reset notice is derived from the cached payload, that
+      // user's notice too.
       //
       // The SWR entry has to go with the store: most sign-in paths replace the
       // document, but native OAuth returns via `router.replace`, and there the
       // dashboard remounts against a warm cache and feeds the old user's
-      // payload straight back into the store before the new fetch lands.
+      // payload straight back in before the new fetch lands.
       try {
         const { useHotkeyStore } = await import('@/stores/useHotkeyStore');
         useHotkeyStore.getState().reset();

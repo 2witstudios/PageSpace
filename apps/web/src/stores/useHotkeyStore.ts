@@ -14,29 +14,19 @@ interface HotkeyBinding {
 
 interface HotkeyState {
   userBindings: Map<string, string>;
-  /**
-   * Hotkey IDs whose stored binding cannot fire and fell back to the default.
-   * Rebuilt from the preferences payload on every load — the row is left in
-   * place until the user acknowledges the notice, precisely so this in-memory
-   * state can be reconstructed after a reload.
-   */
-  resetHotkeys: string[];
   loaded: boolean;
   setUserBindings: (bindings: HotkeyBinding[]) => void;
   updateBinding: (hotkeyId: string, binding: string) => void;
   removeBinding: (hotkeyId: string) => void;
-  dismissResetNotice: () => void;
   reset: () => void;
 }
 
 export const useHotkeyStore = create<HotkeyState>((set) => ({
   userBindings: new Map(),
-  resetHotkeys: [],
   loaded: false,
 
   setUserBindings: (bindings) => {
     const map = new Map<string, string>();
-    const wasReset: string[] = [];
 
     for (const { hotkeyId, binding } of bindings) {
       // An empty binding means "disabled" and is intentional.
@@ -45,51 +35,30 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
         continue;
       }
 
-      // The old capture widget accepted a bare key, so a stored "N" is a real
-      // possibility — and it fires against the global listeners while the user
-      // is just reading. Both the widget and the API now refuse these; reset
-      // the ones already saved rather than honouring them.
+      // Skip anything that cannot fire, so the default takes over. The old
+      // capture widget accepted a bare key, so a stored "N" is a real
+      // possibility, and it would fire against the global listeners while the
+      // user is just reading; the other unusable shape is an Alt binding
+      // holding a macOS-composed character ("Alt+Π"), which never matched
+      // anything. Everything else — shifted punctuation, long-tail named keys
+      // — still matches and is kept untouched.
       //
-      // The other unusable shape is an Alt binding holding a macOS-composed
-      // character ("Alt+Π"), which never matched anything and cannot be traced
-      // back to a physical key. Everything else — including shifted punctuation
-      // and long-tail named keys — still matches and is kept untouched.
-      if (!isUsableBinding(binding)) {
-        wasReset.push(hotkeyId);
-        continue;
-      }
+      // The row itself is left on the server. It is what tells Settings the
+      // shortcut was reset, and the notice there is derived from the payload
+      // rather than remembered here — see `unusablePreferences`.
+      if (!isUsableBinding(binding)) continue;
 
       map.set(hotkeyId, binding);
     }
 
-    set((state) => ({
-      userBindings: map,
-      // Accumulate, but reconcile against what this payload actually says.
-      //
-      // Accumulate, because a payload that simply stops mentioning a shortcut
-      // — a revalidation racing the delete that acknowledging fires — must not
-      // erase a notice the user has not read yet.
-      //
-      // Reconcile, because a payload that carries a *valid* binding for that
-      // shortcut is positive evidence the reset no longer stands: another tab
-      // re-bound it, or the user did. Keeping the id would show a notice for a
-      // shortcut that is working.
-      resetHotkeys: [
-        ...new Set([...state.resetHotkeys.filter((id) => !map.has(id)), ...wasReset]),
-      ],
-      loaded: true,
-    }));
+    set({ userBindings: map, loaded: true });
   },
 
   updateBinding: (hotkeyId, binding) => {
     set((state) => {
       const newMap = new Map(state.userBindings);
       newMap.set(hotkeyId, binding);
-      return {
-        userBindings: newMap,
-        // The user has set this one again — the notice has served its purpose.
-        resetHotkeys: state.resetHotkeys.filter((id) => id !== hotkeyId),
-      };
+      return { userBindings: newMap };
     });
   },
 
@@ -97,23 +66,12 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
     set((state) => {
       const newMap = new Map(state.userBindings);
       newMap.delete(hotkeyId);
-      return {
-        userBindings: newMap,
-        // Deleting the row *is* the acknowledgement — it is the thing that was
-        // keeping the notice alive across reloads. Leaving the id here meant a
-        // payload read before the delete could re-arm a banner that had just
-        // been dismissed, and the accumulate leg then preserved it forever.
-        resetHotkeys: state.resetHotkeys.filter((id) => id !== hotkeyId),
-      };
+      return { userBindings: newMap };
     });
   },
 
-  dismissResetNotice: () => {
-    set({ resetHotkeys: [] });
-  },
-
   reset: () => {
-    set({ userBindings: new Map(), resetHotkeys: [], loaded: false });
+    set({ userBindings: new Map(), loaded: false });
   },
 }));
 

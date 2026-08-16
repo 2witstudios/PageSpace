@@ -2,6 +2,7 @@ import useSWR from 'swr';
 import { useEffect } from 'react';
 import { useHotkeyStore } from '@/stores/useHotkeyStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { isUsableBinding } from '@/lib/hotkeys/binding';
 
 interface HotkeyPreference {
   hotkeyId: string;
@@ -32,10 +33,10 @@ export function useHotkeyPreferences() {
 
   // Sync to store when data loads. A binding the store refuses to keep can
   // never fire, so the default takes over immediately — but the row is left in
-  // place deliberately. It is the only durable record that the reset happened:
-  // the notice lives in an in-memory store, so deleting the row here would make
-  // the reset silent for anyone who reloads before opening Keyboard Shortcuts.
-  // The row is removed when the user acknowledges the notice or re-binds.
+  // place deliberately. It is the durable record that the reset happened, and
+  // the Settings notice is derived from it (`unusablePreferences`), so deleting
+  // it here would make the reset silent for anyone who reloads before opening
+  // Keyboard Shortcuts. The row goes when the user acknowledges or re-binds.
   useEffect(() => {
     if (!data?.preferences) return;
     setUserBindings(data.preferences);
@@ -50,13 +51,27 @@ export function useHotkeyPreferences() {
 }
 
 /**
+ * The stored preferences that cannot fire, and so have fallen back to their
+ * default. This is the whole of the "these shortcuts were reset" notice.
+ *
+ * Derived from the payload rather than remembered, which is only possible
+ * because the rows are deliberately not deleted on load — the row *is* the
+ * record that the reset happened, so it outlives the tab for free. Every bug
+ * this notice has had came from keeping a second copy of that fact in memory
+ * and trying to keep the two in step: it went stale when another tab re-bound
+ * the shortcut, it re-armed itself from a read taken before its own deletes,
+ * and it survived a logout. None of those are expressible now.
+ */
+export function unusablePreferences(preferences: HotkeyPreference[]): HotkeyPreference[] {
+  return preferences.filter(({ binding }) => binding !== '' && !isUsableBinding(binding));
+}
+
+/**
  * Read the stored preferences without touching the SWR cache.
  *
- * Deliberately not `mutate()`: that writes the response into the cache, which
- * the hook's effect then feeds into the store. A caller checking what is on the
- * server *before* deleting rows would therefore re-arm the reset notice from
- * the very rows it is about to remove — and, because a later payload that omits
- * a row preserves its notice by design, the banner would never clear again.
+ * Deliberately not `mutate()`: that publishes the response to every consumer,
+ * so a caller checking what is on the server *before* deleting rows would first
+ * repaint the page from the very rows it is about to remove.
  */
 export async function fetchHotkeyPreferences(): Promise<HotkeyPreference[]> {
   const { preferences } = await fetcher('/api/settings/hotkey-preferences');

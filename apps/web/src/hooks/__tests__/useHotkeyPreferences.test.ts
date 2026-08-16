@@ -1,12 +1,14 @@
 /**
  * useHotkeyPreferences Hook Tests
  *
- * Guards the persistence half of the stale-binding path: the store decides what
- * it can honour, but the hook is what does — or deliberately does not — write
- * that decision back. The row for a reset shortcut is the only durable record
- * that the reset happened, because the notice lives in an in-memory store. A
- * bug here makes the reset silent for anyone who reloads before opening
- * Keyboard Shortcuts, which is invisible in the store's own tests.
+ * Two things, both about the same decision: the row for a reset shortcut is
+ * left on the server, and the notice is derived from it.
+ *
+ * The hook must not delete it — that row is the durable record that the reset
+ * happened, and deleting it on load makes the reset silent for anyone who
+ * reloads before opening Keyboard Shortcuts. `unusablePreferences` is the
+ * derivation: what the banner shows is a pure function of the payload, which
+ * is what stops it going stale, re-arming itself, or outliving a logout.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -30,7 +32,7 @@ vi.mock('swr', () => ({
   }),
 }));
 
-import { useHotkeyPreferences } from '../useHotkeyPreferences';
+import { useHotkeyPreferences, unusablePreferences } from '../useHotkeyPreferences';
 import { useHotkeyStore, getEffectiveBinding } from '@/stores/useHotkeyStore';
 
 /** Requests the hook made, as [method, body] pairs. */
@@ -68,7 +70,6 @@ describe('useHotkeyPreferences', () => {
 
     expect(writes()).toEqual([]);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
   });
 
   it('given a stored bare key, should fall back but keep the row', async () => {
@@ -78,22 +79,6 @@ describe('useHotkeyPreferences', () => {
 
     expect(writes()).toEqual([]);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
-  });
-
-  it('given a reload after the reset, should raise the notice again from the row', async () => {
-    // The point of keeping the row: a fresh document has an empty store, and
-    // the payload is what reconstructs the banner.
-    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
-    renderHook(() => useHotkeyPreferences());
-
-    // A new document: same server state, brand-new in-memory store.
-    useHotkeyStore.getState().reset();
-    expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
-
-    renderHook(() => useHotkeyPreferences());
-
-    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
   });
 
   it('given only valid bindings, should write nothing', async () => {
@@ -102,21 +87,53 @@ describe('useHotkeyPreferences', () => {
     renderHook(() => useHotkeyPreferences());
 
     expect(writes()).toEqual([]);
-    expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
   });
 
-  it('given a revalidation that no longer returns the row, should keep the notice', async () => {
-    // Acknowledging clears the notice and deletes the row. A revalidation that
-    // lands in between must not erase a notice the user has not read.
+  it('given a revalidation that still returns the row, should still not delete it', async () => {
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
 
     const { rerender } = renderHook(() => useHotkeyPreferences());
 
     mockFetchWithAuth.mockClear();
-    mockSWRState.data = { preferences: [] };
     rerender();
 
     expect(writes()).toEqual([]);
-    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+  });
+});
+
+describe('unusablePreferences', () => {
+  // The banner, as a pure function of the payload.
+
+  it('given a binding that cannot fire, should name it', () => {
+    const ids = unusablePreferences([
+      { hotkeyId: 'a', binding: 'Alt+Π' },
+      { hotkeyId: 'b', binding: 'N' },
+      { hotkeyId: 'c', binding: '+' },
+      { hotkeyId: 'd', binding: 'Ctrl+CapsLock' },
+    ]).map((p) => p.hotkeyId);
+
+    expect(ids).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('given a binding that still fires, should leave it out', () => {
+    const ids = unusablePreferences([
+      { hotkeyId: 'a', binding: 'Alt+P' },
+      { hotkeyId: 'b', binding: 'Ctrl+Shift+?' },
+      { hotkeyId: 'c', binding: 'Ctrl+Pause' },
+      { hotkeyId: 'd', binding: 'Ctrl+NumLock' },
+    ]).map((p) => p.hotkeyId);
+
+    expect(ids).toEqual([]);
+  });
+
+  it('given a deliberately disabled shortcut, should leave it out', () => {
+    // '' is "off", chosen by the user — not a binding that broke.
+    expect(unusablePreferences([{ hotkeyId: 'a', binding: '' }])).toEqual([]);
+  });
+
+  it('given a payload that re-binds a previously broken shortcut, should say nothing', () => {
+    // Another tab re-bound it. There is no second copy of the old answer to go
+    // stale, so the notice simply stops being true.
+    expect(unusablePreferences([{ hotkeyId: 'a', binding: 'Ctrl+Shift+J' }])).toEqual([]);
   });
 });

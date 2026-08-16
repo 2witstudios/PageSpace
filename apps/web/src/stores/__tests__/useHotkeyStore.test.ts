@@ -44,23 +44,25 @@ describe('useHotkeyStore', () => {
   });
 
   describe('stale bindings', () => {
-    it('given an Alt binding that can never match, should reset it to the default', () => {
+    // The store's whole job here is to refuse a binding that cannot fire, so
+    // the default takes over. Whether the user is *told* is derived from the
+    // payload in `unusablePreferences`, not remembered here.
+
+    it('given an Alt binding that can never match, should fall back to the default', () => {
       // "Alt+Π" is what the old capture code stored for macOS Option+P.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
-    it('given a valid binding, should keep it and report nothing reset', () => {
+    it('given a valid binding, should keep it', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+P' },
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+P');
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
     it('given a legacy shifted-punctuation binding, should keep it working untouched', () => {
@@ -70,7 +72,6 @@ describe('useHotkeyStore', () => {
       ]);
 
       expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+?');
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
 
       const event = {
         ctrlKey: true, metaKey: false, altKey: false, shiftKey: true,
@@ -79,16 +80,15 @@ describe('useHotkeyStore', () => {
       expect(matchesKeyEvent(getEffectiveBinding('editing.find'), event)).toBe(true);
     });
 
-    it('given a legacy long-tail named key, should keep it rather than delete it', () => {
+    it('given a legacy long-tail named key, should keep it rather than drop it', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'editing.find', binding: 'Ctrl+Pause' },
       ]);
 
       expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Pause');
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
-    it('given a stored bare key, should reset it rather than let it fire while browsing', () => {
+    it('given a stored bare key, should refuse it rather than let it fire while browsing', () => {
       // The old capture widget had no modifier guard, so a plain "N" could be
       // saved. It would fire while the user is simply reading.
       useHotkeyStore.getState().setUserBindings([
@@ -96,10 +96,9 @@ describe('useHotkeyStore', () => {
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
-    it('given a stored bare "+", should reset it like any other bare key', () => {
+    it('given a stored bare "+", should refuse it like any other bare key', () => {
       // The numpad Add key reports key === "+", so an unmodified press captures
       // as "+" — the one bare key whose shape looks modified.
       useHotkeyStore.getState().setUserBindings([
@@ -107,85 +106,36 @@ describe('useHotkeyStore', () => {
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
-    it('given a binding on a modifier key, should reset it rather than keep a dead override', () => {
+    it('given a binding on a modifier key, should refuse it rather than keep a dead override', () => {
       // The old widget only excluded Control/Meta/Alt/Shift, so "Ctrl+CapsLock"
       // was capturable. It can no longer fire, and keeping it would shadow the
-      // default with something silently dead and no notice.
+      // default with something silently dead.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Ctrl+CapsLock' },
       ]);
 
       expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
     });
 
-    it('given a later payload with a valid binding, should drop the notice', () => {
-      // Another tab re-bound it, so the payload is positive evidence that the
-      // reset no longer stands. Keeping the id shows a notice — and, before
-      // the settings page re-read the server, deleted a working binding.
+    it('given a later payload that re-binds it, should take the new binding', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
-
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Ctrl+Shift+J' },
       ]);
 
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
       expect(getEffectiveBinding('pages.quick-create')).toBe('Ctrl+Shift+J');
     });
 
-    it('given a later payload that disables the shortcut, should drop the notice too', () => {
-      // '' is a deliberate "off", not a broken binding.
-      useHotkeyStore.getState().setUserBindings([
-        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
-      ]);
+    it('given a disabled binding, should honour the "off" rather than refuse it', () => {
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: '' },
       ]);
 
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
-    });
-
-    it('given a re-saved binding, should clear its reset notice', () => {
-      useHotkeyStore.getState().setUserBindings([
-        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
-      ]);
-      useHotkeyStore.getState().updateBinding('pages.quick-create', 'Alt+P');
-
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
-    });
-
-    it('given a payload that no longer names the shortcut, should keep the notice until dismissed', () => {
-      // Another tab may have deleted the row. This tab's user has still not
-      // read the notice, and a payload that merely goes quiet about a shortcut
-      // is not evidence that it works — so the notice stands.
-      useHotkeyStore.getState().setUserBindings([
-        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
-      ]);
-      useHotkeyStore.getState().setUserBindings([]);
-
-      expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
-
-      useHotkeyStore.getState().dismissResetNotice();
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
-    });
-
-    it('given the row is deleted here, should drop the notice with it', () => {
-      // Deleting the row is the acknowledgement — it is the thing that kept
-      // the notice alive across reloads. Holding the id afterwards let a read
-      // taken before the delete re-arm a banner that had just been dismissed,
-      // which the accumulate leg then preserved for the rest of the session.
-      useHotkeyStore.getState().setUserBindings([
-        { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
-      ]);
-      useHotkeyStore.getState().removeBinding('pages.quick-create');
-
-      expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+      expect(getEffectiveBinding('pages.quick-create')).toBe('');
     });
   });
 
