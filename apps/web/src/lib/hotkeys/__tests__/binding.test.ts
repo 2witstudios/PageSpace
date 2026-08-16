@@ -174,8 +174,9 @@ describe('isCanonicalBinding', () => {
   });
 
   it('given an Alt binding holding a composed character, should reject it', () => {
-    // Alt resolves through e.code, which only yields A-Z or 0-9, so these can
-    // never be produced by a key press and never matched anything.
+    // Alt resolves through e.code, so the token is always an ASCII code name
+    // ("P", "1", "Slash", "Tab"). A composed character could only have been
+    // written by the old capture code and can never be produced again.
     expect(isCanonicalBinding('Alt+Π')).toBe(false);
     expect(isCanonicalBinding('Alt+†')).toBe(false);
     expect(isCanonicalBinding('Alt+~')).toBe(false);

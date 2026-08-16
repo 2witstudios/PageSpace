@@ -158,7 +158,7 @@ describe('useHotkeyStore', () => {
       expect(matchesKeyEvent(captured, event)).toBe(true);
     });
 
-    it('given Shift+1, what is recorded should match that same press', () => {
+    it('given Ctrl+Shift+1, what is recorded should match that same press', () => {
       const event = {
         ctrlKey: true,
         metaKey: false,

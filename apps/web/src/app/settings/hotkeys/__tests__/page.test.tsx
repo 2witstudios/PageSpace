@@ -20,11 +20,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 
-const { mockMutate, mockDelete, mockFetch, mockSWRState, mockToast } = vi.hoisted(() => ({
+const { mockMutate, mockDelete, mockFetch, mockSave, mockSWRState, mockToast } = vi.hoisted(() => ({
   mockMutate: vi.fn(),
   mockDelete: vi.fn(),
   mockFetch: vi.fn(),
-  mockSWRState: { data: { preferences: [] as { hotkeyId: string; binding: string }[] } },
+  mockSave: vi.fn(),
+  mockSWRState: {
+    data: { preferences: [] as { hotkeyId: string; binding: string }[] },
+    /** Make the revalidation half of `mutate` fail, as a flaky network would. */
+    revalidationFails: false,
+  },
   mockToast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
@@ -41,7 +46,7 @@ vi.mock('@/hooks/useHotkeyPreferences', async (importOriginal) => {
       error: undefined,
       mutate: mockMutate,
     }),
-    updateHotkeyPreference: vi.fn(),
+    updateHotkeyPreference: (id: string, binding: string) => mockSave(id, binding),
     deleteHotkeyPreference: (id: string) => mockDelete(id),
     fetchHotkeyPreferences: () => mockFetch(),
   };
@@ -53,12 +58,15 @@ import HotkeysSettingsPage from '../page';
 function serverHolds(preferences: { hotkeyId: string; binding: string }[]) {
   mockSWRState.data = { preferences };
   mockFetch.mockImplementation(async () => mockSWRState.data.preferences);
-  // Model SWR's optimistic form: an updater rewrites the cached payload, and
-  // the banner is derived from that, so the cache is what the page renders.
+  // Model SWR's optimistic form faithfully: the updater rewrites the cache
+  // *first*, and a revalidation that fails afterwards leaves that value in
+  // place. Nothing else in this file writes the cache, so the banner can only
+  // clear through the page's own updater — which is the mechanism under test.
   mockMutate.mockImplementation(async (updater?: unknown) => {
     if (typeof updater === 'function') {
       mockSWRState.data = (updater as (c: unknown) => typeof mockSWRState.data)(mockSWRState.data);
     }
+    if (mockSWRState.revalidationFails) throw new Error('offline');
     return mockSWRState.data;
   });
 }
@@ -77,7 +85,9 @@ async function clickDismiss() {
 describe('HotkeysSettingsPage reset notice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSWRState.revalidationFails = false;
     mockDelete.mockResolvedValue(undefined);
+    mockSave.mockResolvedValue(undefined);
   });
 
   it('given a stored binding that cannot fire, should name it in the notice', () => {
@@ -111,10 +121,9 @@ describe('HotkeysSettingsPage reset notice', () => {
   });
 
   it('given the row is still unusable, should delete it and let the notice fall away', async () => {
+    // The delete deliberately does not touch the cache: the banner may only
+    // disappear because the page folded the deletion into the payload itself.
     const { rerender } = renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
-    mockDelete.mockImplementation(async () => {
-      mockSWRState.data = { preferences: [] };
-    });
 
     await clickDismiss();
 
@@ -128,10 +137,7 @@ describe('HotkeysSettingsPage reset notice', () => {
     // afterwards must not tell the user to try again, and must not leave the
     // banner up as though nothing happened.
     const { rerender } = renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
-    mockDelete.mockImplementation(async () => {
-      mockSWRState.data = { preferences: [] };
-    });
-    mockMutate.mockRejectedValue(new Error('offline'));
+    mockSWRState.revalidationFails = true;
 
     await clickDismiss();
 
@@ -151,6 +157,30 @@ describe('HotkeysSettingsPage reset notice', () => {
     // The row survived, so the notice is still true and must still show.
     rerender(<HotkeysSettingsPage />);
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeDefined();
+  });
+
+  it('given the shortcut re-bound here, should drop the notice without waiting for a refetch', async () => {
+    // The banner tells the user to set the shortcut again. Doing so must take
+    // it down now — not whenever a revalidation happens to land, which on a
+    // slow connection left it instructing them to do what they had just done.
+    mockSWRState.revalidationFails = true;
+    const { rerender } = renderPage([{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }]);
+
+    await act(async () => {
+      screen.getAllByRole('button', { name: 'Alt+N' })[0].click();
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { bubbles: true, key: 'π', code: 'KeyP', altKey: true })
+      );
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Save' }).click();
+    });
+
+    expect(mockSave).toHaveBeenCalledWith('pages.quick-create', 'Alt+P');
+    rerender(<HotkeysSettingsPage />);
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
   it('given the read fails, should delete nothing rather than guess', async () => {

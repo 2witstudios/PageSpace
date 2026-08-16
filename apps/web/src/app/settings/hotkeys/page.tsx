@@ -101,9 +101,11 @@ export default function HotkeysSettingsPage() {
       await Promise.all(unusable.map(({ hotkeyId }) => deleteHotkeyPreference(hotkeyId)));
 
       // Past this point the dismiss has succeeded. Drop the deleted rows from
-      // the cached payload so the banner goes now, and keep the revalidation
-      // out of the try — a refetch that fails afterwards must not report a
-      // completed dismiss as a failure and leave the banner standing.
+      // the cached payload so the banner goes now, and do NOT await the
+      // revalidation: a refetch failing afterwards must not report a completed
+      // dismiss as a failure. It is the `void` and the `.catch` that guarantee
+      // that, not where the call sits — awaiting it here would put the reject
+      // back into the catch below and reintroduce exactly that bug.
       const deleted = new Set(unusable.map(({ hotkeyId }) => hotkeyId));
       void mutate(
         (current) => ({
@@ -125,7 +127,7 @@ export default function HotkeysSettingsPage() {
       await deleteHotkeyPreference(hotkeyId);
       setEditingId(null);
       toast.success('Hotkey reset to default');
-      mutate();
+      void mutate().catch(() => {});
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reset hotkey');
     }
