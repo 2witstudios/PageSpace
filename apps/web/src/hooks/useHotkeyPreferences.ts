@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useHotkeyStore } from '@/stores/useHotkeyStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -29,30 +29,16 @@ export function useHotkeyPreferences() {
   );
 
   const setUserBindings = useHotkeyStore((state) => state.setUserBindings);
-  /** Rows already sent for cleanup, so a stale payload cannot re-trigger one. */
-  const cleanedUp = useRef<Set<string>>(new Set());
 
-  // Sync to store when data loads
+  // Sync to store when data loads. A binding the store refuses to keep can
+  // never fire, so the default takes over immediately — but the row is left in
+  // place deliberately. It is the only durable record that the reset happened:
+  // the notice lives in an in-memory store, so deleting the row here would make
+  // the reset silent for anyone who reloads before opening Keyboard Shortcuts.
+  // The row is removed when the user acknowledges the notice or re-binds.
   useEffect(() => {
     if (!data?.preferences) return;
-
     setUserBindings(data.preferences);
-
-    // Anything in this payload the store refused to keep can never fire — a
-    // bare key, or an Alt binding holding a macOS-composed character. Drop the
-    // row so the default stands and this resolves itself once.
-    const { userBindings } = useHotkeyStore.getState();
-
-    for (const { hotkeyId } of data.preferences) {
-      if (userBindings.has(hotkeyId) || cleanedUp.current.has(hotkeyId)) continue;
-
-      // Remember the attempt before awaiting: a stale row that survives a failed
-      // delete would otherwise be retried on every revalidation.
-      cleanedUp.current.add(hotkeyId);
-      void deleteHotkeyPreference(hotkeyId).catch(() => {
-        // Best-effort cleanup — the store already fell back to the default.
-      });
-    }
   }, [data, setUserBindings]);
 
   return {

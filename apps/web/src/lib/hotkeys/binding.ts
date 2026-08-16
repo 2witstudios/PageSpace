@@ -18,8 +18,32 @@
 /** Modifier names, in the order they must appear in a canonical binding. */
 const MODIFIER_ORDER = ['Ctrl', 'Meta', 'Alt', 'Shift'] as const;
 
-/** Keys that are modifiers themselves and can never be the main key. */
-const MODIFIER_KEY_NAMES = new Set(['Control', 'Meta', 'Alt', 'Shift', 'CapsLock']);
+/**
+ * Keys that are modifiers themselves and can never be the main key.
+ *
+ * This is the modifier-key list from the UI Events spec, not just the four the
+ * widget used to exclude. `AltGraph` is the one that bites: on X11 AltGr fires
+ * `key: "AltGraph"` with `altKey === false`, so it takes the `e.key` path and
+ * would otherwise be recorded as a main key. The lock keys are here for the
+ * same reason `CapsLock` is — bound, they shadow a default and never fire.
+ */
+const MODIFIER_KEY_NAMES = new Set([
+  'Control',
+  'Meta',
+  'Alt',
+  'AltGraph',
+  'Shift',
+  'CapsLock',
+  'NumLock',
+  'ScrollLock',
+  'Fn',
+  'FnLock',
+  'Hyper',
+  'Super',
+  'Symbol',
+  'SymbolLock',
+  'OS',
+]);
 
 /** `e.code` values for the modifier keys, which can never be the main key. */
 const MODIFIER_CODE = /^(Control|Meta|Alt|Shift|OS)(Left|Right)?$|^CapsLock$/;
@@ -55,6 +79,10 @@ export function resolveEventKey(event: BindingEventLike): string {
   if (event.altKey && event.code) {
     if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
     if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+    // A numpad digit resolves to the digit, so one Alt binding covers both the
+    // numpad and the top row — the parity the `e.key` path gets for free, and
+    // which Alt would otherwise be alone in dropping.
+    if (/^Numpad[0-9]$/.test(event.code)) return event.code.slice(6);
     // Punctuation, named and navigation keys keep their code ("Slash", "Tab").
     // Alt bindings are therefore layout-independent, which is the trade Alt
     // forces on us: e.key carries no usable signal here.
@@ -190,13 +218,22 @@ const MAC_SYMBOLS: Record<string, string> = {
   Shift: '⇧',
 };
 
+/**
+ * A key token that renders as nothing useful. Space is `e.key` for the space
+ * bar, so `Ctrl+ ` would otherwise display as a lone "⌃" — indistinguishable
+ * from a half-recorded binding.
+ */
+const KEY_DISPLAY_NAMES: Record<string, string> = { ' ': 'Space' };
+
 /** Render a binding for display: ⌘⇧K on macOS, Ctrl+Shift+K elsewhere. */
 export function formatBindingForDisplay(binding: string, isMac: boolean): string {
   if (!binding) return '';
-  if (!isMac) return binding;
 
   const { modifiers, key } = splitBinding(binding);
-  return `${modifiers.map((m) => MAC_SYMBOLS[m] ?? m).join('')}${key}`;
+  const keyLabel = KEY_DISPLAY_NAMES[key] ?? key;
+
+  if (!isMac) return [...modifiers, keyLabel].join('+');
+  return `${modifiers.map((m) => MAC_SYMBOLS[m] ?? m).join('')}${keyLabel}`;
 }
 
 /** True when running on a macOS-like platform (browser only). */

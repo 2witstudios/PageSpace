@@ -17,8 +17,9 @@ interface HotkeyState {
   userBindings: Map<string, string>;
   /**
    * Hotkey IDs whose stored binding cannot fire and fell back to the default.
-   * Kept until the user re-binds or dismisses it, so the notice survives the
-   * cleanup that removes the row.
+   * Rebuilt from the preferences payload on every load — the row is left in
+   * place until the user acknowledges the notice, precisely so this in-memory
+   * state can be reconstructed after a reload.
    */
   resetHotkeys: string[];
   loaded: boolean;
@@ -64,8 +65,9 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
 
     set((state) => ({
       userBindings: map,
-      // Accumulate: cleanup removes the row, so a later load sees nothing wrong
-      // and would otherwise erase the notice before the user ever reads it.
+      // Accumulate rather than replace: a payload that no longer mentions the
+      // shortcut — a revalidation racing the delete that acknowledging fires —
+      // must not erase a notice the user has not read yet.
       resetHotkeys: [...new Set([...state.resetHotkeys, ...wasReset])],
       loaded: true,
     }));

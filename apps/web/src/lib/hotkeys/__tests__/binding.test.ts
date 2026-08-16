@@ -7,6 +7,7 @@ import {
   resolveEventKey,
 } from '../binding';
 import { HOTKEY_REGISTRY } from '../registry';
+import { matchesKeyEvent } from '@/stores/useHotkeyStore';
 
 function keyEvent(overrides: Partial<KeyboardEvent> & { key: string }) {
   return {
@@ -100,6 +101,14 @@ describe('eventToBinding', () => {
     expect(eventToBinding(keyEvent({ metaKey: true, key: 'Meta', code: 'MetaLeft' }))).toBe('');
   });
 
+  it('given a dead key without Alt, should refuse rather than emit "Dead"', () => {
+    // Some layouts report key "Dead" for a plain dead key (´, ^, ~). Only the
+    // Alt branch resolves through e.code, so a Ctrl or Shift press here would
+    // otherwise capture "Ctrl+Dead" — which the PATCH validator rejects.
+    expect(eventToBinding(keyEvent({ ctrlKey: true, key: 'Dead', code: 'Backquote' }))).toBe('');
+    expect(eventToBinding(keyEvent({ shiftKey: true, key: 'Dead', code: 'Quote' }))).toBe('');
+  });
+
   it('given an Option press with no e.code, should refuse rather than emit a composed character', () => {
     // A virtual or IME keyboard can report an empty code, which skips the Alt
     // branch of resolveEventKey. Emitting "Alt+Π" here would hand the widget a
@@ -125,6 +134,9 @@ describe('capture and validation agree', () => {
     { name: 'Ctrl+Pause', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: 'Pause', code: 'Pause' },
     { name: 'Ctrl+ArrowUp', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: 'ArrowUp', code: 'ArrowUp' },
     { name: 'Meta+Shift+Tab', ctrlKey: false, metaKey: true, altKey: false, shiftKey: true, key: 'Tab', code: 'Tab' },
+    { name: 'Meta+Backspace', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false, key: 'Backspace', code: 'Backspace' },
+    { name: 'Ctrl+Space', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, key: ' ', code: 'Space' },
+    { name: 'macOS Option+1 from the numpad', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, key: '¡', code: 'Numpad1' },
   ];
 
   for (const press of presses) {
@@ -132,9 +144,13 @@ describe('capture and validation agree', () => {
       const event = keyEvent(press as unknown as Partial<KeyboardEvent> & { key: string });
       const captured = eventToBinding(event);
 
+      // `eventToBinding` refuses anything non-canonical, so asserting
+      // `isCanonicalBinding(captured)` here would be a tautology. The two legs
+      // worth asserting are that the press was recordable at all, and that the
+      // runtime matcher fires on the string that was recorded.
       expect(captured, 'should capture something').not.toBe('');
-      expect(isCanonicalBinding(captured), `${captured} should validate`).toBe(true);
       expect(hasModifier(captured), `${captured} should carry a modifier`).toBe(true);
+      expect(matchesKeyEvent(captured, event), `${captured} should match its own press`).toBe(true);
     });
   }
 });
@@ -183,6 +199,23 @@ describe('isCanonicalBinding', () => {
     expect(isCanonicalBinding('Ctrl++')).toBe(true);
   });
 
+  it('given an Alt binding on a digit, should fire from the numpad as well', () => {
+    // The e.key path gives numpad parity for free; Alt resolves through e.code,
+    // so it has to map Numpad1 back to the digit or the same rebind would
+    // silently drop the numpad half.
+    expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Numpad1' }))).toBe('1');
+    expect(resolveEventKey(keyEvent({ altKey: true, key: '¡', code: 'Digit1' }))).toBe('1');
+  });
+
+  it('given a modifier key the old widget never excluded, should reject it', () => {
+    // X11 AltGr reports key "AltGraph" with altKey false, so it takes the
+    // e.key path and would otherwise be recorded as a main key.
+    expect(resolveEventKey(keyEvent({ ctrlKey: true, key: 'AltGraph', code: 'AltRight' }))).toBe('');
+    expect(isCanonicalBinding('Ctrl+AltGraph')).toBe(false);
+    expect(isCanonicalBinding('Ctrl+NumLock')).toBe(false);
+    expect(isCanonicalBinding('Ctrl+OS')).toBe(false);
+  });
+
   it('given a modifier name as the main key, should reject it', () => {
     // resolveEventKey returns '' for these, so the binding could never fire —
     // keeping it would shadow the default with something silently dead.
@@ -229,6 +262,18 @@ describe('hasModifier', () => {
 describe('formatBindingForDisplay', () => {
   it('given a Mac, should use symbols', () => {
     expect(formatBindingForDisplay('Meta+Shift+K', true)).toBe('⌘⇧K');
+  });
+
+  it('given the space bar, should name it rather than render a blank', () => {
+    // e.key for the space bar is " ", so the unnamed form displays as a lone
+    // "⌃" — indistinguishable from a half-recorded binding.
+    expect(formatBindingForDisplay('Ctrl+ ', true)).toBe('⌃Space');
+    expect(formatBindingForDisplay('Ctrl+ ', false)).toBe('Ctrl+Space');
+  });
+
+  it('given "+" as the main key, should keep it', () => {
+    expect(formatBindingForDisplay('Ctrl+Shift++', false)).toBe('Ctrl+Shift++');
+    expect(formatBindingForDisplay('Ctrl+Shift++', true)).toBe('⌃⇧+');
   });
 
   it('given a non-Mac, should keep the plain form', () => {

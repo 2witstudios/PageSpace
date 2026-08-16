@@ -131,9 +131,10 @@ describe('useHotkeyStore', () => {
       expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
     });
 
-    it('given cleanup that removes the row, should keep the notice until dismissed', () => {
-      // Cleanup deletes the row, so the next load sees nothing wrong. The
-      // notice must survive that or the user is never told.
+    it('given a payload that no longer names the shortcut, should keep the notice until dismissed', () => {
+      // Acknowledging the notice is what deletes the row. A revalidation that
+      // lands while that delete is in flight returns a payload with nothing
+      // wrong in it, and must not erase a notice the user has not read.
       useHotkeyStore.getState().setUserBindings([
         { hotkeyId: 'pages.quick-create', binding: 'Alt+Π' },
       ]);

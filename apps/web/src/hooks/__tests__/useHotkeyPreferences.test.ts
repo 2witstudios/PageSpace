@@ -1,10 +1,12 @@
 /**
  * useHotkeyPreferences Hook Tests
  *
- * Guards the persistence half of stale-binding cleanup: the store decides what
- * it can honour, but the hook is what writes that decision back. A bug here is
- * invisible in the store's own tests — the wrong call silently deletes a
- * shortcut that works, or retries a failed delete on every revalidation.
+ * Guards the persistence half of the stale-binding path: the store decides what
+ * it can honour, but the hook is what does — or deliberately does not — write
+ * that decision back. The row for a reset shortcut is the only durable record
+ * that the reset happened, because the notice lives in an in-memory store. A
+ * bug here makes the reset silent for anyone who reloads before opening
+ * Keyboard Shortcuts, which is invisible in the store's own tests.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -55,22 +57,43 @@ describe('useHotkeyPreferences', () => {
     expect(getEffectiveBinding('editing.find')).toBe('Ctrl+Shift+?');
   });
 
-  it('given an unmatchable legacy binding, should delete the row', async () => {
+  it('given an unmatchable legacy binding, should fall back but keep the row', async () => {
+    // Deleting here would work, and would also destroy the only evidence the
+    // reset happened — the banner is in-memory, so a reload before the user
+    // opens Keyboard Shortcuts would leave them with a changed shortcut and no
+    // explanation. The row is removed when they acknowledge the notice.
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
 
     renderHook(() => useHotkeyPreferences());
 
-    expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
+    expect(writes()).toEqual([]);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
   });
 
-  it('given a stored bare key, should delete the row', async () => {
+  it('given a stored bare key, should fall back but keep the row', async () => {
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'N' }] };
 
     renderHook(() => useHotkeyPreferences());
 
-    expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
+    expect(writes()).toEqual([]);
     expect(getEffectiveBinding('pages.quick-create')).toBe('Alt+N');
+    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
+  });
+
+  it('given a reload after the reset, should raise the notice again from the row', async () => {
+    // The point of keeping the row: a fresh document has an empty store, and
+    // the payload is what reconstructs the banner.
+    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
+    renderHook(() => useHotkeyPreferences());
+
+    // A new document: same server state, brand-new in-memory store.
+    useHotkeyStore.getState().reset();
+    expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
+
+    renderHook(() => useHotkeyPreferences());
+
+    expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
   });
 
   it('given only valid bindings, should write nothing', async () => {
@@ -79,24 +102,12 @@ describe('useHotkeyPreferences', () => {
     renderHook(() => useHotkeyPreferences());
 
     expect(writes()).toEqual([]);
+    expect(useHotkeyStore.getState().resetHotkeys).toEqual([]);
   });
 
-  it('given a revalidation that still returns the dropped row, should not re-delete it', async () => {
-    // A failed delete leaves the row in place. Retrying on every revalidation
-    // would hammer the endpoint for as long as the session lasts.
-    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
-
-    const { rerender } = renderHook(() => useHotkeyPreferences());
-    expect(writes()).toContainEqual(['DELETE', { hotkeyId: 'pages.quick-create' }]);
-
-    mockFetchWithAuth.mockClear();
-    mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
-    rerender();
-
-    expect(writes()).toEqual([]);
-  });
-
-  it('given a revalidation after the row is gone, should write nothing and keep the notice', async () => {
+  it('given a revalidation that no longer returns the row, should keep the notice', async () => {
+    // Acknowledging clears the notice and deletes the row. A revalidation that
+    // lands in between must not erase a notice the user has not read.
     mockSWRState.data = { preferences: [{ hotkeyId: 'pages.quick-create', binding: 'Alt+Π' }] };
 
     const { rerender } = renderHook(() => useHotkeyPreferences());
@@ -106,7 +117,6 @@ describe('useHotkeyPreferences', () => {
     rerender();
 
     expect(writes()).toEqual([]);
-    // The notice still stands even though the row that caused it is gone.
     expect(useHotkeyStore.getState().resetHotkeys).toContain('pages.quick-create');
   });
 });

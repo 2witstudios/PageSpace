@@ -26,14 +26,19 @@ export function HotkeyInput({ initialValue, onSave, onCancel }: HotkeyInputProps
       e.preventDefault();
       e.stopPropagation();
 
-      // Escape to cancel
-      if (e.key === 'Escape') {
+      // Escape cancels and Backspace/Delete disables — but only unmodified.
+      // Gating on the modifiers is what lets ⌘⌫ be recorded as a binding: these
+      // checks run before capture, so an ungated Backspace turned an attempt to
+      // bind "Close Tab" to ⌘⌫ into silently disabling it instead, and no
+      // modified Escape or Delete combination could ever be recorded.
+      const isBareKey = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+
+      if (isBareKey && e.key === 'Escape') {
         onCancel();
         return;
       }
 
-      // Backspace/Delete to clear (disable the hotkey)
-      if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (isBareKey && (e.key === 'Backspace' || e.key === 'Delete')) {
         setBinding('');
         setHint(null);
         setIsCapturing(false);

@@ -67,6 +67,16 @@ export default function HotkeysSettingsPage() {
     }
   };
 
+  // The stale rows are what make the notice survive a reload — the store is
+  // in-memory, so they are the only durable record that the reset happened.
+  // Acknowledging is therefore what deletes them.
+  const handleDismissResetNotice = async () => {
+    const stale = [...resetHotkeys];
+    dismissResetNotice();
+    await Promise.allSettled(stale.map((id) => deleteHotkeyPreference(id)));
+    mutate();
+  };
+
   const handleReset = async (hotkeyId: string) => {
     // Drop the override entirely rather than storing the default as a custom
     // binding — the default is resolved per platform at read time.
@@ -103,7 +113,7 @@ export default function HotkeysSettingsPage() {
               never be triggered, so {resetHotkeys.length === 1 ? 'it has' : 'they have'} been restored
               to the default. Set {resetHotkeys.length === 1 ? 'it' : 'them'} again below.
             </p>
-            <Button variant="ghost" size="sm" onClick={dismissResetNotice}>
+            <Button variant="ghost" size="sm" onClick={handleDismissResetNotice}>
               Dismiss
             </Button>
           </div>
