@@ -82,7 +82,8 @@ export async function GET(request: Request) {
           FROM channel_messages cm
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+          WHERE cm."isActive" = true
+            AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
             AND (
               cm."userId" != ${userId}
               OR cm."aiMeta"->>'senderType' = 'agent'
@@ -255,7 +256,8 @@ export async function GET(request: Request) {
             FROM channel_messages cm
             LEFT JOIN channel_read_status crs
               ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-            WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+            WHERE cm."isActive" = true
+              AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
               AND (
                 cm."userId" != ${userId}
                 OR cm."aiMeta"->>'senderType' = 'agent'

@@ -14,8 +14,13 @@ import { createMockSocket } from '@/test/socket-mocks';
 
 const { mockMutate } = vi.hoisted(() => ({ mockMutate: vi.fn() }));
 const mockSocket = createMockSocket();
+// A second Socket instance stands in for the one useSocket mints on auth
+// refresh — it replaces the object rather than mutating it, so every consumer
+// effect re-subscribes.
+const refreshedSocket = createMockSocket();
+let currentSocket = mockSocket;
 
-vi.mock('../useSocket', () => ({ useSocket: () => mockSocket }));
+vi.mock('../useSocket', () => ({ useSocket: () => currentSocket }));
 
 vi.mock('swr', () => ({
   default: () => ({ data: undefined, mutate: mockMutate }),
@@ -37,6 +42,8 @@ describe('useSidebarBadges', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mockSocket._handlers.clear();
+    refreshedSocket._handlers.clear();
+    currentSocket = mockSocket;
   });
 
   afterEach(() => {
@@ -74,6 +81,23 @@ describe('useSidebarBadges', () => {
     flushDebounce();
 
     expect(mockMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('still revalidates when the socket is replaced mid-debounce', () => {
+    // An auth refresh swaps the Socket instance, which re-runs the subscription
+    // effect. A debounce timer scoped to that effect would be cancelled by the
+    // cleanup and the badge would silently stay stale.
+    const { rerender } = renderHook(() => useSidebarBadges());
+    mockMutate.mockClear();
+
+    act(() => { mockSocket._trigger('inbox:channel_updated', { id: 'ch_1' }); });
+    currentSocket = refreshedSocket;
+    rerender();
+    flushDebounce();
+
+    expect(mockMutate).toHaveBeenCalled();
+    // and the new socket is the one now subscribed
+    expect(refreshedSocket._handlers.get('inbox:channel_updated')?.length).toBeGreaterThan(0);
   });
 
   it('removes its handlers and cancels a pending revalidation on unmount', () => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
@@ -43,19 +43,28 @@ export function useSidebarBadges(): SidebarBadges {
   // Debounced because channel traffic is burstier than DM/notification traffic
   // and each event triggers a full /api/sidebar/badges refetch; undebounced, a
   // busy channel fires one request per message.
+  // The pending timer is a ref, not effect-local, and the effect's cleanup
+  // deliberately does not clear it. `socket` identity is replaced on every auth
+  // refresh (useSocket mints a new Socket rather than mutating the old one), so
+  // an effect-local timer meant an event landing in the 250ms either side of a
+  // token refresh had its revalidation cancelled by the re-subscribe and never
+  // fired — leaving the badge stale until the next event. Only unmount cancels.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
   useEffect(() => {
     if (!socket) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const revalidate = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
         void mutate();
       }, REVALIDATE_DEBOUNCE_MS);
     };
     for (const event of SOCKET_EVENTS) socket.on(event, revalidate);
     return () => {
-      if (timer) clearTimeout(timer);
       for (const event of SOCKET_EVENTS) socket.off(event, revalidate);
     };
   }, [socket, mutate]);

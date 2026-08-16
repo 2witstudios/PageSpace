@@ -95,8 +95,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   you had not read and the number beside **Channels** stayed at zero, disagreeing with the per-channel
   counts on the Channels page. It now counts every message you have not read across the channels you
   can see, in every drive you belong to, and it moves the moment a message arrives rather than
-  waiting for a page reload. Opening the channel clears it, and a channel you do not have access to
-  never contributes to it.
+  waiting for a page reload. A channel you do not have access to never contributes to it.
+
+- **A channel you are sitting in stops counting messages you just watched arrive** — the channel was
+  only ever marked read at the moment you opened it, so messages that landed while you sat reading
+  them still counted as unread and inflated the sidebar count until you navigated away and came
+  back. They now clear as they arrive, and a channel left open in a background tab still counts
+  them, so nothing marks itself read behind your back.
+
+- **Deleted messages no longer count as unread** — a message someone posted and then deleted still
+  counted towards the unread count on the Channels page, leaving a number next to a channel that had
+  nothing new to show you. It only cleared by opening the channel.
 
 - **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
   endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered

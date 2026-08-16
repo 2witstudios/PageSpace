@@ -71,36 +71,58 @@ const mockAuth = () => {
 
 /**
  * The other four badges use the Drizzle query builder, which is a thenable
- * chain. One self-returning thenable stands in for all of them and always
- * resolves to a zero count, so `channels` is the only figure under test.
+ * chain. Each `db.select()` gets its own self-returning thenable resolving to a
+ * DISTINCT count, handed out in the order the route builds its Promise.all:
+ * dms, files, tasks, calendar (channels is raw SQL and takes no slot).
+ *
+ * Distinct values are the point. With every chain resolving to 0, transposing
+ * two names in the positional destructuring — which this route's change had to
+ * touch — is invisible. See the response-contract test below.
  */
+const SELECT_COUNTS = [11, 22, 33, 44];
+
 const stubQueryBuilder = () => {
-  const chain: Record<string, unknown> = {
-    then: (resolve: (value: unknown) => unknown) => resolve([{ count: 0 }]),
-  };
-  for (const method of ['from', 'innerJoin', 'leftJoin', 'where']) {
-    chain[method] = () => chain;
-  }
-  (db.select as unknown as ReturnType<typeof vi.fn>).mockReturnValue(chain);
+  let nth = 0;
+  (db.select as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    const value = SELECT_COUNTS[nth++] ?? 0;
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown) => resolve([{ count: value }]),
+    };
+    for (const method of ['from', 'innerJoin', 'leftJoin', 'where']) {
+      chain[method] = () => chain;
+    }
+    return chain;
+  });
 };
 
-const grantView = (...pageIds: string[]) => {
+const perm = (canView: boolean) => ({ canView, canEdit: false, canShare: false, canDelete: false });
+
+/**
+ * getBatchPagePermissions pre-seeds every id it was asked about with an explicit
+ * deny, so "denied" arrives as a present entry with canView:false, not as an
+ * absent key. Tests must be able to express both — a filter written as
+ * `permissions.has(id)` passes the absent case while leaking the denied one.
+ */
+const setPermissions = (entries: Record<string, boolean>) => {
   vi.mocked(getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-    new Map(
-      pageIds.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }])
-    )
+    new Map(Object.entries(entries).map(([id, canView]) => [id, perm(canView)]))
   );
 };
+
+const grantView = (...pageIds: string[]) =>
+  setPermissions(Object.fromEntries(pageIds.map((id) => [id, true])));
 
 const withUnreadRows = (rows: Array<{ id: string; unread_count: string }>) => {
   (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ rows });
 };
 
-const getChannels = async () => {
+const getBadges = async () => {
   const res = await GET(new Request('http://localhost/api/sidebar/badges'));
   expect(res.status).toBe(200);
-  return (await res.json()).channels as number;
+  return (await res.json()) as Record<string, number>;
 };
+
+const getChannels = async () => (await getBadges()).channels;
 
 describe('GET /api/sidebar/badges — channels', () => {
   beforeEach(() => {
@@ -119,12 +141,24 @@ describe('GET /api/sidebar/badges — channels', () => {
     expect(await getChannels()).toBe(7);
   });
 
-  it('excludes channels the user cannot view', async () => {
+  it('excludes a channel present in the permission map but denied', async () => {
     withUnreadRows([
       { id: 'ch_visible', unread_count: '2' },
-      { id: 'ch_hidden', unread_count: '99' },
+      { id: 'ch_denied', unread_count: '99' },
     ]);
-    // ch_hidden is in one of the user's drives but permissioned away from them.
+    // ch_denied is in one of the user's drives but permissioned away from them.
+    // It is PRESENT with canView:false — the shape getBatchPagePermissions
+    // actually returns — so a `permissions.has(id)` filter would leak it.
+    setPermissions({ ch_visible: true, ch_denied: false });
+
+    expect(await getChannels()).toBe(2);
+  });
+
+  it('excludes a channel absent from the permission map', async () => {
+    withUnreadRows([
+      { id: 'ch_visible', unread_count: '2' },
+      { id: 'ch_missing', unread_count: '99' },
+    ]);
     grantView('ch_visible');
 
     expect(await getChannels()).toBe(2);
@@ -148,5 +182,33 @@ describe('GET /api/sidebar/badges — channels', () => {
 
     expect(await getChannels()).toBe(0);
     expect(getBatchPagePermissions).not.toHaveBeenCalled();
+  });
+
+  it('reports 0 unread channels rather than blanking every badge when the query fails', async () => {
+    // The channel slot sits in a Promise.all: an unhandled rejection 500s the
+    // route, and the client renders that as all five badges empty. Only the
+    // channel figure should degrade.
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+
+    const badges = await getBadges();
+    expect(badges.channels).toBe(0);
+    expect(badges.dms).toBe(SELECT_COUNTS[0]);
+    expect(badges.calendar).toBe(SELECT_COUNTS[3]);
+  });
+
+  it('keeps each badge wired to its own query', async () => {
+    // Guards the positional destructuring of the Promise.all, which this
+    // route's change had to renumber. Each db.select() resolves to a distinct
+    // count in build order, so a transposition shows up as swapped values.
+    withUnreadRows([{ id: 'ch_1', unread_count: '5' }]);
+    grantView('ch_1');
+
+    expect(await getBadges()).toEqual({
+      dms: SELECT_COUNTS[0],
+      channels: 5,
+      files: SELECT_COUNTS[1],
+      tasks: SELECT_COUNTS[2],
+      calendar: SELECT_COUNTS[3],
+    });
   });
 });
