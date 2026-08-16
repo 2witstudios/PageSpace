@@ -36,20 +36,6 @@ vi.mock('../useMessageActions', () => ({
 const userMsg = (id: string): UIMessage => ({ id, role: 'user', parts: [{ type: 'text', text: 'hi' }] });
 const assistantMsg = (id: string): UIMessage => ({ id, role: 'assistant', parts: [{ type: 'text', text: 'reply' }] });
 
-const baseOptions = (
-  overrides: Partial<UseCacheMessageActionsOptions> = {},
-): UseCacheMessageActionsOptions => ({
-  agentId: 'agent-1',
-  conversationId: 'conv-1',
-  renderedMessages: [
-    { mode: 'confirmed', message: userMsg('u1') },
-    { mode: 'confirmed', message: assistantMsg('a1') },
-  ],
-  regenerate: vi.fn(),
-  wrapSend: makeWrapSend(overrides.conversationId === undefined ? 'conv-1' : overrides.conversationId),
-  ...overrides,
-});
-
 /**
  * Faithful to `useSendHandoff.wrapSend`, because the retry latch now IS its pendingSend
  * registration: it registers synchronously, keyed by conversation, before invoking the send.
@@ -59,6 +45,26 @@ const makeWrapSend = (conversationId: string | null) => <T,>(sendFn: () => T): T
   if (!conversationId) return undefined;
   useEditingStore.getState().startPendingSend(conversationId);
   return sendFn();
+};
+
+const baseOptions = (
+  overrides: Partial<UseCacheMessageActionsOptions> = {},
+): UseCacheMessageActionsOptions => {
+  // Resolved once so the default `wrapSend` is keyed to whatever conversation these options
+  // actually describe — an override has to move both together or the stub registers under a
+  // conversation the hook is not looking at.
+  const conversationId = overrides.conversationId === undefined ? 'conv-1' : overrides.conversationId;
+  return {
+    agentId: 'agent-1',
+    conversationId,
+    renderedMessages: [
+      { mode: 'confirmed', message: userMsg('u1') },
+      { mode: 'confirmed', message: assistantMsg('a1') },
+    ],
+    regenerate: vi.fn(),
+    wrapSend: makeWrapSend(conversationId),
+    ...overrides,
+  };
 };
 
 describe('useCacheMessageActions handleRetry', () => {
@@ -199,9 +205,7 @@ describe('useCacheMessageActions handleRetry', () => {
 
     const { result, rerender } = renderHook(
       ({ conversationId }: { conversationId: string }) =>
-        useCacheMessageActions(
-          baseOptions({ conversationId, wrapSend: makeWrapSend(conversationId) }),
-        ),
+        useCacheMessageActions(baseOptions({ conversationId })),
       { initialProps: { conversationId: 'conv-1' } },
     );
     mockState.handleRetryBase?.mockClear();
