@@ -23,6 +23,19 @@ context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
+> **`boxId` — owning versus borrowing a sandbox.** The schema now carries a nullable
+> `agent_workspaces.boxId` pointing at a `drive_boxes` row: a *persistent, drive-owned*
+> machine that sessions can be spawned inside (epic "Deliberate Per-Drive Boxes"). The
+> column **ships dark** — nothing writes it until that epic's Phase 3 — so everything
+> below still describes every session that exists today.
+>
+> What changes when it is written: a box-bound session **borrows** its box's Sprite
+> instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
+> the database, not by convention (`agent_workspaces_box_no_sprite_check`), which is what
+> makes "ending a box session cannot kill the box" structural: the lifecycle planner sees
+> `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
+> sandboxes remain the default and are unchanged.
+
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 

@@ -63,6 +63,7 @@ import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
+import * as driveBoxes from '../drive-boxes';
 
 const schemaDir = resolve(process.cwd(), 'src/schema');
 
@@ -532,6 +533,20 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflowRuns.workflowRunsRelations).toBeDefined();
+    });
+  });
+
+  describe('drive_boxes schema', () => {
+    it('exports enums', () => {
+      expect(driveBoxes.driveBoxKind).toBeDefined();
+    });
+
+    it('exports tables', () => {
+      expect(driveBoxes.driveBoxes).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(driveBoxes.driveBoxesRelations).toBeDefined();
     });
   });
 });

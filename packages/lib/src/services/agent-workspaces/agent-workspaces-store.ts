@@ -38,6 +38,20 @@ export interface AgentSessionRecord {
   /** Display label only — no uniqueness, never an address. */
   name: string | null;
 
+  /**
+   * The persistent box this session runs inside, or null for the default
+   * ephemeral session. Carried here because `findById` selects the WHOLE row
+   * and casts it to this interface: a field missing from this mirror is not
+   * absent at runtime, it is present and invisible to the type system, which
+   * is the drift this file would otherwise hand to its callers.
+   *
+   * Nothing reads it yet — `spawnAgentSession` starts writing it in Phase 3.
+   * A box-bound session holds NO Sprite pointer of its own (it borrows the
+   * box's), which the database enforces via
+   * `agent_workspaces_box_no_sprite_check`.
+   */
+  boxId: string | null;
+
   spriteKey: string | null;
   sandboxId: string | null;
   spriteInstanceId: string | null;

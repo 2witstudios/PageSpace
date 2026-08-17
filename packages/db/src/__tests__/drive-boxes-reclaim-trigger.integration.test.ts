@@ -125,6 +125,106 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
     }
   });
 
+  /**
+   * The "sessions are history rows" claim, executed. `boxId` is `ON DELETE SET
+   * NULL` precisely so that reclaiming a machine never destroys the
+   * conversations that ran on it — and until this test, nothing proved the
+   * database actually behaves that way rather than the docblock merely saying
+   * so. A cascade here would silently delete user chat history as a side
+   * effect of an admin deleting a box.
+   */
+  it('given a box-bound session, deleting the BOX should null the binding, KEEP the session, and still reclaim', async () => {
+    const suffix = `boxsess-${process.pid}-${process.hrtime.bigint()}`;
+    const sandboxId = `pgs-box-${suffix}`;
+    const boxId = `b-${suffix}`;
+    const workspaceId = `ws-${suffix}`;
+    const { userId, driveId } = await seedDrive(suffix);
+    try {
+      await client.query(
+        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
+        [boxId, driveId, sandboxId],
+      );
+      // A box-bound session: drive set, box set, and NO sprite pointer of its
+      // own — it borrows the box's.
+      await client.query(
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "updatedAt")
+         VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
+        [workspaceId, userId, driveId, boxId],
+      );
+
+      await client.query(`DELETE FROM drive_boxes WHERE id = $1`, [boxId]);
+
+      const { rows: sessions } = await client.query<{ boxId: string | null; driveId: string | null }>(
+        `SELECT "boxId", "driveId" FROM agent_workspaces WHERE id = $1`,
+        [workspaceId],
+      );
+      // The session SURVIVES — this is the whole reason the FK is SET NULL.
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].boxId).toBeNull();
+      // And it keeps its drive: nulling `driveId` too would silently convert it
+      // into a global-assistant session, which is the failure mode that ruled
+      // out a composite FK here.
+      expect(sessions[0].driveId).toBe(driveId);
+
+      // The box's Sprite is still reclaimed on the way out.
+      const { rows: reclaims } = await client.query(
+        `SELECT 1 FROM machine_sprite_reclaims WHERE "sandboxId" = $1`,
+        [sandboxId],
+      );
+      expect(reclaims).toHaveLength(1);
+    } finally {
+      await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [sandboxId]);
+      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    }
+  });
+
+  /**
+   * Both `drive_boxes` and `agent_workspaces` cascade from `drives`, and the
+   * session additionally holds an `ON DELETE SET NULL` FK at the box. Deleting
+   * the drive fires all three at once. This asserts they cooperate — the
+   * pointer still reaches the outbox even though the row holding the binding
+   * is itself being destroyed in the same statement.
+   */
+  it('given a drive holding a box AND a box-bound session, deleting the drive should still reclaim', async () => {
+    const suffix = `boxcasc-${process.pid}-${process.hrtime.bigint()}`;
+    const sandboxId = `pgs-box-${suffix}`;
+    const boxId = `b-${suffix}`;
+    const workspaceId = `ws-${suffix}`;
+    const { userId, driveId } = await seedDrive(suffix);
+    try {
+      await client.query(
+        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
+        [boxId, driveId, sandboxId],
+      );
+      await client.query(
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "updatedAt")
+         VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
+        [workspaceId, userId, driveId, boxId],
+      );
+
+      await client.query(`DELETE FROM drives WHERE id = $1`, [driveId]);
+
+      const { rows } = await client.query<{ spriteInstanceId: string | null }>(
+        `SELECT "spriteInstanceId" FROM machine_sprite_reclaims WHERE "sandboxId" = $1`,
+        [sandboxId],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].spriteInstanceId).toBe('inst-1');
+
+      // Both rows went with the drive; only the FK-less outbox survives.
+      const { rows: left } = await client.query(
+        `SELECT 1 FROM agent_workspaces WHERE id = $1`,
+        [workspaceId],
+      );
+      expect(left).toHaveLength(0);
+    } finally {
+      await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [sandboxId]);
+      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    }
+  });
+
   it('given a reused sandbox NAME now holds a newer VM, should chase the live instance rather than keep the stale one', async () => {
     const suffix = `boxrec-aba-${process.pid}-${process.hrtime.bigint()}`;
     const sandboxId = `pgs-box-${suffix}`;
