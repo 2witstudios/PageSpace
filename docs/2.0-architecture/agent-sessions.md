@@ -23,42 +23,33 @@ context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
-> **`boxId` — owning versus borrowing a sandbox.** The schema now carries a nullable
-> `agent_workspaces.boxId` pointing at a `drive_boxes` row: a *persistent, drive-owned*
-> machine that sessions can be spawned inside (epic "Deliberate Per-Drive Boxes"). The
-> column **ships dark** — nothing writes it until that epic's Phase 3 — so everything
-> below still describes every session that exists today.
+> **`envId` — owning versus borrowing a sandbox.** The schema now carries a nullable
+> `agent_workspaces.envId` pointing at a `drive_envs` row: a *persistent, drive-owned*
+> ENVIRONMENT that sessions can be spawned inside (epic "Deliberate Per-Drive
+> Environments"). The column **ships dark** — nothing writes it until that epic's Phase 3
+> — so everything below still describes every session that exists today.
 >
-> What changes when it is written: a box-bound session **borrows** its box's sandbox
+> What changes when it is written: an env-bound session **borrows** its env's sandbox
 > instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
-> the database, not by convention (`agent_workspaces_box_no_sprite_check`), which is what
-> makes "ending a box session cannot kill the box" structural: the lifecycle planner sees
+> the database, not by convention (`agent_workspaces_env_no_sprite_check`), which is what
+> makes "ending an env session cannot kill the env" structural: the lifecycle planner sees
 > `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
 > sandboxes remain the default and are unchanged.
 >
-> **A box owns its sessions.** `boxId` is `ON DELETE CASCADE`: deleting a box deletes the
-> sessions run inside it, their panes, that tree's rev counter and their shells —
+> **An env owns its sessions.** `envId` is `ON DELETE CASCADE`: deleting an env deletes
+> the sessions run inside it, their panes, that tree's rev counter and their shells —
 > everything that already cascades from a session row. It does **not** reach chat
 > history, because nothing connects the two: `conversations` lost its session column at
 > `0256` and a pane's `targetId` is polymorphic with no foreign key, so conversations are
 > independent rows that stay reachable through the cross-session past-conversations
-> surface. What a cascade destroys is layout, not threads. Nor is any accounting lost — a
-> box-bound session is CHECK-forbidden from holding Sprite or storage/billing columns, so
-> the row carries no VM to orphan and no bytes to bill.
+> surface. What a cascade destroys is layout and shell scrollback, not threads. Nor is
+> any accounting lost — an env-bound session is CHECK-forbidden from holding Sprite or
+> storage/billing columns, so the row carries no VM to orphan and no bytes to bill.
 >
-> **A box's substrate follows its kind, and only one substrate hosts sessions.**
-> `substrateForBoxKind` (`@pagespace/lib/drive-boxes/box-kind`) maps `dev` and `staging`
-> to Sprite, and `deploy` to a Fly Machine. A borrowed sandbox is therefore always a
-> Sprite — not because sessions pick the Sprite half, but because a **deploy box refuses
-> to host sessions at all** (v1); it is a publish target, and its Fly state is meant to
-> live on a hosting row rather than in the Sprite columns — which
-> `drive_boxes_sprite_kind_check` enforces by forbidding those columns on a
-> `kind='deploy'` row. That hosting row ships with the Published Apps work and does not
-> exist yet. So the box table's
-> teardown trigger can only ever hand `machine_sprite_reclaims` a Sprite name. The
-> matching Fly-side outbox (`app_hosting_reclaims`) arrives with the Published Apps
-> work and does not exist yet, so a deploy box currently has no reclaim path at all —
-> safe only because nothing can provision one until that lands.
+> **There is no env "kind".** dev / staging / prod are use cases a user expresses by
+> NAMING an env; every env is Sprite-backed uniformly. The Fly serving tier attaches
+> later as a `published_apps.envId` hosting row pointing AT an env — it never puts Fly
+> pointers on the env row.
 
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):

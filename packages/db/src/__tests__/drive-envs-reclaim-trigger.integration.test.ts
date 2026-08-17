@@ -1,5 +1,5 @@
 /**
- * `drive_boxes` Sprite reclaim trigger (0263) — against a REAL database.
+ * `drive_envs` Sprite reclaim trigger (0263) — against a REAL database.
  *
  * The sibling suite (`schema/__tests__/drive-boxes.test.ts`) asserts the
  * trigger's SQL TEXT, which proves the migration says the right thing and
@@ -9,14 +9,14 @@
  * assertion and lose a live, billing microVM in production.
  *
  * So this deletes real rows and reads the outbox. The path it walks is the
- * expensive one: deleting the DRIVE, so the box row dies by referential
+ * expensive one: deleting the DRIVE, so the env row dies by referential
  * cascade rather than by a direct DELETE — which is how a permanent drive
  * delete and an Art. 17 erasure both reach it, and the case a per-delete-path
  * guard would have missed.
  *
  * Excluded from the default `vitest run` (no database there) — see
  * `vitest.config.ts`. Run with:
- *     bun run --filter '@pagespace/db' test:integration -- src/__tests__/drive-boxes-reclaim-trigger.integration.test.ts
+ *     bun run --filter '@pagespace/db' test:integration -- src/__tests__/drive-envs-reclaim-trigger.integration.test.ts
  * It fails loudly rather than skipping when DATABASE_URL is absent: a silently
  * skipped reclaim test has already hidden a real failure in this repo once.
  */
@@ -29,7 +29,7 @@ beforeAll(async () => {
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error(
-      'drive-boxes-reclaim-trigger.integration.test.ts requires DATABASE_URL pointed at a ' +
+      'drive-envs-reclaim-trigger.integration.test.ts requires DATABASE_URL pointed at a ' +
         'migrated database. It is not skippable: this trigger is the last pointer to a ' +
         'billing VM whose row is disappearing, and a silent skip proves nothing.',
     );
@@ -59,19 +59,19 @@ async function seedDrive(suffix: string): Promise<{ userId: string; driveId: str
   const userId = `u-${suffix}`;
   const driveId = `d-${suffix}`;
   await client.query(
-    `INSERT INTO users (id, name, email) VALUES ($1, 'drive box probe', $2)`,
+    `INSERT INTO users (id, name, email) VALUES ($1, 'drive env probe', $2)`,
     [userId, `${suffix}@example.test`],
   );
   await client.query(
     `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt")
      VALUES ($1, 'box probe drive', $2, $3, (now() at time zone 'utc'))`,
-    [driveId, `box-probe-${suffix}`, userId],
+    [driveId, `env-probe-${suffix}`, userId],
   );
   return { userId, driveId };
 }
 
-describe('drive_boxes sprite reclaim trigger — live', () => {
-  it('should be armed and ENABLED on drive_boxes', async () => {
+describe('drive_envs sprite reclaim trigger — live', () => {
+  it('should be armed and ENABLED on drive_envs', async () => {
     // Filtered by NAME rather than asserting the table has exactly one trigger:
     // Phase 2 may well add another, and this test is about THIS trigger being
     // alive, not about the table staying single-triggered forever.
@@ -79,12 +79,12 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
       `SELECT t.tgname, p.proname, t.tgenabled
          FROM pg_trigger t
          JOIN pg_proc p ON p.oid = t.tgfoid
-        WHERE t.tgrelid = 'drive_boxes'::regclass
+        WHERE t.tgrelid = 'drive_envs'::regclass
           AND NOT t.tgisinternal
-          AND t.tgname = 'drive_boxes_sprite_reclaim'`,
+          AND t.tgname = 'drive_envs_sprite_reclaim'`,
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].proname).toBe('drive_boxes_capture_sprite_reclaim');
+    expect(rows[0].proname).toBe('drive_envs_capture_sprite_reclaim');
     // 'O' = enabled for origin+local. A disabled trigger is silent data loss.
     expect(rows[0].tgenabled).toBe('O');
   });
@@ -99,39 +99,35 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
     const { rows } = await client.query<{ conname: string; convalidated: boolean }>(
       `SELECT conname, convalidated FROM pg_constraint
         WHERE conname IN (
-          'drive_boxes_sprite_kind_check',
-          'agent_workspaces_box_no_sprite_check',
-          'agent_workspaces_box_needs_drive_check'
+          'agent_workspaces_env_no_sprite_check',
+          'agent_workspaces_env_needs_drive_check'
         )
         ORDER BY conname`,
     );
     const validated = new Map(rows.map((r) => [r.conname, r.convalidated]));
     expect([...validated.keys()].sort()).toEqual([
-      'agent_workspaces_box_needs_drive_check',
-      'agent_workspaces_box_no_sprite_check',
-      'drive_boxes_sprite_kind_check',
+      'agent_workspaces_env_needs_drive_check',
+      'agent_workspaces_env_no_sprite_check',
     ]);
-    // `drive_boxes` is created empty in the same statement — nothing to scan.
-    expect(validated.get('drive_boxes_sprite_kind_check')).toBe(true);
     // `agent_workspaces` is populated — stage 2 (`VALIDATE CONSTRAINT`) is a
     // separate release. If either of these flips to true inside THIS release,
     // the two-stage rule was broken.
-    expect(validated.get('agent_workspaces_box_no_sprite_check')).toBe(false);
-    expect(validated.get('agent_workspaces_box_needs_drive_check')).toBe(false);
+    expect(validated.get('agent_workspaces_env_no_sprite_check')).toBe(false);
+    expect(validated.get('agent_workspaces_env_needs_drive_check')).toBe(false);
   });
 
-  it('given a box with a live Sprite pointer, should MOVE it into the outbox when the drive cascade deletes it', async () => {
-    const suffix = uniqueSuffix('boxrec');
-    const sandboxId = `pgs-box-${suffix}`;
+  it('given an env with a live Sprite pointer, should MOVE it into the outbox when the drive cascade deletes it', async () => {
+    const suffix = uniqueSuffix('envrec');
+    const sandboxId = `pgs-env-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "createdBy", "sandboxId", "spriteInstanceId", "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', $3, $4, $5, (now() at time zone 'utc'))`,
+        `INSERT INTO drive_envs (id, "driveId", name, "createdBy", "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', $3, $4, $5, (now() at time zone 'utc'))`,
         [`b-${suffix}`, driveId, userId, sandboxId, 'inst-1'],
       );
 
-      // The cascade path, not a direct DELETE FROM drive_boxes: this is how a
+      // The cascade path, not a direct DELETE FROM drive_envs: this is how a
       // permanent drive delete and an account erasure both reach the row.
       await client.query(`DELETE FROM drives WHERE id = $1`, [driveId]);
 
@@ -148,13 +144,13 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   it('given a Sprite already CONFIRMED destroyed, should enqueue nothing', async () => {
-    const suffix = uniqueSuffix('boxrec-torn');
-    const sandboxId = `pgs-box-${suffix}`;
+    const suffix = uniqueSuffix('envrec-torn');
+    const sandboxId = `pgs-env-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteTornDownAt", "updatedAt")
-         VALUES ($1, $2, 'staging', 'staging', $3, (now() at time zone 'utc'), (now() at time zone 'utc'))`,
+        `INSERT INTO drive_envs (id, "driveId", name, "sandboxId", "spriteTornDownAt", "updatedAt")
+         VALUES ($1, $2, 'staging', $3, (now() at time zone 'utc'), (now() at time zone 'utc'))`,
         [`b-${suffix}`, driveId, sandboxId],
       );
       await client.query(`DELETE FROM drives WHERE id = $1`, [driveId]);
@@ -173,7 +169,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   /**
-   * The "sessions are history rows" claim, executed. `boxId` is `ON DELETE SET
+   * The "sessions are history rows" claim, executed. `envId` is `ON DELETE SET
    * NULL` precisely so that reclaiming a machine never destroys the
    * conversations that ran on it — and until this test, nothing proved the
    * database actually behaves that way rather than the docblock merely saying
@@ -181,11 +177,11 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
    * effect of an admin deleting a box.
    */
   /**
-   * A box OWNS its sessions. This walks the whole ownership chain in one
+   * An env OWNS its sessions. This walks the whole ownership chain in one
    * delete and asserts BOTH halves of it: what a cascade is supposed to take,
    * and — more importantly — what it must not reach.
    *
-   * `boxId` used to be `ON DELETE SET NULL`, on the reasoning that a session
+   * `envId` used to be `ON DELETE SET NULL`, on the reasoning that a session
    * had to outlive its box "so its conversations stay readable". That was
    * false: `conversations` has carried no session column since 0256, and a
    * pane's `targetId` is polymorphic with no FK, so a conversation is not
@@ -194,28 +190,28 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
    * reopening it would provision a fresh empty Sprite instead of returning to
    * the shared filesystem.
    */
-  it('given a box-bound session, deleting the BOX should take the session, its nodes and its shells — but NOT the conversation', async () => {
-    const suffix = uniqueSuffix('boxsess');
-    const sandboxId = `pgs-box-${suffix}`;
-    const boxId = `b-${suffix}`;
+  it('given an env-bound session, deleting the ENV should take the session, its nodes and its shells — but NOT the conversation', async () => {
+    const suffix = uniqueSuffix('envsess');
+    const sandboxId = `pgs-env-${suffix}`;
+    const envId = `b-${suffix}`;
     const workspaceId = `ws-${suffix}`;
     const conversationId = `conv-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteInstanceId", "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
-        [boxId, driveId, sandboxId],
+        `INSERT INTO drive_envs (id, "driveId", name, "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
+        [envId, driveId, sandboxId],
       );
-      // A box-bound session: drive set, box set, and NO sprite pointer of its
-      // own — it borrows the box's.
+      // A env-bound session: drive set, box set, and NO sprite pointer of its
+      // own — it borrows the env's.
       await client.query(
-        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "updatedAt")
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "envId", "updatedAt")
          VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
-        [workspaceId, userId, driveId, boxId],
+        [workspaceId, userId, driveId, envId],
       );
       // A pane tree (root node) and a shell — the two things that cascade from
-      // a session row and therefore die with the box.
+      // a session row and therefore die with the env.
       await client.query(
         `INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", axis, "createdAt", "updatedAt")
          VALUES ($1, $2, NULL, 0, 'root', 'row', (now() at time zone 'utc'), (now() at time zone 'utc'))`,
@@ -234,7 +230,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
         [conversationId, userId, driveId],
       );
 
-      await client.query(`DELETE FROM drive_boxes WHERE id = $1`, [boxId]);
+      await client.query(`DELETE FROM drive_envs WHERE id = $1`, [envId]);
 
       // The session and everything that hangs off it are GONE.
       for (const [table, column, id] of [
@@ -246,7 +242,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
           `SELECT 1 FROM ${table} WHERE ${column} = $1`,
           [id],
         );
-        expect(rows, `${table} should have cascaded away with the box`).toHaveLength(0);
+        expect(rows, `${table} should have cascaded away with the env`).toHaveLength(0);
       }
 
       // The CONVERSATION survives. Nothing links it to the session, so a
@@ -256,9 +252,9 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
         `SELECT 1 FROM conversations WHERE id = $1`,
         [conversationId],
       );
-      expect(convs, 'chat history must outlive the box').toHaveLength(1);
+      expect(convs, 'chat history must outlive the env').toHaveLength(1);
 
-      // And the box's Sprite is still reclaimed on the way out.
+      // And the env's Sprite is still reclaimed on the way out.
       const { rows: reclaims } = await client.query(
         `SELECT 1 FROM machine_sprite_reclaims WHERE "sandboxId" = $1`,
         [sandboxId],
@@ -271,28 +267,28 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   /**
-   * Both `drive_boxes` and `agent_workspaces` cascade from `drives`, and the
-   * session additionally cascades from the box. Deleting the drive fires all
+   * Both `drive_envs` and `agent_workspaces` cascade from `drives`, and the
+   * session additionally cascades from the env. Deleting the drive fires all
    * three at once, by two different routes into the same session row. This asserts they cooperate — the
    * pointer still reaches the outbox even though the row holding the binding
    * is itself being destroyed in the same statement.
    */
-  it('given a drive holding a box AND a box-bound session, deleting the drive should still reclaim', async () => {
-    const suffix = uniqueSuffix('boxcasc');
-    const sandboxId = `pgs-box-${suffix}`;
-    const boxId = `b-${suffix}`;
+  it('given a drive holding an env AND a env-bound session, deleting the drive should still reclaim', async () => {
+    const suffix = uniqueSuffix('envcasc');
+    const sandboxId = `pgs-env-${suffix}`;
+    const envId = `b-${suffix}`;
     const workspaceId = `ws-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteInstanceId", "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
-        [boxId, driveId, sandboxId],
+        `INSERT INTO drive_envs (id, "driveId", name, "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
+        [envId, driveId, sandboxId],
       );
       await client.query(
-        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "updatedAt")
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "envId", "updatedAt")
          VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
-        [workspaceId, userId, driveId, boxId],
+        [workspaceId, userId, driveId, envId],
       );
 
       await client.query(`DELETE FROM drives WHERE id = $1`, [driveId]);
@@ -317,8 +313,8 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   it('given a reused sandbox NAME now holds a newer VM, should chase the live instance rather than keep the stale one', async () => {
-    const suffix = uniqueSuffix('boxrec-aba');
-    const sandboxId = `pgs-box-${suffix}`;
+    const suffix = uniqueSuffix('envrec-aba');
+    const sandboxId = `pgs-env-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
@@ -326,8 +322,8 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
         [sandboxId],
       );
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteInstanceId", "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', $3, 'inst-new', (now() at time zone 'utc'))`,
+        `INSERT INTO drive_envs (id, "driveId", name, "sandboxId", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, 'dev', $3, 'inst-new', (now() at time zone 'utc'))`,
         [`b-${suffix}`, driveId, sandboxId],
       );
       await client.query(`DELETE FROM drives WHERE id = $1`, [driveId]);
@@ -345,80 +341,19 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 });
 
-describe('drive_boxes CHECK constraints — live', () => {
-  /**
-   * EVERY column in the predicate, one per case. Testing only `sandboxId`
-   * would leave two thirds of this constraint guarded by nothing but a
-   * text-containment assertion in the sibling unit suite — which is a
-   * spellcheck, not a regression guard: dropping the `spriteKey` leg from the
-   * predicate would keep the column NAME in the SQL and pass.
-   */
-  it.each(['sandboxId', 'spriteKey', 'spriteInstanceId'])(
-    'given a deploy box, should REFUSE %s — this is what partitions the two outboxes',
-    async (column) => {
-      const suffix = uniqueSuffix('boxchk');
-      const { userId, driveId } = await seedDrive(suffix);
-      try {
-        await expect(
-          client.query(
-            `INSERT INTO drive_boxes (id, "driveId", name, kind, "${column}", "updatedAt")
-             VALUES ($1, $2, 'prod', 'deploy', $3, (now() at time zone 'utc'))`,
-            [`b-${suffix}`, driveId, `pgs-box-${suffix}`],
-          ),
-        ).rejects.toThrow(/drive_boxes_sprite_kind_check/);
-      } finally {
-        await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
-      }
-    },
-  );
-
-  /**
-   * The POSITIVE half of the same constraint, and the reason it is not
-   * redundant: the predicate is `kind IN ('dev','staging') OR (pointers all
-   * NULL)`. Flip that `OR` to `AND` and every rejection test above still
-   * passes while every real dev box becomes uninsertable. Only accepting a
-   * fully-populated dev box catches it.
-   */
-  it.each(['dev', 'staging'])(
-    'given a %s box, should ACCEPT a full sprite pointer set',
-    async (kind) => {
-      const suffix = uniqueSuffix('boxok');
-      const { userId, driveId } = await seedDrive(suffix);
-      try {
-        await client.query(
-          `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteKey", "spriteInstanceId", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, 'inst-1', (now() at time zone 'utc'))`,
-          [`b-${suffix}`, driveId, kind, kind, `pgs-box-${suffix}`, `key-${suffix}`],
-        );
-        const { rows } = await client.query(
-          `SELECT 1 FROM drive_boxes WHERE id = $1`,
-          [`b-${suffix}`],
-        );
-        expect(rows).toHaveLength(1);
-      } finally {
-        // ORDER MATTERS. This box holds a LIVE pointer, so deleting the user
-        // cascades drive -> drive_boxes and fires the reclaim trigger, which
-        // INSERTS into the outbox. Cleaning the outbox first would delete a row
-        // that is then immediately re-created and — the outbox being FK-less by
-        // design — never collected by anything.
-        await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
-        await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [`pgs-box-${suffix}`]);
-      }
-    },
-  );
-
-  it('given a box-bound session, should REFUSE a sprite pointer of its own', async () => {
+describe('drive_envs CHECK constraints — live', () => {
+  it('given an env-bound session, should REFUSE a sprite pointer of its own', async () => {
     const suffix = uniqueSuffix('wschk');
-    const boxId = `b-${suffix}`;
+    const envId = `b-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', (now() at time zone 'utc'))`,
-        [boxId, driveId],
+        `INSERT INTO drive_envs (id, "driveId", name, "updatedAt")
+         VALUES ($1, $2, 'dev', (now() at time zone 'utc'))`,
+        [envId, driveId],
       );
 
-      // A box session borrows the box's VM. Two rows claiming one Sprite is
+      // An env session borrows the env's VM. Two rows claiming one Sprite is
       // the failure this CHECK exists to make impossible. NOT VALID does not
       // weaken this: new rows are fully checked from the moment it lands.
       //
@@ -429,14 +364,14 @@ describe('drive_boxes CHECK constraints — live', () => {
       for (const column of ['sandboxId', 'spriteKey', 'spriteInstanceId']) {
         await expect(
           client.query(
-            `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "${column}", "updatedAt")
+            `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "envId", "${column}", "updatedAt")
              VALUES ($1, $2, $3, $4, $5, (now() at time zone 'utc'))`,
-            [`ws-${column}-${suffix}`, userId, driveId, boxId, `pgs-ses-${suffix}`],
+            [`ws-${column}-${suffix}`, userId, driveId, envId, `pgs-ses-${suffix}`],
           ),
-        ).rejects.toThrow(/agent_workspaces_box_no_sprite_check/);
+        ).rejects.toThrow(/agent_workspaces_env_no_sprite_check/);
       }
 
-      // The mirror of the deploy-box positive case: an UNBOUND session may hold
+      // The positive case: an UNBOUND session may hold
       // every pointer. Flipping this predicate's `OR` to `AND` would reject
       // every ordinary ephemeral session, and only this case notices.
       await client.query(
@@ -448,9 +383,9 @@ describe('drive_boxes CHECK constraints — live', () => {
       // The same row WITHOUT a pointer is accepted — the constraint refuses
       // the conflation, not the binding.
       await client.query(
-        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "updatedAt")
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "envId", "updatedAt")
          VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
-        [`ws-ok-${suffix}`, userId, driveId, boxId],
+        [`ws-ok-${suffix}`, userId, driveId, envId],
       );
     } finally {
       await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
@@ -460,28 +395,28 @@ describe('drive_boxes CHECK constraints — live', () => {
     }
   });
 
-  it('given a box is drive-owned, should REFUSE a box-bound session with no drive', async () => {
+  it('given an env is drive-owned, should REFUSE a env-bound session with no drive', async () => {
     const suffix = uniqueSuffix('wsdrv');
-    const boxId = `b-${suffix}`;
+    const envId = `b-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
-        `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
-         VALUES ($1, $2, 'dev', 'dev', (now() at time zone 'utc'))`,
-        [boxId, driveId],
+        `INSERT INTO drive_envs (id, "driveId", name, "updatedAt")
+         VALUES ($1, $2, 'dev', (now() at time zone 'utc'))`,
+        [envId, driveId],
       );
 
-      // `driveId` is nullable for global-assistant sessions, but a box is
+      // `driveId` is nullable for global-assistant sessions, but an env is
       // drive-owned, drive-paid and drive-shared: a user-scoped session
       // borrowing a drive's machine has no coherent access or billing answer,
       // and `decideAgentSessionAccess` reads `driveId` alone.
       await expect(
         client.query(
-          `INSERT INTO agent_workspaces (id, "ownerId", "boxId", "updatedAt")
+          `INSERT INTO agent_workspaces (id, "ownerId", "envId", "updatedAt")
            VALUES ($1, $2, $3, (now() at time zone 'utc'))`,
-          [`ws-${suffix}`, userId, boxId],
+          [`ws-${suffix}`, userId, envId],
         ),
-      ).rejects.toThrow(/agent_workspaces_box_needs_drive_check/);
+      ).rejects.toThrow(/agent_workspaces_env_needs_drive_check/);
 
       // A driveless session with NO box is still fine — that is the global
       // assistant, and this constraint must not have broken it.
@@ -495,8 +430,8 @@ describe('drive_boxes CHECK constraints — live', () => {
     }
   });
 
-  it('given box names address, should REFUSE a duplicate name in one drive and ALLOW it across drives', async () => {
-    const suffix = uniqueSuffix('boxname');
+  it('given env names address, should REFUSE a duplicate name in one drive and ALLOW it across drives', async () => {
+    const suffix = uniqueSuffix('envname');
     const userId = `u-${suffix}`;
     try {
       await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
@@ -506,18 +441,18 @@ describe('drive_boxes CHECK constraints — live', () => {
           [`d${n}-${suffix}`, `box-name-${n}-${suffix}`, userId],
         );
         await client.query(
-          `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
-           VALUES ($1, $2, 'staging', 'staging', (now() at time zone 'utc'))`,
+          `INSERT INTO drive_envs (id, "driveId", name, "updatedAt")
+           VALUES ($1, $2, 'staging', (now() at time zone 'utc'))`,
           [`b${n}-${suffix}`, `d${n}-${suffix}`],
         );
       }
       await expect(
         client.query(
-          `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
-           VALUES ($1, $2, 'staging', 'dev', (now() at time zone 'utc'))`,
+          `INSERT INTO drive_envs (id, "driveId", name, "updatedAt")
+           VALUES ($1, $2, 'staging', (now() at time zone 'utc'))`,
           [`bdup-${suffix}`, `d1-${suffix}`],
         ),
-      ).rejects.toThrow(/drive_boxes_drive_name_idx/);
+      ).rejects.toThrow(/drive_envs_drive_name_idx/);
     } finally {
       await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
     }

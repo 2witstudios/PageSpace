@@ -192,8 +192,8 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     ],
     excluded: {
       ...AGENT_WORKSPACE_SPRITE_EXCLUSIONS,
-      boxId:
-        'Names a `drive_boxes` row — a PERSISTENT per-drive machine — and the bundle does not carry that table, so a carried value would reference a row the tenant has no INSERT for. The column is nullable and NULL is the ephemeral-session default, which is also the state a box-bound session correctly lands in on a substrate that holds no boxes: it keeps its history and provisions its own Sprite on next use. NOT a permanent decision — `drive_boxes` ships dark and empty in this release (epic "Deliberate Per-Drive Boxes", Phase 1), and the phase that gives boxes a writer is the one that must decide whether they travel, at which point this entry becomes a carried column and a table spec instead of an exclusion. Note the table is outside the FK closure the paired guard derives (it references `drives`, not `agent_workspaces`), so nothing else will raise the question — it is recorded here deliberately.',
+      envId:
+        'Names a `drive_envs` row — a PERSISTENT per-drive machine — and the bundle does not carry that table, so a carried value would reference a row the tenant has no INSERT for. The column is nullable and NULL is the ephemeral-session default, which is also the state a box-bound session correctly lands in on a substrate that holds no boxes: it keeps its history and provisions its own Sprite on next use. NOT a permanent decision — `drive_envs` ships dark and empty in this release (epic "Deliberate Per-Drive Environments", Phase 1), and the phase that gives boxes a writer is the one that must decide whether they travel, at which point this entry becomes a carried column and a table spec instead of an exclusion. Note the table is outside the FK closure the paired guard derives (it references `drives`, not `agent_workspaces`), so nothing else will raise the question — it is recorded here deliberately.',
     },
   },
 

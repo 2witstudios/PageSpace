@@ -361,8 +361,8 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
       ownerId: 'u1',
       driveId: 'd1',
       name: null,
-      // Ephemeral session — owns its own Sprite, not bound to a drive box.
-      boxId: null,
+      // Ephemeral session — owns its own Sprite, not bound to a drive env.
+      envId: null,
       spriteKey: null,
       sandboxId: null,
       spriteInstanceId: null,
@@ -606,8 +606,8 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       ownerId: 'u1',
       driveId: 'd1',
       name: null,
-      // Ephemeral session — owns its own Sprite, not bound to a drive box.
-      boxId: null,
+      // Ephemeral session — owns its own Sprite, not bound to a drive env.
+      envId: null,
       spriteKey: null,
       sandboxId: null,
       spriteInstanceId: null,

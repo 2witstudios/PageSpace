@@ -1,5 +1,5 @@
 {
-  "id": "0c0a892b-bf67-4f6b-a57d-90c889da346e",
+  "id": "f5b96dd7-75cc-44f5-8562-1a9dc64d9ede",
   "prevId": "21483578-807a-4e65-92ad-6061210f91fc",
   "version": "7",
   "dialect": "postgresql",
@@ -20410,8 +20410,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "boxId": {
-          "name": "boxId",
+        "envId": {
+          "name": "envId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -20550,11 +20550,11 @@
           "method": "btree",
           "with": {}
         },
-        "agent_workspaces_box_id_idx": {
-          "name": "agent_workspaces_box_id_idx",
+        "agent_workspaces_env_id_idx": {
+          "name": "agent_workspaces_env_id_idx",
           "columns": [
             {
-              "expression": "boxId",
+              "expression": "envId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -20593,12 +20593,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_workspaces_boxId_drive_boxes_id_fk": {
-          "name": "agent_workspaces_boxId_drive_boxes_id_fk",
+        "agent_workspaces_envId_drive_envs_id_fk": {
+          "name": "agent_workspaces_envId_drive_envs_id_fk",
           "tableFrom": "agent_workspaces",
-          "tableTo": "drive_boxes",
+          "tableTo": "drive_envs",
           "columnsFrom": [
-            "boxId"
+            "envId"
           ],
           "columnsTo": [
             "id"
@@ -20611,13 +20611,13 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "agent_workspaces_box_no_sprite_check": {
-          "name": "agent_workspaces_box_no_sprite_check",
-          "value": "\"agent_workspaces\".\"boxId\" IS NULL OR (\"agent_workspaces\".\"sandboxId\" IS NULL AND \"agent_workspaces\".\"spriteKey\" IS NULL AND \"agent_workspaces\".\"spriteInstanceId\" IS NULL)"
+        "agent_workspaces_env_no_sprite_check": {
+          "name": "agent_workspaces_env_no_sprite_check",
+          "value": "\"agent_workspaces\".\"envId\" IS NULL OR (\"agent_workspaces\".\"sandboxId\" IS NULL AND \"agent_workspaces\".\"spriteKey\" IS NULL AND \"agent_workspaces\".\"spriteInstanceId\" IS NULL)"
         },
-        "agent_workspaces_box_needs_drive_check": {
-          "name": "agent_workspaces_box_needs_drive_check",
-          "value": "\"agent_workspaces\".\"boxId\" IS NULL OR \"agent_workspaces\".\"driveId\" IS NOT NULL"
+        "agent_workspaces_env_needs_drive_check": {
+          "name": "agent_workspaces_env_needs_drive_check",
+          "value": "\"agent_workspaces\".\"envId\" IS NULL OR \"agent_workspaces\".\"driveId\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -20846,8 +20846,8 @@
       },
       "isRLSEnabled": false
     },
-    "public.drive_boxes": {
-      "name": "drive_boxes",
+    "public.drive_envs": {
+      "name": "drive_envs",
       "schema": "",
       "columns": {
         "id": {
@@ -20865,13 +20865,6 @@
         "name": {
           "name": "name",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "drive_box_kind",
-          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -20957,8 +20950,8 @@
         }
       },
       "indexes": {
-        "drive_boxes_drive_id_idx": {
-          "name": "drive_boxes_drive_id_idx",
+        "drive_envs_drive_id_idx": {
+          "name": "drive_envs_drive_id_idx",
           "columns": [
             {
               "expression": "driveId",
@@ -20972,8 +20965,8 @@
           "method": "btree",
           "with": {}
         },
-        "drive_boxes_drive_name_idx": {
-          "name": "drive_boxes_drive_name_idx",
+        "drive_envs_drive_name_idx": {
+          "name": "drive_envs_drive_name_idx",
           "columns": [
             {
               "expression": "driveId",
@@ -20993,8 +20986,8 @@
           "method": "btree",
           "with": {}
         },
-        "drive_boxes_live_sprite_idx": {
-          "name": "drive_boxes_live_sprite_idx",
+        "drive_envs_live_sprite_idx": {
+          "name": "drive_envs_live_sprite_idx",
           "columns": [
             {
               "expression": "sandboxId",
@@ -21010,16 +21003,16 @@
             }
           ],
           "isUnique": false,
-          "where": "\"drive_boxes\".\"sandboxId\" IS NOT NULL AND \"drive_boxes\".\"spriteTornDownAt\" IS NULL",
+          "where": "\"drive_envs\".\"sandboxId\" IS NOT NULL AND \"drive_envs\".\"spriteTornDownAt\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "drive_boxes_driveId_drives_id_fk": {
-          "name": "drive_boxes_driveId_drives_id_fk",
-          "tableFrom": "drive_boxes",
+        "drive_envs_driveId_drives_id_fk": {
+          "name": "drive_envs_driveId_drives_id_fk",
+          "tableFrom": "drive_envs",
           "tableTo": "drives",
           "columnsFrom": [
             "driveId"
@@ -21030,9 +21023,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "drive_boxes_createdBy_users_id_fk": {
-          "name": "drive_boxes_createdBy_users_id_fk",
-          "tableFrom": "drive_boxes",
+        "drive_envs_createdBy_users_id_fk": {
+          "name": "drive_envs_createdBy_users_id_fk",
+          "tableFrom": "drive_envs",
           "tableTo": "users",
           "columnsFrom": [
             "createdBy"
@@ -21047,12 +21040,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "drive_boxes_sprite_kind_check": {
-          "name": "drive_boxes_sprite_kind_check",
-          "value": "\"drive_boxes\".\"kind\" IN ('dev', 'staging') OR (\"drive_boxes\".\"sandboxId\" IS NULL AND \"drive_boxes\".\"spriteKey\" IS NULL AND \"drive_boxes\".\"spriteInstanceId\" IS NULL)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
@@ -21515,15 +21503,6 @@
         "completed",
         "failed",
         "cancelled"
-      ]
-    },
-    "public.drive_box_kind": {
-      "name": "drive_box_kind",
-      "schema": "public",
-      "values": [
-        "dev",
-        "staging",
-        "deploy"
       ]
     }
   },
