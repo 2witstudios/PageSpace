@@ -18,6 +18,16 @@
  * the alias would buy no call-site stability, and the repo's knip gate (rightly)
  * refuses two exported names for one symbol. One name, one lifecycle.
  *
+ * Two things stay session-worded ON PURPOSE, so a later reader does not read them
+ * as a rename that was missed:
+ *  - **`planSessionReopen`** — genuinely session-only. It withdraws an end-intent
+ *    when a CONVERSATION is claimed into an ended session's listing, and a box
+ *    has no listing and no conversations to claim.
+ *  - **The deny/noop VALUES** (`session_limit_reached`, `session_not_found`, …).
+ *    Those strings leave the package — web routes switch on them for HTTP status
+ *    and echo them into audit payloads — so renaming one is an API change, not a
+ *    refactor. See `SpriteHolderDenyReason`.
+ *
  * It absorbs the decision branches of two proven predecessors:
  *  - `planMachineLifecycle` (services/sandbox/machine-session-manager.ts) — the
  *    authorize → create/resume/teardown skeleton, including its two hard rules:
