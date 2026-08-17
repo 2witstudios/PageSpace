@@ -26,8 +26,16 @@
 -- drive-agreement invariant: a box is drive-owned, so a box-bound session must
 -- have a drive. The other half (that the box belongs to THIS session's drive)
 -- is enforced in `spawnAgentSession` at Phase 3 — see that constraint's
--- docblock in `schema/agent-workspaces.ts` for why a composite FK is the wrong
--- trade here.
+-- docblock in `schema/agent-workspaces.ts`, which records it as a SECURITY
+-- criterion, not merely a correctness one.
+--
+-- `agent_workspaces.boxId` is ON DELETE CASCADE: a box OWNS its sessions.
+-- Deleting a box takes its sessions, their panes, that tree's rev counter and
+-- their shells — everything that already cascades from a session row. It does
+-- NOT take chat history, because nothing links the two: `conversations` lost
+-- its session column at 0256 and a pane's `targetId` is polymorphic with no
+-- foreign key, so conversations are independent rows that stay reachable
+-- through the cross-session past-conversations surface.
 --
 -- The reclaim trigger for this table ships in 0263, in the same release. A box
 -- table without it would regress the orphan-billing bug `machine_sprite_reclaims`
@@ -68,7 +76,7 @@ ALTER TABLE "drive_boxes" ADD CONSTRAINT "drive_boxes_createdBy_users_id_fk" FOR
 CREATE INDEX "drive_boxes_drive_id_idx" ON "drive_boxes" USING btree ("driveId");--> statement-breakpoint
 CREATE UNIQUE INDEX "drive_boxes_drive_name_idx" ON "drive_boxes" USING btree ("driveId","name");--> statement-breakpoint
 CREATE INDEX "drive_boxes_live_sprite_idx" ON "drive_boxes" USING btree ("sandboxId","spriteTornDownAt") WHERE "drive_boxes"."sandboxId" IS NOT NULL AND "drive_boxes"."spriteTornDownAt" IS NULL;--> statement-breakpoint
-ALTER TABLE "agent_workspaces" ADD CONSTRAINT "agent_workspaces_boxId_drive_boxes_id_fk" FOREIGN KEY ("boxId") REFERENCES "public"."drive_boxes"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agent_workspaces" ADD CONSTRAINT "agent_workspaces_boxId_drive_boxes_id_fk" FOREIGN KEY ("boxId") REFERENCES "public"."drive_boxes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "agent_workspaces_box_id_idx" ON "agent_workspaces" USING btree ("boxId");--> statement-breakpoint
 -- ── The populated-table CHECKs: STAGE 1 of 2 ────────────────────────
 -- `db:generate` emits these as plain (validating) ADD CONSTRAINTs; they are

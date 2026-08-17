@@ -36,6 +36,16 @@ lives inside it.
 > `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
 > sandboxes remain the default and are unchanged.
 >
+> **A box owns its sessions.** `boxId` is `ON DELETE CASCADE`: deleting a box deletes the
+> sessions run inside it, their panes, that tree's rev counter and their shells —
+> everything that already cascades from a session row. It does **not** reach chat
+> history, because nothing connects the two: `conversations` lost its session column at
+> `0256` and a pane's `targetId` is polymorphic with no foreign key, so conversations are
+> independent rows that stay reachable through the cross-session past-conversations
+> surface. What a cascade destroys is layout, not threads. Nor is any accounting lost — a
+> box-bound session is CHECK-forbidden from holding Sprite or storage/billing columns, so
+> the row carries no VM to orphan and no bytes to bill.
+>
 > **A box's substrate follows its kind, and only one substrate hosts sessions.**
 > `substrateForBoxKind` (`@pagespace/lib/drive-boxes/box-kind`) maps `dev` and `staging`
 > to Sprite, and `deploy` to a Fly Machine. A borrowed sandbox is therefore always a

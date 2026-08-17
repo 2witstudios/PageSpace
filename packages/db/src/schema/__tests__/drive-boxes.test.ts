@@ -107,7 +107,7 @@ const triggerSql = stripComments(
   readFileSync(path.join(MIGRATIONS_DIR, '0263_drive_boxes_reclaim_trigger.sql'), 'utf8'),
 );
 const schemaSql = stripComments(
-  readFileSync(path.join(MIGRATIONS_DIR, '0262_dusty_redwing.sql'), 'utf8'),
+  readFileSync(path.join(MIGRATIONS_DIR, '0262_long_nightmare.sql'), 'utf8'),
 );
 
 describe('drive_boxes schema — identity and ownership', () => {
@@ -246,9 +246,15 @@ describe('drive_boxes schema — the two CHECKs that partition the outboxes', ()
   });
 });
 
-describe('agent_workspaces.boxId — sessions are history rows', () => {
-  it('given a session outlives its environment, should SET NULL rather than cascade from the box', () => {
-    expect(fkOnColumn(sessionsConfig, 'boxId').onDelete).toBe('set null');
+describe('agent_workspaces.boxId — a box owns its sessions', () => {
+  it('given a box owns the sessions run inside it, should CASCADE rather than set null', () => {
+    // NOT `set null`. A nulled binding leaves a row identical to a
+    // never-provisioned ephemeral session, which would reprovision a fresh
+    // empty Sprite on reopen instead of returning to the shared filesystem.
+    // Nothing is lost to the cascade that is not layout: `conversations` has
+    // no column pointing at a session (dropped at 0256) and a pane's
+    // `targetId` carries no FK, so chat history is unreachable from here.
+    expect(fkOnColumn(sessionsConfig, 'boxId').onDelete).toBe('cascade');
     expect(sessionsColumns.boxId.notNull).toBe(false);
   });
 

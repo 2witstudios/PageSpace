@@ -88,34 +88,40 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * Sprite of its own — it borrows the box's, sharing that filesystem with
    * every other session in the same box (see `drive_boxes`).
    *
-   * `on delete set null`, NOT cascade. A session row is HISTORY: it outlives
-   * the Sprite it pointed at by design (that is why a killed session keeps its
-   * row), and it must outlive its box for the same reason — its conversations
-   * stay readable after the environment they ran in is gone. Refusing to
-   * delete a box while sessions are live is an APPLICATION guard with a
-   * `force` escape (`plan-box-delete`), deliberately not an FK: an FK would
-   * make the refusal permanent and unforceable, and cascading would delete a
-   * user's chat history as a side effect of reclaiming a machine.
+   * **`on delete cascade`: a box OWNS its sessions.** Deleting a box deletes
+   * the sessions that ran inside it, and with them their panes
+   * (`agent_workspace_nodes`), that tree's rev counter
+   * (`agent_workspace_node_revs`) and their shells
+   * (`agent_workspace_shells`) — everything that already cascades from a
+   * session row.
    *
-   * **Known consequence, for Phase 2 to answer.** Once this is nulled, the row
-   * is byte-identical to a never-provisioned ephemeral session: `boxId` NULL,
-   * `sandboxId` NULL, `driveId` set. Nothing downstream can tell "the shared
-   * filesystem this session ran on was reclaimed" from "this session has not
-   * started yet", so a resume would hand it a fresh Sprite and an empty disk
-   * with no explanation.
+   * **Chat history is NOT among it, because nothing links the two.**
+   * `conversations` carries no column pointing at a session: `workspaceId` was
+   * dropped at migration 0256, and a pane's `targetId` is polymorphic with NO
+   * foreign key by design, so a node's death cannot reach a conversation.
+   * Conversations are independent rows keyed to their user and stay reachable
+   * through the cross-session past-conversations surface. What a cascade
+   * destroys is LAYOUT — where things sat on screen — plus the shells' cold
+   * scrollback, not the threads themselves.
    *
-   * That is mostly closed by the delete FLOW rather than by this column — as
-   * DESIGNED, not as shipped: Phase 2's `deleteDriveBox` is to refuse while
-   * sessions are live, with `force` ENDING them first, so a surviving
-   * box-bound session should already carry `endedAt`. Neither that verb nor
-   * `plan-box-delete` exists yet; both arrive with Phase 2.
-   * Once that flow exists it will cover the deliberate deletes; the path it
-   * will still not cover is a DRIVE cascade, where the session row dies anyway
-   * — which is why this is recorded rather than fixed here. Phase 2 owns the
-   * decision of whether `force` should also stamp something durable saying
-   * WHY the environment vanished; if it does not, this note is the bug report.
+   * Nor is any accounting lost: a box-bound session is CHECK-forbidden from
+   * holding Sprite pointers or storage/billing columns (see
+   * `agent_workspaces_box_no_sprite_check`), so the row cascading away carries
+   * no VM to orphan, no bytes to bill, and no audit trail. The box's own row
+   * carries all of that, and its teardown is what the reclaim trigger guards.
+   *
+   * This is deliberately NOT `set null`, which an earlier cut of this column
+   * used on the reasoning that a session must outlive its box "so its
+   * conversations stay readable". That reasoning was simply false — the
+   * conversations were never at risk, because they were never attached — and
+   * it bought a real defect for nothing: a nulled binding leaves a row
+   * IDENTICAL to a never-provisioned ephemeral session (`boxId` NULL,
+   * `sandboxId` NULL, `driveId` set), so reopening it would silently
+   * provision a fresh, empty Sprite instead of the shared filesystem the user
+   * expects to return to. Cascade removes that state rather than documenting
+   * it.
    */
-  boxId: text('boxId').references(() => driveBoxes.id, { onDelete: 'set null' }),
+  boxId: text('boxId').references(() => driveBoxes.id, { onDelete: 'cascade' }),
 
   // The session's pane tree lives in `agent_workspace_nodes` behind
   // `agent_workspace_node_revs` — see `agent-workspace-nodes.ts`. It was a

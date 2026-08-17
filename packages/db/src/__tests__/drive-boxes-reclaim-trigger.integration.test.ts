@@ -180,11 +180,26 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
    * so. A cascade here would silently delete user chat history as a side
    * effect of an admin deleting a box.
    */
-  it('given a box-bound session, deleting the BOX should null the binding, KEEP the session, and still reclaim', async () => {
+  /**
+   * A box OWNS its sessions. This walks the whole ownership chain in one
+   * delete and asserts BOTH halves of it: what a cascade is supposed to take,
+   * and — more importantly — what it must not reach.
+   *
+   * `boxId` used to be `ON DELETE SET NULL`, on the reasoning that a session
+   * had to outlive its box "so its conversations stay readable". That was
+   * false: `conversations` has carried no session column since 0256, and a
+   * pane's `targetId` is polymorphic with no FK, so a conversation is not
+   * reachable from a session at all. The false premise bought a real defect —
+   * a nulled binding is indistinguishable from a never-provisioned session, so
+   * reopening it would provision a fresh empty Sprite instead of returning to
+   * the shared filesystem.
+   */
+  it('given a box-bound session, deleting the BOX should take the session, its nodes and its shells — but NOT the conversation', async () => {
     const suffix = uniqueSuffix('boxsess');
     const sandboxId = `pgs-box-${suffix}`;
     const boxId = `b-${suffix}`;
     const workspaceId = `ws-${suffix}`;
+    const conversationId = `conv-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
       await client.query(
@@ -199,37 +214,66 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
          VALUES ($1, $2, $3, $4, (now() at time zone 'utc'))`,
         [workspaceId, userId, driveId, boxId],
       );
+      // A pane tree (root node) and a shell — the two things that cascade from
+      // a session row and therefore die with the box.
+      await client.query(
+        `INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", axis, "createdAt", "updatedAt")
+         VALUES ($1, $2, NULL, 0, 'root', 'row', (now() at time zone 'utc'), (now() at time zone 'utc'))`,
+        [`${workspaceId}-root`, workspaceId],
+      );
+      await client.query(
+        `INSERT INTO agent_workspace_shells (id, "workspaceId", "ownerId", name, "agentType", "updatedAt")
+         VALUES ($1, $2, $3, 'sh', 'shell', (now() at time zone 'utc'))`,
+        [`sh-${suffix}`, workspaceId, userId],
+      );
+      // A conversation owned by the same user. It is NOT attached to the
+      // session — that is the whole point — so it must be untouched.
+      await client.query(
+        `INSERT INTO conversations (id, "userId", type, "contextId", "updatedAt")
+         VALUES ($1, $2, 'drive', $3, (now() at time zone 'utc'))`,
+        [conversationId, userId, driveId],
+      );
 
       await client.query(`DELETE FROM drive_boxes WHERE id = $1`, [boxId]);
 
-      const { rows: sessions } = await client.query<{ boxId: string | null; driveId: string | null }>(
-        `SELECT "boxId", "driveId" FROM agent_workspaces WHERE id = $1`,
-        [workspaceId],
-      );
-      // The session SURVIVES — this is the whole reason the FK is SET NULL.
-      expect(sessions).toHaveLength(1);
-      expect(sessions[0].boxId).toBeNull();
-      // And it keeps its drive: nulling `driveId` too would silently convert it
-      // into a global-assistant session, which is the failure mode that ruled
-      // out a composite FK here.
-      expect(sessions[0].driveId).toBe(driveId);
+      // The session and everything that hangs off it are GONE.
+      for (const [table, column, id] of [
+        ['agent_workspaces', 'id', workspaceId],
+        ['agent_workspace_nodes', '"rootId"', workspaceId],
+        ['agent_workspace_shells', '"workspaceId"', workspaceId],
+      ] as const) {
+        const { rows } = await client.query(
+          `SELECT 1 FROM ${table} WHERE ${column} = $1`,
+          [id],
+        );
+        expect(rows, `${table} should have cascaded away with the box`).toHaveLength(0);
+      }
 
-      // The box's Sprite is still reclaimed on the way out.
+      // The CONVERSATION survives. Nothing links it to the session, so a
+      // cascade cannot reach it — this is the assertion that would catch
+      // someone "helpfully" adding a session FK to `conversations` later.
+      const { rows: convs } = await client.query(
+        `SELECT 1 FROM conversations WHERE id = $1`,
+        [conversationId],
+      );
+      expect(convs, 'chat history must outlive the box').toHaveLength(1);
+
+      // And the box's Sprite is still reclaimed on the way out.
       const { rows: reclaims } = await client.query(
         `SELECT 1 FROM machine_sprite_reclaims WHERE "sandboxId" = $1`,
         [sandboxId],
       );
       expect(reclaims).toHaveLength(1);
     } finally {
-      await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [sandboxId]);
       await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [sandboxId]);
     }
   });
 
   /**
    * Both `drive_boxes` and `agent_workspaces` cascade from `drives`, and the
-   * session additionally holds an `ON DELETE SET NULL` FK at the box. Deleting
-   * the drive fires all three at once. This asserts they cooperate — the
+   * session additionally cascades from the box. Deleting the drive fires all
+   * three at once, by two different routes into the same session row. This asserts they cooperate — the
    * pointer still reaches the outbox even though the row holding the binding
    * is itself being destroyed in the same statement.
    */
