@@ -40,9 +40,11 @@ lives inside it.
 > `substrateForBoxKind` (`@pagespace/lib/drive-boxes/box-kind`) maps `dev` and `staging`
 > to Sprite, and `deploy` to a Fly Machine. A borrowed sandbox is therefore always a
 > Sprite — not because sessions pick the Sprite half, but because a **deploy box refuses
-> to host sessions at all** (v1); it is a publish target, and its Fly state lives on its
-> hosting row rather than in the Sprite columns, which `drive_boxes_sprite_kind_check`
-> enforces by forbidding those columns on a `kind='deploy'` row. So the box table's
+> to host sessions at all** (v1); it is a publish target, and its Fly state is meant to
+> live on a hosting row rather than in the Sprite columns — which
+> `drive_boxes_sprite_kind_check` enforces by forbidding those columns on a
+> `kind='deploy'` row. That hosting row ships with the Published Apps work and does not
+> exist yet. So the box table's
 > teardown trigger can only ever hand `machine_sprite_reclaims` a Sprite name. The
 > matching Fly-side outbox (`app_hosting_reclaims`) arrives with the Published Apps
 > work and does not exist yet, so a deploy box currently has no reclaim path at all —

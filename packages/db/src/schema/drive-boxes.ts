@@ -57,9 +57,11 @@ import { drives } from './core';
  * `machine_sprite_reclaims` was built to end.
  *
  * **No stored status.** Derived the way `workspace-status.ts` derives a
- * session's, from the pointer columns below; a deploy box surfaces its hosting
- * row's status machine instead. Status is a reading of the pointers, and a
- * cached reading of a pointer is a lie waiting for a crash.
+ * session's, from the pointer columns below. (A deploy box is intended to
+ * surface its hosting row's status machine instead — that row arrives with PR
+ * #2425 and does not exist yet, so a deploy box has no derivable status today
+ * either.) Status is a reading of the pointers, and a cached reading of a
+ * pointer is a lie waiting for a crash.
  *
  * **Names address here, deliberately.** `(driveId, name)` is UNIQUE — a
  * documented exception to the repo's "ids address, names label" rule (see
@@ -113,7 +115,8 @@ export const driveBoxes = pgTable('drive_boxes', {
   // entire point of a box.
   //
   // Held on `kind IN ('dev','staging')` rows only (CHECK below). A deploy
-  // box's Fly state lives on its hosting row, not here.
+  // box's Fly state is meant to live on its hosting row rather than here —
+  // that row ships with PR #2425 and does not exist yet.
   // ---------------------------------------------------------------------------
 
   /** Opaque HMAC name this box's Sprite is provisioned under — distinct per box, stable across a replacement (what an identity CAS needs). NULL until first provisioned. */

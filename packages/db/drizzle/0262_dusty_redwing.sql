@@ -9,13 +9,15 @@
 -- row", and it is stated twice here, from both sides:
 --
 --   * `drive_boxes_sprite_kind_check` — a `kind='deploy'` box holds no Sprite
---     pointer (its machine is a Fly Machine, tracked on its hosting row), so
---     the reclaim outboxes stay partitioned: Sprite names can only ever reach
---     `machine_sprite_reclaims`, and a deploy box cannot carry a Sprite pointer
---     for one to rescue. NOTE: the Fly-side outbox (`app_hosting_reclaims`) is
---     introduced by PR #2425 and does NOT exist yet — a `kind='deploy'` box has
---     no reclaim path at all today, which is safe only because nothing can
---     provision one until Phase 6 wires it.
+--     pointer, because its machine is meant to be a Fly Machine rather than a
+--     Sprite. So the only outbox that exists, `machine_sprite_reclaims`, can
+--     only ever be handed a pointer it knows how to kill.
+--     NOTE, because the rest of this epic's prose describes the END state: the
+--     Fly-side outbox (`app_hosting_reclaims`) and the hosting row that would
+--     own a deploy box's Fly state BOTH arrive with PR #2425 and exist nowhere
+--     in this schema. A `kind='deploy'` box therefore has no reclaim path at
+--     all today — safe only because nothing can provision one until Phase 6,
+--     which must wire the outbox in the same change.
 --   * `agent_workspaces_box_no_sprite_check` — a box-BOUND session holds no
 --     Sprite pointer either; it borrows the box's. This is what makes "ending
 --     a box session cannot kill the box" structural rather than a flag.

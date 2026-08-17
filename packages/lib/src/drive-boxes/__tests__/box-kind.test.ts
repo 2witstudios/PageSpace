@@ -30,8 +30,11 @@ describe('substrateForBoxKind', () => {
     // `kind IN ('dev','staging')` and forbids them otherwise. If this ever
     // stops agreeing with the constraint, one of the two is wrong and rows
     // start being refused (or, worse, accepted) for reasons no reader expects.
-    const kinds: DriveBoxKind[] = ['dev', 'staging', 'deploy'];
-    const spriteKinds = kinds.filter((kind) => substrateForBoxKind(kind) === 'sprite');
+    // Derived from the pgEnum, not hand-listed: a fourth hand-written copy of
+    // the kind set is one more thing that can silently fall out of step.
+    const spriteKinds = driveBoxKind.enumValues.filter(
+      (kind) => substrateForBoxKind(kind) === 'sprite',
+    );
     expect(spriteKinds).toEqual(['dev', 'staging']);
   });
 
@@ -49,12 +52,17 @@ describe('substrateForBoxKind', () => {
     // actually happens — someone edits the schema, ships the migration, and
     // never looks at this file.
     const fromPg: DriveBoxKind[] = [...driveBoxKind.enumValues];
-    // The literal list is the third witness, and it is what pins the pgEnum
-    // itself: a value REMOVED from the enum fails here. It cannot catch a
-    // union member with no enum value — `fromPg` is derived wholly from the
-    // enum, so the union is invisible to it. That direction is covered by the
-    // `never` branch in `substrateForBoxKind`, which stops compiling when the
-    // union gains a member the switch does not handle.
+
+    // ...and the OTHER direction, which is NOT covered by the `never` branch in
+    // `substrateForBoxKind`. That branch catches a union member the SWITCH does
+    // not handle — add `'preview'` to the union *and* a `case 'preview'` and it
+    // compiles clean, leaving a kind the database cannot store. Assigning the
+    // union INTO the enum's type is what closes it.
+    const intoPg: (typeof driveBoxKind.enumValues)[number] = 'dev' as DriveBoxKind;
+    expect(driveBoxKind.enumValues).toContain(intoPg);
+
+    // The literal list pins the pgEnum itself: a value REMOVED from the enum
+    // fails here, which neither assignment above would notice.
     expect([...fromPg].sort()).toEqual(['deploy', 'dev', 'staging']);
   });
 

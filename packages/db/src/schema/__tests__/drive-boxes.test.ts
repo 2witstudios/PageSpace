@@ -70,11 +70,29 @@ function checkSql(config: ReturnType<typeof getTableConfig>, name: string): stri
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../drizzle');
 
-/** SQL with line comments stripped, so assertions never match prose. */
+/**
+ * SQL with `--` comments removed — WHOLE-LINE and TRAILING both, so no
+ * assertion can be satisfied or broken by prose. These files are more than half
+ * commentary, and the commentary quotes SQL (`INSERT INTO ...`,
+ * `ON CONFLICT ...`) precisely because it is explaining it, so a matcher that
+ * saw comments would be reading the explanation instead of the statement.
+ *
+ * A trailing `--` is only treated as a comment when an EVEN number of single
+ * quotes precede it on that line, i.e. when it is not inside a string literal.
+ * That is a heuristic rather than a parser, and it is the right trade for a
+ * test helper: it handles every form these migrations actually use, and the
+ * behavioural proof lives in the integration suite regardless.
+ */
 function stripComments(raw: string): string {
   return raw
     .split('\n')
-    .filter((line) => !line.trimStart().startsWith('--'))
+    .map((line) => {
+      const at = line.indexOf('--');
+      if (at === -1) return line;
+      const quotesBefore = (line.slice(0, at).match(/'/g) ?? []).length;
+      return quotesBefore % 2 === 0 ? line.slice(0, at) : line;
+    })
+    .filter((line) => line.trim().length > 0)
     .join('\n');
 }
 
@@ -264,13 +282,28 @@ describe('drive_boxes sprite reclaim trigger (0263)', () => {
     );
   });
 
-  it('should write to exactly ONE outbox, and that outbox is the Sprite one', () => {
+  it('should name exactly ONE outbox inside the function body, and it is the Sprite one', () => {
     // Asserting the ABSENCE of `app_hosting_reclaims` here would be vacuous:
-    // that table does not exist anywhere in this schema (it arrives with PR
-    // #2425), so the assertion could never fail for a real reason. What CAN
-    // regress is this trigger growing a second INSERT into some other table,
-    // so count the INSERT targets instead.
-    const targets = [...triggerSql.matchAll(/INSERT\s+INTO\s+([a-z_."]+)/gi)]
+    // that table exists nowhere in this schema (it arrives with PR #2425), so
+    // the assertion could never fail for a real reason. What CAN regress is
+    // this function growing a second INSERT, so count INSERT targets instead.
+    //
+    // Scoped to the FUNCTION BODY, not the file: the file is more than half
+    // prose, and `stripComments` only drops whole-line comments, so a future
+    // trailing `-- ... INSERT INTO x ...` would otherwise fail this test for a
+    // reason that has nothing to do with the trigger.
+    //
+    // Being honest about the limit of a textual check: this measures the
+    // statements the body NAMES. It cannot see an insert reached indirectly
+    // (a `PERFORM some_helper()`), which is why the behavioural proof lives in
+    // `src/__tests__/drive-boxes-reclaim-trigger.integration.test.ts`, where
+    // rows are actually deleted and the outbox is actually read.
+    const body = triggerSql.slice(
+      triggerSql.indexOf('AS $$'),
+      triggerSql.indexOf('$$ LANGUAGE plpgsql'),
+    );
+    expect(body).not.toHaveLength(0);
+    const targets = [...body.matchAll(/INSERT\s+INTO\s+([a-z0-9_."]+)/gi)]
       .map((m) => m[1].replace(/"/g, ''));
     expect(targets).toEqual(['public.machine_sprite_reclaims']);
   });

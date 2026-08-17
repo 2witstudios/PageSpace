@@ -4,7 +4,9 @@
  * A drive box runs on one of two very different things: dev and staging boxes
  * are Sprites (the session tooling already speaks Sprite end to end, and
  * hibernation is what makes "persistent" cheap), while a deploy box is a raw
- * Fly Machine reached through the app-hosting provisioner.
+ * Fly Machine — reached through the app-hosting provisioner that arrives with
+ * PR #2425, so today this branch of the mapping has no implementation behind
+ * it.
  *
  * `drive_boxes` deliberately stores NO substrate column. A stored copy would
  * be a second witness to a fact `kind` already states, free to disagree with

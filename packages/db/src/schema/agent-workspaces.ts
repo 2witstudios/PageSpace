@@ -109,7 +109,8 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * sessions are live, with `force` ENDING them first, so a surviving
    * box-bound session should already carry `endedAt`. Neither that verb nor
    * `plan-box-delete` exists yet; both arrive with Phase 2.
-   * The uncovered path is a DRIVE cascade — where the session row dies anyway
+   * Once that flow exists it will cover the deliberate deletes; the path it
+   * will still not cover is a DRIVE cascade, where the session row dies anyway
    * — which is why this is recorded rather than fixed here. Phase 2 owns the
    * decision of whether `force` should also stamp something durable saying
    * WHY the environment vanished; if it does not, this note is the bug report.
