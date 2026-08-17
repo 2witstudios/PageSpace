@@ -57,8 +57,8 @@ import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code'
 import { deriveAgentSessionSpriteKey } from '../../agent-workspaces/workspace-sprite-key';
 import {
   planSpriteHolderLifecycle,
-  type AgentSessionDenyReason,
-  type AgentSessionRowStamps,
+  type SpriteHolderDenyReason,
+  type SpriteHolderRowStamps,
   type LiveSpriteInstance,
   type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
@@ -82,12 +82,12 @@ export interface SpriteHolderStore {
     sandboxId: string;
     spriteInstanceId: string | null;
     egressPolicyToken: string | null;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     now: Date;
   }): Promise<boolean>;
   applyStamps(input: {
     holderId: string;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   reloadSpritePointer(holderId: string): Promise<{ sandboxId: string | null; spriteInstanceId: string | null } | null>;
@@ -150,6 +150,20 @@ export interface SpriteHolderSpriteDeps {
    * Returning `{ allowed: false }` refuses the provision; a resume is exempt (the
    * row's sandbox is already counted), which the quota module itself decides from
    * `alreadyProvisioned`.
+   *
+   * TWO OBLIGATIONS ON THE WRAPPER, both because the core deliberately holds no
+   * holder-specific wording:
+   *
+   *  1. **Supply `reason` on every refusal.** It is passed straight through as the
+   *     denial's `detail`, with no fallback here — a core that invented one would
+   *     be inventing user-facing copy for a holder kind it knows nothing about.
+   *     Omit it and the user is told only that they were denied. The session
+   *     wrapper's `SESSION_LIMIT_DETAIL` is the worked example.
+   *  2. **Expect `denial: 'session_limit_reached'`.** That is the shared deny
+   *     vocabulary today (see `SpriteHolderDenyReason` — the values are wire- and
+   *     audit-visible, so Phase 0 does not rename them). A holder kind whose
+   *     refusal is NOT a live-session ceiling should add its own member to that
+   *     union rather than borrow this one.
    */
   checkQuota: (input: { alreadyProvisioned: boolean }) => Promise<{ allowed: boolean; reason?: string }>;
   /**
@@ -211,7 +225,7 @@ export type EnsureSpriteHolderSandboxResult =
         | 'provision_failed'
         | 'persist_failed'
         | 'race_lost';
-      denial?: AgentSessionDenyReason;
+      denial?: SpriteHolderDenyReason;
       detail?: string;
     };
 

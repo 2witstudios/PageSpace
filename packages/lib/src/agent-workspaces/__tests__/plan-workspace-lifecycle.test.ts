@@ -3,7 +3,7 @@ import {
   planSpriteHolderLifecycle,
   planSessionReopen,
   type SpriteHolderLifecycleRow,
-  type AgentSessionIntent,
+  type SpriteHolderIntent,
 } from '../plan-workspace-lifecycle';
 
 const NOW = new Date('2026-07-28T12:00:00.000Z');
@@ -130,7 +130,7 @@ describe('planSpriteHolderLifecycle — attach (read-only resolve; never mints a
 describe('planSpriteHolderLifecycle — live-instance reconciliation (ABA)', () => {
   const live = { sandboxId: 'pgs-ses-abc', spriteInstanceId: 'inst-2' };
 
-  it.each<AgentSessionIntent>(['ensure', 'attach'])(
+  it.each<SpriteHolderIntent>(['ensure', 'attach'])(
     'given %s and a live instance MATCHING the row, should plainly resume',
     (intent) => {
       const plan = planSpriteHolderLifecycle({
@@ -144,7 +144,7 @@ describe('planSpriteHolderLifecycle — live-instance reconciliation (ABA)', () 
     },
   );
 
-  it.each<AgentSessionIntent>(['ensure', 'attach'])(
+  it.each<SpriteHolderIntent>(['ensure', 'attach'])(
     'given %s and a live instance that MOVED, should adopt — never a blind kill',
     (intent) => {
       const plan = planSpriteHolderLifecycle({ row: row(), intent, canRun: true, now: NOW, liveInstance: live });
@@ -369,7 +369,7 @@ describe('planSpriteHolderLifecycle — reprovision (heal a row whose Sprite is 
 });
 
 describe('planSpriteHolderLifecycle — hibernation model', () => {
-  it.each<AgentSessionIntent>(['ensure', 'attach'])(
+  it.each<SpriteHolderIntent>(['ensure', 'attach'])(
     'given %s on a row idle for years, should resume — idleness alone NEVER destroys',
     (intent) => {
       const plan = planSpriteHolderLifecycle({
@@ -383,7 +383,7 @@ describe('planSpriteHolderLifecycle — hibernation model', () => {
   );
 
   it('should never emit a teardown for any intent other than end', () => {
-    const intents: AgentSessionIntent[] = ['ensure', 'attach', 'reprovision'];
+    const intents: SpriteHolderIntent[] = ['ensure', 'attach', 'reprovision'];
     const rows = [null, row(), unprovisioned, tornDown, row({ lastActiveAt: LONG_AGO })];
     for (const intent of intents) {
       for (const candidate of rows) {
@@ -397,7 +397,7 @@ describe('planSpriteHolderLifecycle — hibernation model', () => {
     expect(() =>
       planSpriteHolderLifecycle({
         row: row(),
-        intent: 'destroy' as AgentSessionIntent,
+        intent: 'destroy' as SpriteHolderIntent,
         canRun: true,
         now: NOW,
       }),
@@ -405,7 +405,7 @@ describe('planSpriteHolderLifecycle — hibernation model', () => {
   });
 
   it('every verdict should carry a stamps bag so the runtime writes rows uniformly', () => {
-    const intents: AgentSessionIntent[] = ['ensure', 'attach', 'end', 'reprovision'];
+    const intents: SpriteHolderIntent[] = ['ensure', 'attach', 'end', 'reprovision'];
     for (const intent of intents) {
       for (const candidate of [null, row(), unprovisioned, tornDown]) {
         for (const canRun of [true, false]) {

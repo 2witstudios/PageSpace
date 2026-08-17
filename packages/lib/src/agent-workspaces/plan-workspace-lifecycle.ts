@@ -85,9 +85,9 @@ export interface SpriteHolderLifecycleRow {
  * - `end` — explicit teardown. Unconditional on authorization.
  * - `reprovision` — deliberately replace an unusable Sprite under the same key.
  */
-export type AgentSessionIntent = 'ensure' | 'attach' | 'end' | 'reprovision';
+export type SpriteHolderIntent = 'ensure' | 'attach' | 'end' | 'reprovision';
 
-/** A Sprite the caller has actually observed under this session's name. */
+/** A Sprite the caller has actually observed under this holder's name. */
 export interface LiveSpriteInstance {
   sandboxId: string;
   spriteInstanceId: string | null;
@@ -101,7 +101,7 @@ export interface LiveSpriteInstance {
  *
  * `null` here always means "clear this column"; an absent key means "leave it".
  */
-export interface AgentSessionRowStamps {
+export interface SpriteHolderRowStamps {
   lastActiveAt?: Date;
   endedAt?: Date | null;
   teardownRequestedAt?: Date | null;
@@ -115,7 +115,23 @@ export interface AgentSessionRowStamps {
   storageMeasuredAt?: null;
 }
 
-export type AgentSessionDenyReason =
+/**
+ * Why a holder was refused.
+ *
+ * The type NAME is holder-neutral; the VALUES are deliberately still
+ * session-worded, and that asymmetry is the point. These strings leave the
+ * package: web routes switch on them to pick an HTTP status
+ * (`session_limit_reached` → 429, the rest → 403/404) and echo them into
+ * security-audit payloads. Renaming a value is therefore an API and audit-log
+ * change, not a refactor, and this module's job in Phase 0 is to change no
+ * behavior at all.
+ *
+ * When the box holder lands, EXTEND this union with box-worded members rather
+ * than renaming these — a box's "not found" and a session's are different facts
+ * about different tables, and one shared spelling for both is what would need
+ * un-picking later.
+ */
+export type SpriteHolderDenyReason =
   /** The actor may not run code here — re-checked on every intent that could hand back a sandbox. */
   | 'not_authorized'
   /** Nothing to attach to or reprovision. */
@@ -136,13 +152,13 @@ export type AgentSessionDenyReason =
   /** The live VM's identity moved but the row carries no key to CAS against — reconcile, never resume on a stale identity. */
   | 'missing_session_key';
 
-export type AgentSessionNoopReason = 'no_session' | 'no_sandbox' | 'already_ended';
+export type SpriteHolderNoopReason = 'no_session' | 'no_sandbox' | 'already_ended';
 
-export type AgentSessionLifecyclePlan =
+export type SpriteHolderLifecyclePlan =
   /** Provision under the session's derived key. `previousSandboxId` is the pointer to CAS against (null when there is no row yet). */
-  | { action: 'create'; previousSandboxId: string | null; stamps: AgentSessionRowStamps }
+  | { action: 'create'; previousSandboxId: string | null; stamps: SpriteHolderRowStamps }
   /** Reconnect to the recorded Sprite. Covers warm AND hibernating VMs — waking is the platform's job, not a distinct verdict. */
-  | { action: 'resume'; sandboxId: string; spriteInstanceId: string | null; stamps: AgentSessionRowStamps }
+  | { action: 'resume'; sandboxId: string; spriteInstanceId: string | null; stamps: SpriteHolderRowStamps }
   /** CAS the live VM's identity onto the row, then treat it as resumed. Never a blind kill. */
   | {
       action: 'adopt';
@@ -150,16 +166,16 @@ export type AgentSessionLifecyclePlan =
       spriteInstanceId: string | null;
       previousSandboxId: string | null;
       previousSpriteInstanceId: string | null;
-      stamps: AgentSessionRowStamps;
+      stamps: SpriteHolderRowStamps;
     }
   /** Kill, guarded by the INSTANCE the row records — a stale expectation must refuse, not silently miss. */
-  | { action: 'teardown'; sandboxId: string; expectedInstanceId: string | null; stamps: AgentSessionRowStamps }
-  | { action: 'deny'; reason: AgentSessionDenyReason; stamps: AgentSessionRowStamps }
-  | { action: 'noop'; reason: AgentSessionNoopReason; stamps: AgentSessionRowStamps };
+  | { action: 'teardown'; sandboxId: string; expectedInstanceId: string | null; stamps: SpriteHolderRowStamps }
+  | { action: 'deny'; reason: SpriteHolderDenyReason; stamps: SpriteHolderRowStamps }
+  | { action: 'noop'; reason: SpriteHolderNoopReason; stamps: SpriteHolderRowStamps };
 
 export interface PlanSpriteHolderLifecycleInput {
   row: SpriteHolderLifecycleRow | null;
-  intent: AgentSessionIntent;
+  intent: SpriteHolderIntent;
   /**
    * The caller's freshly-computed code-execution authorization (see
    * `decide-workspace-access.ts`), passed through rather than re-derived — every
@@ -182,7 +198,7 @@ function isEnded(row: SpriteHolderLifecycleRow): boolean {
 }
 
 /** Provisioning revives a row: the session is live again, and any teardown intent recorded against its predecessor is void. */
-function reviveStamps(now: Date): AgentSessionRowStamps {
+function reviveStamps(now: Date): SpriteHolderRowStamps {
   return {
     lastActiveAt: now,
     endedAt: null,
@@ -208,7 +224,7 @@ function reviveStamps(now: Date): AgentSessionRowStamps {
  * bookkeeping is untouched. Clearing it here, without a provision, would
  * recreate exactly the stale-attach hazard `resolveLiveInstance` documents.
  */
-export function planSessionReopen(): AgentSessionRowStamps {
+export function planSessionReopen(): SpriteHolderRowStamps {
   return { endedAt: null };
 }
 
@@ -231,8 +247,8 @@ function resolveLiveInstance(
   sandboxId: string,
   liveInstance: LiveSpriteInstance | null | undefined,
   now: Date,
-): AgentSessionLifecyclePlan {
-  const activeStamps: AgentSessionRowStamps = { lastActiveAt: now, endedAt: null, teardownRequestedAt: null };
+): SpriteHolderLifecyclePlan {
+  const activeStamps: SpriteHolderRowStamps = { lastActiveAt: now, endedAt: null, teardownRequestedAt: null };
 
   if (!liveInstance || !instanceMoved(row, liveInstance)) {
     return { action: 'resume', sandboxId, spriteInstanceId: row.spriteInstanceId, stamps: activeStamps };
@@ -261,7 +277,7 @@ export function planSpriteHolderLifecycle({
   canRun,
   now,
   liveInstance = null,
-}: PlanSpriteHolderLifecycleInput): AgentSessionLifecyclePlan {
+}: PlanSpriteHolderLifecycleInput): SpriteHolderLifecyclePlan {
   // Cleanup first, and unconditionally: authorization gates ACQUIRING compute,
   // never releasing it. An actor who just lost the right to a session must still
   // be able to end it, and so must every automated path.

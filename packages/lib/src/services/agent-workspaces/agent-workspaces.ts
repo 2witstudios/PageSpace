@@ -20,7 +20,7 @@
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
-import { planSpriteHolderLifecycle, type AgentSessionLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { planSpriteHolderLifecycle, type SpriteHolderLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionDTO } from '../../agent-workspaces/session-contract';
 import { deriveSandboxStatus } from './workspace-status';
 import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
@@ -186,7 +186,7 @@ async function endProvisionedSession({
   deps,
 }: {
   workspaceId: string;
-  plan: Extract<AgentSessionLifecyclePlan, { action: 'teardown' }>;
+  plan: Extract<SpriteHolderLifecyclePlan, { action: 'teardown' }>;
   now: Date;
   deps: EndAgentSessionDeps;
 }): Promise<EndAgentSessionResult> {
