@@ -263,8 +263,23 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    *
    * So the equality check lives in `spawnAgentSession` (Phase 3), which is the
    * first thing that can write `boxId` and the first place it can be TESTED
-   * against a real spawn. That test is the acceptance criterion for Phase 3 —
-   * if it is not there, this comment is the bug report.
+   * against a real spawn.
+   *
+   * **TWO invariants are deferred there, and both are Phase 3 acceptance
+   * criteria. If either lacks a test when `boxId` gains its first writer, this
+   * comment is the bug report:**
+   *
+   *  1. `box.driveId === session.driveId` — the cross-drive case argued above.
+   *  2. `substrateForBoxKind(box.kind) === 'sprite'` — a session may not bind
+   *     to a `kind='deploy'` box. Deliberately NOT a constraint, and not for
+   *     the same reason as (1): it is enforceable here (a `boxKind` column
+   *     plus a composite FK to `drive_boxes (id, kind)` would do it, and
+   *     unlike the `(boxId, driveId)` case a plain `ON DELETE SET NULL` over
+   *     both columns is correct, so Drizzle could express it). It is refused
+   *     because it is a POLICY, not an invariant: the plan refuses sessions on
+   *     deploy boxes *in v1*, and a rule expected to relax should not need a
+   *     migration — and a denormalized `boxKind` on a populated table is a
+   *     steep price for a column nothing writes yet.
    *
    * Ships NOT VALID for the same reason as the constraint above, and is
    * vacuously true of the existing corpus for the same reason: `boxId` does
