@@ -230,12 +230,21 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * rather than overlooked. Stating it structurally needs a composite FK on
    * `(boxId, driveId)`, which in turn needs `ON DELETE SET NULL ("boxId")` so
    * that reclaiming a box does not also blank `driveId` and silently convert a
-   * drive session into a global-assistant one. Drizzle 0.45.2 cannot express a
-   * column-scoped SET NULL (`UpdateDeleteAction` is a bare string union), so
-   * that FK could only be hand-written into the migration, where the snapshot
-   * cannot represent it and every later `db:generate` would try to reconcile
-   * the difference. Trading a permanent drift hazard for a constraint on a
-   * column nothing writes yet is a bad exchange.
+   * drive session into a global-assistant one.
+   *
+   * Drizzle 0.45.2 cannot express a column-scoped SET NULL —
+   * `UpdateDeleteAction` is a bare string union of the five bare actions — so
+   * that FK could only be hand-written in SQL. The cost is NOT that
+   * `db:generate` would fight it: generate diffs the TS schema against the
+   * stored snapshot and never reads the database, so a hand-written statement
+   * is invisible to it (this migration's own `NOT VALID` amendment is proof —
+   * `db:generate` reports "No schema changes" against it). The cost is worse
+   * than noisy, because it is silent: the TS schema and the snapshot would
+   * both describe a constraint that is not the one deployed, so every reader
+   * would believe a box delete blanks `driveId` too, and the next
+   * regeneration that touches this FK would emit a plain `ON DELETE set null`
+   * that reverts the column list with nothing flagging it. Buying that for a
+   * constraint on a column nothing writes yet is a bad exchange.
    *
    * So the equality check lives in `spawnAgentSession` (Phase 3), which is the
    * first thing that can write `boxId` and the first place it can be TESTED
