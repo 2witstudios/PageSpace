@@ -248,45 +248,36 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * a row with a box and no drive would route work into a drive's shared
    * filesystem through an authorization path that never looked at that drive.
    *
-   * **This closes one half of the drive-agreement invariant, not both.** The
-   * other half — that `boxId`'s box belongs to THIS session's drive rather
-   * than some other one — is NOT enforced here, and the gap is deliberate
-   * rather than overlooked. Stating it structurally needs a composite FK on
-   * `(boxId, driveId)`, which in turn needs `ON DELETE SET NULL ("boxId")` so
-   * that reclaiming a box does not also blank `driveId` and silently convert a
-   * drive session into a global-assistant one.
+   * **This closes one half of the drive-agreement invariant. The other half is
+   * now cheaply closable too, and is NOT yet closed — read on before copying
+   * the old reasoning out of this file.**
    *
-   * Drizzle 0.45.2 cannot express a column-scoped SET NULL —
-   * `UpdateDeleteAction` is a bare string union of the five bare actions — so
-   * that FK could only be hand-written in SQL. The cost is NOT that
-   * `db:generate` would fight it: generate diffs the TS schema against the
-   * stored snapshot and never reads the database, so a hand-written statement
-   * is invisible to it (this migration's own `NOT VALID` amendment is proof —
-   * `db:generate` reports "No schema changes" against it). The cost is worse
-   * than noisy, because it is silent: the TS schema and the snapshot would
-   * both describe a constraint that is not the one deployed, so every reader
-   * would believe a box delete blanks `driveId` too, and the next
-   * regeneration that touches this FK would emit a plain `ON DELETE set null`
-   * that reverts the column list with nothing flagging it. Buying that for a
-   * constraint on a column nothing writes yet is a bad exchange.
+   * The other half is that `boxId`'s box belongs to THIS session's drive. An
+   * earlier cut of this docblock argued it could not be stated structurally,
+   * because a composite FK on `(boxId, driveId)` would need
+   * `ON DELETE SET NULL ("boxId")` — so that reclaiming a box did not also
+   * blank `driveId` and silently convert a drive session into a
+   * global-assistant one — and Drizzle 0.45.2 cannot express a column-scoped
+   * SET NULL.
    *
-   * So the equality check lives in `spawnAgentSession` (Phase 3), which is the
-   * first thing that can write `boxId` and the first place it can be TESTED
-   * against a real spawn.
+   * **That argument died with `set null`.** `boxId` is `ON DELETE CASCADE`
+   * now, so a composite FK wants CASCADE too: the whole row goes, and there is
+   * no `driveId` left to blank. Drizzle expresses a plain composite cascade FK
+   * without difficulty. Verified against a live database: with
+   * `UNIQUE (id, "driveId")` on `drive_boxes` and
+   * `FOREIGN KEY ("boxId","driveId") REFERENCES drive_boxes(id,"driveId") ON
+   * DELETE CASCADE`, a same-drive binding is accepted, a cross-drive binding
+   * is REFUSED, and deleting the box still cascades the session away.
    *
-   * **TWO invariants are deferred there, and both are Phase 3 acceptance
-   * criteria. If either lacks a test when `boxId` gains its first writer, this
-   * comment is the bug report:**
+   * The `MATCH SIMPLE` hole that would normally undercut such an FK — a NULL
+   * in either column skipping the check entirely — is already closed by the
+   * constraint above: a row with a `boxId` and no `driveId` cannot exist.
    *
-   *  1. `box.driveId === session.driveId` — the cross-drive case argued above.
-   *     **This one is a SECURITY criterion, not merely a correctness one.** A
-   *     cross-drive `boxId` is an authorization bypass by construction:
-   *     `decideAgentSessionAccess` gates on the SESSION's `driveId`, while the
-   *     filesystem actually touched belongs to the BOX's drive — so a member
-   *     of drive A would be authorized against A and then handed B's shared
-   *     disk. It is unreachable today only because nothing writes `boxId`;
-   *     the moment a writer exists without this check, that is a live
-   *     cross-tenant read/write path, not a tidiness issue.
+   * It is not enforced here because that is a schema-shape decision beyond the
+   * change this constraint shipped with, not because it is expensive. Until it
+   * lands, the check remains a Phase 3 acceptance criterion on
+   * `spawnAgentSession`:
+   *
    *  2. `substrateForBoxKind(box.kind) === 'sprite'` — a session may not bind
    *     to a `kind='deploy'` box. Deliberately NOT a constraint, and not for
    *     the same reason as (1): it is enforceable here (a `boxKind` column
