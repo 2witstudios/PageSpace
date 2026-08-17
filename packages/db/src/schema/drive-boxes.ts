@@ -42,11 +42,19 @@ import { drives } from './core';
  *
  * `drive_boxes_sprite_kind_check` is what makes that derivation load-bearing
  * rather than advisory: a `kind='deploy'` row may hold NO Sprite pointer at
- * all. The two teardown outboxes therefore stay PARTITIONED by construction —
- * Sprite names can only ever reach `machine_sprite_reclaims` (via this table's
- * AFTER DELETE trigger), Fly app names only ever reach `app_hosting_reclaims`
- * (via the hosting row's). Neither reconciler can be handed a pointer it does
- * not know how to kill.
+ * all. So this table's AFTER DELETE trigger can only ever hand
+ * `machine_sprite_reclaims` a pointer it knows how to kill — a deploy row has
+ * none to give it.
+ *
+ * **The Fly half of that story does not exist yet.** The intended end state is
+ * two partitioned outboxes, with Fly app names reaching `app_hosting_reclaims`
+ * via the hosting row's own trigger — but that table is introduced by PR #2425
+ * (unmerged) and is nowhere in this schema today. Stated plainly because the
+ * gap is load-bearing for whoever builds Phase 6: a `kind='deploy'` box
+ * currently has NO reclaim path of any kind, and that is safe ONLY because
+ * nothing can provision a Fly machine for one yet. Wiring deploy provisioning
+ * without also wiring its outbox re-creates the orphan-billing bug
+ * `machine_sprite_reclaims` was built to end.
  *
  * **No stored status.** Derived the way `workspace-status.ts` derives a
  * session's, from the pointer columns below; a deploy box surfaces its hosting
@@ -64,9 +72,11 @@ export const driveBoxKind = pgEnum('drive_box_kind', ['dev', 'staging', 'deploy'
 
 export const driveBoxes = pgTable('drive_boxes', {
   /**
-   * The box's own identity — the API address and the Sprite-key fold input
+   * The box's own identity — the API address, and the fold input for the
+   * Sprite key a dev/staging box will be provisioned under
    * (`deriveDriveBoxSpriteKey`, namespace `drive-box-sprite:v1`, name prefix
-   * `pgs-box-`). Client-generated cuid2, same as every other row here.
+   * `pgs-box-`; that helper lands with the Phase 0 lifecycle work and is not
+   * in this PR). Client-generated cuid2, same as every other row here.
    */
   id: text('id').primaryKey().$defaultFn(() => createId()),
 

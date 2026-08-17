@@ -16,8 +16,9 @@
  *    particular disagreement picks the wrong provisioner and the wrong reclaim
  *    outbox.
  *  - **Deploy boxes hold no Sprite pointers** (`drive_boxes_sprite_kind_check`)
- *    — which is what keeps `machine_sprite_reclaims` and `app_hosting_reclaims`
- *    partitioned by construction rather than by convention.
+ *    — so the reclaim trigger can only ever hand `machine_sprite_reclaims` a
+ *    pointer it knows how to kill. (The Fly-side outbox that would complete the
+ *    partition does not exist yet; see the schema docblock.)
  *  - **A Sprite pointer outlives its row.** Every delete path into
  *    `drive_boxes` cascades (drive delete, permanent drive delete, Art. 17
  *    erasure through the drive), so the AFTER DELETE trigger must rescue
@@ -263,8 +264,15 @@ describe('drive_boxes sprite reclaim trigger (0263)', () => {
     );
   });
 
-  it('should never enqueue a Fly pointer — this outbox only kills Sprites', () => {
-    expect(triggerSql).not.toMatch(/app_hosting_reclaims/);
+  it('should write to exactly ONE outbox, and that outbox is the Sprite one', () => {
+    // Asserting the ABSENCE of `app_hosting_reclaims` here would be vacuous:
+    // that table does not exist anywhere in this schema (it arrives with PR
+    // #2425), so the assertion could never fail for a real reason. What CAN
+    // regress is this trigger growing a second INSERT into some other table,
+    // so count the INSERT targets instead.
+    const targets = [...triggerSql.matchAll(/INSERT\s+INTO\s+([a-z_."]+)/gi)]
+      .map((m) => m[1].replace(/"/g, ''));
+    expect(targets).toEqual(['public.machine_sprite_reclaims']);
   });
 });
 

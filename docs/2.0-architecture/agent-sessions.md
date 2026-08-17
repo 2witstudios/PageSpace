@@ -42,9 +42,11 @@ lives inside it.
 > Sprite — not because sessions pick the Sprite half, but because a **deploy box refuses
 > to host sessions at all** (v1); it is a publish target, and its Fly state lives on its
 > hosting row rather than in the Sprite columns, which `drive_boxes_sprite_kind_check`
-> enforces by forbidding those columns on a `kind='deploy'` row. That is what keeps the
-> two teardown outboxes disjoint: Sprite names can only reach `machine_sprite_reclaims`,
-> Fly app names only `app_hosting_reclaims`.
+> enforces by forbidding those columns on a `kind='deploy'` row. So the box table's
+> teardown trigger can only ever hand `machine_sprite_reclaims` a Sprite name. The
+> matching Fly-side outbox (`app_hosting_reclaims`) arrives with the Published Apps
+> work and does not exist yet, so a deploy box currently has no reclaim path at all —
+> safe only because nothing can provision one until that lands.
 
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):

@@ -49,7 +49,12 @@ describe('substrateForBoxKind', () => {
     // actually happens — someone edits the schema, ships the migration, and
     // never looks at this file.
     const fromPg: DriveBoxKind[] = [...driveBoxKind.enumValues];
-    // RUNTIME half: catches the reverse (a union member with no enum value).
+    // The literal list is the third witness, and it is what pins the pgEnum
+    // itself: a value REMOVED from the enum fails here. It cannot catch a
+    // union member with no enum value — `fromPg` is derived wholly from the
+    // enum, so the union is invisible to it. That direction is covered by the
+    // `never` branch in `substrateForBoxKind`, which stops compiling when the
+    // union gains a member the switch does not handle.
     expect([...fromPg].sort()).toEqual(['deploy', 'dev', 'staging']);
   });
 

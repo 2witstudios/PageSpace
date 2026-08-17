@@ -104,9 +104,11 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * started yet", so a resume would hand it a fresh Sprite and an empty disk
    * with no explanation.
    *
-   * That is mostly closed by the delete FLOW rather than by this column:
-   * `deleteDriveBox` refuses while sessions are live, and `force` ENDS them
-   * first, so a surviving box-bound session should already carry `endedAt`.
+   * That is mostly closed by the delete FLOW rather than by this column — as
+   * DESIGNED, not as shipped: Phase 2's `deleteDriveBox` is to refuse while
+   * sessions are live, with `force` ENDING them first, so a surviving
+   * box-bound session should already carry `endedAt`. Neither that verb nor
+   * `plan-box-delete` exists yet; both arrive with Phase 2.
    * The uncovered path is a DRIVE cascade — where the session row dies anyway
    * — which is why this is recorded rather than fixed here. Phase 2 owns the
    * decision of whether `force` should also stamp something durable saying

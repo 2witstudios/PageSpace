@@ -352,8 +352,13 @@ describe('drive_boxes CHECK constraints — live', () => {
         );
         expect(rows).toHaveLength(1);
       } finally {
-        await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [`pgs-box-${suffix}`]);
+        // ORDER MATTERS. This box holds a LIVE pointer, so deleting the user
+        // cascades drive -> drive_boxes and fires the reclaim trigger, which
+        // INSERTS into the outbox. Cleaning the outbox first would delete a row
+        // that is then immediately re-created and — the outbox being FK-less by
+        // design — never collected by anything.
         await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+        await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [`pgs-box-${suffix}`]);
       }
     },
   );

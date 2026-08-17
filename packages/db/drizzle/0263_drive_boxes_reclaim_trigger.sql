@@ -28,9 +28,14 @@
 --
 -- `kind='deploy'` boxes are not a special case here and need no branch: their
 -- Sprite pointer columns are NULL by CHECK (`drive_boxes_sprite_kind_check`,
--- 0262), so the WHEN clause below can never select one. Their Fly app names
--- reach `app_hosting_reclaims` through the hosting row's own trigger, and the
--- two outboxes stay partitioned by construction rather than by convention.
+-- 0262), so the WHEN clause below can never select one.
+--
+-- To be explicit about what that does NOT mean: a deploy box has no reclaim
+-- path today. The Fly-side outbox it will eventually use
+-- (`app_hosting_reclaims`, via the hosting row's own trigger) arrives with PR
+-- #2425 and does not exist in this schema. That is safe right now only because
+-- nothing can provision a Fly machine for a box until Phase 6 — whoever wires
+-- that must wire its outbox in the same change.
 
 -- SECURITY DEFINER + a pinned search_path for the same reason as
 -- 0209/0219/0229/0238: this sits on the critical path of every drive delete,
