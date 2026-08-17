@@ -64,7 +64,7 @@ async function seedDrive(suffix: string): Promise<{ userId: string; driveId: str
   );
   await client.query(
     `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt")
-     VALUES ($1, 'box probe drive', $2, $3, (now() at time zone 'utc'))`,
+     VALUES ($1, 'env probe drive', $2, $3, (now() at time zone 'utc'))`,
     [driveId, `env-probe-${suffix}`, userId],
   );
   return { userId, driveId };
@@ -169,20 +169,12 @@ describe('drive_envs sprite reclaim trigger — live', () => {
   });
 
   /**
-   * The "sessions are history rows" claim, executed. `envId` is `ON DELETE SET
-   * NULL` precisely so that reclaiming a machine never destroys the
-   * conversations that ran on it — and until this test, nothing proved the
-   * database actually behaves that way rather than the docblock merely saying
-   * so. A cascade here would silently delete user chat history as a side
-   * effect of an admin deleting a box.
-   */
-  /**
    * An env OWNS its sessions. This walks the whole ownership chain in one
    * delete and asserts BOTH halves of it: what a cascade is supposed to take,
    * and — more importantly — what it must not reach.
    *
    * `envId` used to be `ON DELETE SET NULL`, on the reasoning that a session
-   * had to outlive its box "so its conversations stay readable". That was
+   * had to outlive its env "so its conversations stay readable". That was
    * false: `conversations` has carried no session column since 0256, and a
    * pane's `targetId` is polymorphic with no FK, so a conversation is not
    * reachable from a session at all. The false premise bought a real defect —
@@ -203,7 +195,7 @@ describe('drive_envs sprite reclaim trigger — live', () => {
          VALUES ($1, $2, 'dev', $3, 'inst-1', (now() at time zone 'utc'))`,
         [envId, driveId, sandboxId],
       );
-      // A env-bound session: drive set, box set, and NO sprite pointer of its
+      // An env-bound session: drive set, env set, and NO sprite pointer of its
       // own — it borrows the env's.
       await client.query(
         `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "envId", "updatedAt")
@@ -418,7 +410,7 @@ describe('drive_envs CHECK constraints — live', () => {
         ),
       ).rejects.toThrow(/agent_workspaces_env_needs_drive_check/);
 
-      // A driveless session with NO box is still fine — that is the global
+      // A driveless session with NO env is still fine — that is the global
       // assistant, and this constraint must not have broken it.
       await client.query(
         `INSERT INTO agent_workspaces (id, "ownerId", "updatedAt")
@@ -438,7 +430,7 @@ describe('drive_envs CHECK constraints — live', () => {
       for (const n of [1, 2]) {
         await client.query(
           `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt") VALUES ($1, 'p', $2, $3, (now() at time zone 'utc'))`,
-          [`d${n}-${suffix}`, `box-name-${n}-${suffix}`, userId],
+          [`d${n}-${suffix}`, `env-name-${n}-${suffix}`, userId],
         );
         await client.query(
           `INSERT INTO drive_envs (id, "driveId", name, "updatedAt")
