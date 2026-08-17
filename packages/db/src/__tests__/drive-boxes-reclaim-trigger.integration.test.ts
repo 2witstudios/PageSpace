@@ -23,42 +23,54 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from 'pg';
 
-describe('drive_boxes sprite reclaim trigger — live', () => {
+let client: Client;
+
+beforeAll(async () => {
   const url = process.env.DATABASE_URL;
-  let client: Client;
-
-  beforeAll(async () => {
-    if (!url) {
-      throw new Error(
-        'drive-boxes-reclaim-trigger.integration.test.ts requires DATABASE_URL pointed at a ' +
-          'migrated database. It is not skippable: this trigger is the last pointer to a ' +
-          'billing VM whose row is disappearing, and a silent skip proves nothing.',
-      );
-    }
-    client = new Client({ connectionString: url });
-    await client.connect();
-  });
-
-  afterAll(async () => {
-    await client?.end();
-  });
-
-  /** A drive + owner to hang boxes off, torn down with the caller's `finally`. */
-  async function seedDrive(suffix: string): Promise<{ userId: string; driveId: string }> {
-    const userId = `u-${suffix}`;
-    const driveId = `d-${suffix}`;
-    await client.query(
-      `INSERT INTO users (id, name, email) VALUES ($1, 'drive box probe', $2)`,
-      [userId, `${suffix}@example.test`],
+  if (!url) {
+    throw new Error(
+      'drive-boxes-reclaim-trigger.integration.test.ts requires DATABASE_URL pointed at a ' +
+        'migrated database. It is not skippable: this trigger is the last pointer to a ' +
+        'billing VM whose row is disappearing, and a silent skip proves nothing.',
     );
-    await client.query(
-      `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt")
-       VALUES ($1, 'box probe drive', $2, $3, (now() at time zone 'utc'))`,
-      [driveId, `box-probe-${suffix}`, userId],
-    );
-    return { userId, driveId };
   }
+  client = new Client({ connectionString: url });
+  await client.connect();
+});
 
+afterAll(async () => {
+  await client?.end();
+});
+
+/**
+ * A unique suffix per test. `process.hrtime.bigint()` rather than a counter so
+ * two files running against the same database cannot collide on ids.
+ */
+function uniqueSuffix(label: string): string {
+  return `${label}-${process.pid}-${process.hrtime.bigint()}`;
+}
+
+/**
+ * A drive + owner to hang boxes off. Every caller deletes the USER in its
+ * `finally`, which cascades to the drive, its boxes and its sessions — so a
+ * failing assertion still cleans up after itself.
+ */
+async function seedDrive(suffix: string): Promise<{ userId: string; driveId: string }> {
+  const userId = `u-${suffix}`;
+  const driveId = `d-${suffix}`;
+  await client.query(
+    `INSERT INTO users (id, name, email) VALUES ($1, 'drive box probe', $2)`,
+    [userId, `${suffix}@example.test`],
+  );
+  await client.query(
+    `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt")
+     VALUES ($1, 'box probe drive', $2, $3, (now() at time zone 'utc'))`,
+    [driveId, `box-probe-${suffix}`, userId],
+  );
+  return { userId, driveId };
+}
+
+describe('drive_boxes sprite reclaim trigger — live', () => {
   it('should be armed and ENABLED on drive_boxes', async () => {
     const { rows } = await client.query<{ tgname: string; proname: string; tgenabled: string }>(
       `SELECT t.tgname, p.proname, t.tgenabled
@@ -74,7 +86,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   it('given a box with a live Sprite pointer, should MOVE it into the outbox when the drive cascade deletes it', async () => {
-    const suffix = `boxrec-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxrec');
     const sandboxId = `pgs-box-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
@@ -101,7 +113,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   it('given a Sprite already CONFIRMED destroyed, should enqueue nothing', async () => {
-    const suffix = `boxrec-torn-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxrec-torn');
     const sandboxId = `pgs-box-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
@@ -134,7 +146,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
    * effect of an admin deleting a box.
    */
   it('given a box-bound session, deleting the BOX should null the binding, KEEP the session, and still reclaim', async () => {
-    const suffix = `boxsess-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxsess');
     const sandboxId = `pgs-box-${suffix}`;
     const boxId = `b-${suffix}`;
     const workspaceId = `ws-${suffix}`;
@@ -187,7 +199,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
    * is itself being destroyed in the same statement.
    */
   it('given a drive holding a box AND a box-bound session, deleting the drive should still reclaim', async () => {
-    const suffix = `boxcasc-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxcasc');
     const sandboxId = `pgs-box-${suffix}`;
     const boxId = `b-${suffix}`;
     const workspaceId = `ws-${suffix}`;
@@ -226,7 +238,7 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
   });
 
   it('given a reused sandbox NAME now holds a newer VM, should chase the live instance rather than keep the stale one', async () => {
-    const suffix = `boxrec-aba-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxrec-aba');
     const sandboxId = `pgs-box-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
     try {
@@ -255,29 +267,10 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
 });
 
 describe('drive_boxes CHECK constraints — live', () => {
-  const url = process.env.DATABASE_URL;
-  let client: Client;
-
-  beforeAll(async () => {
-    if (!url) throw new Error('drive-boxes-reclaim-trigger.integration.test.ts requires DATABASE_URL.');
-    client = new Client({ connectionString: url });
-    await client.connect();
-  });
-
-  afterAll(async () => {
-    await client?.end();
-  });
-
   it('given a deploy box, should REFUSE a sprite pointer — this is what partitions the two outboxes', async () => {
-    const suffix = `boxchk-${process.pid}-${process.hrtime.bigint()}`;
-    const userId = `u-${suffix}`;
-    const driveId = `d-${suffix}`;
+    const suffix = uniqueSuffix('boxchk');
+    const { userId, driveId } = await seedDrive(suffix);
     try {
-      await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
-      await client.query(
-        `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt") VALUES ($1, 'p', $2, $3, (now() at time zone 'utc'))`,
-        [driveId, `box-chk-${suffix}`, userId],
-      );
       await expect(
         client.query(
           `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "updatedAt")
@@ -291,16 +284,10 @@ describe('drive_boxes CHECK constraints — live', () => {
   });
 
   it('given a box-bound session, should REFUSE a sprite pointer of its own', async () => {
-    const suffix = `wschk-${process.pid}-${process.hrtime.bigint()}`;
-    const userId = `u-${suffix}`;
-    const driveId = `d-${suffix}`;
+    const suffix = uniqueSuffix('wschk');
     const boxId = `b-${suffix}`;
+    const { userId, driveId } = await seedDrive(suffix);
     try {
-      await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
-      await client.query(
-        `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt") VALUES ($1, 'p', $2, $3, (now() at time zone 'utc'))`,
-        [driveId, `ws-chk-${suffix}`, userId],
-      );
       await client.query(
         `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
          VALUES ($1, $2, 'dev', 'dev', (now() at time zone 'utc'))`,
@@ -331,16 +318,10 @@ describe('drive_boxes CHECK constraints — live', () => {
   });
 
   it('given a box is drive-owned, should REFUSE a box-bound session with no drive', async () => {
-    const suffix = `wsdrv-${process.pid}-${process.hrtime.bigint()}`;
-    const userId = `u-${suffix}`;
-    const driveId = `d-${suffix}`;
+    const suffix = uniqueSuffix('wsdrv');
     const boxId = `b-${suffix}`;
+    const { userId, driveId } = await seedDrive(suffix);
     try {
-      await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
-      await client.query(
-        `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt") VALUES ($1, 'p', $2, $3, (now() at time zone 'utc'))`,
-        [driveId, `ws-drv-${suffix}`, userId],
-      );
       await client.query(
         `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
          VALUES ($1, $2, 'dev', 'dev', (now() at time zone 'utc'))`,
@@ -372,7 +353,7 @@ describe('drive_boxes CHECK constraints — live', () => {
   });
 
   it('given box names address, should REFUSE a duplicate name in one drive and ALLOW it across drives', async () => {
-    const suffix = `boxname-${process.pid}-${process.hrtime.bigint()}`;
+    const suffix = uniqueSuffix('boxname');
     const userId = `u-${suffix}`;
     try {
       await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
