@@ -172,10 +172,23 @@ export const driveBoxes = pgTable('drive_boxes', {
    * and this CHECK is the proof that a `kind='deploy'` row can never carry a
    * pointer that would land there.
    *
-   * Stated over the three IDENTITY columns rather than all six: those are the
-   * ones a reclaim reads (`sandboxId` addresses, `spriteInstanceId` guards,
-   * `spriteKey` derives), and the timestamp columns describe the lifecycle of
-   * a pointer that this constraint has already forbidden.
+   * Stated over the three POINTER columns rather than all six. The test is not
+   * "is this column Sprite-flavoured" but "can a live VM be reached through
+   * it", because reaching one is what orphans it: `sandboxId` addresses the
+   * VM, `spriteInstanceId` is the identity every teardown CAS keys on, and
+   * `spriteKey` re-derives the name. Those three are exactly what the reclaim
+   * outbox stores and what the orphan reconciler kills by.
+   *
+   * The other three are inert on a deploy row, for two different reasons, and
+   * both are worth naming so a later reader does not "helpfully" add them:
+   * `teardownRequestedAt` and `spriteTornDownAt` describe the lifecycle of a
+   * pointer this constraint has already forbidden, so they can only ever
+   * describe nothing. `egressPolicyToken` is NOT a timestamp and not a
+   * lifecycle stamp — it is proof that an egress lockdown was confirmed for a
+   * VM — but it is still not an address: nothing can be found, billed or
+   * destroyed through it, so a stray value is unusable rather than dangerous.
+   * Widening the predicate to cover it would buy no reclaim safety and would
+   * make the constraint say something other than what it means.
    *
    * Shipped VALID: the table is created empty in the same migration, so there
    * is no legacy corpus to grandfather and nothing for a scan to reject.

@@ -201,9 +201,22 @@ describe('drive_boxes schema — the two CHECKs that partition the outboxes', ()
     );
   });
 
-  it('given drive_boxes is created empty in the same statement, should ship ITS check validating', () => {
-    expect(schemaSql).toContain('CONSTRAINT "drive_boxes_sprite_kind_check" CHECK');
-    expect(schemaSql).not.toMatch(/drive_boxes_sprite_kind_check[\s\S]{0,400}NOT VALID/);
+  it('given drive_boxes is created empty in the same statement, should declare ITS check inline', () => {
+    // Inline in CREATE TABLE, which is what makes it VALID from birth — there
+    // is no separate ADD CONSTRAINT that could have carried a NOT VALID.
+    //
+    // Deliberately NOT asserted by measuring the distance to the nearest
+    // `NOT VALID` in the file: that passes or fails on statement ORDER, so it
+    // would silently stop meaning anything the first time 0262 is reordered.
+    // The authoritative check is `convalidated` in `pg_constraint`, asserted
+    // against a real database in
+    // `src/__tests__/drive-boxes-reclaim-trigger.integration.test.ts`.
+    const createTable = schemaSql.slice(
+      schemaSql.indexOf('CREATE TABLE "drive_boxes"'),
+      schemaSql.indexOf('ALTER TABLE "agent_workspaces" ADD COLUMN "boxId"'),
+    );
+    expect(createTable).toContain('CONSTRAINT "drive_boxes_sprite_kind_check" CHECK');
+    expect(createTable).not.toContain('NOT VALID');
   });
 });
 

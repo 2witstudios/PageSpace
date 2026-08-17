@@ -19,7 +19,18 @@
  * a Sprite for a deploy box could not persist the result.
  */
 
-/** The three box kinds, mirroring the `drive_box_kind` Postgres enum. */
+/**
+ * The three box kinds, mirroring the `drive_box_kind` Postgres enum.
+ *
+ * Written out rather than derived from `driveBoxKind.enumValues` so this
+ * module stays free of a `@pagespace/db` import and remains pure. That makes
+ * it a SECOND witness to the same fact, which is only safe because something
+ * fails when the two disagree: `box-kind.test.ts` assigns the pgEnum's values
+ * into `DriveBoxKind[]` (so widening the enum without widening this union is a
+ * TYPE error, caught by `bun run typecheck`) and maps
+ * `substrateForBoxKind` over every one of them (so a kind added to the enum
+ * with no substrate decision THROWS there rather than in production).
+ */
 export type DriveBoxKind = 'dev' | 'staging' | 'deploy';
 
 /** What a box of a given kind actually runs on. */
@@ -29,10 +40,16 @@ export type DriveBoxSubstrate = 'sprite' | 'fly';
  * Resolve a box's substrate from its kind.
  *
  * Written as an exhaustive switch rather than a lookup object on purpose: a
- * fourth `DriveBoxKind` added later fails to compile here (the `never` in the
- * default branch), which forces the substrate decision to be made at the same
- * time as the kind rather than defaulting silently to whichever branch an
+ * fourth member added to `DriveBoxKind` fails to compile here (the `never` in
+ * the default branch), which forces the substrate decision to be made at the
+ * same time as the kind rather than defaulting silently to whichever branch an
  * object literal's fallback happened to pick.
+ *
+ * Note what that does and does not buy. It binds this function to the UNION;
+ * the union is bound to the Postgres enum by the tests, not by the compiler
+ * (see `DriveBoxKind`). So a kind added to the pgEnum alone is caught by
+ * `bun run typecheck` and by this suite — not by this switch, which never sees
+ * it.
  */
 export function substrateForBoxKind(kind: DriveBoxKind): DriveBoxSubstrate {
   switch (kind) {

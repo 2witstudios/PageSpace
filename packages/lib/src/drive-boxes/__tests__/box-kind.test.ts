@@ -9,6 +9,7 @@
  * tracking would bill forever.
  */
 import { describe, it, expect } from 'vitest';
+import { driveBoxKind } from '@pagespace/db/schema/drive-boxes';
 import { substrateForBoxKind, type DriveBoxKind } from '../box-kind';
 
 describe('substrateForBoxKind', () => {
@@ -32,6 +33,33 @@ describe('substrateForBoxKind', () => {
     const kinds: DriveBoxKind[] = ['dev', 'staging', 'deploy'];
     const spriteKinds = kinds.filter((kind) => substrateForBoxKind(kind) === 'sprite');
     expect(spriteKinds).toEqual(['dev', 'staging']);
+  });
+
+  /**
+   * `DriveBoxKind` is a hand-written union, kept that way so the helper stays
+   * free of a `@pagespace/db` import. That makes it a second witness to the
+   * `drive_box_kind` Postgres enum, and these two assertions are what stop the
+   * witnesses drifting apart — without them, adding `'preview'` to the pgEnum
+   * would compile clean and only fail in production, at the moment something
+   * asked which machine technology to provision.
+   */
+  it('given the pgEnum is the source of truth, should stay in lockstep with it', () => {
+    // COMPILE-TIME half: if the pgEnum gains a member that `DriveBoxKind` does
+    // not have, this assignment stops typechecking. That is the direction that
+    // actually happens — someone edits the schema, ships the migration, and
+    // never looks at this file.
+    const fromPg: DriveBoxKind[] = [...driveBoxKind.enumValues];
+    // RUNTIME half: catches the reverse (a union member with no enum value).
+    expect([...fromPg].sort()).toEqual(['deploy', 'dev', 'staging']);
+  });
+
+  it('given every kind the database can store, should have a substrate for it', () => {
+    // Maps the REAL enum, not a hand-copied list: a kind added to the pgEnum
+    // with no substrate decision falls to the `never` branch and throws here,
+    // which is the failure surfacing in CI instead of in a provisioner.
+    for (const kind of driveBoxKind.enumValues) {
+      expect(['sprite', 'fly']).toContain(substrateForBoxKind(kind));
+    }
   });
 
   it('given an unknown kind slipped past the type system, should throw rather than guess a substrate', () => {

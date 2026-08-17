@@ -29,12 +29,22 @@ lives inside it.
 > column **ships dark** — nothing writes it until that epic's Phase 3 — so everything
 > below still describes every session that exists today.
 >
-> What changes when it is written: a box-bound session **borrows** its box's Sprite
+> What changes when it is written: a box-bound session **borrows** its box's sandbox
 > instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
 > the database, not by convention (`agent_workspaces_box_no_sprite_check`), which is what
 > makes "ending a box session cannot kill the box" structural: the lifecycle planner sees
 > `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
 > sandboxes remain the default and are unchanged.
+>
+> **A box's substrate follows its kind, and only one substrate hosts sessions.**
+> `substrateForBoxKind` (`@pagespace/lib/drive-boxes/box-kind`) maps `dev` and `staging`
+> to Sprite, and `deploy` to a Fly Machine. A borrowed sandbox is therefore always a
+> Sprite — not because sessions pick the Sprite half, but because a **deploy box refuses
+> to host sessions at all** (v1); it is a publish target, and its Fly state lives on its
+> hosting row rather than in the Sprite columns, which `drive_boxes_sprite_kind_check`
+> enforces by forbidding those columns on a `kind='deploy'` row. That is what keeps the
+> two teardown outboxes disjoint: Sprite names can only reach `machine_sprite_reclaims`,
+> Fly app names only `app_hosting_reclaims`.
 
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):

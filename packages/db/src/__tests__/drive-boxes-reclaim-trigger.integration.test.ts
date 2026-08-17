@@ -72,17 +72,52 @@ async function seedDrive(suffix: string): Promise<{ userId: string; driveId: str
 
 describe('drive_boxes sprite reclaim trigger — live', () => {
   it('should be armed and ENABLED on drive_boxes', async () => {
+    // Filtered by NAME rather than asserting the table has exactly one trigger:
+    // Phase 2 may well add another, and this test is about THIS trigger being
+    // alive, not about the table staying single-triggered forever.
     const { rows } = await client.query<{ tgname: string; proname: string; tgenabled: string }>(
       `SELECT t.tgname, p.proname, t.tgenabled
          FROM pg_trigger t
          JOIN pg_proc p ON p.oid = t.tgfoid
-        WHERE t.tgrelid = 'drive_boxes'::regclass AND NOT t.tgisinternal`,
+        WHERE t.tgrelid = 'drive_boxes'::regclass
+          AND NOT t.tgisinternal
+          AND t.tgname = 'drive_boxes_sprite_reclaim'`,
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].tgname).toBe('drive_boxes_sprite_reclaim');
     expect(rows[0].proname).toBe('drive_boxes_capture_sprite_reclaim');
     // 'O' = enabled for origin+local. A disabled trigger is silent data loss.
     expect(rows[0].tgenabled).toBe('O');
+  });
+
+  /**
+   * The two-stage rule, asserted against the DATABASE rather than against the
+   * migration's text. `convalidated` is the only authority on whether a
+   * constraint was scanned; a regex over the SQL file proves the file says a
+   * word, and would keep passing if the statements were reordered.
+   */
+  it('should ship the populated-table CHECKs NOT VALID and the new-table CHECK VALID', async () => {
+    const { rows } = await client.query<{ conname: string; convalidated: boolean }>(
+      `SELECT conname, convalidated FROM pg_constraint
+        WHERE conname IN (
+          'drive_boxes_sprite_kind_check',
+          'agent_workspaces_box_no_sprite_check',
+          'agent_workspaces_box_needs_drive_check'
+        )
+        ORDER BY conname`,
+    );
+    const validated = new Map(rows.map((r) => [r.conname, r.convalidated]));
+    expect([...validated.keys()].sort()).toEqual([
+      'agent_workspaces_box_needs_drive_check',
+      'agent_workspaces_box_no_sprite_check',
+      'drive_boxes_sprite_kind_check',
+    ]);
+    // `drive_boxes` is created empty in the same statement — nothing to scan.
+    expect(validated.get('drive_boxes_sprite_kind_check')).toBe(true);
+    // `agent_workspaces` is populated — stage 2 (`VALIDATE CONSTRAINT`) is a
+    // separate release. If either of these flips to true inside THIS release,
+    // the two-stage rule was broken.
+    expect(validated.get('agent_workspaces_box_no_sprite_check')).toBe(false);
+    expect(validated.get('agent_workspaces_box_needs_drive_check')).toBe(false);
   });
 
   it('given a box with a live Sprite pointer, should MOVE it into the outbox when the drive cascade deletes it', async () => {
@@ -267,21 +302,61 @@ describe('drive_boxes sprite reclaim trigger — live', () => {
 });
 
 describe('drive_boxes CHECK constraints — live', () => {
-  it('given a deploy box, should REFUSE a sprite pointer — this is what partitions the two outboxes', async () => {
-    const suffix = uniqueSuffix('boxchk');
-    const { userId, driveId } = await seedDrive(suffix);
-    try {
-      await expect(
-        client.query(
-          `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "updatedAt")
-           VALUES ($1, $2, 'prod', 'deploy', $3, (now() at time zone 'utc'))`,
-          [`b-${suffix}`, driveId, `pgs-box-${suffix}`],
-        ),
-      ).rejects.toThrow(/drive_boxes_sprite_kind_check/);
-    } finally {
-      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
-    }
-  });
+  /**
+   * EVERY column in the predicate, one per case. Testing only `sandboxId`
+   * would leave two thirds of this constraint guarded by nothing but a
+   * text-containment assertion in the sibling unit suite — which is a
+   * spellcheck, not a regression guard: dropping the `spriteKey` leg from the
+   * predicate would keep the column NAME in the SQL and pass.
+   */
+  it.each(['sandboxId', 'spriteKey', 'spriteInstanceId'])(
+    'given a deploy box, should REFUSE %s — this is what partitions the two outboxes',
+    async (column) => {
+      const suffix = uniqueSuffix('boxchk');
+      const { userId, driveId } = await seedDrive(suffix);
+      try {
+        await expect(
+          client.query(
+            `INSERT INTO drive_boxes (id, "driveId", name, kind, "${column}", "updatedAt")
+             VALUES ($1, $2, 'prod', 'deploy', $3, (now() at time zone 'utc'))`,
+            [`b-${suffix}`, driveId, `pgs-box-${suffix}`],
+          ),
+        ).rejects.toThrow(/drive_boxes_sprite_kind_check/);
+      } finally {
+        await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      }
+    },
+  );
+
+  /**
+   * The POSITIVE half of the same constraint, and the reason it is not
+   * redundant: the predicate is `kind IN ('dev','staging') OR (pointers all
+   * NULL)`. Flip that `OR` to `AND` and every rejection test above still
+   * passes while every real dev box becomes uninsertable. Only accepting a
+   * fully-populated dev box catches it.
+   */
+  it.each(['dev', 'staging'])(
+    'given a %s box, should ACCEPT a full sprite pointer set',
+    async (kind) => {
+      const suffix = uniqueSuffix('boxok');
+      const { userId, driveId } = await seedDrive(suffix);
+      try {
+        await client.query(
+          `INSERT INTO drive_boxes (id, "driveId", name, kind, "sandboxId", "spriteKey", "spriteInstanceId", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, 'inst-1', (now() at time zone 'utc'))`,
+          [`b-${suffix}`, driveId, kind, kind, `pgs-box-${suffix}`, `key-${suffix}`],
+        );
+        const { rows } = await client.query(
+          `SELECT 1 FROM drive_boxes WHERE id = $1`,
+          [`b-${suffix}`],
+        );
+        expect(rows).toHaveLength(1);
+      } finally {
+        await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [`pgs-box-${suffix}`]);
+        await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      }
+    },
+  );
 
   it('given a box-bound session, should REFUSE a sprite pointer of its own', async () => {
     const suffix = uniqueSuffix('wschk');
@@ -297,13 +372,29 @@ describe('drive_boxes CHECK constraints — live', () => {
       // A box session borrows the box's VM. Two rows claiming one Sprite is
       // the failure this CHECK exists to make impossible. NOT VALID does not
       // weaken this: new rows are fully checked from the moment it lands.
-      await expect(
-        client.query(
-          `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "sandboxId", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, (now() at time zone 'utc'))`,
-          [`ws-${suffix}`, userId, driveId, boxId, `pgs-ses-${suffix}`],
-        ),
-      ).rejects.toThrow(/agent_workspaces_box_no_sprite_check/);
+      //
+      // All THREE pointer columns, not just `sandboxId` — each is independently
+      // enough to make two rows claim one VM (`sandboxId` addresses it,
+      // `spriteKey` re-derives it, `spriteInstanceId` is what every teardown
+      // CAS keys on), so each has to be refused on its own.
+      for (const column of ['sandboxId', 'spriteKey', 'spriteInstanceId']) {
+        await expect(
+          client.query(
+            `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "boxId", "${column}", "updatedAt")
+             VALUES ($1, $2, $3, $4, $5, (now() at time zone 'utc'))`,
+            [`ws-${column}-${suffix}`, userId, driveId, boxId, `pgs-ses-${suffix}`],
+          ),
+        ).rejects.toThrow(/agent_workspaces_box_no_sprite_check/);
+      }
+
+      // The mirror of the deploy-box positive case: an UNBOUND session may hold
+      // every pointer. Flipping this predicate's `OR` to `AND` would reject
+      // every ordinary ephemeral session, and only this case notices.
+      await client.query(
+        `INSERT INTO agent_workspaces (id, "ownerId", "driveId", "sandboxId", "spriteKey", "spriteInstanceId", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, 'inst-1', (now() at time zone 'utc'))`,
+        [`ws-free-${suffix}`, userId, driveId, `pgs-ses-free-${suffix}`, `key-${suffix}`],
+      );
 
       // The same row WITHOUT a pointer is accepted — the constraint refuses
       // the conflation, not the binding.
@@ -314,6 +405,9 @@ describe('drive_boxes CHECK constraints — live', () => {
       );
     } finally {
       await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      // The unbound session above holds a live pointer, so deleting the user
+      // cascades into the session table's own reclaim trigger.
+      await client.query(`DELETE FROM machine_sprite_reclaims WHERE "sandboxId" = $1`, [`pgs-ses-free-${suffix}`]);
     }
   });
 

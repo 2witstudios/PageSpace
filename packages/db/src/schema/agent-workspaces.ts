@@ -96,6 +96,21 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * `force` escape (`plan-box-delete`), deliberately not an FK: an FK would
    * make the refusal permanent and unforceable, and cascading would delete a
    * user's chat history as a side effect of reclaiming a machine.
+   *
+   * **Known consequence, for Phase 2 to answer.** Once this is nulled, the row
+   * is byte-identical to a never-provisioned ephemeral session: `boxId` NULL,
+   * `sandboxId` NULL, `driveId` set. Nothing downstream can tell "the shared
+   * filesystem this session ran on was reclaimed" from "this session has not
+   * started yet", so a resume would hand it a fresh Sprite and an empty disk
+   * with no explanation.
+   *
+   * That is mostly closed by the delete FLOW rather than by this column:
+   * `deleteDriveBox` refuses while sessions are live, and `force` ENDS them
+   * first, so a surviving box-bound session should already carry `endedAt`.
+   * The uncovered path is a DRIVE cascade — where the session row dies anyway
+   * — which is why this is recorded rather than fixed here. Phase 2 owns the
+   * decision of whether `force` should also stamp something durable saying
+   * WHY the environment vanished; if it does not, this note is the bug report.
    */
   boxId: text('boxId').references(() => driveBoxes.id, { onDelete: 'set null' }),
 
