@@ -24,9 +24,20 @@
  * every name in it fresh by construction.
  *
  * Everything else — the >=32-char secret floor, the NUL-delimited injective fold,
- * the sha3-256 HMAC — is copied from the session derivation deliberately: two
- * derivations with one discipline, so a weakness cannot be fixed in one and
- * missed in the other.
+ * the sha3-256 HMAC — is copied verbatim from the session derivation. Note what
+ * that copy does and does not buy: it does NOT protect against a weakness being
+ * fixed in one file and missed in the other. Copying is the form that failure
+ * takes. It is here because `workspace-sprite-key.ts` is not free to change —
+ * `packages/db/src/__tests__/agent-workspaces-rename-migration.test.ts` asserts
+ * on that file's literal source text (its namespace constant and its
+ * ``return `pgs-ses-${digest}` ``) to catch a Sprite-name drift that would orphan
+ * billed VMs. Factoring both onto a shared helper deletes the line that guard
+ * reads, so the extraction has to come with a rethink of the guard, and that is
+ * not a thing to bundle into a refactor that claims to change no behavior.
+ *
+ * When a third holder kind appears, extract then, guard first: the shared helper
+ * wants a mandatory `{ namespace, prefix }` and both key modules already pin
+ * known-answer digests, so the extraction is verifiable — it just is not free.
  */
 
 import { createHmac } from 'crypto';

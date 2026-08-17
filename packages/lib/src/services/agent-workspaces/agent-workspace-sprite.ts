@@ -110,9 +110,6 @@ export interface AgentSessionActorContext {
 /** The intents that can hand back a sandbox. `'end'` is not one of them — teardown lives in `agent-workspaces.ts`, and its verdict is unconditional on authorization. */
 export type SpriteHolderProvisionIntent = 'ensure' | 'attach' | 'reprovision';
 
-/** The session-flavored name for the same intents (web and realtime already speak it). */
-export type AgentSessionProvisionIntent = SpriteHolderProvisionIntent;
-
 /**
  * Everything the holder-neutral core needs from the outside. Each dep is the
  * seam where a holder kind differs; nothing below this line branches on which
@@ -158,21 +155,28 @@ export interface SpriteHolderProvisionDeps {
    * row's sandbox is already counted), which the quota module itself decides from
    * `alreadyProvisioned`.
    *
-   * TWO OBLIGATIONS ON THE WRAPPER, both because the core deliberately holds no
-   * holder-specific wording:
+   * A refusal names BOTH halves of what the caller will see, because the core
+   * deliberately holds no holder-specific wording:
    *
-   *  1. **Supply `reason` on every refusal.** It is passed straight through as the
-   *     denial's `detail`, with no fallback here — a core that invented one would
-   *     be inventing user-facing copy for a holder kind it knows nothing about.
-   *     Omit it and the user is told only that they were denied. The session
-   *     wrapper's `SESSION_LIMIT_DETAIL` is the worked example.
-   *  2. **Expect `denial: 'session_limit_reached'`.** That is the shared deny
-   *     vocabulary today (see `SpriteHolderDenyReason` — the values are wire- and
-   *     audit-visible, so Phase 0 does not rename them). A holder kind whose
-   *     refusal is NOT a live-session ceiling should add its own member to that
-   *     union rather than borrow this one.
+   *  - `denial` — the machine-readable reason, which surfaces on the result and
+   *    which API routes switch on to choose a status code. Injected rather than
+   *    assumed: a core that hardcoded `'session_limit_reached'` would label a
+   *    box's refusal a live-SESSION ceiling, mislabel it the same way in the
+   *    security audit, and force this return statement back open the moment a
+   *    second holder kind wanted its own word — the exact reopening this module
+   *    exists to prevent.
+   *  - `reason` — the human detail, passed straight through as the result's
+   *    `detail`. No fallback here either; inventing user-facing copy for a holder
+   *    kind the core knows nothing about is not the core's call.
+   *
+   * The session wrapper below is the worked example of both: it supplies
+   * `'session_limit_reached'` and `SESSION_LIMIT_DETAIL`, so the wire value and
+   * the audit payload are byte-for-byte what they were before this seam existed.
    */
-  checkQuota: (input: { alreadyProvisioned: boolean }) => Promise<{ allowed: boolean; reason?: string }>;
+  checkQuota: (input: { alreadyProvisioned: boolean }) => Promise<
+    | { allowed: true }
+    | { allowed: false; denial: SpriteHolderDenyReason; reason: string }
+  >;
   /**
    * Optional opportunistic storage measurement. While the Sprite is ALREADY
    * awake right after a provision, capture its used bytes onto the holder's row so
@@ -236,7 +240,18 @@ export type EnsureSpriteHolderSandboxResult =
       detail?: string;
     };
 
-/** The session-flavored name for the same result (web already speaks it). */
+/**
+ * The session-flavored name for the same result.
+ *
+ * The rule this PR follows for session-flavored aliases, so the one kept here
+ * and the one dropped from `plan-workspace-lifecycle.ts` do not read as a coin
+ * flip: **an alias survives only if something outside this package imports it.**
+ * This one does — `apps/web/src/lib/agent-workspaces/agent-workspaces-runtime.ts`
+ * — so dropping it would churn an app for nothing. `planAgentSessionLifecycle`
+ * did not, and neither did the provision-intent alias that used to sit above, so
+ * both went: an alias with only in-package callers is dead weight the knip
+ * ratchet is right to notice.
+ */
 export type EnsureAgentSessionSandboxResult = EnsureSpriteHolderSandboxResult;
 
 /**
@@ -399,15 +414,16 @@ async function probeRecordedSprite(
 /**
  * The row slice a session provision needs — the lifecycle columns under the
  * session's own names, plus who to authorize and meter against.
+ *
+ * `ownerId` is here for the concurrency ceiling: the quota counts an OWNER's
+ * live sessions, and the owner is a fact of the row, never of the actor (a drive
+ * member provisioning inside someone else's agent still consumes the session
+ * owner's allocation, not their own).
  */
 export type AgentSessionSpriteRow = Omit<SpriteHolderLifecycleRow, 'holderId'> & {
   /** The session's id — its `holderId`. Kept under this name so call sites do not churn. */
   workspaceId: string;
-} & Pick<AgentSessionRecord, 'driveId' | 'egressPolicyToken' | 'ownerId'>;
-// `ownerId` is here for the concurrency ceiling: the quota counts an OWNER's
-// live sessions, and the owner is a fact of the row, never of the actor
-// (a drive member provisioning inside someone else's agent still consumes the
-// session owner's allocation, not their own).
+} & Pick<AgentSessionRecord, 'driveId' | 'ownerId'>;
 
 /**
  * Ensure this holder's sandbox exists (or resume/adopt the one it has), and
@@ -531,12 +547,7 @@ export async function ensureSpriteHolderSandbox({
         alreadyProvisioned: row.sandboxId !== null && row.spriteTornDownAt === null,
       });
       if (!quota.allowed) {
-        return {
-          ok: false,
-          reason: 'denied',
-          denial: 'session_limit_reached',
-          detail: quota.reason,
-        };
+        return { ok: false, reason: 'denied', denial: quota.denial, detail: quota.reason };
       }
 
       const enablement = await deps.checkFullEgressEnablement();
@@ -634,7 +645,7 @@ export async function ensureAgentSessionSandbox({
   deps,
 }: {
   row: AgentSessionSpriteRow;
-  intent: AgentSessionProvisionIntent;
+  intent: SpriteHolderProvisionIntent;
   actor: AgentSessionActorContext;
   deps: AgentSessionSpriteDeps;
 }): Promise<EnsureAgentSessionSandboxResult> {
@@ -659,20 +670,20 @@ export async function ensureAgentSessionSandbox({
       // check. The drive is a fact of the ROW (a session is drive-scoped; null =
       // a user-scoped global-assistant session), so there is nothing to resolve
       // through an agent page any more.
-      authorize: async () => {
-        const authorized = await deps.authorize({
+      // `CanRunCodeResult` is already the shape the dep asks for, so this binds
+      // the arguments and nothing else — no re-wrap to drift out of sync with.
+      authorize: () =>
+        deps.authorize({
           userId: actor.userId,
           driveId: row.driveId ?? undefined,
           ownerId: row.ownerId,
           requestOrigin: 'user',
-        });
-        return authorized.ok ? { ok: true } : { ok: false, reason: authorized.reason };
-      },
+        }),
       checkFullEgressEnablement: deps.checkFullEgressEnablement,
       checkQuota: async ({ alreadyProvisioned }) => {
         const quota = await deps.checkConcurrency({ ownerId: row.ownerId, alreadyProvisioned });
         if (quota.allowed) return { allowed: true };
-        return { allowed: false, reason: quota.reason ?? SESSION_LIMIT_DETAIL };
+        return { allowed: false, denial: 'session_limit_reached', reason: quota.reason ?? SESSION_LIMIT_DETAIL };
       },
       measureStorage: measureSessionStorage
         ? ({ holderId, handle }) => measureSessionStorage({ workspaceId: holderId, handle })

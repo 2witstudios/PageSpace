@@ -136,10 +136,18 @@ export interface SpriteHolderRowStamps {
  * change, not a refactor, and this module's job in Phase 0 is to change no
  * behavior at all.
  *
- * When the box holder lands, EXTEND this union with box-worded members rather
- * than renaming these — a box's "not found" and a session's are different facts
- * about different tables, and one shared spelling for both is what would need
- * un-picking later.
+ * Note what that does NOT license: adding box-worded members to this union.
+ * Every value here is emitted from a branch that tests a holder-neutral fact —
+ * no row, row ended, no key — so choosing a box-worded member would mean the
+ * pure planner asking WHICH holder it is deciding for, which is the one branch
+ * this module exists not to have.
+ *
+ * The move that keeps both properties, when a second holder wrapper lands: make
+ * the discriminants neutral here (`not_found`, `torn_down`, `missing_key`) and
+ * let each wrapper map them onto its own wire vocabulary. For sessions that map
+ * is the identity function, so the strings on the wire and in the audit log do
+ * not move — which is exactly what makes it a safe change to defer rather than
+ * a rename this PR is dodging.
  */
 export type SpriteHolderDenyReason =
   /** The actor may not run code here — re-checked on every intent that could hand back a sandbox. */

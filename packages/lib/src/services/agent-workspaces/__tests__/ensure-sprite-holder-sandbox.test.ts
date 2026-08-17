@@ -18,6 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { ensureSpriteHolderSandbox, type SpriteHolderProvisionDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
 import type { SpriteHolderLifecycleRow } from '../../../agent-workspaces/plan-workspace-lifecycle';
+import { stampColumns } from '../agent-workspaces-store';
 import { deriveDriveBoxSpriteKey } from '../../../drive-boxes/box-sprite-key';
 import { makeSpriteHost, NOW, SECRET, TENANT_ID, type FakeSpriteHost } from './fakes';
 
@@ -67,16 +68,29 @@ function makeBoxStore(seed: SpriteHolderLifecycleRow[] = [makeBoxRow()]): FakeBo
         sandboxId: input.sandboxId,
         spriteInstanceId: input.spriteInstanceId,
         egressPolicyToken: input.egressPolicyToken,
-        ...input.stamps,
+        // Through the REAL translator, not a spread of `input.stamps`. Its
+        // whole job is that an ABSENT key leaves a column alone while an
+        // explicit `null` clears it, and a spread collapses the two the moment
+        // a caller builds a stamp bag with an explicit `undefined`. A fake that
+        // collapses it agrees with a bug the production store would reject.
+        ...stampColumns(input.stamps),
       });
       return true;
     },
     async applyStamps({ holderId, stamps, cas }) {
       const row = rows.get(holderId);
       if (!row) return true;
-      if (cas && 'endedAt' in cas && (row.endedAt ?? null) !== (cas.endedAt ?? null)) return false;
-      if (cas && 'sandboxId' in cas && (row.sandboxId ?? null) !== (cas.sandboxId ?? null)) return false;
-      rows.set(holderId, { ...row, ...stamps });
+      // Same three behaviors the session fake mirrors from the real store: an
+      // empty stamp bag is a legitimate no-op, and each CAS compares by VALUE —
+      // `endedAt` by timestamp rather than `Date` identity, which reference
+      // equality would get wrong for every non-null guard.
+      const columns = stampColumns(stamps);
+      if (Object.keys(columns).length === 0) return true;
+      if (cas?.sandboxId !== undefined && (row.sandboxId ?? null) !== (cas.sandboxId ?? null)) return false;
+      if (cas?.endedAt !== undefined && (row.endedAt?.getTime() ?? null) !== (cas.endedAt?.getTime() ?? null)) {
+        return false;
+      }
+      rows.set(holderId, { ...row, ...columns });
       return true;
     },
     async reloadSpritePointer(holderId) {
@@ -85,7 +99,9 @@ function makeBoxStore(seed: SpriteHolderLifecycleRow[] = [makeBoxRow()]): FakeBo
       return { sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId };
     },
     async enqueueReclaim({ sandboxId, spriteInstanceId }) {
-      reclaims.set(sandboxId, spriteInstanceId);
+      // Idempotent on the sandboxId, chasing the newest instance — mirrors the
+      // AFTER-DELETE trigger's own insert, exactly as the session fake does.
+      reclaims.set(sandboxId, spriteInstanceId ?? reclaims.get(sandboxId) ?? null);
     },
   };
 
@@ -204,15 +220,23 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     expect(host.calls.provision).toHaveLength(0);
   });
 
-  it("should surface the holder's OWN quota wording — the core invents none", async () => {
-    // Documents the contract `checkQuota` states: the core passes `reason`
-    // straight through as `detail` with no fallback, so a holder wrapper that
-    // omits it leaves the user with a bare denial.
+  it("should surface the holder's OWN quota verdict — both halves, the core invents neither", async () => {
+    // The core hardcodes no part of a quota refusal. It used to bake in
+    // `denial: 'session_limit_reached'`, which would have labelled a BOX's
+    // refusal a live-session ceiling — wrong on the wire and wrong in the
+    // security audit. Both halves are the holder's to name, and this pins that:
+    // a refusal reports back exactly what `checkQuota` said, nothing defaulted.
     const store = makeBoxStore();
     const host = makeSpriteHost();
     const deps = makeBoxDeps(
       { store, host },
-      { checkQuota: async () => ({ allowed: false, reason: 'box limit reached for this drive' }) },
+      {
+        checkQuota: async () => ({
+          allowed: false,
+          denial: 'not_authorized',
+          reason: 'box limit reached for this drive',
+        }),
+      },
     );
 
     const result = await ensureSpriteHolderSandbox({ row: makeBoxRow(), intent: 'ensure', deps });
@@ -220,7 +244,9 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'denied',
-      denial: 'session_limit_reached',
+      // Deliberately NOT `session_limit_reached`: a value the core could only
+      // have produced by passing the holder's own answer through.
+      denial: 'not_authorized',
       detail: 'box limit reached for this drive',
     });
     expect(host.calls.provision).toHaveLength(0);
