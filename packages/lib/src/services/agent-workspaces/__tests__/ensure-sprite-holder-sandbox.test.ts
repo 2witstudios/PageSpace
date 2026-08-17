@@ -7,11 +7,11 @@
  * session assumptions. If the only caller is the session wrapper, "holder-neutral"
  * is an assertion about code nobody has run any other way.
  *
- * So this suite stands up a BOX holder — a bare `SpriteHolderStore` over a row
- * map, keys derived with `deriveDriveBoxSpriteKey`, no `AgentSessionStore`, no
+ * So this suite stands up an ENVIRONMENT holder — a bare `SpriteHolderStore` over a row
+ * map, keys derived with `deriveDriveEnvSpriteKey`, no `AgentSessionStore`, no
  * `ownerId`, no actor, no session secret — and drives `ensureSpriteHolderSandbox`
  * directly. It is also the standing regression test for Phase 3's central
- * invariant: two sessions opening in one box must land on ONE VM, which is the
+ * invariant: two sessions opening in one environment must land on ONE VM, which is the
  * CAS's job and nothing else's.
  */
 
@@ -19,15 +19,15 @@ import { describe, it, expect } from 'vitest';
 import { ensureSpriteHolderSandbox, type SpriteHolderProvisionDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
 import type { SpriteHolderLifecycleRow } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { stampColumns } from '../agent-workspaces-store';
-import { deriveDriveBoxSpriteKey } from '../../../drive-boxes/box-sprite-key';
+import { deriveDriveEnvSpriteKey } from '../../../drive-envs/env-sprite-key';
 import { makeSpriteHost, NOW, SECRET, TENANT_ID, type FakeSpriteHost } from './fakes';
 
-const BOX_ID = 'box-1';
-const BOX_KEY = deriveDriveBoxSpriteKey({ tenantId: TENANT_ID, boxId: BOX_ID, secret: SECRET });
+const ENV_ID = 'env-1';
+const ENV_KEY = deriveDriveEnvSpriteKey({ tenantId: TENANT_ID, envId: ENV_ID, secret: SECRET });
 
-function makeBoxRow(over: Partial<SpriteHolderLifecycleRow> = {}): SpriteHolderLifecycleRow {
+function makeEnvRow(over: Partial<SpriteHolderLifecycleRow> = {}): SpriteHolderLifecycleRow {
   return {
-    holderId: BOX_ID,
+    holderId: ENV_ID,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
@@ -40,18 +40,18 @@ function makeBoxRow(over: Partial<SpriteHolderLifecycleRow> = {}): SpriteHolderL
   };
 }
 
-interface FakeBoxStore {
+interface FakeEnvStore {
   store: SpriteHolderStore;
   rows: Map<string, SpriteHolderLifecycleRow>;
   reclaims: Map<string, string | null>;
 }
 
 /**
- * A box-shaped holder store with the REAL identity CAS — the same discipline the
+ * An environment-shaped holder store with the REAL identity CAS — the same discipline the
  * session fake keeps, for the same reason: a fake that accepts writes the
  * production CAS would refuse makes every concurrency test agree with a bug.
  */
-function makeBoxStore(seed: SpriteHolderLifecycleRow[] = [makeBoxRow()]): FakeBoxStore {
+function makeEnvStore(seed: SpriteHolderLifecycleRow[] = [makeEnvRow()]): FakeEnvStore {
   const rows = new Map(seed.map((row) => [row.holderId, row]));
   const reclaims = new Map<string, string | null>();
 
@@ -108,8 +108,8 @@ function makeBoxStore(seed: SpriteHolderLifecycleRow[] = [makeBoxRow()]): FakeBo
   return { store, rows, reclaims };
 }
 
-function makeBoxDeps(
-  fakes: { store: FakeBoxStore; host: FakeSpriteHost },
+function makeEnvDeps(
+  fakes: { store: FakeEnvStore; host: FakeSpriteHost },
   over: Partial<SpriteHolderProvisionDeps> = {},
 ): SpriteHolderProvisionDeps {
   return {
@@ -117,7 +117,7 @@ function makeBoxDeps(
     host: fakes.host.host,
     substrate: { kind: 'sprite' },
     options: {},
-    deriveSpriteKey: (holderId) => deriveDriveBoxSpriteKey({ tenantId: TENANT_ID, boxId: holderId, secret: SECRET }),
+    deriveSpriteKey: (holderId) => deriveDriveEnvSpriteKey({ tenantId: TENANT_ID, envId: holderId, secret: SECRET }),
     authorize: async () => ({ ok: true }),
     checkFullEgressEnablement: async () => ({ ok: true }),
     checkQuota: async () => ({ allowed: true }),
@@ -128,43 +128,43 @@ function makeBoxDeps(
 
 describe('ensureSpriteHolderSandbox — a non-session holder', () => {
   it('should provision under the HOLDER-supplied key, never a session key', async () => {
-    // The key-derivation seam is the whole reason box names cannot collide with
+    // The key-derivation seam is the whole reason environment names cannot collide with
     // reclaim-pending session names. If the core reached for the session
     // derivation, this name would carry `pgs-ses-`.
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
     const result = await ensureSpriteHolderSandbox({
-      row: makeBoxRow(),
+      row: makeEnvRow(),
       intent: 'ensure',
-      deps: makeBoxDeps({ store, host }),
+      deps: makeEnvDeps({ store, host }),
     });
 
-    expect(result).toEqual({ ok: true, sandboxId: BOX_KEY, resumed: false });
-    expect(host.calls.provision[0].name).toBe(BOX_KEY);
-    expect(BOX_KEY.startsWith('pgs-box-')).toBe(true);
-    expect(store.rows.get(BOX_ID)!.spriteKey).toBe(BOX_KEY);
+    expect(result).toEqual({ ok: true, sandboxId: ENV_KEY, resumed: false });
+    expect(host.calls.provision[0].name).toBe(ENV_KEY);
+    expect(ENV_KEY.startsWith('pgs-env-')).toBe(true);
+    expect(store.rows.get(ENV_ID)!.spriteKey).toBe(ENV_KEY);
   });
 
-  it('given two concurrent first-ensures of ONE box, should yield ONE VM (the Phase 3 shared-filesystem invariant)', async () => {
+  it('given two concurrent first-ensures of ONE environment, should yield ONE VM (the Phase 3 shared-filesystem invariant)', async () => {
     // This is the case the provisioner's docblock exists for. Two sessions
-    // opening in the same box at the same moment must not mint two VMs: the
+    // opening in the same environment at the same moment must not mint two VMs: the
     // host is name-keyed so both hold the same physical Sprite, and the CAS
     // decides which one records it. The loser must resume onto the winner's VM,
     // not kill it — killing it would take down the filesystem both sessions are
     // about to share.
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
-    const deps = makeBoxDeps({ store, host });
+    const deps = makeEnvDeps({ store, host });
 
     const [a, b] = await Promise.all([
-      ensureSpriteHolderSandbox({ row: makeBoxRow(), intent: 'ensure', deps }),
-      ensureSpriteHolderSandbox({ row: makeBoxRow(), intent: 'ensure', deps }),
+      ensureSpriteHolderSandbox({ row: makeEnvRow(), intent: 'ensure', deps }),
+      ensureSpriteHolderSandbox({ row: makeEnvRow(), intent: 'ensure', deps }),
     ]);
 
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
-    expect(a.ok && a.sandboxId).toBe(BOX_KEY);
-    expect(b.ok && b.sandboxId).toBe(BOX_KEY);
+    expect(a.ok && a.sandboxId).toBe(ENV_KEY);
+    expect(b.ok && b.sandboxId).toBe(ENV_KEY);
     // The load-bearing assertion. "Both got the same sandboxId" is NOT evidence
     // of a working CAS — the host is name-keyed, so both callers hold one VM
     // whether or not the CAS refuses anyone. What only a working CAS produces is
@@ -179,27 +179,27 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     expect(store.reclaims.size).toBe(0);
   });
 
-  it('given an already-provisioned box, should RESUME its Sprite rather than mint another', async () => {
-    const store = makeBoxStore([makeBoxRow({ spriteKey: BOX_KEY, sandboxId: BOX_KEY, spriteInstanceId: `inst-${BOX_KEY}` })]);
-    const host = makeSpriteHost({ seed: { [BOX_KEY]: { instanceId: `inst-${BOX_KEY}` } } });
+  it('given an already-provisioned environment, should RESUME its Sprite rather than mint another', async () => {
+    const store = makeEnvStore([makeEnvRow({ spriteKey: ENV_KEY, sandboxId: ENV_KEY, spriteInstanceId: `inst-${ENV_KEY}` })]);
+    const host = makeSpriteHost({ seed: { [ENV_KEY]: { instanceId: `inst-${ENV_KEY}` } } });
 
     const result = await ensureSpriteHolderSandbox({
-      row: store.rows.get(BOX_ID)!,
+      row: store.rows.get(ENV_ID)!,
       intent: 'ensure',
-      deps: makeBoxDeps({ store, host }),
+      deps: makeEnvDeps({ store, host }),
     });
 
-    expect(result).toEqual({ ok: true, sandboxId: BOX_KEY, resumed: true });
+    expect(result).toEqual({ ok: true, sandboxId: ENV_KEY, resumed: true });
     expect(host.calls.provision).toHaveLength(0);
   });
 
-  it('given two DIFFERENT boxes, should provision two distinct Sprites', async () => {
-    const store = makeBoxStore([makeBoxRow({ holderId: 'box-a' }), makeBoxRow({ holderId: 'box-b' })]);
+  it('given two DIFFERENT environments, should provision two distinct Sprites', async () => {
+    const store = makeEnvStore([makeEnvRow({ holderId: 'env-a' }), makeEnvRow({ holderId: 'env-b' })]);
     const host = makeSpriteHost();
-    const deps = makeBoxDeps({ store, host });
+    const deps = makeEnvDeps({ store, host });
 
-    const a = await ensureSpriteHolderSandbox({ row: makeBoxRow({ holderId: 'box-a' }), intent: 'ensure', deps });
-    const b = await ensureSpriteHolderSandbox({ row: makeBoxRow({ holderId: 'box-b' }), intent: 'ensure', deps });
+    const a = await ensureSpriteHolderSandbox({ row: makeEnvRow({ holderId: 'env-a' }), intent: 'ensure', deps });
+    const b = await ensureSpriteHolderSandbox({ row: makeEnvRow({ holderId: 'env-b' }), intent: 'ensure', deps });
 
     expect(a.ok && b.ok && a.sandboxId).not.toBe(b.ok && b.sandboxId);
     expect(host.live.size).toBe(2);
@@ -208,38 +208,38 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
   it('given an unauthorized actor, should deny BEFORE touching the host', async () => {
     // The authorize seam is holder-neutral too: the core never learns who the
     // actor is, only whether the wrapper says yes.
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
     const result = await ensureSpriteHolderSandbox({
-      row: makeBoxRow(),
+      row: makeEnvRow(),
       intent: 'ensure',
-      deps: makeBoxDeps({ store, host }, { authorize: async () => ({ ok: false, reason: 'no_box_access' }) }),
+      deps: makeEnvDeps({ store, host }, { authorize: async () => ({ ok: false, reason: 'no_env_access' }) }),
     });
 
-    expect(result).toEqual({ ok: false, reason: 'denied', denial: 'not_authorized', detail: 'no_box_access' });
+    expect(result).toEqual({ ok: false, reason: 'denied', denial: 'not_authorized', detail: 'no_env_access' });
     expect(host.calls.provision).toHaveLength(0);
   });
 
   it("should surface the holder's OWN quota verdict — both halves, the core invents neither", async () => {
     // The core hardcodes no part of a quota refusal. It used to bake in
-    // `denial: 'session_limit_reached'`, which would have labelled a BOX's
+    // `denial: 'session_limit_reached'`, which would have labelled an ENVIRONMENT's
     // refusal a live-session ceiling — wrong on the wire and wrong in the
     // security audit. Both halves are the holder's to name, and this pins that:
     // a refusal reports back exactly what `checkQuota` said, nothing defaulted.
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
-    const deps = makeBoxDeps(
+    const deps = makeEnvDeps(
       { store, host },
       {
         checkQuota: async () => ({
           allowed: false,
           denial: 'not_authorized',
-          reason: 'box limit reached for this drive',
+          reason: 'environment limit reached for this drive',
         }),
       },
     );
 
-    const result = await ensureSpriteHolderSandbox({ row: makeBoxRow(), intent: 'ensure', deps });
+    const result = await ensureSpriteHolderSandbox({ row: makeEnvRow(), intent: 'ensure', deps });
 
     expect(result).toEqual({
       ok: false,
@@ -247,18 +247,18 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
       // Deliberately NOT `session_limit_reached`: a value the core could only
       // have produced by passing the holder's own answer through.
       denial: 'not_authorized',
-      detail: 'box limit reached for this drive',
+      detail: 'environment limit reached for this drive',
     });
     expect(host.calls.provision).toHaveLength(0);
   });
 
   it('given the egress gate refuses, should not provision', async () => {
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
     const result = await ensureSpriteHolderSandbox({
-      row: makeBoxRow(),
+      row: makeEnvRow(),
       intent: 'ensure',
-      deps: makeBoxDeps(
+      deps: makeEnvDeps(
         { store, host },
         { checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }) },
       ),
@@ -268,13 +268,13 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     expect(host.calls.provision).toHaveLength(0);
   });
 
-  it('given attach on a box that has never provisioned, should deny — attach never mints', async () => {
-    const store = makeBoxStore();
+  it('given attach on an environment that has never provisioned, should deny — attach never mints', async () => {
+    const store = makeEnvStore();
     const host = makeSpriteHost();
     const result = await ensureSpriteHolderSandbox({
-      row: makeBoxRow(),
+      row: makeEnvRow(),
       intent: 'attach',
-      deps: makeBoxDeps({ store, host }),
+      deps: makeEnvDeps({ store, host }),
     });
 
     expect(result).toEqual({ ok: false, reason: 'denied', denial: 'sandbox_not_provisioned' });
@@ -282,13 +282,13 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
   });
 
   it('should measure storage opportunistically, keyed by HOLDER id', async () => {
-    const store = makeBoxStore();
+    const store = makeEnvStore();
     const host = makeSpriteHost();
     const measured: string[] = [];
     await ensureSpriteHolderSandbox({
-      row: makeBoxRow(),
+      row: makeEnvRow(),
       intent: 'ensure',
-      deps: makeBoxDeps(
+      deps: makeEnvDeps(
         { store, host },
         {
           measureStorage: async ({ holderId }) => {
@@ -298,6 +298,6 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
       ),
     });
 
-    expect(measured).toEqual([BOX_ID]);
+    expect(measured).toEqual([ENV_ID]);
   });
 });

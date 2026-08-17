@@ -4,7 +4,7 @@
  *
  * A **sprite holder** is any row that owns exactly one Sprite under a
  * deterministic name: an agent session (`agent_workspaces`) today, a per-drive
- * box (`drive_boxes`) next. The provisioning core below knows nothing about
+ * environment (`drive_envs`) next. The provisioning core below knows nothing about
  * which — it is handed a store slice, a key-derivation function, an
  * authorization function and a quota check, and it runs the same
  * probe → plan → provision → CAS machinery over whatever they address.
@@ -13,9 +13,9 @@
  * concurrent provisioners if every provisioner runs it. Two surfaces with two
  * copies of this logic would race each other into two live VMs under one holder,
  * and only one of them would ever be pointed at. This is exactly why a second
- * holder kind must be a set of DEPS rather than a second provisioner — a box
+ * holder kind must be a set of DEPS rather than a second provisioner — an environment
  * with its own copy of this flow would be correct against itself and race
- * against nothing, right up until two sessions opened in one box at once.
+ * against nothing, right up until two sessions opened in one environment at once.
  * `ensureAgentSessionSandbox` is therefore a thin session-flavored wrapper, not
  * an alternative implementation: the web app and the realtime bridge keep
  * calling it, and it keeps calling the one core.
@@ -125,8 +125,8 @@ export interface SpriteHolderProvisionDeps {
   /**
    * The holder's deterministic Sprite NAME. Injected rather than derived here
    * because the namespace is what keeps holder kinds from colliding: sessions
-   * fold `agent-session-sprite:v2`, boxes fold `drive-box-sprite:v1`, and a core
-   * that picked for itself would be one `if` away from provisioning a box onto a
+   * fold `agent-session-sprite:v2`, environments fold `drive-env-sprite:v1`, and a core
+   * that picked for itself would be one `if` away from provisioning an environment onto a
    * session Sprite awaiting reclaim. Only consulted when the row carries no key.
    */
   deriveSpriteKey: (holderId: string) => string;
@@ -161,7 +161,7 @@ export interface SpriteHolderProvisionDeps {
    *  - `denial` — the machine-readable reason, which surfaces on the result and
    *    which API routes switch on to choose a status code. Injected rather than
    *    assumed: a core that hardcoded `'session_limit_reached'` would label a
-   *    box's refusal a live-SESSION ceiling, mislabel it the same way in the
+   *    environment's refusal a live-SESSION ceiling, mislabel it the same way in the
    *    security audit, and force this return statement back open the moment a
    *    second holder kind wanted its own word — the exact reopening this module
    *    exists to prevent.

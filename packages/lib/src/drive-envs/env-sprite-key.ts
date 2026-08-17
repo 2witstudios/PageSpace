@@ -1,27 +1,27 @@
 /**
- * Per-box Sprite identity (pure).
+ * Per-environment Sprite identity (pure).
  *
- * A drive box that runs on the Sprite substrate owns exactly ONE Sprite, and this
- * derives its NAME: an opaque HMAC over (tenant, box), namespaced so a
- * (tenantId, boxId) pair ALWAYS resolves to the same Sprite name — and two
- * different boxes ALWAYS resolve to two different names. `SandboxHost.provision`
- * auto-resumes "same name, same filesystem", which is what makes a box a
- * PERSISTENT environment: every session spawned inside it lands on the same VM
- * and the same disk, because they all resolve the same box, not because anything
- * threads a "shared" id around.
+ * A drive environment that runs on the Sprite substrate owns exactly ONE Sprite,
+ * and this derives its NAME: an opaque HMAC over (tenant, env), namespaced so a
+ * (tenantId, envId) pair ALWAYS resolves to the same Sprite name — and two
+ * different environments ALWAYS resolve to two different names.
+ * `SandboxHost.provision` auto-resumes "same name, same filesystem", which is
+ * what makes an environment PERSISTENT: every session spawned inside it lands on
+ * the same VM and the same disk, because they all resolve the same environment,
+ * not because anything threads a "shared" id around.
  *
- * The fold is the BOX's own id (`drive_boxes.id`) — a server-minted cuid2. A cuid
- * is fine as HMAC input: the key's unguessability comes from the server-held
- * secret, not from the id.
+ * The fold is the ENVIRONMENT's own id (`drive_envs.id`) — a server-minted cuid2.
+ * A cuid is fine as HMAC input: the key's unguessability comes from the
+ * server-held secret, not from the id.
  *
- * The namespace is FRESH (`drive-box-sprite:v1`) with its own `pgs-box-` prefix,
+ * The namespace is FRESH (`drive-env-sprite:v1`) with its own `pgs-env-` prefix,
  * and that is a requirement rather than a convention. Session keys
  * (`agent-workspaces/workspace-sprite-key.ts`) fold cuid2s too, so a shared
- * namespace would put box names and session names in ONE keyspace — where a box
- * could derive the name of a session Sprite still awaiting reclaim, and provision
- * straight onto a VM the reclaim outbox is about to kill. That module's own
- * v1→v2 bump is the same hazard answered the same way: a fresh namespace makes
- * every name in it fresh by construction.
+ * namespace would put environment names and session names in ONE keyspace —
+ * where an environment could derive the name of a session Sprite still awaiting
+ * reclaim, and provision straight onto a VM the reclaim outbox is about to kill.
+ * That module's own v1→v2 bump is the same hazard answered the same way: a fresh
+ * namespace makes every name in it fresh by construction.
  *
  * Everything else — the >=32-char secret floor, the NUL-delimited injective fold,
  * the sha3-256 HMAC — is copied verbatim from the session derivation. Note what
@@ -42,15 +42,15 @@
 
 import { createHmac } from 'crypto';
 
-export interface DriveBoxSpriteKeyInput {
+export interface DriveEnvSpriteKeyInput {
   tenantId: string;
-  /** The box's OWN id (`drive_boxes.id`) — the identity fold. */
-  boxId: string;
+  /** The environment's OWN id (`drive_envs.id`) — the identity fold. */
+  envId: string;
   /** The server-held `SANDBOX_SESSION_SECRET`; never user input. */
   secret: string;
 }
 
-const NAMESPACE_VERSION = 'drive-box-sprite:v1';
+const NAMESPACE_VERSION = 'drive-env-sprite:v1';
 
 /**
  * The web env schema enforces >=32 chars, but the realtime service bypasses full
@@ -61,30 +61,30 @@ const NAMESPACE_VERSION = 'drive-box-sprite:v1';
  */
 const MIN_SECRET_LENGTH = 32;
 
-export function deriveDriveBoxSpriteKey({ tenantId, boxId, secret }: DriveBoxSpriteKeyInput): string {
+export function deriveDriveEnvSpriteKey({ tenantId, envId, secret }: DriveEnvSpriteKeyInput): string {
   if (secret.length < MIN_SECRET_LENGTH) {
-    throw new Error(`deriveDriveBoxSpriteKey requires a secret of at least ${MIN_SECRET_LENGTH} characters`);
+    throw new Error(`deriveDriveEnvSpriteKey requires a secret of at least ${MIN_SECRET_LENGTH} characters`);
   }
   if (tenantId.length === 0) {
-    throw new Error('deriveDriveBoxSpriteKey requires a non-empty tenantId');
+    throw new Error('deriveDriveEnvSpriteKey requires a non-empty tenantId');
   }
-  if (boxId.length === 0) {
-    throw new Error('deriveDriveBoxSpriteKey requires a non-empty boxId');
+  if (envId.length === 0) {
+    throw new Error('deriveDriveEnvSpriteKey requires a non-empty envId');
   }
   // The NUL delimiter only makes the fold injective if neither component can
-  // carry one — enforced, not assumed: without this, {tenant:'a\0b', box:'c'}
-  // and {tenant:'a', box:'b\0c'} derive the SAME key. Both ids are server-minted
+  // carry one — enforced, not assumed: without this, {tenant:'a\0b', env:'c'}
+  // and {tenant:'a', env:'b\0c'} derive the SAME key. Both ids are server-minted
   // cuids today, but this function is the boundary.
   if (tenantId.includes('\0')) {
-    throw new Error('deriveDriveBoxSpriteKey requires a tenantId without the NUL delimiter');
+    throw new Error('deriveDriveEnvSpriteKey requires a tenantId without the NUL delimiter');
   }
-  if (boxId.includes('\0')) {
-    throw new Error('deriveDriveBoxSpriteKey requires a boxId without the NUL delimiter');
+  if (envId.includes('\0')) {
+    throw new Error('deriveDriveEnvSpriteKey requires an envId without the NUL delimiter');
   }
-  // NUL-delimited so no (tenant, box) pair can be re-spelled as another —
+  // NUL-delimited so no (tenant, env) pair can be re-spelled as another —
   // neither component can contain the delimiter (rejected above).
-  const payload = [NAMESPACE_VERSION, tenantId, boxId].join('\0');
+  const payload = [NAMESPACE_VERSION, tenantId, envId].join('\0');
   // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as workspace-sprite-key.ts's deriveAgentSessionSpriteKey
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
-  return `pgs-box-${digest}`;
+  return `pgs-env-${digest}`;
 }

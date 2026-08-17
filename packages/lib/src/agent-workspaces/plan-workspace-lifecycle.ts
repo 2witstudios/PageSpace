@@ -9,7 +9,7 @@
  *
  * A **sprite holder** is any row that owns exactly one Sprite under a
  * deterministic name. Today that is an agent session (`agent_workspaces`);
- * per-drive boxes are the next one. The planner never learns which: it decides
+ * per-drive environments are the next one. The planner never learns which: it decides
  * on pointers and stamps alone, so a second holder kind is a new caller, not a
  * new branch.
  *
@@ -21,7 +21,7 @@
  * Two things stay session-worded ON PURPOSE, so a later reader does not read them
  * as a rename that was missed:
  *  - **`planSessionReopen`** — genuinely session-only. It withdraws an end-intent
- *    when a CONVERSATION is claimed into an ended session's listing, and a box
+ *    when a CONVERSATION is claimed into an ended session's listing, and an environment
  *    has no listing and no conversations to claim.
  *  - **The deny/noop VALUES** (`session_limit_reached`, `session_not_found`, …).
  *    Those strings leave the package — web routes switch on them for HTTP status
@@ -55,12 +55,12 @@
 
 /**
  * The slice of a sprite-holder row the lifecycle decides on — an
- * `agent_workspaces` session today, a `drive_boxes` box next. Everything here is
+ * `agent_workspaces` session today, a `drive_envs` environment next. Everything here is
  * a pointer or a stamp; nothing is derived, and nothing names a table.
  */
 export interface SpriteHolderLifecycleRow {
   /**
-   * The holder's own id — the session id (`agent_workspaces.id`) or the box id.
+   * The holder's own id — the session id (`agent_workspaces.id`) or the environment id.
    * The planner never reads it; it is here because every verdict the caller
    * executes is written back against this row, and a row slice that cannot say
    * WHICH row it describes is a foot-gun at the call site.
@@ -136,9 +136,9 @@ export interface SpriteHolderRowStamps {
  * change, not a refactor, and this module's job in Phase 0 is to change no
  * behavior at all.
  *
- * Note what that does NOT license: adding box-worded members to this union.
+ * Note what that does NOT license: adding environment-worded members to this union.
  * Every value here is emitted from a branch that tests a holder-neutral fact —
- * no row, row ended, no key — so choosing a box-worded member would mean the
+ * no row, row ended, no key — so choosing an environment-worded member would mean the
  * pure planner asking WHICH holder it is deciding for, which is the one branch
  * this module exists not to have.
  *
