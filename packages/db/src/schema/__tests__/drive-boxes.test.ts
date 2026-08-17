@@ -72,7 +72,14 @@ const MIGRATIONS_DIR = path.resolve(__dirname, '../../../drizzle');
 
 /**
  * SQL with `--` comments removed — WHOLE-LINE and TRAILING both, so no
- * assertion can be satisfied or broken by prose. These files are more than half
+ * assertion can be satisfied or broken by prose.
+ *
+ * Deliberately NOT `stripSqlComments` from `../../migration-sql-analysis`,
+ * which is the shared one: that helper strips whole-line comments ONLY, which
+ * is sufficient for the DROP analysis it serves and is NOT sufficient here —
+ * a trailing `-- ... INSERT INTO ...` would break the outbox assertion below.
+ * Widening the shared helper would change what every DROP-migration test sees,
+ * which is not this PR's business. These files are more than half
  * commentary, and the commentary quotes SQL (`INSERT INTO ...`,
  * `ON CONFLICT ...`) precisely because it is explaining it, so a matcher that
  * saw comments would be reading the explanation instead of the statement.
