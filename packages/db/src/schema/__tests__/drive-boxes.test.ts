@@ -81,7 +81,7 @@ const triggerSql = stripComments(
   readFileSync(path.join(MIGRATIONS_DIR, '0263_drive_boxes_reclaim_trigger.sql'), 'utf8'),
 );
 const schemaSql = stripComments(
-  readFileSync(path.join(MIGRATIONS_DIR, '0262_simple_puff_adder.sql'), 'utf8'),
+  readFileSync(path.join(MIGRATIONS_DIR, '0262_dusty_redwing.sql'), 'utf8'),
 );
 
 describe('drive_boxes schema — identity and ownership', () => {
@@ -187,6 +187,18 @@ describe('drive_boxes schema — the two CHECKs that partition the outboxes', ()
     // Stage 2 must NOT ride this release: every pending migration runs in one
     // invocation, so a VALIDATE here would execute seconds after the ADD.
     expect(schemaSql).not.toMatch(/VALIDATE CONSTRAINT/);
+  });
+
+  it('given a box is drive-owned, should refuse a box-bound session that has no drive', () => {
+    const sql = checkSql(sessionsConfig, 'agent_workspaces_box_needs_drive_check');
+    expect(sql).toContain('boxId');
+    expect(sql).toContain('driveId');
+    // The other half of drive-agreement — that the box belongs to THIS
+    // session's drive — is Phase 3's `spawnAgentSession`, deliberately (see the
+    // constraint's docblock). This test is the marker for that follow-up.
+    expect(schemaSql).toMatch(
+      /ADD CONSTRAINT "agent_workspaces_box_needs_drive_check"[\s\S]*?NOT VALID/,
+    );
   });
 
   it('given drive_boxes is created empty in the same statement, should ship ITS check validating', () => {

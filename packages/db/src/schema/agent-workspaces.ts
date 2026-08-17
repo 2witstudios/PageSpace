@@ -214,6 +214,42 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
     'agent_workspaces_box_no_sprite_check',
     sql`${table.boxId} IS NULL OR (${table.sandboxId} IS NULL AND ${table.spriteKey} IS NULL AND ${table.spriteInstanceId} IS NULL)`,
   ),
+
+  /**
+   * A box-bound session MUST have a drive. `driveId` is nullable because a
+   * global-assistant session lives outside any drive — but a box does not: it
+   * is drive-owned, drive-paid and drive-shared, so "user-scoped session
+   * borrowing a drive's machine" is a state with no coherent access or billing
+   * answer. `decideAgentSessionAccess` derives access from `driveId` alone, so
+   * a row with a box and no drive would route work into a drive's shared
+   * filesystem through an authorization path that never looked at that drive.
+   *
+   * **This closes one half of the drive-agreement invariant, not both.** The
+   * other half — that `boxId`'s box belongs to THIS session's drive rather
+   * than some other one — is NOT enforced here, and the gap is deliberate
+   * rather than overlooked. Stating it structurally needs a composite FK on
+   * `(boxId, driveId)`, which in turn needs `ON DELETE SET NULL ("boxId")` so
+   * that reclaiming a box does not also blank `driveId` and silently convert a
+   * drive session into a global-assistant one. Drizzle 0.45.2 cannot express a
+   * column-scoped SET NULL (`UpdateDeleteAction` is a bare string union), so
+   * that FK could only be hand-written into the migration, where the snapshot
+   * cannot represent it and every later `db:generate` would try to reconcile
+   * the difference. Trading a permanent drift hazard for a constraint on a
+   * column nothing writes yet is a bad exchange.
+   *
+   * So the equality check lives in `spawnAgentSession` (Phase 3), which is the
+   * first thing that can write `boxId` and the first place it can be TESTED
+   * against a real spawn. That test is the acceptance criterion for Phase 3 —
+   * if it is not there, this comment is the bug report.
+   *
+   * Ships NOT VALID for the same reason as the constraint above, and is
+   * vacuously true of the existing corpus for the same reason: `boxId` does
+   * not exist until this migration.
+   */
+  boxNeedsDriveCheck: check(
+    'agent_workspaces_box_needs_drive_check',
+    sql`${table.boxId} IS NULL OR ${table.driveId} IS NOT NULL`,
+  ),
 }));
 
 /**

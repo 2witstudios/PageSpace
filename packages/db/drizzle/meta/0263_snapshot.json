@@ -1,6 +1,6 @@
 {
-  "id": "3327eb24-2fe9-4432-89fb-195752817ccc",
-  "prevId": "d2a737f4-f8b6-45b6-a492-dc8c4def29f8",
+  "id": "0ed9dc83-adb6-49ad-83d3-e56ad40722e7",
+  "prevId": "33e4a117-c407-462e-a192-58bea6de3fd3",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -20614,6 +20614,10 @@
         "agent_workspaces_box_no_sprite_check": {
           "name": "agent_workspaces_box_no_sprite_check",
           "value": "\"agent_workspaces\".\"boxId\" IS NULL OR (\"agent_workspaces\".\"sandboxId\" IS NULL AND \"agent_workspaces\".\"spriteKey\" IS NULL AND \"agent_workspaces\".\"spriteInstanceId\" IS NULL)"
+        },
+        "agent_workspaces_box_needs_drive_check": {
+          "name": "agent_workspaces_box_needs_drive_check",
+          "value": "\"agent_workspaces\".\"boxId\" IS NULL OR \"agent_workspaces\".\"driveId\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false

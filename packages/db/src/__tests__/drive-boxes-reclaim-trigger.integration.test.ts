@@ -230,6 +230,47 @@ describe('drive_boxes CHECK constraints — live', () => {
     }
   });
 
+  it('given a box is drive-owned, should REFUSE a box-bound session with no drive', async () => {
+    const suffix = `wsdrv-${process.pid}-${process.hrtime.bigint()}`;
+    const userId = `u-${suffix}`;
+    const driveId = `d-${suffix}`;
+    const boxId = `b-${suffix}`;
+    try {
+      await client.query(`INSERT INTO users (id, name, email) VALUES ($1, 'p', $2)`, [userId, `${suffix}@example.test`]);
+      await client.query(
+        `INSERT INTO drives (id, name, slug, "ownerId", "updatedAt") VALUES ($1, 'p', $2, $3, (now() at time zone 'utc'))`,
+        [driveId, `ws-drv-${suffix}`, userId],
+      );
+      await client.query(
+        `INSERT INTO drive_boxes (id, "driveId", name, kind, "updatedAt")
+         VALUES ($1, $2, 'dev', 'dev', (now() at time zone 'utc'))`,
+        [boxId, driveId],
+      );
+
+      // `driveId` is nullable for global-assistant sessions, but a box is
+      // drive-owned, drive-paid and drive-shared: a user-scoped session
+      // borrowing a drive's machine has no coherent access or billing answer,
+      // and `decideAgentSessionAccess` reads `driveId` alone.
+      await expect(
+        client.query(
+          `INSERT INTO agent_workspaces (id, "ownerId", "boxId", "updatedAt")
+           VALUES ($1, $2, $3, (now() at time zone 'utc'))`,
+          [`ws-${suffix}`, userId, boxId],
+        ),
+      ).rejects.toThrow(/agent_workspaces_box_needs_drive_check/);
+
+      // A driveless session with NO box is still fine — that is the global
+      // assistant, and this constraint must not have broken it.
+      await client.query(
+        `INSERT INTO agent_workspaces (id, "ownerId", "updatedAt")
+         VALUES ($1, $2, (now() at time zone 'utc'))`,
+        [`ws-global-${suffix}`, userId],
+      );
+    } finally {
+      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    }
+  });
+
   it('given box names address, should REFUSE a duplicate name in one drive and ALLOW it across drives', async () => {
     const suffix = `boxname-${process.pid}-${process.hrtime.bigint()}`;
     const userId = `u-${suffix}`;
