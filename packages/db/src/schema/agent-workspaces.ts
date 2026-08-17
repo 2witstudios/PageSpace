@@ -273,6 +273,14 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    * comment is the bug report:**
    *
    *  1. `box.driveId === session.driveId` — the cross-drive case argued above.
+   *     **This one is a SECURITY criterion, not merely a correctness one.** A
+   *     cross-drive `boxId` is an authorization bypass by construction:
+   *     `decideAgentSessionAccess` gates on the SESSION's `driveId`, while the
+   *     filesystem actually touched belongs to the BOX's drive — so a member
+   *     of drive A would be authorized against A and then handed B's shared
+   *     disk. It is unreachable today only because nothing writes `boxId`;
+   *     the moment a writer exists without this check, that is a live
+   *     cross-tenant read/write path, not a tidiness issue.
    *  2. `substrateForBoxKind(box.kind) === 'sprite'` — a session may not bind
    *     to a `kind='deploy'` box. Deliberately NOT a constraint, and not for
    *     the same reason as (1): it is enforceable here (a `boxKind` column
