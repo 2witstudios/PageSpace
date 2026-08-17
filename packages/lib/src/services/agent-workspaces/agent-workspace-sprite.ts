@@ -20,6 +20,13 @@
  * an alternative implementation: the web app and the realtime bridge keep
  * calling it, and it keeps calling the one core.
  *
+ * **On the file's address.** A holder-neutral core under `agent-workspaces/` is a
+ * deliberate stop, not an oversight. Moving it would rewrite the `@pagespace/lib`
+ * exports map and both app-side import paths in the same change that generalizes
+ * the logic, which is exactly the mix that makes a "no behavior change" claim
+ * unreviewable. The move belongs with the second holder, where a reviewer can see
+ * two callers justifying the new address.
+ *
  * Ported from `services/machines/agent-terminal-sprites.ts`, with two structural
  * changes:
  *
@@ -111,7 +118,7 @@ export type AgentSessionProvisionIntent = SpriteHolderProvisionIntent;
  * seam where a holder kind differs; nothing below this line branches on which
  * kind is being provisioned.
  */
-export interface SpriteHolderSpriteDeps {
+export interface SpriteHolderProvisionDeps {
   /** The identity/stamp slice of the holder's store — this module never reads or writes anything else. */
   store: SpriteHolderStore;
   /** The provider-neutral Sprite lifecycle seam. */
@@ -187,7 +194,7 @@ export interface AgentSessionSpriteDeps {
   secret: string;
   /**
    * Centralized code-execution authorization for the CURRENT actor. See
-   * `SpriteHolderSpriteDeps.authorize` — this is the session-shaped form of it,
+   * `SpriteHolderProvisionDeps.authorize` — this is the session-shaped form of it,
    * called with the row's drive/owner and `requestOrigin: 'user'`.
    */
   authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
@@ -195,7 +202,7 @@ export interface AgentSessionSpriteDeps {
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /**
    * REQUIRED per-owner live-session ceiling — the session flavor of
-   * `SpriteHolderSpriteDeps.checkQuota`, counted against the ROW's owner rather
+   * `SpriteHolderProvisionDeps.checkQuota`, counted against the ROW's owner rather
    * than the actor (a drive member provisioning inside someone else's agent still
    * consumes the session owner's allocation, not their own).
    */
@@ -205,7 +212,7 @@ export interface AgentSessionSpriteDeps {
   }) => Promise<{ allowed: boolean; reason?: string }>;
   /**
    * Optional opportunistic storage measurement — see
-   * `SpriteHolderSpriteDeps.measureStorage`.
+   * `SpriteHolderProvisionDeps.measureStorage`.
    */
   measureSessionStorage?: (input: {
     workspaceId: string;
@@ -245,7 +252,7 @@ export type EnsureAgentSessionSandboxResult = EnsureSpriteHolderSandboxResult;
  * which means a replacement already took the name and our target is already gone.
  */
 async function killUnreferencedOrEnqueue(
-  deps: Pick<SpriteHolderSpriteDeps, 'host' | 'store'>,
+  deps: Pick<SpriteHolderProvisionDeps, 'host' | 'store'>,
   handle: SandboxHandle,
 ): Promise<void> {
   try {
@@ -285,7 +292,7 @@ async function killUnreferencedOrEnqueue(
  * — is NOT our generation. Pure reload + compare; kills nothing.
  */
 async function findPersistedWinner(
-  deps: Pick<SpriteHolderSpriteDeps, 'store'>,
+  deps: Pick<SpriteHolderProvisionDeps, 'store'>,
   holderId: string,
   handle: SandboxHandle,
 ): Promise<{ sandboxId: string } | null> {
@@ -313,7 +320,7 @@ async function reconcileBeforeKill({
   holderId,
   handle,
 }: {
-  deps: Pick<SpriteHolderSpriteDeps, 'store' | 'host'>;
+  deps: Pick<SpriteHolderProvisionDeps, 'store' | 'host'>;
   holderId: string;
   handle: SandboxHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
@@ -377,7 +384,7 @@ function observedInstance(probe: SpriteProbeOutcome): LiveSpriteInstance | null 
  */
 async function probeRecordedSprite(
   row: SpriteHolderLifecycleRow,
-  deps: Pick<SpriteHolderSpriteDeps, 'host'>,
+  deps: Pick<SpriteHolderProvisionDeps, 'host'>,
 ): Promise<SpriteProbeOutcome> {
   if (row.sandboxId === null || row.spriteTornDownAt !== null) return { kind: 'unprobed' };
   try {
@@ -419,7 +426,7 @@ export async function ensureSpriteHolderSandbox({
 }: {
   row: SpriteHolderLifecycleRow;
   intent: SpriteHolderProvisionIntent;
-  deps: SpriteHolderSpriteDeps;
+  deps: SpriteHolderProvisionDeps;
 }): Promise<EnsureSpriteHolderSandboxResult> {
   // Authorization is computed for THIS request and handed to the planner, which
   // applies it before any warm holder is returned.

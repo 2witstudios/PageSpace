@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ensureSpriteHolderSandbox, type SpriteHolderSpriteDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
+import { ensureSpriteHolderSandbox, type SpriteHolderProvisionDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
 import type { SpriteHolderLifecycleRow } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { deriveDriveBoxSpriteKey } from '../../../drive-boxes/box-sprite-key';
 import { makeSpriteHost, NOW, SECRET, TENANT_ID, type FakeSpriteHost } from './fakes';
@@ -94,8 +94,8 @@ function makeBoxStore(seed: SpriteHolderLifecycleRow[] = [makeBoxRow()]): FakeBo
 
 function makeBoxDeps(
   fakes: { store: FakeBoxStore; host: FakeSpriteHost },
-  over: Partial<SpriteHolderSpriteDeps> = {},
-): SpriteHolderSpriteDeps {
+  over: Partial<SpriteHolderProvisionDeps> = {},
+): SpriteHolderProvisionDeps {
   return {
     store: fakes.store.store,
     host: fakes.host.host,
