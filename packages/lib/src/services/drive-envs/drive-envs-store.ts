@@ -107,6 +107,15 @@ export interface DriveEnvStore {
    * every drive they own, so a per-drive lock would let one payer's two drives
    * race past it — the same hole with more steps.
    *
+   * **`payerId` MUST be `driveId`'s owner.** The lock key, the count and the
+   * inserted row have to describe one ledger; a `payerId` that does not own
+   * this drive would serialize on one payer's key while metering a second
+   * payer's envs and inserting into a third's drive. It is a parameter rather
+   * than a join inside the transaction only because the caller has already
+   * resolved the drive's owner to get their TIER (`resolveDriveEnvPayer`, which
+   * fails closed on a vanished drive), so re-reading it here would be a second
+   * source of truth for the same fact rather than a check on it.
+   *
    * It is also the ONLY way to mint an env row. There is deliberately no
    * unguarded `create` alongside it: a second minting path is a ceiling a
    * future caller can forget, and the whole point of making this structural is

@@ -246,6 +246,22 @@ describe('deleteIfUnoccupied — the live-session guard, for real', () => {
     expect(rows).toHaveLength(0);
   });
 
+  it('given two CONCURRENT deletes, should let exactly one win and tell the other the truth', async () => {
+    // The row lock serializes them, so this is deterministic rather than racy:
+    // the loser blocks, then re-checks under READ COMMITTED and finds the row
+    // gone. Reporting `not_found` rather than a second success is what keeps
+    // `spriteTornDown` honest — only one call actually killed anything.
+    const envId = await seedEnv();
+
+    const [first, second] = await Promise.all([
+      store.deleteIfUnoccupied({ envId, force: false }),
+      store.deleteIfUnoccupied({ envId, force: false }),
+    ]);
+
+    expect([first, second].filter((r) => r.ok)).toHaveLength(1);
+    expect([first, second].filter((r) => !r.ok)).toEqual([{ ok: false, reason: 'not_found' }]);
+  });
+
   it('given the row is gone, should report not_found rather than a phantom success', async () => {
     expect(await store.deleteIfUnoccupied({ envId: createId(), force: false })).toEqual({
       ok: false,
