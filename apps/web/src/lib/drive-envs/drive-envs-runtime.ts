@@ -51,7 +51,7 @@ import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import { getSandboxHost } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 export { toDriveEnvDTO };
-export type { DriveEnvDTO, DriveEnvRecord };
+export type { DriveEnvDTO };
 
 // ---------------------------------------------------------------------------
 // Lazy singleton — the store reconnects to one DB pool; it is built on first
@@ -69,7 +69,8 @@ export function getDriveEnvStore(): Promise<DriveEnvStore> {
 // Row-fact lookups (null-plumbing only)
 // ---------------------------------------------------------------------------
 
-export async function findDriveEnvRecord(envId: string): Promise<DriveEnvRecord | null> {
+/** The row, or null. Internal: every caller outside this module goes through `resolveEnvInDrive`, which additionally proves the env belongs to the drive in the path. */
+async function findDriveEnvRecord(envId: string): Promise<DriveEnvRecord | null> {
   return (await getDriveEnvStore()).findById(envId);
 }
 
