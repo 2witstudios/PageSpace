@@ -43,6 +43,7 @@ import {
   extractPosts,
   findBrokenNavLinks,
   rewriteLinks,
+  imageMimeType,
   REPO_ROOT,
   type ExtractedDoc,
   type ExtractedPost,
@@ -207,17 +208,19 @@ function collectImageRefs(posts: ExtractedPost[]): string[] {
  *
  * Uses the same presign → PUT → complete flow the web client uses
  * (`/api/upload/presign`, `/api/upload/complete`); `contentHash` is the sha256
- * the presign step reserves the slot against.
+ * the presign step reserves the slot against (the route validates it against
+ * `/^[0-9a-fA-F]{64}$/`).
  */
 async function uploadImage(driveId: string, absPath: string, parentId: string | null): Promise<string> {
   const bytes = new Uint8Array(await readFile(absPath));
   const contentHash = Bun.SHA256.hash(bytes, 'hex');
   const filename = basename(absPath);
+  const mimeType = imageMimeType(filename);
 
   const presign = await api<{ url?: string; jobId: string; alreadyExists?: boolean }>(
     'POST',
     '/api/upload/presign',
-    { contentHash, driveId, filename, mimeType: 'image/png', fileSize: bytes.byteLength },
+    { contentHash, driveId, filename, mimeType, fileSize: bytes.byteLength },
   );
 
   // `alreadyExists` means the object is already in storage (content-addressed
@@ -226,18 +229,21 @@ async function uploadImage(driveId: string, absPath: string, parentId: string | 
     if (!presign.url) throw new Error(`presign returned no URL for ${filename}`);
     const put = await fetch(presign.url, {
       method: 'PUT',
-      headers: { 'Content-Type': 'image/png' },
+      headers: { 'Content-Type': mimeType },
       body: bytes,
     });
     if (!put.ok) throw new Error(`PUT ${filename} → ${put.status} ${put.statusText}`);
   }
 
-  const page = await api<PageRef>('POST', '/api/upload/complete', {
+  // Note the envelope: /api/upload/complete answers `{ success, page }`,
+  // unlike /api/pages which returns the page object bare.
+  const done = await api<{ success: boolean; page: PageRef }>('POST', '/api/upload/complete', {
     jobId: presign.jobId,
     title: filename,
     parentId,
   });
-  return page.id;
+  if (!done.page?.id) throw new Error(`upload/complete returned no page id for ${filename}`);
+  return done.page.id;
 }
 
 async function migrateBlog(driveId: string | undefined, posts: ExtractedPost[]): Promise<void> {
