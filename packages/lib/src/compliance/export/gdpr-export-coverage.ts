@@ -211,6 +211,15 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'drive_backup_schedules',
     'drive_backups',
     'drive_roles',
+    // A persistent per-drive ENVIRONMENT. The row is the
+    // drive's infrastructure, not the subject's data: a name, a kind, and
+    // pointers at a VM. `createdBy` is audit-only and confers nothing — the env
+    // belongs to the drive, is paid for by the drive owner, and is shared by
+    // every member — so it is the drive's record in exactly the sense this
+    // rationale describes. What the subject actually authored INSIDE an env is
+    // their sessions, shells and messages, all of which the export carries
+    // under their own categories.
+    'drive_envs',
     'drive_share_links',
     'page_permissions',
     'page_share_links',

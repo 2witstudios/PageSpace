@@ -1835,6 +1835,20 @@
       "when": 1786832941822,
       "tag": "0261_bored_santa_claus",
       "breakpoints": true
+    },
+    {
+      "idx": 262,
+      "version": "7",
+      "when": 1786984475218,
+      "tag": "0262_aspiring_star_brand",
+      "breakpoints": true
+    },
+    {
+      "idx": 263,
+      "version": "7",
+      "when": 1786984523744,
+      "tag": "0263_drive_envs_reclaim_trigger",
+      "breakpoints": true
     }
   ]
 }

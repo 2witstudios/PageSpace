@@ -63,6 +63,7 @@ import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
+import * as driveEnvs from '../drive-envs';
 
 const schemaDir = resolve(process.cwd(), 'src/schema');
 
@@ -532,6 +533,16 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflowRuns.workflowRunsRelations).toBeDefined();
+    });
+  });
+
+  describe('drive_envs schema', () => {
+    it('exports tables', () => {
+      expect(driveEnvs.driveEnvs).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(driveEnvs.driveEnvsRelations).toBeDefined();
     });
   });
 });

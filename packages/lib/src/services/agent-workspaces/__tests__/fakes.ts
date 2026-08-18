@@ -39,6 +39,8 @@ export function makeSessionRecord(over: Partial<AgentSessionRecord> = {}): Agent
     ownerId: OWNER_ID,
     driveId: DRIVE_ID,
     name: null,
+    /** Ephemeral by default — the shape every existing lifecycle test assumes. */
+    envId: null,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
