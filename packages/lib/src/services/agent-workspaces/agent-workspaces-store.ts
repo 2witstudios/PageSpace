@@ -12,7 +12,7 @@
  *
  *  - **No policy.** Every write this store performs is described by a verdict
  *    from `plan-workspace-lifecycle.ts` — including WHICH columns to stamp, which
- *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
+ *    arrive as an `SpriteHolderRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
  *  - **No membership writes.** A thread belongs to a workspace by virtue of a
@@ -24,7 +24,7 @@
  *    (moving a thread is a fork).
  */
 
-import { planSessionReopen, type AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { planSessionReopen, type SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { withWorkspaceLock } from './workspace-lock';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
@@ -199,7 +199,7 @@ export interface AgentSessionStore {
     sandboxId: string;
     spriteInstanceId: string | null;
     egressPolicyToken: string | null;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     now: Date;
   }): Promise<boolean>;
   /**
@@ -226,7 +226,7 @@ export interface AgentSessionStore {
    */
   applyStamps(input: {
     workspaceId: string;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   /**
@@ -285,7 +285,7 @@ export interface AgentSessionStore {
     workspaceId: string;
     sandboxId: string;
     spriteInstanceId: string | null;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
   }): Promise<boolean>;
   /**
    * Re-read just the Sprite pointer AND INSTANCE, to reconcile a lost
@@ -311,7 +311,7 @@ export interface AgentSessionStore {
  * would collapse that distinction the moment a caller built one with an
  * explicit `undefined`, so each key is copied only when present.
  */
-export function stampColumns(stamps: AgentSessionRowStamps): Partial<{
+export function stampColumns(stamps: SpriteHolderRowStamps): Partial<{
   lastActiveAt: Date;
   endedAt: Date | null;
   teardownRequestedAt: Date | null;
@@ -345,7 +345,7 @@ export function revivedAgentSessionColumns(input: {
   sandboxId: string;
   spriteInstanceId: string | null;
   egressPolicyToken: string | null;
-  stamps: AgentSessionRowStamps;
+  stamps: SpriteHolderRowStamps;
   now: Date;
 }) {
   return {
