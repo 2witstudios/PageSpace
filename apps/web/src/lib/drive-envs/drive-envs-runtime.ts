@@ -29,7 +29,10 @@ import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import { deriveDriveEnvSpriteKey } from '@pagespace/lib/drive-envs/env-sprite-key';
-import { ensureSpriteHolderSandbox } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
+import {
+  ensureSpriteHolderSandbox,
+  type SpriteHolderProvisionDeps,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import {
   createDbDriveEnvStore,
   type DriveEnvRecord,
@@ -48,6 +51,7 @@ import {
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import type { SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { getSandboxHost } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 
 export { toDriveEnvDTO };
@@ -149,6 +153,89 @@ export async function deleteEnv(input: { envId: string; force: boolean }): Promi
  * which keyspace the Sprite name folds in (`drive-env-sprite:v1`, never the
  * session namespace), who may run code here, and what a refusal is called.
  */
+/**
+ * The env's flavor of every seam the holder-neutral provisioner asks for.
+ *
+ * Extracted from `rebuildEnv` below because this — not the verb that calls it —
+ * is where an environment's provisioning correctness actually lives. The core
+ * derives no Sprite key, resolves no tenant and picks no authorization gate of
+ * its own, so getting any of these wrong is silent, and burying them four
+ * closures deep inside a lifecycle call made them read like plumbing rather than
+ * the decisions they are. `drive-envs-runtime.test.ts` asserts on exactly this
+ * object.
+ *
+ * `payer` is the DRIVE OWNER, resolved by the caller and passed in — the tenant
+ * an env's Sprite key folds under, with no fallback, for the same reason
+ * `resolveSessionTenantId` fails closed: a different tenant means a different
+ * key means a second Sprite identity for one env.
+ */
+function buildEnvProvisionDeps({
+  row,
+  payer,
+  requesterId,
+  store,
+  host,
+}: {
+  row: DriveEnvRecord;
+  payer: { payerId: string; tier: SubscriptionTier };
+  requesterId: string;
+  store: DriveEnvStore;
+  host: SandboxHost;
+}): SpriteHolderProvisionDeps {
+  return {
+    // The identity/stamp slice, renamed holder → env. This adapter IS what makes
+    // an env a second holder of the ONE provisioning CAS rather than a second
+    // provisioner with its own.
+    store: {
+      updateSpriteIdentity: ({ holderId, ...identity }) =>
+        store.updateSpriteIdentity({ envId: holderId, ...identity }),
+      applyStamps: ({ holderId, stamps, cas }) => store.applyStamps({ envId: holderId, stamps, cas }),
+      reloadSpritePointer: (holderId) => store.reloadSpritePointer(holderId),
+      enqueueReclaim: (reclaim) => store.enqueueReclaim(reclaim),
+    },
+    host,
+    substrate: { kind: 'sprite' },
+    options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
+    /** The ENV keyspace (`drive-env-sprite:v1`), never the session one — see `env-sprite-key.ts` on why a shared namespace is a reclaim hazard rather than a tidiness question. */
+    deriveSpriteKey: (holderId) =>
+      deriveDriveEnvSpriteKey({ tenantId: payer.payerId, envId: holderId, secret: getSandboxSessionSecret() }),
+    /**
+     * The centralized code-execution gate, resolved against the env's DRIVE and
+     * its payer — which is also where tier eligibility lives, so a downgraded
+     * payer is refused here rather than deeper in.
+     */
+    authorize: async () => {
+      const result = await canRunCode({
+        userId: requesterId,
+        driveId: row.driveId,
+        ownerId: payer.payerId,
+        requestOrigin: 'user',
+      });
+      return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+    },
+    checkFullEgressEnablement: async () =>
+      decideFullEgressEnablement({
+        adminGateEnabled: isCodeExecutionEnabled(),
+        containment: isContainmentVerified() ? { contained: true } : null,
+      }),
+    /**
+     * The env ALLOWANCE is metered where the commitment is made — at
+     * `createDriveEnv`, on the row. Provisioning an env that already exists adds
+     * no allocation to count, so there is no second ceiling here; what this
+     * re-asserts is tier ELIGIBILITY, so a payer downgraded since the env was
+     * created stops getting machines for it. That is the same fact `authorize`
+     * denies on (`can-run-code`'s tier gate), re-checked at the mint site as
+     * defense in depth and reported under the same word rather than dressed up
+     * as a quota it is not.
+     */
+    checkQuota: async () => {
+      if (isSandboxAvailable(payer.tier)) return { allowed: true };
+      return { allowed: false, denial: 'not_authorized', reason: 'tier_ineligible' };
+    },
+    now: () => new Date(),
+  };
+}
+
 export async function rebuildEnv(input: { envId: string; requesterId: string }): Promise<RebuildDriveEnvResult> {
   const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
   return rebuildDriveEnv({
@@ -158,10 +245,9 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
       host,
       now: () => new Date(),
       ensureSandbox: async (row) => {
-        // The tenant an env's Sprite key folds under is the DRIVE OWNER, with
-        // no fallback — same rule, and same failure mode if broken, as
-        // `resolveSessionTenantId`: a different tenant means a different key
-        // means a second Sprite identity for one env.
+        // Fails CLOSED on a vanished drive: there is no tenant to fold the
+        // Sprite key under, and inventing one would split this env across two
+        // Sprite identities.
         const payer = await resolveDriveEnvPayer(row.driveId);
         if (!payer) return { ok: false, reason: 'provision_failed', detail: 'drive_not_found' };
         return ensureSpriteHolderSandbox({
@@ -170,56 +256,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // confirmed, so the row reads as machineless and the core takes its
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
-          deps: {
-            store: {
-              updateSpriteIdentity: ({ holderId, ...identity }) =>
-                store.updateSpriteIdentity({ envId: holderId, ...identity }),
-              applyStamps: ({ holderId, stamps, cas }) => store.applyStamps({ envId: holderId, stamps, cas }),
-              reloadSpritePointer: (holderId) => store.reloadSpritePointer(holderId),
-              enqueueReclaim: (reclaim) => store.enqueueReclaim(reclaim),
-            },
-            host,
-            substrate: { kind: 'sprite' },
-            options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
-            deriveSpriteKey: (holderId) =>
-              deriveDriveEnvSpriteKey({
-                tenantId: payer.payerId,
-                envId: holderId,
-                secret: getSandboxSessionSecret(),
-              }),
-            // The centralized code-execution gate, resolved against the env's
-            // DRIVE and its payer — which is also where the tier-eligibility
-            // check lives, so a downgraded payer is refused here rather than
-            // deeper in.
-            authorize: async () => {
-              const result = await canRunCode({
-                userId: input.requesterId,
-                driveId: row.driveId,
-                ownerId: payer.payerId,
-                requestOrigin: 'user',
-              });
-              return result.ok ? { ok: true } : { ok: false, reason: result.reason };
-            },
-            checkFullEgressEnablement: async () =>
-              decideFullEgressEnablement({
-                adminGateEnabled: isCodeExecutionEnabled(),
-                containment: isContainmentVerified() ? { contained: true } : null,
-              }),
-            // The env ALLOWANCE is metered where the commitment is made — at
-            // `createDriveEnv`, on the row, which is the billed persistence
-            // unit. Provisioning an env that already exists adds no allocation
-            // to count, so there is no second ceiling to apply here; what this
-            // re-asserts is tier ELIGIBILITY, so a payer downgraded since the
-            // env was created stops getting machines for it. That is the same
-            // fact `authorize` above denies on (`can-run-code`'s tier gate),
-            // re-checked at the mint site as defense in depth and reported
-            // under the same word rather than dressed up as a quota it is not.
-            checkQuota: async () => {
-              if (isSandboxAvailable(payer.tier)) return { allowed: true };
-              return { allowed: false, denial: 'not_authorized', reason: 'tier_ineligible' };
-            },
-            now: () => new Date(),
-          },
+          deps: buildEnvProvisionDeps({ row, payer, requesterId: input.requesterId, store, host }),
         });
       },
     },
