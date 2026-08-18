@@ -89,38 +89,53 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs', () => ({
   toDriveEnvDTO: vi.fn(),
 }));
 
-const ensureSpriteHolderSandbox = vi.fn(async (_input: unknown) => ({
-  ok: true,
-  sandboxId: 'pgs-env-probe',
-  resumed: false,
-}));
+/**
+ * Typed FROM THE REAL EXPORT, not from a hand-written shape.
+ *
+ * This suite exists to catch drift in what the wiring hands the provisioner, so
+ * a locally re-declared deps type would defeat it in the one case that matters:
+ * `SpriteHolderProvisionDeps` gaining or renaming a seam would leave these tests
+ * compiling green against a contract that no longer exists (CodeRabbit's
+ * nitpick, and it is right that a stale-but-compiling assertion is worse here
+ * than elsewhere).
+ */
+const ensureSpriteHolderSandbox =
+  vi.fn<(input: EnsureSpriteHolderInput) => Promise<EnsureSpriteHolderSandboxResult>>(async () => ({
+    ok: true,
+    sandboxId: 'pgs-env-probe',
+    resumed: false,
+  }));
 vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-sprite', () => ({
-  ensureSpriteHolderSandbox: (input: unknown) => ensureSpriteHolderSandbox(input),
+  ensureSpriteHolderSandbox: (input: EnsureSpriteHolderInput) => ensureSpriteHolderSandbox(input),
 }));
 
+import type {
+  EnsureSpriteHolderSandboxResult,
+  SpriteHolderProvisionDeps,
+  SpriteHolderProvisionIntent,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
+import type { SpriteHolderLifecycleRow } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { rebuildEnv } from '../drive-envs-runtime';
+
+/** The core's own call shape — derived, so a change to it breaks this suite instead of sliding past. */
+type EnsureSpriteHolderInput = {
+  row: SpriteHolderLifecycleRow;
+  intent: SpriteHolderProvisionIntent;
+  deps: SpriteHolderProvisionDeps;
+};
 import { deriveDriveEnvSpriteKey } from '@pagespace/lib/drive-envs/env-sprite-key';
 import { deriveAgentSessionSpriteKey } from '@pagespace/lib/agent-workspaces/workspace-sprite-key';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { db } from '@pagespace/db/db';
 
-type ProvisionCall = {
-  row: { holderId: string; endedAt: Date | null };
-  intent: string;
-  deps: {
-    deriveSpriteKey: (holderId: string) => string;
-    authorize: () => Promise<{ ok: boolean; reason?: string }>;
-    checkQuota: (input: { alreadyProvisioned: boolean }) => Promise<{ allowed: boolean; denial?: string; reason?: string }>;
-  };
-};
-
-function lastProvisionCall(): ProvisionCall {
-  const call = ensureSpriteHolderSandbox.mock.calls.at(-1) as unknown[] | undefined;
+function lastProvisionCall(): EnsureSpriteHolderInput {
+  const call = ensureSpriteHolderSandbox.mock.calls.at(-1);
   if (!call) throw new Error('ensureSpriteHolderSandbox was never called');
-  return call[0] as ProvisionCall;
+  return call[0];
 }
 
-function stubPayer(tier: string): void {
+function stubPayer(tier: SubscriptionTier): void {
   vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: DRIVE_OWNER_ID } as never);
   vi.mocked(db.query.users.findFirst).mockResolvedValue({ subscriptionTier: tier } as never);
 }
