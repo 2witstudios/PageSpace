@@ -283,11 +283,22 @@ type TeardownEnvSpriteResult =
  *
  * The order is the crash contract, and it is the same one `endAgentSession`
  * follows for the same reason. `teardownRequestedAt` is written BEFORE the kill
- * so that a process dying mid-teardown still leaves the VM reclaimable — the
- * orphan reconciler requires that stamp before it destroys anything. The
- * confirmation stamp goes on afterwards under a CAS on the INSTANCE, because a
- * concurrent provision may have put a LIVE replacement into this row, and
- * marking that one torn down would hide a billing VM from the reconciler forever.
+ * so that a process dying mid-teardown leaves a durable record of the INTENT.
+ * The confirmation stamp goes on afterwards under a CAS on the INSTANCE, because
+ * a concurrent provision may have put a LIVE replacement into this row, and
+ * marking that one torn down would hide a billing VM from every pointer there is.
+ *
+ * **What recovers a crash here, precisely.** For a DELETED env row the reclaim
+ * outbox does: the AFTER DELETE trigger parks the pointer and
+ * `reconcileOrphanSprites` drains it (source A). For a SURVIVING row it does
+ * NOT: that cron's second source enumerates `agent_workspaces` only, and
+ * `drive_envs` is not folded into its row sources yet (the schema PR defers that
+ * to when envs join the crons). So an env whose kill failed keeps a live VM its
+ * own row still points at — nothing is leaked or unbilled — and the retry is the
+ * next delete or rebuild, or a plain `ensure`, which resumes the VM and clears
+ * the stale intent. Folding envs into the reconciler is the follow-up that makes
+ * that automatic; it is deliberately not smuggled into this dark-shipped layer,
+ * because it changes the behavior of a cron that is live for sessions today.
  */
 async function teardownEnvSprite({
   envId,
@@ -333,11 +344,12 @@ async function teardownEnvSprite({
     // — confirmed enough to stamp (the CAS below still refuses if the row has
     // moved on to that replacement).
     if (!(error instanceof SandboxSpriteReplacedError)) {
-      // A real failure: the VM may still be running. The row keeps its teardown
-      // request, so the orphan reconciler retries — which is why this is
-      // reported rather than swallowed, and why the caller must NOT go on to
-      // delete the row: deleting it would hand the reclaim job to the AFTER
-      // DELETE trigger while we still believe the kill is retryable here.
+      // A real failure: the VM may still be running. Reported rather than
+      // swallowed, because for a SURVIVING env row nothing retries this on its
+      // own (see the doc above) — the next delete, rebuild or ensure does. And
+      // the caller must NOT go on to delete the row: the row is what still
+      // points at the VM, and deleting it would hand the reclaim job to the
+      // AFTER DELETE trigger while we believe the kill is retryable here.
       return { ok: false, detail: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -381,7 +393,7 @@ export type DeleteDriveEnvResult =
  *  2. **Teardown.** Kill the env's Sprite while the row still points at it, so
  *     the kill is confirmed by the caller that asked for it. A failed kill
  *     ABORTS the delete: the row keeps its teardown request and stays as the
- *     reconciler's handle on the VM.
+ *     only pointer at the VM, so a retry can finish what this call started.
  *  3. **Delete, atomically re-guarded.** `deleteIfUnoccupied` repeats the count
  *     inside one transaction holding `FOR UPDATE` on the env row, which is what
  *     actually closes the window: a session cannot bind between the count and
@@ -441,9 +453,9 @@ export async function deleteDriveEnv({
       deps,
     });
     // A kill we could not confirm must NOT be followed by a row delete: the row
-    // is the reconciler's only handle on a VM it may still have to retry, and
-    // the reclaim outbox is a net for crashes, not a substitute for a teardown
-    // this process knows failed.
+    // is the only remaining pointer at a VM whose kill may still have to be
+    // retried, and the reclaim outbox is a net for crashes, not a substitute
+    // for a teardown this process knows failed.
     if (!teardown.ok) return { ok: false, reason: 'teardown_failed', detail: teardown.detail };
     // `stamped: false` means the confirmation CAS refused — a concurrent
     // provision owns this row's pointer now. The delete still proceeds (the

@@ -238,10 +238,12 @@ export interface DriveEnvStore {
   /**
    * Record the durable teardown INTENT, BEFORE the kill — the one stamp written
    * ahead of its IO, so a crash between "we decided to kill" and "the kill was
-   * confirmed" still leaves the Sprite reclaimable. CAS-guarded on the pointer
-   * about to be killed: a concurrent provision that revived this env onto a NEW
-   * VM must not be left carrying a teardown request, because a teardown request
-   * is exactly what licenses the orphan reconciler to destroy a Sprite.
+   * confirmed" leaves a durable record of the intent rather than a silent
+   * half-teardown. CAS-guarded on the pointer about to be killed: a concurrent
+   * provision that revived this env onto a NEW VM must not be left carrying a
+   * teardown request — for sessions that stamp is exactly what licenses the
+   * orphan reconciler to destroy a Sprite, and `drive_envs` joins that cron's
+   * row sources in the follow-up that folds envs into the crons.
    */
   requestTeardown(input: {
     envId: string;

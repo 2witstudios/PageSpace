@@ -161,8 +161,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
         );
       }
       // The kill could not be confirmed, so the row was deliberately NOT
-      // deleted: it is the reconciler's only handle on a VM that may still be
-      // running. A retry is the right client behavior, hence 503.
+      // deleted: it is the only remaining pointer at a VM that may still be
+      // running, and for a surviving env row the retry is a later delete or
+      // rebuild rather than a cron. A retry is the right client behavior,
+      // hence 503.
       loggers.api.error('Drive environment teardown failed', new Error(result.detail), { envId });
       return NextResponse.json({ error: 'Could not tear down the environment machine', reason: 'teardown_failed' }, { status: 503 });
     }

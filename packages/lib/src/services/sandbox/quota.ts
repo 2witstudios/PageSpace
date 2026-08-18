@@ -294,12 +294,19 @@ export function sessionActivityMapSize(): number {
  *
  * The other two ceilings above bound compute in flight: `checkCodeExecutionQuota`
  * caps concurrent RUNS, `checkAgentSessionConcurrency` caps LIVE SANDBOXES. An
- * environment is neither. It is the billed PERSISTENCE unit: its row exists (and
- * its filesystem keeps accruing storage cost) whether or not anyone is running
+ * environment is neither. It is the PERSISTENCE unit: its row exists — and its
+ * filesystem keeps costing real money — whether or not anyone is running
  * anything inside it, and its whole purpose is to outlive every session that
  * touches it. So the count that matters is how many envs the payer OWNS, not how
- * many are awake — an env hibernating for a month still holds a disk someone is
- * paying for.
+ * many are awake: an env hibernating for a month still holds a disk someone is
+ * paying Fly for.
+ *
+ * Note the tense. The COST is real from the moment an env is provisioned; the
+ * app's own storage METER does not read `drive_envs` yet — `sandbox-storage-
+ * billing.ts` enumerates `agent_workspaces` only, and the env row source lands
+ * with the storage-reconcile follow-up. This ceiling exists because the cost is
+ * real, not because the meter has caught up, which is precisely why it is a
+ * ceiling on ROWS rather than on measured bytes.
  *
  * That is also why this gate belongs at `createDriveEnv` rather than at
  * provisioning time, where the two ceilings above sit: creating the row is the

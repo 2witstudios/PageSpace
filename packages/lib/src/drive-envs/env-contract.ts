@@ -31,10 +31,13 @@ export const MAX_DRIVE_ENV_NAME_LENGTH = 64;
  * It is also the CEILING ON THE CEILING: `quota.ts` clamps every per-tier
  * `DRIVE_ENV_LIMIT_*` to this number, so no payer can hold more environments
  * than a listing can display. That coupling is deliberate and load-bearing. An
- * env row that exists but never appears is billed infrastructure with no
- * surface that admits it exists — strictly worse than a refused create — and a
+ * env row that exists but never appears is a machine the drive is paying for
+ * with no surface that admits it exists — strictly worse than a refused create
+ * — and a
  * per-payer ceiling above a per-drive listing cap is exactly how you get one,
- * since nothing stops a payer concentrating their envs in a single drive.
+ * since nothing stops a payer concentrating their envs in a single drive. (The
+ * cost is real from creation even though the app's storage meter does not read
+ * `drive_envs` yet — see `checkDriveEnvAllowance`.)
  *
  * Raising this is therefore the FIRST half of raising any tier ceiling past
  * 100; paginating the listing is the alternative, and would let the two numbers
