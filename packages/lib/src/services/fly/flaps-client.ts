@@ -18,7 +18,7 @@
  *
  * Every request is bounded by a 10s AbortSignal (the pattern in
  * apps/web/src/lib/fly/certs.ts) so a hung Fly response cannot stall a caller, and
- * retried per `app-hosting-retry.ts` — Fly rate-limits per object at ~1 r/s with a
+ * retried per `flaps-retry.ts` — Fly rate-limits per object at ~1 r/s with a
  * burst of 3, which is tight within one app and generous across apps. The ONE
  * endpoint that overrides that bound is `/wait`, which is a long poll: it is given
  * the window it asked the server to hold, plus the usual budget for the answer.
@@ -36,7 +36,7 @@ import {
   MAX_FLAPS_ATTEMPTS,
   parseRetryAfterMs,
   planFlapsRetry,
-} from './app-hosting-retry';
+} from './flaps-retry';
 
 export const FLAPS_BASE_URL = 'https://api.machines.dev';
 

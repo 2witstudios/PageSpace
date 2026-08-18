@@ -26,6 +26,7 @@ import {
   type PublishedApp,
   type PublishedAppStatus,
 } from '@pagespace/db/schema/published-apps';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { and, eq, inArray, isNull, lt, or, sql } from '@pagespace/db/operators';
 import {
   isAppHostingEnabled,
@@ -37,7 +38,7 @@ import {
   deleteApp as flapsDeleteApp,
   createDeployToken as flapsCreateDeployToken,
   type FlapsTransport,
-} from './flaps-client';
+} from '../fly/flaps-client';
 import { flyAppNameFor, planProvision, planTransition } from './provisioner-core';
 import type { ProvisionDenial, TransitionRefusal } from './provisioner-core';
 import { loggers } from '../../logging/logger-config';
@@ -72,7 +73,9 @@ export const defaultProvisionerDeps: ProvisionerDeps = {
 };
 
 export interface CreatePublishedAppInput {
-  pageId: string;
+  /** The environment being published. The hosting row's only structural key. */
+  envId: string;
+  /** The drive that owns the env — denormalized onto the row, and validated against it here. */
   driveId: string;
   ownerId: string;
   subdomain: string;
@@ -84,10 +87,25 @@ export type CreatePublishedAppResult =
   | { ok: true; app: PublishedApp }
   /** The row exists and provisioning was a no-op — not an error. */
   | { ok: true; app: PublishedApp; noop: true }
-  | { ok: false; reason: ProvisionDenial | 'fly_error'; error?: string };
+  | { ok: false; reason: ProvisionDenial | 'fly_error' | 'env_not_found' | 'env_drive_mismatch'; error?: string };
 
 /**
- * Provision a published app: row first, Fly second.
+ * Provision a published app for an ENVIRONMENT: row first, Fly second.
+ *
+ * The Fly app is created HERE — at first publish — and never when an env is
+ * created. An env is a Sprite-backed machine that costs nothing on Fly's app
+ * plane; a Fly app provisioned eagerly at env create would bill for every env
+ * that is never published. This is also the only place the two planes meet: the
+ * `drive_envs` row is READ (to check it exists and belongs to the drive) and
+ * never written, because a hosting row must not be able to modify the
+ * environment it serves.
+ *
+ * `driveId`/`ownerId` are denormalized onto the row so the claim and metering
+ * queries skip a join, which makes them a second copy of a fact the env already
+ * holds. The database cannot express "this envId's driveId equals that
+ * driveId", so the check lives here, BEFORE the row is written — a row whose
+ * denormalized drive disagrees with its env would bill the wrong drive and be
+ * invisible to the drive that actually owns the app.
  *
  * On a Fly failure the row is stamped `failed` with the error and is NEVER
  * deleted. Deleting it would discard `flyAppName` — the only handle that can
@@ -109,6 +127,18 @@ export async function createPublishedApp(
   // closed. Every other entry point checks first; this one now matches them.
   if (!deps.isEnabled()) return { ok: false, reason: 'disabled' };
 
+  // The env has to exist and has to belong to the drive we are about to stamp on
+  // the row. Read before anything else is decided: the denormalized `driveId` is
+  // what billing and the claim queries trust, so a mismatch has to be refused
+  // rather than recorded.
+  const [env] = await db
+    .select({ id: driveEnvs.id, driveId: driveEnvs.driveId })
+    .from(driveEnvs)
+    .where(eq(driveEnvs.id, input.envId))
+    .limit(1);
+  if (!env) return { ok: false, reason: 'env_not_found' };
+  if (env.driveId !== input.driveId) return { ok: false, reason: 'env_drive_mismatch' };
+
   // The WHOLE row, in one read. An earlier cut selected {id, status} here and
   // re-read the full row on the no-op path, which returned `app: undefined` — typed
   // as `PublishedApp` — whenever the row was deleted between the two reads. One
@@ -116,7 +146,7 @@ export async function createPublishedApp(
   const existing = await db
     .select()
     .from(publishedApps)
-    .where(eq(publishedApps.pageId, input.pageId))
+    .where(eq(publishedApps.envId, input.envId))
     .limit(1);
 
   const plan = planProvision({ enabled: deps.isEnabled(), existingStatus: existing[0]?.status });
@@ -153,7 +183,7 @@ export async function createPublishedApp(
       .insert(publishedApps)
       .values({
         id,
-        pageId: input.pageId,
+        envId: input.envId,
         driveId: input.driveId,
         ownerId: input.ownerId,
         flyAppName,
@@ -198,6 +228,11 @@ export type DestroyPublishedAppResult =
 /**
  * Tear a published app down: mark `destroying`, delete the Fly app, then delete
  * the row.
+ *
+ * UNPUBLISHING IS NOT DELETING AN ENVIRONMENT. Nothing here reads or writes
+ * `drive_envs`: the env outlives its hosting row, keeps its Sprite and its
+ * sessions, and can be published again. The cascade runs one way only — deleting
+ * the env destroys this row, never the reverse.
  *
  * Deleting the row fires the AFTER DELETE trigger, which enqueues the name into
  * `app_hosting_reclaims` even on this clean path. That is deliberate belt and

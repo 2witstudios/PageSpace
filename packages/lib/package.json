@@ -567,16 +567,6 @@
       "import": "./dist/services/app-hosting/app-hosting-env.js",
       "require": "./dist/services/app-hosting/app-hosting-env.js"
     },
-    "./services/app-hosting/app-hosting-retry": {
-      "types": "./dist/services/app-hosting/app-hosting-retry.d.ts",
-      "import": "./dist/services/app-hosting/app-hosting-retry.js",
-      "require": "./dist/services/app-hosting/app-hosting-retry.js"
-    },
-    "./services/app-hosting/flaps-client": {
-      "types": "./dist/services/app-hosting/flaps-client.d.ts",
-      "import": "./dist/services/app-hosting/flaps-client.js",
-      "require": "./dist/services/app-hosting/flaps-client.js"
-    },
     "./services/app-hosting/provisioner-core": {
       "types": "./dist/services/app-hosting/provisioner-core.d.ts",
       "import": "./dist/services/app-hosting/provisioner-core.js",
@@ -586,6 +576,16 @@
       "types": "./dist/services/app-hosting/provisioner.d.ts",
       "import": "./dist/services/app-hosting/provisioner.js",
       "require": "./dist/services/app-hosting/provisioner.js"
+    },
+    "./services/fly/flaps-retry": {
+      "types": "./dist/services/fly/flaps-retry.d.ts",
+      "import": "./dist/services/fly/flaps-retry.js",
+      "require": "./dist/services/fly/flaps-retry.js"
+    },
+    "./services/fly/flaps-client": {
+      "types": "./dist/services/fly/flaps-client.d.ts",
+      "import": "./dist/services/fly/flaps-client.js",
+      "require": "./dist/services/fly/flaps-client.js"
     },
     "./services/sandbox/checkpoint-policy": {
       "types": "./dist/services/sandbox/checkpoint-policy.d.ts",
@@ -2075,17 +2075,17 @@
       "services/app-hosting/app-hosting-env": [
         "./dist/services/app-hosting/app-hosting-env.d.ts"
       ],
-      "services/app-hosting/app-hosting-retry": [
-        "./dist/services/app-hosting/app-hosting-retry.d.ts"
-      ],
-      "services/app-hosting/flaps-client": [
-        "./dist/services/app-hosting/flaps-client.d.ts"
-      ],
       "services/app-hosting/provisioner-core": [
         "./dist/services/app-hosting/provisioner-core.d.ts"
       ],
       "services/app-hosting/provisioner": [
         "./dist/services/app-hosting/provisioner.d.ts"
+      ],
+      "services/fly/flaps-retry": [
+        "./dist/services/fly/flaps-retry.d.ts"
+      ],
+      "services/fly/flaps-client": [
+        "./dist/services/fly/flaps-client.d.ts"
       ],
       "services/sandbox/checkpoint-policy": [
         "./dist/services/sandbox/checkpoint-policy.d.ts"

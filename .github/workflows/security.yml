@@ -59,6 +59,7 @@ on:
       # Postgres guarantees — and without these entries a PR touching only the
       # provisioner would never trigger this workflow and never run them.
       - 'packages/lib/src/services/app-hosting/**'
+      - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
   pull_request:
     # BASE branches, not head. This branch listed itself here and it bought
@@ -126,6 +127,7 @@ on:
       # Postgres guarantees — and without these entries a PR touching only the
       # provisioner would never trigger this workflow and never run them.
       - 'packages/lib/src/services/app-hosting/**'
+      - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
   # Allow manual trigger
   workflow_dispatch:

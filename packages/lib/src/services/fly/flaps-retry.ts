@@ -1,5 +1,5 @@
 /**
- * app-hosting-retry — the PURE retry/backoff decision layer for Flaps calls.
+ * flaps-retry — the PURE retry/backoff decision layer for Flaps calls.
  *
  * INVARIANT: this module has zero I/O. No fetch, no db, no env, no clock, no
  * timers. Every input is an explicit argument; every output is a value. The

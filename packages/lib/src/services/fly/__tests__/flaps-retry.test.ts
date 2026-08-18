@@ -6,7 +6,7 @@ import {
   flapsRetryDelayMs,
   parseRetryAfterMs,
   planFlapsRetry,
-} from '../app-hosting-retry';
+} from '../flaps-retry';
 import { assert } from './riteway';
 
 describe('flapsRetryDelayMs', () => {
@@ -158,7 +158,7 @@ describe('planFlapsRetry — ambiguity is only safe when the request is idempote
 });
 
 describe('purity', () => {
-  const source = readFileSync(join(__dirname, '..', 'app-hosting-retry.ts'), 'utf8');
+  const source = readFileSync(join(__dirname, '..', 'flaps-retry.ts'), 'utf8');
   const runtimeImports = source
     .split('\n')
     .filter((line) => /^import /.test(line) && !/^import type /.test(line));
