@@ -1,0 +1,125 @@
+'use client';
+
+import { useMemo } from 'react';
+import useSWRInfinite from 'swr/infinite';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types';
+
+/**
+ * Sub-tasks come from the SAME route the top-level list uses — called with the
+ * task's own pageId instead of the list page's. Tasks are TASK_LIST pages (the
+ * route selects children by `eq(pages.type, 'TASK_LIST')`), so a task's children
+ * are its sub-tasks, already enriched with status/priority/assignees/dueDate,
+ * `activeTriggerCount`, `hasContent` and their own `subTaskCount`. No new endpoint.
+ *
+ * The schema comment on `taskItems` in packages/db/src/schema/tasks.ts calling the
+ * linked page a DOCUMENT is stale; do not trust it over the route's own filter.
+ */
+
+/**
+ * Matches TASKS_PAGE_SIZE in TaskListView and DEFAULT_LIMIT in the GET route's
+ * query-spec.ts. Must stay <= that route's MAX_LIMIT (200) or every page beyond
+ * the first would be silently clamped down server-side and `offset` would skip rows.
+ */
+export const SUB_TASKS_PAGE_SIZE = 100;
+
+/** The minimum a caller must know about a task to decide whether to fetch its children. */
+export interface SubTaskGateInput {
+  pageId: string | null;
+  subTaskCount?: number;
+}
+
+/**
+ * THE GATE. `GET /api/pages/[pageId]/tasks` has a write side effect:
+ * `getOrCreateTaskListForPage` (route.ts:33) lazily inserts a `task_lists` row plus
+ * 4 `task_status_configs` rows for any pageId it has not seen. Expanding 50 leaf
+ * tasks would therefore create 50 task lists and 200 status-config rows for tasks
+ * that have no children at all.
+ *
+ * `subTaskCount` is already on the row before expanding (it ships with the parent
+ * list's own response), so refusing to fetch when it is 0 costs nothing and confines
+ * those lazy writes to tasks that genuinely have sub-tasks.
+ */
+export const shouldFetchSubTasks = (task: SubTaskGateInput): boolean =>
+  !!task.pageId && (task.subTaskCount ?? 0) > 0;
+
+/**
+ * Built outside the hook so the gate is testable on its own and so the key is a
+ * pure function of (task, enabled, pageIndex) — SWR caches per key, which is what
+ * makes collapse → re-expand of the same task a cache hit rather than a refetch.
+ */
+export const getSubTaskPageKey = (task: SubTaskGateInput, enabled: boolean) =>
+  (pageIndex: number, previousPageData: TaskListData | null): string | null => {
+    if (!enabled || !shouldFetchSubTasks(task)) return null;
+    if (previousPageData && !previousPageData.hasMore) return null;
+    return `/api/pages/${task.pageId}/tasks?limit=${SUB_TASKS_PAGE_SIZE}&offset=${pageIndex * SUB_TASKS_PAGE_SIZE}`;
+  };
+
+/** Only the most recently loaded page's `hasMore` is current; earlier ones are stale bounds. */
+export const getSubTasksHasMore = (pages: TaskListData[] | undefined): boolean =>
+  !!pages && pages.length > 0 && pages[pages.length - 1].hasMore;
+
+const fetcher = async (url: string): Promise<TaskListData> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to fetch sub-tasks');
+  return res.json();
+};
+
+export interface UseTaskSubTasksOptions {
+  /**
+   * Callers mount this hook inside an expansion, so `enabled` normally just mirrors
+   * "is this row expanded". Passing false keeps the key null — no request, and no
+   * lazy task_list write on the server.
+   */
+  enabled?: boolean;
+}
+
+export interface UseTaskSubTasksResult {
+  subTasks: TaskItem[];
+  /** The sub-task list's own status configs — a sub-task's statuses come from its parent task's list. */
+  statusConfigs: TaskStatusConfig[];
+  hasMore: boolean;
+  isLoading: boolean;
+  isLoadingMore: boolean;
+  error: Error | undefined;
+  loadMore: () => void;
+}
+
+export function useTaskSubTasks(
+  task: SubTaskGateInput,
+  { enabled = true }: UseTaskSubTasksOptions = {},
+): UseTaskSubTasksResult {
+  const gateOpen = enabled && shouldFetchSubTasks(task);
+
+  const { data: pages, error, isLoading, size, setSize } = useSWRInfinite<TaskListData>(
+    getSubTaskPageKey(task, enabled),
+    fetcher,
+    {
+      // Expansion is disclosure of data the parent list already summarised — it does
+      // not need to be live. Every revalidation trigger is off so that collapsing and
+      // re-expanding a task is served entirely from SWR's cache: a refetch there would
+      // not just cost a request, it would re-run the route's lazy task_list write path.
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      revalidateIfStale: false,
+      revalidateFirstPage: false,
+    },
+  );
+
+  const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
+  const statusConfigs = pages?.[0]?.statusConfigs ?? [];
+
+  return {
+    subTasks,
+    statusConfigs,
+    hasMore: getSubTasksHasMore(pages),
+    // With the gate shut there is no key, so SWR reports neither loading nor data —
+    // report "not loading" rather than leaving a caller spinning forever.
+    isLoading: gateOpen && isLoading,
+    // A "Load more" click bumps `size` past 1 before the new page resolves into
+    // `pages`. `size > 1` keeps the initial load out of this — that one is `isLoading`.
+    isLoadingMore: gateOpen && size > 1 && (pages === undefined || pages.length < size),
+    error: error as Error | undefined,
+    loadMore: () => setSize(size + 1),
+  };
+}
