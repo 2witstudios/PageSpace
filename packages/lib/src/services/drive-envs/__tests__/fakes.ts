@@ -53,7 +53,7 @@ export interface FakeDriveEnvStore {
   liveSessions: Map<string, number>;
   /** payerId → envs owned across their drives, the quota's input. */
   ownedEnvs: Map<string, number>;
-  calls: { deleteById: number; requestTeardown: number; stampSpriteTornDown: number };
+  calls: { deleteIfUnoccupied: number; requestTeardown: number; stampSpriteTornDown: number };
 }
 
 export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date = () => NOW): FakeDriveEnvStore {
@@ -62,7 +62,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
   const reclaims = new Map<string, string | null>();
   const liveSessions = new Map<string, number>();
   const ownedEnvs = new Map<string, number>();
-  const calls = { deleteById: 0, requestTeardown: 0, stampSpriteTornDown: 0 };
+  const calls = { deleteIfUnoccupied: 0, requestTeardown: 0, stampSpriteTornDown: 0 };
   let minted = 0;
 
   /** The `(driveId, name)` unique index, modelled — a duplicate is an ANSWER, not a throw. */
@@ -114,7 +114,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
     },
 
     async deleteIfUnoccupied({ envId, force }) {
-      calls.deleteById += 1;
+      calls.deleteIfUnoccupied += 1;
       const row = rows.get(envId);
       if (!row) return { ok: false, reason: 'not_found' };
       // The guard re-read INSIDE the atomic step — the fake is single-threaded,

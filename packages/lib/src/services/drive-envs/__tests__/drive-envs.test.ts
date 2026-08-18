@@ -207,7 +207,7 @@ describe('deleteDriveEnv', () => {
 
     expect(result).toEqual({ ok: false, reason: 'live_sessions', liveSessionCount: 2 });
     expect(host.calls.kill).toEqual([]);
-    expect(store.calls.deleteById).toBe(0);
+    expect(store.calls.deleteIfUnoccupied).toBe(0);
     expect(store.rows.has(ENV_ID)).toBe(true);
   });
 
@@ -267,7 +267,7 @@ describe('deleteDriveEnv', () => {
     const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
     expect(result).toMatchObject({ ok: false, reason: 'teardown_failed' });
-    expect(store.calls.deleteById).toBe(0);
+    expect(store.calls.deleteIfUnoccupied).toBe(0);
     expect(store.rows.has(ENV_ID)).toBe(true);
     // The intent survives, which is what licenses the orphan reconciler to retry.
     expect(store.rows.get(ENV_ID)?.teardownRequestedAt).toEqual(NOW);
