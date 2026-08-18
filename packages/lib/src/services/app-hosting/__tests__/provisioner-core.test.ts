@@ -13,7 +13,7 @@ import {
 } from '../provisioner-core';
 import type { PublishedAppStatusColumns } from '../provisioner-core';
 import type { PublishedAppStatus } from '@pagespace/db/schema/published-apps';
-import { assert } from '../../../test/riteway';
+import { assert } from '../../../__tests__/riteway';
 
 /** This file's own directory — the source-reading assertions resolve against it. */
 const HERE = dirname(fileURLToPath(import.meta.url));

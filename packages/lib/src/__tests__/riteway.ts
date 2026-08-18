@@ -17,6 +17,11 @@ interface AssertParams<T> {
  * and that is two chances for the contract to drift while both suites still
  * call it `assert`.
  *
+ * It lives in a `__tests__` directory rather than beside `src/test/setup.ts`
+ * for a build reason: `tsconfig.build.json` excludes every `__tests__`
+ * directory, so a helper importing `vitest` — a devDependency — never reaches
+ * `dist`.
+ *
  * NOT the same helper as `services/sandbox/__tests__/riteway.ts`, despite the
  * shared name: that one is a bare `expect` assertion meant to be called INSIDE
  * an `it`. Merging them would break every caller of whichever contract lost.

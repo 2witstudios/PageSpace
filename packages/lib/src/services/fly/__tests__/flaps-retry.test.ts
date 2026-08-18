@@ -8,7 +8,7 @@ import {
   parseRetryAfterMs,
   planFlapsRetry,
 } from '../flaps-retry';
-import { assert } from '../../../test/riteway';
+import { assert } from '../../../__tests__/riteway';
 
 /** This file's own directory — the purity assertions read the module's source. */
 const HERE = dirname(fileURLToPath(import.meta.url));

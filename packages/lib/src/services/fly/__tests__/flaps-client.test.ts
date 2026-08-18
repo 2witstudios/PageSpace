@@ -19,7 +19,7 @@ import {
   type FlapsTransport,
   type MachineConfig,
 } from '../flaps-client';
-import { assert } from '../../../test/riteway';
+import { assert } from '../../../__tests__/riteway';
 
 /** This file's own directory — the source-reading assertions resolve against it. */
 const HERE = dirname(fileURLToPath(import.meta.url));
