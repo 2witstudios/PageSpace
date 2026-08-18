@@ -540,6 +540,41 @@ describe('the Sprite-identity CAS, in SQL', () => {
   });
 });
 
+describe('list — the drive-scoped listing, in SQL', () => {
+  it('should return ONLY this drive\'s envs — a listing that crossed drives would be a leak', async () => {
+    // The fake filters by `driveId` because it was written to; this proves the
+    // actual WHERE clause does. Envs are drive-owned and a drive's members see
+    // its machines, so a listing that reached into a sibling drive — even one
+    // owned by the same payer — would show infrastructure the requester was
+    // never authorized for.
+    await seedEnv({ driveId, name: 'mine-a' });
+    await seedEnv({ driveId, name: 'mine-b' });
+    await seedEnv({ driveId: secondDriveId, name: 'same-payer-other-drive' });
+    await seedEnv({ driveId: otherDriveId, name: 'other-payer' });
+
+    const rows = await store.list(driveId);
+
+    expect(rows.map((row) => row.name).sort()).toEqual(['mine-a', 'mine-b']);
+  });
+
+  it('should order OLDEST first — an env name is an address, so the row must not move under the reader', async () => {
+    const older = await seedEnv({ driveId, name: 'first' });
+    const newer = await seedEnv({ driveId, name: 'second' });
+    // Force a definite ordering rather than relying on insert timing.
+    await db.update(driveEnvs).set({ createdAt: new Date('2026-01-01T00:00:00Z') }).where(eq(driveEnvs.id, older));
+    await db.update(driveEnvs).set({ createdAt: new Date('2026-06-01T00:00:00Z') }).where(eq(driveEnvs.id, newer));
+
+    const rows = await store.list(driveId);
+
+    expect(rows.map((row) => row.id)).toEqual([older, newer]);
+  });
+
+  it('given a drive with no envs, should return empty rather than everything', async () => {
+    await seedEnv({ driveId, name: 'somewhere-else' });
+    expect(await store.list(otherDriveId)).toEqual([]);
+  });
+});
+
 describe('countLiveSessionsInEnv / countEnvsOwnedBy', () => {
   it('should count only NOT-ENDED sessions in this env', async () => {
     const envId = await seedEnv();
