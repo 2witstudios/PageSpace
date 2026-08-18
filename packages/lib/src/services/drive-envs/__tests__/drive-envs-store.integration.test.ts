@@ -196,7 +196,14 @@ describe('deleteIfUnoccupied — the live-session guard, for real', () => {
       // A session binds to this env, and HOLDS the transaction open.
       await spawner.query('BEGIN');
       await spawner.query(
-        'INSERT INTO agent_workspaces (id, "driveId", "ownerId", "envId", "updatedAt") VALUES ($1,$2,$3,$4,now())',
+        // `now() at time zone 'utc'`, not bare `now()`: these timestamp columns
+        // store UTC wall-clock, while `now()` is a timestamptz resolved through
+        // the session's TZ — so a non-UTC connection writes local time into a
+        // column everything else reads as UTC. Invisible on UTC CI, wrong
+        // anywhere else, and the repo rule exists because that asymmetry has
+        // bitten claim/expiry predicates before.
+        `INSERT INTO agent_workspaces (id, "driveId", "ownerId", "envId", "updatedAt")
+         VALUES ($1,$2,$3,$4,(now() at time zone 'utc'))`,
         [spawnId, driveId, payerId, envId],
       );
 
@@ -232,7 +239,14 @@ describe('deleteIfUnoccupied — the live-session guard, for real', () => {
     try {
       await spawner.query('BEGIN');
       await spawner.query(
-        'INSERT INTO agent_workspaces (id, "driveId", "ownerId", "envId", "updatedAt") VALUES ($1,$2,$3,$4,now())',
+        // `now() at time zone 'utc'`, not bare `now()`: these timestamp columns
+        // store UTC wall-clock, while `now()` is a timestamptz resolved through
+        // the session's TZ — so a non-UTC connection writes local time into a
+        // column everything else reads as UTC. Invisible on UTC CI, wrong
+        // anywhere else, and the repo rule exists because that asymmetry has
+        // bitten claim/expiry predicates before.
+        `INSERT INTO agent_workspaces (id, "driveId", "ownerId", "envId", "updatedAt")
+         VALUES ($1,$2,$3,$4,(now() at time zone 'utc'))`,
         [spawnId, driveId, payerId, envId],
       );
       const deleting = store.deleteIfUnoccupied({ envId, force: true });
