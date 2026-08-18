@@ -304,6 +304,34 @@ function assertOk(status: number, body: unknown, endpoint: string): void {
 }
 
 /**
+ * A 2xx whose body is not a machine is not a machine.
+ *
+ * `flapsRequest` reports an empty or non-JSON success body as `null` — a real
+ * case, since some endpoints answer with nothing and the status is what matters
+ * there. Casting that `null` to `Machine` does not make the problem go away; it
+ * moves it. The value travels as a machine and finally throws a TypeError on
+ * `.id` in whatever code touched it first, with no status, no endpoint and no
+ * relation to the call that produced it.
+ *
+ * So the shape is checked at the boundary, where the endpoint is still known,
+ * and a bad answer becomes the same `FlapsError` every other failure in this
+ * file raises. `id` is the field checked because it is the only one the rest of
+ * the system dereferences — it is the machine's identity, and a machine object
+ * without it cannot be started, stopped or destroyed.
+ */
+function asMachine(body: unknown, status: number, endpoint: string): Machine {
+  const id = typeof body === 'object' && body !== null ? (body as { id?: unknown }).id : undefined;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new FlapsError(
+      `Fly Machines API ${endpoint} returned no machine`,
+      status,
+      endpoint,
+    );
+  }
+  return body as Machine;
+}
+
+/**
  * Create a Fly app on the given network.
  *
  * IDEMPOTENT BY KEY: the request is keyed on `app_name`, which is globally unique
@@ -394,7 +422,7 @@ export async function createMachine(
   }
 
   assertOk(status, body, path);
-  return body as Machine;
+  return asMachine(body, status, path);
 }
 
 export async function getMachine(
@@ -405,7 +433,7 @@ export async function getMachine(
   const path = `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`;
   const { status, body } = await flapsRequest(transport, 'GET', path);
   assertOk(status, body, path);
-  return body as Machine;
+  return asMachine(body, status, path);
 }
 
 /**
@@ -526,8 +554,16 @@ export async function acquireLease(
     idempotent: false,
   });
   assertOk(status, body, path);
-  const lease = (body as { data?: MachineLease })?.data ?? (body as MachineLease);
-  return lease;
+  // Same reasoning as `asMachine`: a lease with no nonce cannot be released, and
+  // an unreleasable lease blocks every later mutation of this machine until its
+  // TTL expires. Better to fail here, where the caller can come back, than to
+  // hand out an object whose nonce is `undefined`.
+  const envelope = (body as { data?: MachineLease })?.data ?? (body as MachineLease);
+  const nonce = typeof envelope === 'object' && envelope !== null ? envelope.nonce : undefined;
+  if (typeof nonce !== 'string' || nonce.length === 0) {
+    throw new FlapsError(`Fly Machines API ${path} returned no lease nonce`, status, path);
+  }
+  return envelope;
 }
 
 export async function releaseLease(
@@ -628,5 +664,5 @@ export async function updateMachineConfig(
     body: { config: merged },
   });
   assertOk(status, body, path);
-  return body as Machine;
+  return asMachine(body, status, path);
 }

@@ -7,6 +7,7 @@ import {
   createDeployToken,
   createMachine,
   deleteApp,
+  getMachine,
   listMachineEvents,
   updateMachineConfig,
   waitForMachineState,
@@ -467,6 +468,77 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
       network: 'published-apps',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * `flapsRequest` turns an empty or non-JSON 2xx body into `null`, which is
+ * correct — some endpoints answer with nothing. What must not happen is that
+ * `null` being handed back as a `Machine` or a `MachineLease`: it would surface
+ * as a TypeError somewhere downstream, stripped of the status and endpoint that
+ * explain it, and for a lease it would hand out a nonce of `undefined` that can
+ * never release the lock it just took.
+ */
+describe('response shape — a 2xx that is not the object we promised', () => {
+  const emptyBody = () =>
+    vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('', { status: 200 }));
+
+  it('given a machine create answered with an empty body, should throw a FlapsError rather than return null as a Machine', async () => {
+    const fetchImpl = emptyBody();
+    await expect(
+      createMachine(transport(fetchImpl as unknown as typeof fetch), {
+        appName: 'pgs-app-abc',
+        name: 'pgs-m-abc',
+        config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
+      }),
+    ).rejects.toBeInstanceOf(FlapsError);
+  });
+
+  it('given a machine read answered with a body carrying no id, should throw rather than return a machine nothing can address', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      json({ state: 'started' }),
+    );
+    await expect(
+      getMachine(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+    ).rejects.toBeInstanceOf(FlapsError);
+  });
+
+  it('given a config update answered with an empty body, should throw rather than report a machine it never saw', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      const init = _init as RequestInit | undefined;
+      // The GET of the live machine succeeds; it is the update's answer that is empty.
+      if (!init || init.method === 'GET') return json({ id: 'm1', config: LIVE_CONFIG });
+      return new Response('', { status: 200 });
+    });
+    await expect(
+      updateMachineConfig(
+        transport(fetchImpl as unknown as typeof fetch),
+        'pgs-app-abc',
+        'm1',
+        (current) => current,
+      ),
+    ).rejects.toBeInstanceOf(FlapsError);
+  });
+
+  it('given a lease answered without a nonce, should throw rather than hand back a lease that cannot be released', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      json({ data: { expires_at: 123 } }),
+    );
+    await expect(
+      acquireLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+    ).rejects.toBeInstanceOf(FlapsError);
+  });
+
+  it('given a lease answered with a nonce, should return it — the guard must not reject the ordinary shape', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      json({ data: { nonce: 'lease-nonce', expires_at: 123 } }),
+    );
+    const lease = await acquireLease(
+      transport(fetchImpl as unknown as typeof fetch),
+      'pgs-app-abc',
+      'm1',
+    );
+    expect(lease.nonce).toBe('lease-nonce');
   });
 });
 
