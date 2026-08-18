@@ -199,6 +199,25 @@ describe('published_apps hosting reclaim trigger — live', () => {
     }
   });
 
+  it('given an env that is already published, should REFUSE a second hosting row', async () => {
+    const suffix = uniqueSuffix('apprec-unique');
+    const { userId, driveId, envId } = await seedEnv(suffix);
+    await seedPublishedApp(suffix, { envId, driveId, userId });
+    try {
+      // One env, one Fly app. Without the unique index a double publish would
+      // create a second billing app for the same environment, and the reclaim
+      // outbox — keyed by name — could only ever rescue one of them.
+      await expect(
+        seedPublishedApp(`${suffix}-again`, { envId, driveId, userId }),
+      ).rejects.toThrow(/unique|duplicate key/i);
+    } finally {
+      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" LIKE $1`, [
+        `pgs-app-${suffix}%`,
+      ]);
+      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    }
+  });
+
   it('given an env is deleted, its hosting row should go with it — and unpublishing should NOT touch the env', async () => {
     const suffix = uniqueSuffix('apprec-oneway');
     const { userId, driveId, envId } = await seedEnv(suffix);

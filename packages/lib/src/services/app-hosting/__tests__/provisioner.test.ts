@@ -72,6 +72,8 @@ let insertedRows: Record<string, unknown>[] = [];
 let selectedTables: unknown[] = [];
 /** Every table handed to `db.insert()`, `db.update()` or `db.delete()`, in order. */
 let writtenTables: unknown[] = [];
+/** When true, the guarded insert returns nothing — i.e. another publish won the race. */
+let insertConflicts = false;
 
 /** The most recent `set()` patch. (`Array.prototype.at` is beyond this package's typecheck lib target.) */
 const lastPatch = (): Record<string, unknown> => updatePatches[updatePatches.length - 1] ?? {};
@@ -186,6 +188,7 @@ beforeEach(() => {
   insertedRows = [];
   selectedTables = [];
   writtenTables = [];
+  insertConflicts = false;
   selectMock.mockReset();
   insertMock.mockReset();
   updateMock.mockReset();
@@ -197,11 +200,16 @@ beforeEach(() => {
       writtenTables.push(table);
       callLog.push('db:insert');
       insertedRows.push(row);
-      return {
+      const result = {
         returning: () => Promise.resolve([{ ...ROW, ...row }]),
+        // The conflict guard on `envId`; `insertConflicts` makes it lose the race.
+        onConflictDoNothing: () => ({
+          returning: () => Promise.resolve(insertConflicts ? [] : [{ ...ROW, ...row }]),
+        }),
         // mintDeployToken inserts without .returning()
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
       };
+      return result;
     },
   }));
   updateMock.mockImplementation((table: unknown) => ({
@@ -422,6 +430,53 @@ describe('createPublishedApp — row before Fly', () => {
     // agreement, so this is the only place it can be refused.
     expect(result).toEqual({ ok: false, reason: 'env_drive_mismatch' });
     expect(callLog).not.toContain('db:insert');
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it('given a concurrent publish that won the insert race, should return ITS row as a no-op rather than throw', async () => {
+    insertConflicts = true;
+    const winner = { ...ROW, id: 'app-winner', flyAppName: 'pgs-app-app-winner', status: 'building' as const };
+    mockSelectQueue([
+      ENV_READ,
+      // The read that found nothing — the race is between this and the insert.
+      { rows: [], label: 'db:select' },
+      { rows: [winner], label: 'db:select' },
+    ]);
+
+    const result = await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    // One env has one hosting row, so the loser's answer is the winner's row.
+    // Continuing past the conflict would create a SECOND Fly app — the name is
+    // derived from the id this call generated, which no row now carries.
+    expect(result).toEqual({ ok: true, app: winner, noop: true });
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it('given the winning row is deleted before it can be read back, should refuse rather than invent one', async () => {
+    insertConflicts = true;
+    mockSelectQueue([
+      ENV_READ,
+      { rows: [], label: 'db:select' },
+      { rows: [], label: 'db:select' },
+    ]);
+
+    const result = await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
 

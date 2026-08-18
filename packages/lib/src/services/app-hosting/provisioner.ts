@@ -179,6 +179,14 @@ export async function createPublishedApp(
       .returning();
     row = updated;
   } else {
+    // ON CONFLICT on `envId` ONLY, and it is the read above losing a race that
+    // this handles: two publishes of one env arriving together both see no row,
+    // and the unique index then rejects the second insert. Without this the
+    // loser throws a constraint violation — while the env demonstrably HAS a
+    // hosting row, which is the documented `noop`, not an error. Deliberately
+    // narrow: a `subdomain` or `flyAppName` collision is a different fact about
+    // a different resource and must keep surfacing rather than be absorbed into
+    // "already published".
     const [inserted] = await db
       .insert(publishedApps)
       .values({
@@ -191,7 +199,24 @@ export async function createPublishedApp(
         subdomain: input.subdomain,
         status: 'provisioning',
       })
+      .onConflictDoNothing({ target: publishedApps.envId })
       .returning();
+
+    if (!inserted) {
+      // The other publish won. Its row is the answer — including its Fly app
+      // name, which is derived from ITS id, so continuing with the name derived
+      // above would create a second Fly app for one env.
+      const [winner] = await db
+        .select()
+        .from(publishedApps)
+        .where(eq(publishedApps.envId, input.envId))
+        .limit(1);
+      // Deleted again between the conflict and this read: nothing exists to
+      // report, and inventing a row would be worse than saying so.
+      if (!winner) return { ok: false, reason: 'env_not_found' };
+      return { ok: true, app: winner, noop: true };
+    }
+
     row = inserted;
   }
 
