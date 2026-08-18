@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   PUBLISHED_APP_TRANSITIONS,
   TERMINAL_STATUSES,
@@ -12,7 +13,10 @@ import {
 } from '../provisioner-core';
 import type { PublishedAppStatusColumns } from '../provisioner-core';
 import type { PublishedAppStatus } from '@pagespace/db/schema/published-apps';
-import { assert } from './riteway';
+import { assert } from '../../../test/riteway';
+
+/** This file's own directory — the source-reading assertions resolve against it. */
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const ALL_STATUSES: PublishedAppStatus[] = [
   'provisioning',
@@ -56,7 +60,7 @@ describe('the shared-network invariant', () => {
   // allowed"), so a per-app network derivation must not exist. This asserts the
   // ABSENCE of one — it is the regression guard for reintroducing the design the
   // Phase 0 spike refuted.
-  const source = readFileSync(join(__dirname, '..', 'provisioner-core.ts'), 'utf8');
+  const source = readFileSync(join(HERE, '..', 'provisioner-core.ts'), 'utf8');
 
   assert({
     given: 'the pure provisioner core',
@@ -260,7 +264,7 @@ describe('planProvision', () => {
 describe('purity', () => {
   // The decision layer must stay testable without a database, a network, or a
   // clock. Enforced by inspection of the source, mirroring credit-core's test.
-  const source = readFileSync(join(__dirname, '..', 'provisioner-core.ts'), 'utf8');
+  const source = readFileSync(join(HERE, '..', 'provisioner-core.ts'), 'utf8');
   const runtimeImports = source
     .split('\n')
     .filter((line) => /^import /.test(line) && !/^import type /.test(line));

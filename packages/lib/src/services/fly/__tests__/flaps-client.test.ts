@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   FLAPS_TIMEOUT_MS,
   FlapsError,
@@ -8,6 +11,7 @@ import {
   createMachine,
   deleteApp,
   getMachine,
+  releaseLease,
   listMachineEvents,
   updateMachineConfig,
   waitForMachineState,
@@ -15,7 +19,10 @@ import {
   type FlapsTransport,
   type MachineConfig,
 } from '../flaps-client';
-import { assert } from './riteway';
+import { assert } from '../../../test/riteway';
+
+/** This file's own directory — the source-reading assertions resolve against it. */
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const transport = (fetchImpl: typeof fetch): FlapsTransport => ({
   token: 'test-token',
@@ -294,12 +301,7 @@ describe('listMachineEvents', () => {
     given: 'the events endpoint contract',
     should: 'be documented as last-20-only, since metering cannot be rebuilt from it',
     actual: /most recent 20|MOST RECENT 20/i.test(
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('node:fs').readFileSync(
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        require('node:path').join(__dirname, '..', 'flaps-client.ts'),
-        'utf8',
-      ),
+      readFileSync(join(HERE, '..', 'flaps-client.ts'), 'utf8'),
     ),
     expected: true,
   });
@@ -539,6 +541,43 @@ describe('response shape — a 2xx that is not the object we promised', () => {
       'm1',
     );
     expect(lease.nonce).toBe('lease-nonce');
+  });
+});
+
+/**
+ * A held lease blocks every other worker's mutation of that machine until its
+ * TTL expires, so the release is the call that most needs to actually land.
+ */
+describe('releaseLease', () => {
+  it('given a 429, should retry rather than leave the machine locked for the TTL', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      call += 1;
+      if (call === 1) return new Response('', { status: 429, headers: { 'retry-after': '0' } });
+      return new Response('', { status: 200 });
+    });
+
+    await releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a lease that is already gone, should treat 404 as released', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response('', { status: 404 }),
+    );
+    await expect(
+      releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('given a release, should send the nonce header — it is what identifies the lease', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response('', { status: 200 }),
+    );
+    await releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1');
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>)['fly-machine-lease-nonce']).toBe('nonce-1');
+    expect(init.method).toBe('DELETE');
   });
 });
 

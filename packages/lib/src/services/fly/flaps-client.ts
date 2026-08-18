@@ -160,7 +160,13 @@ export interface CreateMachineInput {
   config: MachineConfig;
 }
 
-const noopSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * The wait the retry path uses when a transport has not supplied its own. It is
+ * a REAL delay — tests inject a no-op `sleep` so backoff costs them no
+ * wall-clock time, and naming this one for that injection would describe the
+ * test rather than the production behaviour.
+ */
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface FlapsResponse {
   status: number;
@@ -170,6 +176,11 @@ interface FlapsResponse {
 
 interface FlapsRequestOptions {
   body?: unknown;
+  /**
+   * Extra request headers, merged over the defaults. The lease endpoints key on
+   * one (`fly-machine-lease-nonce`) and nothing else in this client needs any.
+   */
+  headers?: Record<string, string>;
   /**
    * The abort bound for THIS request. Defaults to `FLAPS_TIMEOUT_MS`, which is right
    * for every endpoint that answers immediately and wrong for the one that does not:
@@ -196,13 +207,13 @@ async function flapsRequest(
   transport: FlapsTransport,
   method: string,
   path: string,
-  { body, timeoutMs = FLAPS_TIMEOUT_MS, idempotent = true }: FlapsRequestOptions = {},
+  { body, headers, timeoutMs = FLAPS_TIMEOUT_MS, idempotent = true }: FlapsRequestOptions = {},
 ): Promise<FlapsResponse> {
   const {
     baseUrl = FLAPS_BASE_URL,
     token,
     fetchImpl = fetch,
-    sleep = noopSleep,
+    sleep = defaultSleep,
     abortSignalFor = (ms: number) => AbortSignal.timeout(ms),
   } = transport;
   const url = `${baseUrl}${path}`;
@@ -219,6 +230,7 @@ async function flapsRequest(
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
+          ...headers,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: abortSignalFor(timeoutMs),
@@ -573,25 +585,17 @@ export async function releaseLease(
   nonce: string,
 ): Promise<void> {
   const path = `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/lease`;
-  const {
-    baseUrl = FLAPS_BASE_URL,
-    token,
-    fetchImpl = fetch,
-    abortSignalFor = (ms: number) => AbortSignal.timeout(ms),
-  } = transport;
-  // The nonce travels in a header, not a body, so this one call bypasses the
-  // shared helper rather than growing it a header parameter used exactly once.
-  const response = await fetchImpl(`${baseUrl}${path}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'fly-machine-lease-nonce': nonce,
-    },
-    signal: abortSignalFor(FLAPS_TIMEOUT_MS),
+  // Through the shared helper, so a 429 or a dropped socket is retried like every
+  // other call. Retrying is safe and it MATTERS: the nonce names one specific
+  // lease, so a repeat either releases it or finds it already gone — while an
+  // un-retried failure leaves the machine locked until the TTL runs out, and
+  // every worker that wants it in the meantime is refused.
+  const { status, body } = await flapsRequest(transport, 'DELETE', path, {
+    headers: { 'fly-machine-lease-nonce': nonce },
   });
-  if (!response.ok && response.status !== 404) {
-    throw new FlapsError(`Fly Machines API release lease failed: ${response.status}`, response.status, path);
-  }
+  // Already released (or expired) is the outcome we wanted.
+  if (status === 404) return;
+  assertOk(status, body, path);
 }
 
 /**

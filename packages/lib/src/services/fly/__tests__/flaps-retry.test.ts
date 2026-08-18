@@ -1,13 +1,17 @@
 import { describe } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   FLAPS_MAX_RETRY_DELAY_MS,
   flapsRetryDelayMs,
   parseRetryAfterMs,
   planFlapsRetry,
 } from '../flaps-retry';
-import { assert } from './riteway';
+import { assert } from '../../../test/riteway';
+
+/** This file's own directory — the purity assertions read the module's source. */
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 describe('flapsRetryDelayMs', () => {
   assert({
@@ -158,7 +162,7 @@ describe('planFlapsRetry — ambiguity is only safe when the request is idempote
 });
 
 describe('purity', () => {
-  const source = readFileSync(join(__dirname, '..', 'flaps-retry.ts'), 'utf8');
+  const source = readFileSync(join(HERE, '..', 'flaps-retry.ts'), 'utf8');
   const runtimeImports = source
     .split('\n')
     .filter((line) => /^import /.test(line) && !/^import type /.test(line));
