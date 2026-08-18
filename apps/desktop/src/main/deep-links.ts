@@ -4,6 +4,7 @@ import { saveAuthSession, type StoredAuthSession } from './auth-storage';
 import { mainWindow } from './state';
 import { setCachedSession } from './state';
 import { getAppOrigin, getStartUrl } from './app-url';
+import { APP_IDENTITY } from './app-identity';
 import { logger } from './logger';
 import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
 import { createWindow } from './window';
@@ -16,12 +17,12 @@ import {
 export function setupProtocolClient(): void {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient('pagespace', process.execPath, [
+      app.setAsDefaultProtocolClient(APP_IDENTITY.protocolScheme, process.execPath, [
         path.resolve(process.argv[1]),
       ]);
     }
   } else {
-    app.setAsDefaultProtocolClient('pagespace');
+    app.setAsDefaultProtocolClient(APP_IDENTITY.protocolScheme);
   }
 }
 

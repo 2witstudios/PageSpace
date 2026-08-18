@@ -2,9 +2,15 @@ import { Menu, Tray, nativeImage, app } from 'electron';
 import * as path from 'path';
 import { mainWindow, setTray, tray, setIsQuitting } from './state';
 import { createWindow } from './window';
+import { APP_IDENTITY } from './app-identity';
 
 export function createTray(): void {
-  const iconPath = path.join(__dirname, '../../assets/tray-icon.png');
+  const iconPath = path.join(
+    __dirname,
+    '../..',
+    APP_IDENTITY.iconDir,
+    APP_IDENTITY.trayIconFile,
+  );
   const icon = nativeImage.createFromPath(iconPath);
 
   const newTray = new Tray(icon.resize({ width: 16, height: 16 }));
@@ -12,7 +18,7 @@ export function createTray(): void {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Show PageSpace',
+      label: `Show ${APP_IDENTITY.displayName}`,
       click: () => {
         if (mainWindow) {
           mainWindow.show();
@@ -32,7 +38,7 @@ export function createTray(): void {
     },
   ]);
 
-  newTray.setToolTip('PageSpace');
+  newTray.setToolTip(APP_IDENTITY.displayName);
   newTray.setContextMenu(contextMenu);
 
   newTray.on('click', () => {

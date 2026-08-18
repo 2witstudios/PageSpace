@@ -2,10 +2,16 @@ import { dialog, app } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 import { setIsQuitting } from './state';
 import { destroyTray } from './tray';
+import { APP_IDENTITY } from './app-identity';
 
 const { autoUpdater } = electronUpdaterPkg;
 
 export function setupAutoUpdater(): void {
+  // Only PageSpace has a publish feed (see the electron-builder configs). Left
+  // ungated, every coder launch would poll a release channel that does not
+  // exist and surface the failure to the user.
+  if (APP_IDENTITY.variant !== 'pagespace') return;
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -34,7 +40,7 @@ export function setupAutoUpdater(): void {
         type: 'info',
         title: 'Update Ready',
         message: `Version ${info.version} has been downloaded and is ready to install.`,
-        detail: 'The update will be installed the next time you restart PageSpace.',
+        detail: `The update will be installed the next time you restart ${APP_IDENTITY.displayName}.`,
         buttons: ['Restart Now', 'Later'],
         defaultId: 1,
         cancelId: 1,
@@ -69,7 +75,7 @@ export function checkForUpdates(): void {
         dialog.showMessageBox({
           type: 'info',
           title: 'No Updates',
-          message: 'You are running the latest version of PageSpace.',
+          message: `You are running the latest version of ${APP_IDENTITY.displayName}.`,
           buttons: ['OK'],
         });
         return;
@@ -82,7 +88,7 @@ export function checkForUpdates(): void {
         dialog.showMessageBox({
           type: 'info',
           title: 'No Updates',
-          message: 'You are running the latest version of PageSpace.',
+          message: `You are running the latest version of ${APP_IDENTITY.displayName}.`,
           buttons: ['OK'],
         });
       }

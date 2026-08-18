@@ -1,11 +1,12 @@
 import { Menu, shell } from 'electron';
 import { mainWindow } from './state';
 import { checkForUpdates } from './updater';
+import { APP_IDENTITY } from './app-identity';
 
 export function createMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'PageSpace',
+      label: APP_IDENTITY.displayName,
       submenu: [
         { role: 'about' },
         { type: 'separator' },
