@@ -342,9 +342,13 @@ const LINK_REPAIRS: Record<string, string> = {
  */
 export function rewriteLinks(markdown: string, site: 'docs' | 'blog', hosts: RewriteHosts): string {
   return markdown.replace(/\]\((\/[^)\s]*)\)/g, (whole, target: string) => {
-    const [rawPath, hash = ''] = target.split(/(?=#)/, 2) as [string, string?];
+    // Split at the FIRST '#' by index. `split(/(?=#)/, 2)` looks equivalent but
+    // the limit truncates rather than rejoins, so `/docs/a#b#c` silently loses
+    // `#c` and the link lands on a different fragment.
+    const hashIndex = target.indexOf('#');
+    const rawPath = hashIndex === -1 ? target : target.slice(0, hashIndex);
+    const suffix = hashIndex === -1 ? '' : target.slice(hashIndex);
     const path = LINK_REPAIRS[rawPath] ?? rawPath;
-    const suffix = hash ?? '';
 
     const strip = (prefix: string) => (path === prefix ? '/' : path.slice(prefix.length));
 
@@ -415,4 +419,40 @@ export async function extractPosts(): Promise<ExtractedPost[]> {
     oldPath: `/blog/${post.slug}`,
     newPath: `/${post.slug}`,
   }));
+}
+
+/**
+ * Image MIME types by file extension.
+ *
+ * `collectImageRefs` takes whatever `/blog/<file>` paths the posts reference,
+ * so the type has to come from the asset rather than being assumed. Everything
+ * is `.png` today, but declaring `image/png` for a future `.jpg` hero would
+ * store a file whose declared type contradicts its bytes.
+ *
+ * SVG is deliberately absent: `/api/upload/presign` rejects `image/svg+xml`
+ * outright (it is in `BLOCKED_MIME_TYPES`, `packages/lib/src/services/
+ * upload-validation.ts`, because SVG is a script-execution vector), so an
+ * entry here would only turn a clear local error into a confusing 400.
+ */
+export const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.avif': 'image/avif',
+};
+
+/** Resolve an asset's MIME type, or fail loudly rather than guess. */
+export function imageMimeType(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot === -1 ? '' : filename.slice(dot).toLowerCase();
+  const mime = IMAGE_MIME_TYPES[ext];
+  if (!mime) {
+    throw new Error(
+      `Unsupported image type "${ext || '(none)'}" for ${filename}. ` +
+        `Supported: ${Object.keys(IMAGE_MIME_TYPES).join(', ')}.`,
+    );
+  }
+  return mime;
 }
