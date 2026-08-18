@@ -94,7 +94,7 @@ const LIVE_CONFIG: MachineConfig = {
 
 describe('updateMachineConfig — the full-replace footgun', () => {
   it('given a merge that only touches guest.memory_mb, should POST a config that still carries services, mounts and checks', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
       const href = String(url);
       if (href.endsWith('/machines/m1')) {
         // The GET of the live machine, then the POST of the merged config.
@@ -103,7 +103,7 @@ describe('updateMachineConfig — the full-replace footgun', () => {
       return json({});
     });
 
-    await updateMachineConfig(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', (current) => ({
+    await updateMachineConfig(transport(fetchImpl), 'pgs-app-abc', 'm1', (current) => ({
       ...current,
       guest: { ...current.guest, memory_mb: 1024 },
     }));
@@ -130,9 +130,9 @@ describe('updateMachineConfig — the full-replace footgun', () => {
       dns: { nameservers: ['1.1.1.1'] },
       restart: { policy: 'always' },
     };
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ id: 'm1', config: withUnknown }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ id: 'm1', config: withUnknown }));
 
-    await updateMachineConfig(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', (current) => ({
+    await updateMachineConfig(transport(fetchImpl), 'pgs-app-abc', 'm1', (current) => ({
       ...current,
       image: 'registry.fly.io/pgs-app-abc:deployment-02',
     }));
@@ -152,10 +152,10 @@ describe('updateMachineConfig — the full-replace footgun', () => {
   });
 
   it('given the live config, should hand the merge function the REAL current config, not an empty object', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ id: 'm1', config: LIVE_CONFIG }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ id: 'm1', config: LIVE_CONFIG }));
     let received: MachineConfig | null = null;
 
-    await updateMachineConfig(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', (current) => {
+    await updateMachineConfig(transport(fetchImpl), 'pgs-app-abc', 'm1', (current) => {
       received = current;
       return current;
     });
@@ -166,8 +166,8 @@ describe('updateMachineConfig — the full-replace footgun', () => {
 
 describe('createApp', () => {
   it('given a network, should send it verbatim on POST /v1/apps', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}, 201));
-    await createApp(transport(fetchImpl as unknown as typeof fetch), {
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}, 201));
+    await createApp(transport(fetchImpl), {
       appName: 'pgs-app-abc',
       orgSlug: 'pagespace',
       network: 'published-apps',
@@ -182,9 +182,9 @@ describe('createApp', () => {
   });
 
   it('given Fly reports the app already exists, should resolve as success — a retried provision must converge', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'App already exists' }, 422));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ error: 'App already exists' }, 422));
     await expect(
-      createApp(transport(fetchImpl as unknown as typeof fetch), {
+      createApp(transport(fetchImpl), {
         appName: 'pgs-app-abc',
         orgSlug: 'pagespace',
         network: 'published-apps',
@@ -193,9 +193,9 @@ describe('createApp', () => {
   });
 
   it('given a genuine failure, should reject rather than swallow it', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'unauthorized' }, 403));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ error: 'unauthorized' }, 403));
     await expect(
-      createApp(transport(fetchImpl as unknown as typeof fetch), {
+      createApp(transport(fetchImpl), {
         appName: 'pgs-app-abc',
         orgSlug: 'pagespace',
         network: 'published-apps',
@@ -206,17 +206,17 @@ describe('createApp', () => {
 
 describe('deleteApp', () => {
   it('given the app is already gone (404), should resolve as success — the kill must be idempotent', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 404 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
     await expect(
-      deleteApp(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc'),
+      deleteApp(transport(fetchImpl), 'pgs-app-abc'),
     ).resolves.toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('given a persistent 500, should reject after the bounded retries rather than looping forever', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'internal' }, 500));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ error: 'internal' }, 500));
     await expect(
-      deleteApp(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc'),
+      deleteApp(transport(fetchImpl), 'pgs-app-abc'),
     ).rejects.toBeInstanceOf(FlapsError);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
@@ -226,7 +226,7 @@ describe('rate limiting', () => {
   it('given a 429 with Retry-After, should wait the server-specified delay and then succeed', async () => {
     const slept: number[] = [];
     let call = 0;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       call += 1;
       if (call === 1) return json({ error: 'rate limited' }, 429, { 'retry-after': '2' });
       return json({}, 200);
@@ -235,7 +235,7 @@ describe('rate limiting', () => {
     await createApp(
       {
         token: 't',
-        fetchImpl: fetchImpl as unknown as typeof fetch,
+        fetchImpl: fetchImpl,
         sleep: async (ms) => {
           slept.push(ms);
         },
@@ -248,9 +248,9 @@ describe('rate limiting', () => {
   });
 
   it('given a 403, should NOT retry — an auth failure is equally true next second', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'unauthorized' }, 403));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ error: 'unauthorized' }, 403));
     await expect(
-      deleteApp(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc'),
+      deleteApp(transport(fetchImpl), 'pgs-app-abc'),
     ).rejects.toBeInstanceOf(FlapsError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -258,9 +258,9 @@ describe('rate limiting', () => {
 
 describe('createDeployToken', () => {
   it('given an expiry, should always send it as a body — Fly answers 400 EOF to a bodyless request', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ token: 'FlyV1 fm2_aaa,fm2_bbb' }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ token: 'FlyV1 fm2_aaa,fm2_bbb' }));
     const token = await createDeployToken(
-      transport(fetchImpl as unknown as typeof fetch),
+      transport(fetchImpl),
       'pgs-app-abc',
       '48h',
     );
@@ -273,9 +273,9 @@ describe('createDeployToken', () => {
   });
 
   it('given a response with no token, should reject rather than return an empty credential', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}));
     await expect(
-      createDeployToken(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', '48h'),
+      createDeployToken(transport(fetchImpl), 'pgs-app-abc', '48h'),
     ).rejects.toBeInstanceOf(FlapsError);
   });
 });
@@ -284,10 +284,10 @@ describe('listMachineEvents', () => {
   it('given Fly returns its capped event array, should pass it through raw and unfiltered', async () => {
     // Fly returns only the most recent 20 events — no pagination, no time window.
     const events = Array.from({ length: 20 }, (_, i) => ({ id: `e${i}`, type: 'start' }));
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json(events));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json(events));
 
     const actual = await listMachineEvents(
-      transport(fetchImpl as unknown as typeof fetch),
+      transport(fetchImpl),
       'pgs-app-abc',
       'm1',
     );
@@ -309,9 +309,9 @@ describe('listMachineEvents', () => {
 
 describe('waitForMachineState — the long poll must outlive the default timeout', () => {
   it('given a 60s wait, should bound the request by the wait window rather than the 10s default', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}));
     const { transport: recording, timeouts } = timeoutRecordingTransport(
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
 
     await waitForMachineState(recording, 'pgs-app-abc', 'm1', 'started', 60);
@@ -323,9 +323,9 @@ describe('waitForMachineState — the long poll must outlive the default timeout
   });
 
   it('given a caller-supplied timeout, should scale the request bound with it', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}));
     const { transport: recording, timeouts } = timeoutRecordingTransport(
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
 
     await waitForMachineState(recording, 'pgs-app-abc', 'm1', 'started', 120);
@@ -335,9 +335,9 @@ describe('waitForMachineState — the long poll must outlive the default timeout
   });
 
   it('given any other endpoint, should keep the 10s default so a hung socket cannot stall a worker', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}, 201));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}, 201));
     const { transport: recording, timeouts } = timeoutRecordingTransport(
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
 
     await createApp(recording, {
@@ -352,12 +352,12 @@ describe('waitForMachineState — the long poll must outlive the default timeout
 
 describe('retry safety — an ambiguous failure must not double-create', () => {
   it('given a transport failure on a deploy-token mint, should NOT retry — a second mint is a second live credential', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error('socket hang up');
     });
 
     await expect(
-      createDeployToken(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', '48h'),
+      createDeployToken(transport(fetchImpl), 'pgs-app-abc', '48h'),
     ).rejects.toBeInstanceOf(FlapsError);
     // The request may well have landed; retrying it mints another token that is
     // returned to nobody and recorded nowhere.
@@ -365,24 +365,24 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
   });
 
   it('given a 500 on a deploy-token mint, should NOT retry — Fly may have minted before failing to answer', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({ error: 'internal' }, 500));
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({ error: 'internal' }, 500));
 
     await expect(
-      createDeployToken(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', '48h'),
+      createDeployToken(transport(fetchImpl), 'pgs-app-abc', '48h'),
     ).rejects.toBeInstanceOf(FlapsError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('given a 429 on a deploy-token mint, should retry — a rate limit is the one failure Fly says it did not process', async () => {
     let call = 0;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       call += 1;
       if (call === 1) return json({ error: 'rate limited' }, 429, { 'retry-after': '1' });
       return json({ token: 'FlyV1 fm2_aaa' });
     });
 
     const token = await createDeployToken(
-      transport(fetchImpl as unknown as typeof fetch),
+      transport(fetchImpl),
       'pgs-app-abc',
       '48h',
     );
@@ -391,12 +391,12 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
   });
 
   it('given a transport failure on an UNNAMED machine create, should NOT retry — every send bills another machine', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error('socket hang up');
     });
 
     await expect(
-      createMachine(transport(fetchImpl as unknown as typeof fetch), {
+      createMachine(transport(fetchImpl), {
         appName: 'pgs-app-abc',
         config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
       }),
@@ -406,13 +406,13 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
 
   it('given a transport failure on a NAMED machine create, should retry — the name is the idempotency key', async () => {
     let call = 0;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       call += 1;
       if (call === 1) throw new Error('socket hang up');
       return json({ id: 'm1', name: 'pgs-app-abc-01' });
     });
 
-    const machine = await createMachine(transport(fetchImpl as unknown as typeof fetch), {
+    const machine = await createMachine(transport(fetchImpl), {
       appName: 'pgs-app-abc',
       name: 'pgs-app-abc-01',
       config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
@@ -424,7 +424,7 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
 
   it('given a named create whose first attempt already landed, should resolve by lookup rather than create a second machine', async () => {
     const calls: string[] = [];
-    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       calls.push(`${init?.method} ${String(url)}`);
       if (init?.method === 'POST') return json({ error: 'already_exists: machine name' }, 409);
       // The list, resolving the machine the lost attempt created.
@@ -434,7 +434,7 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
       ]);
     });
 
-    const machine = await createMachine(transport(fetchImpl as unknown as typeof fetch), {
+    const machine = await createMachine(transport(fetchImpl), {
       appName: 'pgs-app-abc',
       name: 'pgs-app-abc-01',
       config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
@@ -446,25 +446,25 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
   });
 
   it('given a transport failure on a lease acquire, should NOT retry — the nonce of a lost response is unrecoverable', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error('socket hang up');
     });
 
     await expect(
-      acquireLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+      acquireLease(transport(fetchImpl), 'pgs-app-abc', 'm1'),
     ).rejects.toBeInstanceOf(FlapsError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('given a transport failure on an app create, should retry — the app name makes it idempotent by key', async () => {
     let call = 0;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       call += 1;
       if (call === 1) throw new Error('socket hang up');
       return json({}, 201);
     });
 
-    await createApp(transport(fetchImpl as unknown as typeof fetch), {
+    await createApp(transport(fetchImpl), {
       appName: 'pgs-app-abc',
       orgSlug: 'pagespace',
       network: 'published-apps',
@@ -483,12 +483,12 @@ describe('retry safety — an ambiguous failure must not double-create', () => {
  */
 describe('response shape — a 2xx that is not the object we promised', () => {
   const emptyBody = () =>
-    vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('', { status: 200 }));
+    vi.fn<typeof fetch>(async () => new Response('', { status: 200 }));
 
   it('given a machine create answered with an empty body, should throw a FlapsError rather than return null as a Machine', async () => {
     const fetchImpl = emptyBody();
     await expect(
-      createMachine(transport(fetchImpl as unknown as typeof fetch), {
+      createMachine(transport(fetchImpl), {
         appName: 'pgs-app-abc',
         name: 'pgs-m-abc',
         config: { image: 'registry.fly.io/pgs-app-abc:deployment-01' },
@@ -497,24 +497,23 @@ describe('response shape — a 2xx that is not the object we promised', () => {
   });
 
   it('given a machine read answered with a body carrying no id, should throw rather than return a machine nothing can address', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       json({ state: 'started' }),
     );
     await expect(
-      getMachine(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+      getMachine(transport(fetchImpl), 'pgs-app-abc', 'm1'),
     ).rejects.toBeInstanceOf(FlapsError);
   });
 
   it('given a config update answered with an empty body, should throw rather than report a machine it never saw', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
-      const init = _init as RequestInit | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       // The GET of the live machine succeeds; it is the update's answer that is empty.
       if (!init || init.method === 'GET') return json({ id: 'm1', config: LIVE_CONFIG });
       return new Response('', { status: 200 });
     });
     await expect(
       updateMachineConfig(
-        transport(fetchImpl as unknown as typeof fetch),
+        transport(fetchImpl),
         'pgs-app-abc',
         'm1',
         (current) => current,
@@ -523,20 +522,20 @@ describe('response shape — a 2xx that is not the object we promised', () => {
   });
 
   it('given a lease answered without a nonce, should throw rather than hand back a lease that cannot be released', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       json({ data: { expires_at: 123 } }),
     );
     await expect(
-      acquireLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1'),
+      acquireLease(transport(fetchImpl), 'pgs-app-abc', 'm1'),
     ).rejects.toBeInstanceOf(FlapsError);
   });
 
   it('given a lease answered with a nonce, should return it — the guard must not reject the ordinary shape', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       json({ data: { nonce: 'lease-nonce', expires_at: 123 } }),
     );
     const lease = await acquireLease(
-      transport(fetchImpl as unknown as typeof fetch),
+      transport(fetchImpl),
       'pgs-app-abc',
       'm1',
     );
@@ -551,30 +550,30 @@ describe('response shape — a 2xx that is not the object we promised', () => {
 describe('releaseLease', () => {
   it('given a 429, should retry rather than leave the machine locked for the TTL', async () => {
     let call = 0;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       call += 1;
       if (call === 1) return new Response('', { status: 429, headers: { 'retry-after': '0' } });
       return new Response('', { status: 200 });
     });
 
-    await releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1');
+    await releaseLease(transport(fetchImpl), 'pgs-app-abc', 'm1', 'nonce-1');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('given a lease that is already gone, should treat 404 as released', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response('', { status: 404 }),
     );
     await expect(
-      releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1'),
+      releaseLease(transport(fetchImpl), 'pgs-app-abc', 'm1', 'nonce-1'),
     ).resolves.toBeUndefined();
   });
 
   it('given a release, should send the nonce header — it is what identifies the lease', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response('', { status: 200 }),
     );
-    await releaseLease(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', 'nonce-1');
+    await releaseLease(transport(fetchImpl), 'pgs-app-abc', 'm1', 'nonce-1');
     const init = fetchImpl.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>)['fly-machine-lease-nonce']).toBe('nonce-1');
     expect(init.method).toBe('DELETE');
@@ -583,8 +582,8 @@ describe('releaseLease', () => {
 
 describe('auth', () => {
   it('given a token, should send it as a Bearer header on every call', async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json({}));
-    await deleteApp(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc');
+    const fetchImpl = vi.fn<typeof fetch>(async () => json({}));
+    await deleteApp(transport(fetchImpl), 'pgs-app-abc');
     const init = fetchImpl.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-token');
   });

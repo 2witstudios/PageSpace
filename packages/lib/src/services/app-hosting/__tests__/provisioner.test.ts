@@ -51,6 +51,7 @@ vi.mock('../../../logging/logger-config', () => ({
 }));
 
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
 import {
   createPublishedApp,
   destroyPublishedApp,
@@ -74,6 +75,8 @@ let selectedTables: unknown[] = [];
 let writtenTables: unknown[] = [];
 /** When true, the guarded insert returns nothing — i.e. another publish won the race. */
 let insertConflicts = false;
+/** Every `onConflictDoNothing({target})` the insert path asked for, in order. */
+let conflictTargets: unknown[] = [];
 
 /** The most recent `set()` patch. (`Array.prototype.at` is beyond this package's typecheck lib target.) */
 const lastPatch = (): Record<string, unknown> => updatePatches[updatePatches.length - 1] ?? {};
@@ -189,6 +192,7 @@ beforeEach(() => {
   selectedTables = [];
   writtenTables = [];
   insertConflicts = false;
+  conflictTargets = [];
   selectMock.mockReset();
   insertMock.mockReset();
   updateMock.mockReset();
@@ -202,10 +206,16 @@ beforeEach(() => {
       insertedRows.push(row);
       const result = {
         returning: () => Promise.resolve([{ ...ROW, ...row }]),
-        // The conflict guard on `envId`; `insertConflicts` makes it lose the race.
-        onConflictDoNothing: () => ({
-          returning: () => Promise.resolve(insertConflicts ? [] : [{ ...ROW, ...row }]),
-        }),
+        // The conflict guard; `insertConflicts` makes this insert lose the race.
+        // The target is recorded because WHICH constraint it names is the whole
+        // point — a targetless guard would swallow a `subdomain` or
+        // `flyAppName` collision as "already published".
+        onConflictDoNothing: (config?: { target?: unknown }) => {
+          conflictTargets.push(config?.target);
+          return {
+            returning: () => Promise.resolve(insertConflicts ? [] : [{ ...ROW, ...row }]),
+          };
+        },
         // mintDeployToken inserts without .returning()
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
       };
@@ -457,6 +467,10 @@ describe('createPublishedApp — row before Fly', () => {
     // derived from the id this call generated, which no row now carries.
     expect(result).toEqual({ ok: true, app: winner, noop: true });
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+    // Narrow on purpose: only "this env is already published" is absorbed. A
+    // targetless guard would also swallow a subdomain or flyAppName collision,
+    // which are different resources and different problems.
+    expect(conflictTargets).toEqual([publishedApps.envId]);
   });
 
   it('given the winning row is deleted before it can be read back, should refuse rather than invent one', async () => {
