@@ -476,7 +476,10 @@ describe('createPublishedApp — row before Fly', () => {
       deps: deps(),
     });
 
-    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    // Not `env_not_found`: which of "the env went away" and "someone
+    // unpublished" happened is unknowable from here, and both leave the caller
+    // in the same place — nothing was created, try again.
+    expect(result).toEqual({ ok: false, reason: 'raced' });
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
 

@@ -87,7 +87,21 @@ export type CreatePublishedAppResult =
   | { ok: true; app: PublishedApp }
   /** The row exists and provisioning was a no-op — not an error. */
   | { ok: true; app: PublishedApp; noop: true }
-  | { ok: false; reason: ProvisionDenial | 'fly_error' | 'env_not_found' | 'env_drive_mismatch'; error?: string };
+  | {
+      ok: false;
+      reason:
+        | ProvisionDenial
+        | 'fly_error'
+        | 'env_not_found'
+        | 'env_drive_mismatch'
+        /**
+         * Another publish won the insert race and its row was gone again before
+         * this call could read it — so the env may well still be publishable.
+         * NOTHING was created; the caller may simply try again.
+         */
+        | 'raced';
+      error?: string;
+    };
 
 /**
  * Provision a published app for an ENVIRONMENT: row first, Fly second.
@@ -172,6 +186,11 @@ export async function createPublishedApp(
   if (existing[0]) {
     // Retry of a previously failed provision — reuse the row (and therefore the
     // same Fly app name, which makes the create idempotent).
+    //
+    // `input.subdomain` is deliberately NOT re-applied. The row's subdomain is
+    // the address the app is already published at; changing it is a rename, with
+    // its own DNS and cache consequences, not something a retried provision
+    // should do as a side effect.
     const [updated] = await db
       .update(publishedApps)
       .set({ status: 'provisioning', networkName: network, lastError: null })
@@ -211,9 +230,11 @@ export async function createPublishedApp(
         .from(publishedApps)
         .where(eq(publishedApps.envId, input.envId))
         .limit(1);
-      // Deleted again between the conflict and this read: nothing exists to
-      // report, and inventing a row would be worse than saying so.
-      if (!winner) return { ok: false, reason: 'env_not_found' };
+      // Deleted again between the conflict and this read — an unpublish landing
+      // in the microseconds after the conflict, or the env itself going away.
+      // `env_not_found` would be a guess about which; nothing was created either
+      // way, so say exactly that and let the caller retry.
+      if (!winner) return { ok: false, reason: 'raced' };
       return { ok: true, app: winner, noop: true };
     }
 
