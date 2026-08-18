@@ -16,7 +16,7 @@ import { setupProtocolClient, handleDeepLink } from './deep-links';
 import { registerIPCHandlers, setupMCPToolsReadyCallback } from './ipc-handlers';
 import { startMCPStatusBroadcasting, stopMCPStatusBroadcasting } from './mcp-status';
 import { setIsQuitting } from './state';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 setupProtocolClient();
 

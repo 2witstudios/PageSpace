@@ -17,6 +17,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';
+import { desktopDeepLink } from '@/lib/auth/desktop-shell';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
@@ -75,7 +76,9 @@ export async function POST(req: Request) {
       });
 
       if (verifiedState?.platform === 'desktop') {
-        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState?.shell, 'auth-error')}?error=${errorType}`,
+        );
       }
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
@@ -162,7 +165,9 @@ export async function POST(req: Request) {
         details: { reason: 'apple_oauth_unverified_email_link_blocked' },
       });
       if (platform === 'desktop') {
-        return NextResponse.redirect('pagespace://auth-error?error=oauth_error');
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState.shell, 'auth-error')}?error=oauth_error`,
+        );
       }
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
@@ -313,7 +318,7 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
-      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      const deepLinkUrl = new URL(desktopDeepLink(verifiedState.shell, 'auth-exchange'));
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
       if (isNewlyProvisioned) {
@@ -357,6 +362,8 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
+      // iOS is a separate Capacitor app that registers `pagespace://`
+      // itself; the desktop shell variant does not apply here.
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');

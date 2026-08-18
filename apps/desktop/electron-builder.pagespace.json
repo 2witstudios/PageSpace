@@ -1,0 +1,39 @@
+{
+  "extends": "./electron-builder.base.json",
+  "appId": "com.pagespace.app",
+  "productName": "PageSpace",
+  "publish": {
+    "provider": "github",
+    "owner": "2witstudios",
+    "repo": "PageSpace"
+  },
+  "protocols": [
+    {
+      "name": "PageSpace",
+      "schemes": ["pagespace"]
+    }
+  ],
+  "directories": {
+    "output": "dist-electron",
+    "buildResources": "assets"
+  },
+  "files": [
+    "out/**/*",
+    "src/**/*.html",
+    "assets/**/*",
+    "package.json"
+  ],
+  "mac": {
+    "icon": "assets/icon.icns",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "PageSpace needs microphone access for voice mode conversations."
+    },
+    "notarize": true
+  },
+  "win": {
+    "icon": "assets/icon.ico"
+  },
+  "linux": {
+    "icon": "assets/icon.png"
+  }
+}

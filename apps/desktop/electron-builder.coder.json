@@ -1,0 +1,40 @@
+{
+  "extends": "./electron-builder.base.json",
+  "appId": "com.pagespace.coder",
+  "productName": "PageSpace Coder",
+  "publish": null,
+  "protocols": [
+    {
+      "name": "PageSpace Coder",
+      "schemes": ["pagespace-coder"]
+    }
+  ],
+  "directories": {
+    "output": "dist-electron-coder",
+    "buildResources": "assets"
+  },
+  "files": [
+    "out-coder/**/*",
+    "src/**/*.html",
+    "assets/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "out-coder/main/index.js"
+  },
+  "mac": {
+    "icon": "assets/coder/icon.icns",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "PageSpace Coder needs microphone access for voice mode conversations."
+    },
+    "notarize": false,
+    "identity": null
+  },
+  "win": {
+    "icon": "assets/coder/icon.ico"
+  },
+  "linux": {
+    "icon": "assets/coder/icon.png",
+    "publish": null
+  }
+}

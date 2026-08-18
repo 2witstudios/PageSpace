@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import * as path from 'path';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 /**
  * Establish this build's OS-level identity before anything else runs.

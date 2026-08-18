@@ -20,14 +20,14 @@ describe('APP_IDENTITY selection', () => {
 
   it('is PageSpace when neither the define nor the env var is set', async () => {
     delete process.env.PAGESPACE_APP_VARIANT;
-    const { APP_IDENTITY } = await import('../app-identity');
+    const { APP_IDENTITY } = await import('../current-app-identity');
     expect(APP_IDENTITY.variant).toBe('pagespace');
     expect(APP_IDENTITY.startPath).toBe('/dashboard');
   });
 
   it('is the coder app when PAGESPACE_APP_VARIANT selects it', async () => {
     process.env.PAGESPACE_APP_VARIANT = 'coder';
-    const { APP_IDENTITY } = await import('../app-identity');
+    const { APP_IDENTITY } = await import('../current-app-identity');
     expect(APP_IDENTITY.variant).toBe('coder');
     expect(APP_IDENTITY.startPath).toBe('/dashboard/agents');
     expect(APP_IDENTITY.deepLinkPrefix).toBe('pagespace-coder://');
@@ -35,7 +35,7 @@ describe('APP_IDENTITY selection', () => {
 
   it('falls back to PageSpace for an unrecognized variant', async () => {
     process.env.PAGESPACE_APP_VARIANT = 'nonsense';
-    const { APP_IDENTITY } = await import('../app-identity');
+    const { APP_IDENTITY } = await import('../current-app-identity');
     expect(APP_IDENTITY.variant).toBe('pagespace');
   });
 });

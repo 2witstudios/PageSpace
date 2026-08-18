@@ -6,7 +6,7 @@ import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
 import { classifyNavigation } from '../shared/navigation-guard';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 const storeAny = store as any;
 

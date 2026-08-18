@@ -2,7 +2,7 @@ import { dialog, app } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 import { setIsQuitting } from './state';
 import { destroyTray } from './tray';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 const { autoUpdater } = electronUpdaterPkg;
 

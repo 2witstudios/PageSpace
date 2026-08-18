@@ -56,7 +56,7 @@ vi.mock('../app-url', () => ({
   getStartUrl: vi.fn(() => 'https://pagespace.ai/dashboard'),
 }));
 
-vi.mock('../app-identity', () => ({
+vi.mock('../../shared/current-app-identity', () => ({
   APP_IDENTITY: {
     variant: 'pagespace',
     protocolScheme: 'pagespace',

@@ -4,7 +4,7 @@ import { saveAuthSession, type StoredAuthSession } from './auth-storage';
 import { mainWindow } from './state';
 import { setCachedSession } from './state';
 import { getAppOrigin, getStartUrl } from './app-url';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 import { logger } from './logger';
 import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
 import { createWindow } from './window';

@@ -1,8 +1,10 @@
-import { resolveAppIdentity, type AppIdentity } from '../shared/app-identity';
+import { resolveAppIdentity, type AppIdentity } from './app-identity';
 
 /**
  * The identity of THIS build — the single place where the build-time variant is
- * selected.
+ * selected. Lives in `shared/` because both the main process and the preload
+ * bridge need it; the pure registry it reads stays separate so
+ * `navigation-guard.ts` can never see an already-selected identity.
  *
  * electron-vite substitutes `__APP_VARIANT__` textually (see
  * `electron.vite.config.ts`), so in a packaged or dev-served bundle the constant

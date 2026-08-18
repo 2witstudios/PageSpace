@@ -1,5 +1,5 @@
 import { store } from './store';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 import {
   DEVELOPMENT_ORIGIN,
   PRODUCTION_ORIGIN,

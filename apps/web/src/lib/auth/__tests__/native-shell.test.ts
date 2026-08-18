@@ -19,6 +19,13 @@ const IOS_SHELL_UA =
 const DEV_SHELL_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) desktop/1.0.3 Chrome/130.0.6723.137 Electron/33.3.1 Safari/537.36';
 
+// PageSpace Coder is the second app built from the same Electron shell. Its
+// productName token is "PageSpace Coder/", which — note — does NOT contain
+// "PageSpace/", so it needs its own entry in the allowlist. Without one the
+// middleware would bounce every cookie-less Coder navigation to signin.
+const CODER_SHELL_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) PageSpace Coder/1.0.3 Chrome/130.0.6723.137 Electron/33.3.1 Safari/537.36';
+
 // A third-party Electron-based browser or app webview visiting pagespace.ai:
 // carries Electron/ but not our app token. It must keep the normal signin
 // redirect rather than being handed the empty dashboard shell.
@@ -26,6 +33,11 @@ const FOREIGN_ELECTRON_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) SomeBrowser/2.4.1 Chrome/130.0.6723.137 Electron/33.3.1 Safari/537.36';
 
 describe('isElectronShell', () => {
+  it('detects the coder shell, whose productName token does not contain "PageSpace/"', () => {
+    expect(CODER_SHELL_UA.includes('PageSpace/')).toBe(false);
+    expect(isElectronShell(CODER_SHELL_UA)).toBe(true);
+  });
+
   it('detects the packaged shell by Electron/ plus the PageSpace/ productName token', () => {
     expect(isElectronShell(ELECTRON_UA)).toBe(true);
   });

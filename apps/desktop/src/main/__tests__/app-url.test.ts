@@ -10,7 +10,7 @@ const get = vi.fn();
 vi.mock('../store', () => ({ store: { get: (key: string) => get(key) } }));
 
 const startPath = vi.fn(() => '/dashboard');
-vi.mock('../app-identity', () => ({
+vi.mock('../../shared/current-app-identity', () => ({
   get APP_IDENTITY() {
     return { startPath: startPath() };
   },

@@ -1,7 +1,7 @@
 import { Menu, shell } from 'electron';
 import { mainWindow } from './state';
 import { checkForUpdates } from './updater';
-import { APP_IDENTITY } from './app-identity';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 export function createMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
