@@ -18,6 +18,7 @@ import {
   Link2Off,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { docsUrl } from "@/lib/sites";
 
 export function SecurityHero() {
   return (
@@ -38,13 +39,13 @@ export function SecurityHero() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" asChild>
-              <Link href="/docs/security">
+              <Link href={docsUrl("/security")}>
                 Security Documentation
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link href="/docs/security/zero-trust">Zero-Trust Architecture</Link>
+              <Link href={docsUrl("/security/zero-trust")}>Zero-Trust Architecture</Link>
             </Button>
           </div>
         </div>
@@ -393,7 +394,7 @@ export function SecurityCTA() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" asChild>
-              <Link href="/docs/security">
+              <Link href={docsUrl("/security")}>
                 Security Docs
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
