@@ -285,3 +285,91 @@ export function resetSessionRuntimeGuardrail(): void {
 export function sessionActivityMapSize(): number {
   return sessionActivityByKey.size;
 }
+
+/**
+ * checkDriveEnvAllowance — the per-payer ceiling on PERSISTENT environments
+ * (`drive_envs`), the third axis this module caps and the only one that meters a
+ * ROW rather than a running thing.
+ *
+ * The other two ceilings above bound compute in flight: `checkCodeExecutionQuota`
+ * caps concurrent RUNS, `checkAgentSessionConcurrency` caps LIVE SANDBOXES. An
+ * environment is neither. It is the billed PERSISTENCE unit: its row exists (and
+ * its filesystem keeps accruing storage cost) whether or not anyone is running
+ * anything inside it, and its whole purpose is to outlive every session that
+ * touches it. So the count that matters is how many envs the payer OWNS, not how
+ * many are awake — an env hibernating for a month still holds a disk someone is
+ * paying for.
+ *
+ * That is also why this gate belongs at `createDriveEnv` rather than at
+ * provisioning time, where the two ceilings above sit: creating the row is the
+ * moment the persistence is committed to, and an env that has never been
+ * provisioned is still an env the payer holds.
+ *
+ * **Ceilings, and the fact that they are placeholders.** The numbers below are a
+ * deliberate first cut pending the economics sign-off — free 0 (an env is a
+ * paid-tier feature; `isSandboxAvailable` already says so, and this table
+ * agrees rather than contradicting it), pro 2, founder 5, business 10. Each is
+ * overridable by env var (`DRIVE_ENV_LIMIT_FREE` and friends) precisely because
+ * they will move: an operator can retune a tier without a deploy, and the
+ * pricing work can land its real numbers as a one-line change.
+ *
+ * `payerId` is the DRIVE OWNER — envs are drive-owned and drive-billed, so a
+ * free-tier member creating an env in a Pro-owned drive is entitled and metered
+ * against the drive's owner, exactly as sandbox eligibility already resolves
+ * (`resolveSandboxPayerTier`). `countEnvsOwnedBy` is injected (the real
+ * implementation is `DriveEnvStore.countEnvsOwnedBy`, wired by the app) so this
+ * stays testable with no database.
+ */
+const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
+  free: envInt('DRIVE_ENV_LIMIT_FREE', 0),
+  pro: envInt('DRIVE_ENV_LIMIT_PRO', 2),
+  founder: envInt('DRIVE_ENV_LIMIT_FOUNDER', 5),
+  business: envInt('DRIVE_ENV_LIMIT_BUSINESS', 10),
+};
+
+/** The env ceiling for a tier — exported so a caller (or a test) can say WHAT the limit was, not just that it was hit. */
+export function getDriveEnvLimit(tier: SubscriptionTier): number {
+  return DRIVE_ENV_LIMITS[tier];
+}
+
+/**
+ * Deliberately its own denial word rather than reusing `concurrency_limit`:
+ * these are different ceilings with different remedies (end a session vs. delete
+ * an environment), the API maps them to different messages, and the security
+ * audit files them as different events. Conflating them would tell a user to
+ * close sessions when what they have run out of is environments.
+ */
+export type DriveEnvAllowanceDenialReason = 'tier_ineligible' | 'env_limit_reached';
+
+export type DriveEnvAllowanceDecision =
+  | { allowed: true }
+  | { allowed: false; reason: DriveEnvAllowanceDenialReason; limit: number };
+
+export interface CheckDriveEnvAllowanceInput {
+  /** The DRIVE OWNER — envs are drive-owned and drive-billed. */
+  payerId: string;
+  /** The payer's tier, resolved by the caller (drive owner's subscription). */
+  tier: SubscriptionTier;
+  countEnvsOwnedBy: (payerId: string) => Promise<number>;
+}
+
+export async function checkDriveEnvAllowance({
+  payerId,
+  tier,
+  countEnvsOwnedBy,
+}: CheckDriveEnvAllowanceInput): Promise<DriveEnvAllowanceDecision> {
+  const limit = DRIVE_ENV_LIMITS[tier];
+  // Eligibility FIRST, and ahead of any count: a free-tier payer is refused for
+  // being on a tier without cloud machines at all, which is a different thing to
+  // tell them than "you are at your limit" — and it costs no database round-trip
+  // to say. Checked here as defense in depth, in addition to (not instead of)
+  // `can-run-code.ts`'s own tier gate, matching both checks above.
+  if (!isSandboxAvailable(tier)) {
+    return { allowed: false, reason: 'tier_ineligible', limit };
+  }
+  const owned = await countEnvsOwnedBy(payerId);
+  if (owned >= limit) {
+    return { allowed: false, reason: 'env_limit_reached', limit };
+  }
+  return { allowed: true };
+}

@@ -7,6 +7,8 @@ import {
   resetCodeExecutionConcurrency,
   checkCodeExecutionQuota,
   checkAgentSessionConcurrency,
+  checkDriveEnvAllowance,
+  getDriveEnvLimit,
   checkSessionRuntimeGuardrail,
   recordSessionActivity,
   resetSessionRuntimeGuardrail,
@@ -412,5 +414,62 @@ describe('checkAgentSessionConcurrency — tier ineligibility overrides the resu
 
     expect(decision).toEqual({ allowed: false, reason: 'tier_ineligible' });
     expect(countLiveAgentSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkDriveEnvAllowance', () => {
+  it('given an owned count under the tier ceiling, should allow', async () => {
+    const decision = await checkDriveEnvAllowance({
+      payerId: 'payer-1',
+      tier: 'pro',
+      countEnvsOwnedBy: async () => getDriveEnvLimit('pro') - 1,
+    });
+    expect(decision).toEqual({ allowed: true });
+  });
+
+  it('given an owned count AT the tier ceiling, should deny with env_limit_reached and name the limit', async () => {
+    const decision = await checkDriveEnvAllowance({
+      payerId: 'payer-1',
+      tier: 'pro',
+      countEnvsOwnedBy: async () => getDriveEnvLimit('pro'),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'env_limit_reached', limit: getDriveEnvLimit('pro') });
+  });
+
+  it('given a FREE-tier payer, should deny as tier_ineligible WITHOUT even counting — envs are a paid-tier feature', async () => {
+    // Free's ceiling is 0, so a count-first implementation would also refuse —
+    // but it would refuse with the wrong word (and a needless DB round-trip),
+    // telling a free user they are "at their limit" of a feature they do not have.
+    const countEnvsOwnedBy = vi.fn(async () => 0);
+    const decision = await checkDriveEnvAllowance({ payerId: 'payer-1', tier: 'free', countEnvsOwnedBy });
+
+    expect(decision).toEqual({ allowed: false, reason: 'tier_ineligible', limit: 0 });
+    expect(countEnvsOwnedBy).not.toHaveBeenCalled();
+  });
+
+  it('should meter the PAYER it was handed — the drive owner, never the caller', async () => {
+    const countEnvsOwnedBy = vi.fn(async () => 0);
+    await checkDriveEnvAllowance({ payerId: 'drive-owner', tier: 'business', countEnvsOwnedBy });
+    expect(countEnvsOwnedBy).toHaveBeenCalledWith('drive-owner');
+  });
+
+  it('should carry the documented per-tier ceilings — free 0 / pro 2 / founder 5 / business 10', () => {
+    // The placeholder numbers pending the economics sign-off, pinned so a
+    // silent retune is a test change rather than a billing surprise.
+    expect([
+      getDriveEnvLimit('free'),
+      getDriveEnvLimit('pro'),
+      getDriveEnvLimit('founder'),
+      getDriveEnvLimit('business'),
+    ]).toEqual([0, 2, 5, 10]);
+  });
+
+  it('given a tier whose ceiling is above the count, should allow at exactly one below', async () => {
+    const decision = await checkDriveEnvAllowance({
+      payerId: 'payer-1',
+      tier: 'business',
+      countEnvsOwnedBy: async () => getDriveEnvLimit('business') - 1,
+    });
+    expect(decision).toEqual({ allowed: true });
   });
 });
