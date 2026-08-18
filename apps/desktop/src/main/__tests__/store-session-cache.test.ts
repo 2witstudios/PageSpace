@@ -45,7 +45,10 @@ vi.mock('node-machine-id', () => ({
 }));
 
 vi.mock('../store', () => ({ store: { set: vi.fn() } }));
-vi.mock('../app-url', () => ({ getAppUrl: vi.fn(() => 'https://pagespace.ai/dashboard') }));
+vi.mock('../app-url', () => ({
+  getAppOrigin: vi.fn(() => 'https://pagespace.ai'),
+  getStartUrl: vi.fn(() => 'https://pagespace.ai/dashboard'),
+}));
 vi.mock('../window', () => ({ reloadMainWindow: vi.fn() }));
 vi.mock('../mcp-manager', () => ({ getMCPManager: vi.fn(() => ({ setOnToolsReady: vi.fn() })) }));
 vi.mock('../ws-client', () => ({ getWSClient: vi.fn() }));

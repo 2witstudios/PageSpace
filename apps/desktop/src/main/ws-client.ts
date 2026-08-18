@@ -4,6 +4,11 @@ import { logger } from './logger';
 import { loadAuthSession } from './auth-storage';
 import { handleFetchProxyRequest } from './fetch-proxy-handler';
 import type { FetchProxyRequest } from '../shared/fetch-proxy-types';
+import {
+  DEVELOPMENT_ORIGIN,
+  PRODUCTION_ORIGIN,
+  upgradeInsecureUrl,
+} from '../shared/url-policy';
 
 /**
  * WebSocket Client for MCP Bridge
@@ -49,15 +54,14 @@ export class WSClient {
    * Get base URL for API requests
    */
   private getBaseUrl(): string {
-    let baseUrl =
+    // Env-only on purpose: the electron-store `appUrl` override has never been
+    // visible to the WS client, and making it so here would change which host
+    // the MCP socket talks to as a side effect of an unrelated setting.
+    const baseUrl = upgradeInsecureUrl(
       process.env.NODE_ENV === 'development'
-        ? process.env.PAGESPACE_URL || 'http://localhost:3000'
-        : process.env.PAGESPACE_URL || 'https://pagespace.ai';
-
-    // Force HTTPS for non-localhost URLs (security requirement)
-    if (!baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1')) {
-      baseUrl = baseUrl.replace(/^http:/, 'https:');
-    }
+        ? process.env.PAGESPACE_URL || DEVELOPMENT_ORIGIN
+        : process.env.PAGESPACE_URL || PRODUCTION_ORIGIN,
+    );
 
     // Validate the URL is well-formed and uses http(s) protocol
     try {
@@ -67,7 +71,7 @@ export class WSClient {
       }
     } catch (error) {
       logger.error('Invalid base URL configuration', { baseUrl, error });
-      return 'https://pagespace.ai';
+      return PRODUCTION_ORIGIN;
     }
 
     return baseUrl;

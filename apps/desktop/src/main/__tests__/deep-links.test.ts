@@ -52,7 +52,18 @@ vi.mock('../auth-storage', () => ({
 }));
 
 vi.mock('../app-url', () => ({
-  getAppUrl: vi.fn(() => 'https://pagespace.ai/dashboard'),
+  getAppOrigin: vi.fn(() => 'https://pagespace.ai'),
+  getStartUrl: vi.fn(() => 'https://pagespace.ai/dashboard'),
+}));
+
+vi.mock('../app-identity', () => ({
+  APP_IDENTITY: {
+    variant: 'pagespace',
+    protocolScheme: 'pagespace',
+    deepLinkScheme: 'pagespace:',
+    deepLinkPrefix: 'pagespace://',
+    startPath: '/dashboard',
+  },
 }));
 
 vi.mock('../logger', () => ({
