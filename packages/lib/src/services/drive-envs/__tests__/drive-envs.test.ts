@@ -11,6 +11,7 @@ import {
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
+import { isUniqueViolation } from '../drive-envs-store';
 import { driveEnvDtoSchema } from '../../../drive-envs/env-contract';
 import { getDriveEnvLimit } from '../../sandbox/quota';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
@@ -386,6 +387,37 @@ describe('deleteDriveEnv', () => {
   });
 });
 
+describe('isUniqueViolation', () => {
+  it('given drizzle\'s WRAPPED error, should recognize the unique violation', () => {
+    // `drizzle-orm@0.45.2`'s pg-core rethrows every driver error as
+    // `DrizzleQueryError` with the original on `.cause`, so a top-level `.code`
+    // test matches nothing that comes back from an insert — and a duplicate
+    // environment name escapes as a 500 instead of the 409 the route sends.
+    const driverError = Object.assign(new Error('duplicate key value'), { code: '23505' });
+    const wrapped = Object.assign(new Error('Failed query: insert into "drive_envs"'), { cause: driverError });
+    expect(isUniqueViolation(wrapped)).toBe(true);
+  });
+
+  it('given a BARE driver error, should still recognize it — the shape is a dependency detail', () => {
+    expect(isUniqueViolation(Object.assign(new Error('dup'), { code: '23505' }))).toBe(true);
+  });
+
+  it('given any other failure, should not claim a name collision', () => {
+    const other = Object.assign(new Error('deadlock detected'), { code: '40P01' });
+    expect(isUniqueViolation(Object.assign(new Error('Failed query'), { cause: other }))).toBe(false);
+    expect(isUniqueViolation(new Error('connection refused'))).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+  });
+
+  it('given a CYCLIC cause chain, should terminate', () => {
+    const a = new Error('a') as Error & { cause?: unknown };
+    const b = new Error('b') as Error & { cause?: unknown };
+    a.cause = b;
+    b.cause = a;
+    expect(isUniqueViolation(a)).toBe(false);
+  });
+});
+
 describe('rebuildDriveEnv', () => {
   function makeRebuildDeps(
     store: ReturnType<typeof makeDriveEnvStore>,
@@ -457,6 +489,29 @@ describe('rebuildDriveEnv', () => {
     expect(result).toMatchObject({ ok: false, reason: 'teardown_failed' });
     expect(ensureSandbox).not.toHaveBeenCalled();
     expect(store.rows.get(ENV_ID)?.spriteInstanceId).toBe('inst-1');
+  });
+
+  it('given the confirmation CAS refused, should abort WITHOUT provisioning — a live replacement is not a rebuild', async () => {
+    // A concurrent provision put a live instance 2 on the row while our kill
+    // ran. Continuing would resume THAT machine and report a rebuild over a
+    // filesystem this call never destroyed — the exact lie the
+    // kill-before-provision ordering exists to prevent.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    const realKill = host.host.kill.bind(host.host);
+    host.host.kill = async (killInput) => {
+      await realKill(killInput);
+      const row = store.rows.get(ENV_ID);
+      if (row) store.rows.set(ENV_ID, { ...row, spriteInstanceId: 'inst-2' });
+    };
+    const deps = makeRebuildDeps(store, host);
+    const ensureSandbox = vi.fn(deps.ensureSandbox);
+    deps.ensureSandbox = ensureSandbox;
+
+    const result = await rebuildDriveEnv({ envId: ENV_ID, deps });
+
+    expect(result).toEqual({ ok: false, reason: 'teardown_failed', detail: 'teardown_not_confirmed' });
+    expect(ensureSandbox).not.toHaveBeenCalled();
   });
 
   it('given a never-provisioned env, should just provision — there is nothing to tear down', async () => {

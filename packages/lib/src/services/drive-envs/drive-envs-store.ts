@@ -323,8 +323,34 @@ export function revivedDriveEnvColumns(input: {
 /** Postgres unique-violation. A duplicate `(driveId, name)` is an ANSWER (`name_taken`), never a raised error. */
 const UNIQUE_VIOLATION = '23505';
 
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === UNIQUE_VIOLATION;
+/** Bounded so a driver that ever produced a cyclic `cause` chain cannot hang a request here. */
+const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * Is this a unique-constraint violation — WRAPPED OR NOT?
+ *
+ * The chain walk is the whole point. `drizzle-orm@0.45.2`'s pg-core session
+ * catches every driver error and rethrows it as `DrizzleQueryError` with the
+ * original on `.cause`, so a top-level `error.code === '23505'` test matches
+ * NOTHING that comes back from `db.insert(...)`. A duplicate environment name
+ * would then escape as an unhandled error and surface as a 500 instead of the
+ * 409 the route is written to send — the failure being silent in exactly the
+ * case the code claims to handle.
+ *
+ * Exported so the walk itself is testable against both shapes: the drivers'
+ * bare error and drizzle's wrapper. Which one arrives is a fact about a
+ * dependency, and dependencies change — a test pinning both is what makes the
+ * next drizzle bump visible instead of quietly re-breaking the 409.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current !== null && current !== undefined; depth += 1) {
+    if (typeof current === 'object' && 'code' in current && (current as { code?: unknown }).code === UNIQUE_VIOLATION) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**

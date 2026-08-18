@@ -539,6 +539,17 @@ export async function rebuildDriveEnv({
       deps,
     });
     if (!teardown.ok) return { ok: false, reason: 'teardown_failed', detail: teardown.detail };
+    // `stamped: false` means the confirmation CAS refused: a concurrent
+    // provision put a LIVE replacement on this row while we were killing the
+    // old VM. For a DELETE that is survivable (the row goes and the AFTER
+    // DELETE trigger reclaims the replacement) — for a REBUILD it is not.
+    // Continuing would re-read a row pointing at a live machine, resume it, and
+    // report `rebuilt: true` over a filesystem this call never destroyed, which
+    // is precisely the lie the kill-before-provision ordering exists to
+    // prevent. Abort and let the caller retry against the current machine.
+    if (!teardown.stamped) {
+      return { ok: false, reason: 'teardown_failed', detail: 'teardown_not_confirmed' };
+    }
   }
 
   // Re-read: the teardown just moved this row's stamps, and the provisioner
