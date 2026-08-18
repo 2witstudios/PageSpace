@@ -20,6 +20,7 @@
 
 import type { SubscriptionTier } from '../subscription-utils';
 import { isSandboxAvailable } from '../../billing/sandbox-eligibility';
+import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -320,14 +321,32 @@ export function sessionActivityMapSize(): number {
  * implementation is `DriveEnvStore.countEnvsOwnedBy`, wired by the app) so this
  * stays testable with no database.
  */
-const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
-  free: envInt('DRIVE_ENV_LIMIT_FREE', 0),
-  pro: envInt('DRIVE_ENV_LIMIT_PRO', 2),
-  founder: envInt('DRIVE_ENV_LIMIT_FOUNDER', 5),
-  business: envInt('DRIVE_ENV_LIMIT_BUSINESS', 10),
-};
+/**
+ * A tier ceiling, CLAMPED to what a listing can actually show.
+ *
+ * The two numbers are coupled whether or not anyone says so: an env listing is
+ * bounded by `MAX_DRIVE_ENVS_LISTED`, so a ceiling above it would let a payer
+ * legitimately create environments that `GET /envs` then silently omits — rows
+ * that still hold a Sprite and still bill storage, with no surface that admits
+ * they exist. Silently invisible billed infrastructure is a worse failure than
+ * a refused create, so the override is clamped rather than honored, and this is
+ * the one place the coupling has to be remembered.
+ *
+ * Raising the ceiling past 100 is therefore a two-part change on purpose: raise
+ * `MAX_DRIVE_ENVS_LISTED` (or paginate the listing) first, and this follows.
+ */
+function envLimit(name: string, fallback: number): number {
+  return Math.min(envInt(name, fallback), MAX_DRIVE_ENVS_LISTED);
+}
 
 /** The env ceiling for a tier — exported so a caller (or a test) can say WHAT the limit was, not just that it was hit. */
+const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
+  free: envLimit('DRIVE_ENV_LIMIT_FREE', 0),
+  pro: envLimit('DRIVE_ENV_LIMIT_PRO', 2),
+  founder: envLimit('DRIVE_ENV_LIMIT_FOUNDER', 5),
+  business: envLimit('DRIVE_ENV_LIMIT_BUSINESS', 10),
+};
+
 export function getDriveEnvLimit(tier: SubscriptionTier): number {
   return DRIVE_ENV_LIMITS[tier];
 }

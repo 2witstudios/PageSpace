@@ -36,6 +36,7 @@ import { planEnvDelete } from '../../drive-envs/plan-env-delete';
 import type { DriveEnvDTO, DriveEnvStatus } from '../../drive-envs/env-contract';
 import {
   checkDriveEnvAllowance,
+  getDriveEnvLimit,
   type DriveEnvAllowanceDenialReason,
 } from '../sandbox/quota';
 import type { SubscriptionTier } from '../subscription-utils';
@@ -93,7 +94,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord): DriveEnvDTO {
 // ---------------------------------------------------------------------------
 
 export interface CreateDriveEnvDeps {
-  store: Pick<DriveEnvStore, 'create' | 'countEnvsOwnedBy'>;
+  store: Pick<DriveEnvStore, 'createIfUnderLimit' | 'countEnvsOwnedBy'>;
   /**
    * The drive's PAYER and their tier — the drive's OWNER, with no fallback.
    * `null` means the drive is gone, which fails the create closed rather than
@@ -124,6 +125,18 @@ export type CreateDriveEnvResult =
  * is made; a `checkQuota` dependency would be a gate a future caller could
  * supply as `async () => ({ allowed: true })` without any reviewer noticing.
  * What IS injected is the payer lookup, which is genuinely per-deployment IO.
+ *
+ * **The ceiling is enforced TWICE, and the second one is the real one.** The
+ * allowance check below is an advisory pre-check: it reads a count and produces
+ * the right denial vocabulary (`tier_ineligible` vs `env_limit_reached`) without
+ * a write. It is also racy on its own — two admins creating differently-named
+ * envs for one payer at the ceiling both read "under", and `(driveId, name)`
+ * uniqueness does not serialize different names. So the count-and-insert is
+ * repeated inside `createIfUnderLimit` under a per-payer advisory lock, which is
+ * what actually holds the line. This is the same two-layer shape the session
+ * spawn ceiling uses (an advisory pre-check at the route, a structural
+ * count-and-insert in the store), for the same reason: the pre-check exists to
+ * give a good answer, the structural check exists to be correct.
  */
 export async function createDriveEnv({
   driveId,
@@ -150,8 +163,26 @@ export async function createDriveEnv({
     return { ok: false, reason: 'quota_exceeded', denial: allowance.reason, limit: allowance.limit };
   }
 
-  const created = await deps.store.create({ driveId, name, createdBy, now: deps.now() });
-  if (!created.ok) return { ok: false, reason: 'name_taken' };
+  const created = await deps.store.createIfUnderLimit({
+    driveId,
+    name,
+    createdBy,
+    now: deps.now(),
+    payerId: payer.payerId,
+    maxEnvs: getDriveEnvLimit(payer.tier),
+  });
+  if (!created.ok) {
+    if (created.reason === 'name_taken') return { ok: false, reason: 'name_taken' };
+    // Lost the structural race the pre-check above could not see. Reported as
+    // the SAME refusal the pre-check would have produced, because it is the
+    // same fact — the payer is at their ceiling — learned a moment later.
+    return {
+      ok: false,
+      reason: 'quota_exceeded',
+      denial: 'env_limit_reached',
+      limit: getDriveEnvLimit(payer.tier),
+    };
+  }
   return { ok: true, env: created.env };
 }
 
@@ -322,7 +353,7 @@ async function teardownEnvSprite({
 export interface DeleteDriveEnvDeps {
   store: Pick<
     DriveEnvStore,
-    'findById' | 'countLiveSessionsInEnv' | 'requestTeardown' | 'stampSpriteTornDown' | 'deleteById'
+    'findById' | 'countLiveSessionsInEnv' | 'requestTeardown' | 'stampSpriteTornDown' | 'deleteIfUnoccupied'
   >;
   host: SandboxHost;
   now: () => Date;
@@ -341,15 +372,29 @@ export type DeleteDriveEnvResult =
  *
  * The flow, in the order the invariants require:
  *
- *  1. **Guard.** Refuse while sessions are live inside the env, unless `force`.
- *     This has to come first because the row delete CASCADES to those sessions:
- *     by the time the row is gone, the work someone was doing in it is gone too.
+ *  1. **Guard, cheaply.** Refuse while sessions are live inside the env, unless
+ *     `force`. First, because the row delete CASCADES to those sessions: by the
+ *     time the row is gone, the work someone was doing in it is gone too. This
+ *     read is deliberately NOT the authoritative guard — it is the one that
+ *     refuses before anything is destroyed, which is what makes the common case
+ *     cost nothing.
  *  2. **Teardown.** Kill the env's Sprite while the row still points at it, so
  *     the kill is confirmed by the caller that asked for it. A failed kill
  *     ABORTS the delete: the row keeps its teardown request and stays as the
  *     reconciler's handle on the VM.
- *  3. **Delete.** The row goes, and the cascade removes bound sessions (and
- *     their panes, rev counters and shells).
+ *  3. **Delete, atomically re-guarded.** `deleteIfUnoccupied` repeats the count
+ *     inside one transaction holding `FOR UPDATE` on the env row, which is what
+ *     actually closes the window: a session cannot bind between the count and
+ *     the delete, because binding needs an FK lock on the row this transaction
+ *     holds. The cascade then removes bound sessions (and their panes, rev
+ *     counters and shells).
+ *
+ * A session that binds during step 2 therefore REFUSES the delete rather than
+ * being cascaded away — and leaves the env with a torn-down Sprite. That state
+ * is ordinary (`status: 'stopped'`, indistinguishable from a reclaim) and costs
+ * the racing session a re-provision on its next ensure, which is the right
+ * price: a machine rebuilt is recoverable, a live session's work deleted
+ * without consent is not.
  *
  * The AFTER DELETE trigger is the crash net UNDER step 2, not a second copy of
  * it: it fires only `WHEN sandboxId IS NOT NULL AND spriteTornDownAt IS NULL` —
@@ -408,11 +453,17 @@ export async function deleteDriveEnv({
     spriteTornDown = teardown.stamped;
   }
 
-  const deleted = await deps.store.deleteById(envId);
-  // Losing this race means a concurrent delete removed the row first. The env is
-  // gone either way, which is what the caller asked for — but say so honestly
-  // rather than claim this call is what killed the Sprite.
-  if (!deleted) return { ok: false, reason: 'not_found' };
+  const deleted = await deps.store.deleteIfUnoccupied({ envId, force });
+  if (!deleted.ok) {
+    // `not_found`: a concurrent delete removed the row first. The env is gone
+    // either way, which is what the caller asked for — but say so honestly
+    // rather than claim this call is what killed the Sprite.
+    if (deleted.reason === 'not_found') return { ok: false, reason: 'not_found' };
+    // `live_sessions`: a session bound during the teardown above. Refusing
+    // costs that session a re-provision; cascading it away would cost someone
+    // their work.
+    return { ok: false, reason: 'live_sessions', liveSessionCount: deleted.liveSessionCount };
+  }
   return { ok: true, spriteTornDown };
 }
 

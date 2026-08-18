@@ -89,15 +89,41 @@ export interface DriveEnvStore {
    */
   list(driveId: string): Promise<DriveEnvRecord[]>;
   /**
-   * Mint an env row. NOT idempotent: creating an env is an explicit act.
+   * Mint an env row IFF this PAYER is under `maxEnvs` owned environments — the
+   * ceiling made STRUCTURAL rather than a pre-check, exactly as
+   * `AgentSessionStore.createIfUnderLimit` makes the session spawn ceiling
+   * structural.
+   *
+   * A count-then-insert at the call site is TOCTOU-racy in a way the unique
+   * index cannot cover: `(driveId, name)` only serializes creates of the SAME
+   * name, so two admins creating `dev` and `staging` for one payer sitting at
+   * the ceiling both read "under" and both insert. This serializes the
+   * count-and-insert under a per-PAYER Postgres advisory lock (the same
+   * primitive the session spawn ceiling and `credit-gate.ts` use), so two
+   * concurrent creates billed to one payer cannot both win, while creates for
+   * different payers never contend.
+   *
+   * Per payer, NOT per drive: the ceiling is on what the payer owns across
+   * every drive they own, so a per-drive lock would let one payer's two drives
+   * race past it — the same hole with more steps.
+   *
+   * It is also the ONLY way to mint an env row. There is deliberately no
+   * unguarded `create` alongside it: a second minting path is a ceiling a
+   * future caller can forget, and the whole point of making this structural is
+   * that it cannot be forgotten.
    *
    * `(driveId, name)` is UNIQUE, so a duplicate name is refused BY THE DATABASE
    * and reported as `name_taken` rather than raised — a name collision is an
    * ordinary answer to an ordinary request (two admins naming a `staging` at
-   * once), not an exception the caller should have to pattern-match a driver
-   * error string to recognize.
+   * once), not an exception the caller should pattern-match a driver error
+   * string to recognize.
    */
-  create(input: NewDriveEnvInput): Promise<{ ok: true; env: DriveEnvRecord } | { ok: false; reason: 'name_taken' }>;
+  createIfUnderLimit(
+    input: NewDriveEnvInput & { payerId: string; maxEnvs: number },
+  ): Promise<
+    | { ok: true; env: DriveEnvRecord }
+    | { ok: false; reason: 'name_taken' | 'limit_reached' }
+  >;
   /**
    * Rename, subject to the same unique constraint — and reporting the same
    * `name_taken` answer for the same reason. `not_found` distinguishes a
@@ -109,15 +135,44 @@ export interface DriveEnvStore {
     now: Date;
   }): Promise<{ ok: true; env: DriveEnvRecord } | { ok: false; reason: 'name_taken' | 'not_found' }>;
   /**
-   * Delete the row. The cascade removes every session bound to it (and, through
-   * those sessions, their panes, rev counters and shells), and the AFTER DELETE
-   * trigger rescues this row's Sprite pointer into `machine_sprite_reclaims` —
-   * the crash net for a teardown that never confirmed.
+   * Delete the row, ATOMICALLY with the live-session guard.
    *
-   * Reports whether a row was actually removed, so a concurrent delete of the
-   * same env is answered honestly rather than reported twice as a success.
+   * The cascade removes every session bound to this env (and, through those
+   * sessions, their panes, rev counters and shells), which is why the guard
+   * cannot be a separate earlier read: between a count that returned zero and
+   * an unguarded delete, a session can bind to this env and be cascaded away
+   * with work the caller never opted into destroying.
+   *
+   * So the count and the delete run in ONE transaction that first takes
+   * `SELECT ... FOR UPDATE` on the env row, and that lock is what makes the
+   * guard sound rather than merely narrower. Inserting an `agent_workspaces`
+   * row with this `envId` must take `FOR KEY SHARE` on this same env row to
+   * satisfy its foreign key, and `FOR KEY SHARE` conflicts with `FOR UPDATE`.
+   * Therefore, once this transaction holds the lock:
+   *
+   *  - a session insert that already COMMITTED is visible to the count below
+   *    (a new statement snapshot under READ COMMITTED), and refuses the delete;
+   *  - a session insert still IN FLIGHT is blocked on the FK lock until this
+   *    transaction ends — and if the delete lands, that insert's FK check then
+   *    fails against a row that no longer exists. A spawn racing the deletion
+   *    of its own environment failing is the correct outcome; a spawn silently
+   *    succeeding into a doomed env is not.
+   *
+   * There is no third interleaving: a session cannot appear between the count
+   * and the delete without the lock this transaction is holding.
+   *
+   * `force` skips the count (not the lock), which is the whole meaning of
+   * forcing: the caller has been told sessions are live and has said destroy
+   * them anyway.
+   *
+   * Reports the live count on refusal, and distinguishes a vanished row, so a
+   * concurrent delete of the same env is answered honestly rather than reported
+   * twice as a success.
    */
-  deleteById(envId: string): Promise<boolean>;
+  deleteIfUnoccupied(input: {
+    envId: string;
+    force: boolean;
+  }): Promise<{ ok: true } | { ok: false; reason: 'not_found' } | { ok: false; reason: 'live_sessions'; liveSessionCount: number }>;
   /**
    * Sessions still LIVE inside this env — rows carrying this `envId` with no
    * `endedAt`. The delete guard's input. A COUNT, never `list(...).length`: the
@@ -315,16 +370,30 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return rows as DriveEnvRecord[];
     },
 
-    async create({ driveId, name, createdBy, now: at }) {
+    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs }) {
       try {
-        const [row] = await db
-          .insert(driveEnvs)
-          .values({ driveId, name, createdBy, createdAt: at, updatedAt: at })
-          .returning();
-        return { ok: true as const, env: row as DriveEnvRecord };
+        return await db.transaction(async (tx) => {
+          // Per-payer advisory lock, held for this transaction only — the same
+          // primitive the session spawn ceiling uses. It serializes concurrent
+          // creates for THIS payer (so the count below cannot go stale before
+          // the insert) without contending with any other payer's create.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'drive-env-create:' + payerId}))`);
+          const [{ n }] = await tx
+            .select({ n: count() })
+            .from(driveEnvs)
+            .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
+            .where(eq(drives.ownerId, payerId));
+          if (n >= maxEnvs) return { ok: false as const, reason: 'limit_reached' as const };
+          const [row] = await tx
+            .insert(driveEnvs)
+            .values({ driveId, name, createdBy, createdAt: at, updatedAt: at })
+            .returning();
+          return { ok: true as const, env: row as DriveEnvRecord };
+        });
       } catch (error) {
-        // The unique index IS the concurrency control here: two admins naming a
-        // `staging` at once both reach this insert, and exactly one loses.
+        // The `(driveId, name)` unique index still resolves same-name races,
+        // and it aborts the transaction — so it surfaces here rather than at
+        // the insert above.
         if (isUniqueViolation(error)) return { ok: false as const, reason: 'name_taken' as const };
         throw error;
       }
@@ -345,9 +414,32 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       }
     },
 
-    async deleteById(envId) {
-      const deleted = await db.delete(driveEnvs).where(eq(driveEnvs.id, envId)).returning({ id: driveEnvs.id });
-      return deleted.length > 0;
+    async deleteIfUnoccupied({ envId, force }) {
+      return db.transaction(async (tx) => {
+        // The row lock FIRST — see the interface doc for why it, and not the
+        // count, is what makes this guard sound.
+        const [locked] = await tx
+          .select({ id: driveEnvs.id })
+          .from(driveEnvs)
+          .where(eq(driveEnvs.id, envId))
+          .limit(1)
+          .for('update');
+        if (!locked) return { ok: false as const, reason: 'not_found' as const };
+
+        if (!force) {
+          const [live] = await tx
+            .select({ n: count() })
+            .from(agentWorkspaces)
+            .where(and(eq(agentWorkspaces.envId, envId), isNull(agentWorkspaces.endedAt)));
+          const liveSessionCount = live?.n ?? 0;
+          if (liveSessionCount > 0) {
+            return { ok: false as const, reason: 'live_sessions' as const, liveSessionCount };
+          }
+        }
+
+        await tx.delete(driveEnvs).where(eq(driveEnvs.id, envId));
+        return { ok: true as const };
+      });
     },
 
     async countLiveSessionsInEnv(envId) {

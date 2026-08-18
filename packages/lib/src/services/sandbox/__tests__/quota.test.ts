@@ -17,6 +17,7 @@ import {
   SESSION_ACTIVITY_GRACE_MS,
   type CodeExecutionQuotaDeps,
 } from '../quota';
+import { MAX_DRIVE_ENVS_LISTED } from '../../../drive-envs/env-contract';
 
 function makeDeps(
   overrides: Partial<CodeExecutionQuotaDeps> = {},
@@ -462,6 +463,44 @@ describe('checkDriveEnvAllowance', () => {
       getDriveEnvLimit('founder'),
       getDriveEnvLimit('business'),
     ]).toEqual([0, 2, 5, 10]);
+  });
+
+  it('given an override ABOVE the listing cap, should clamp it — an env a listing cannot show must not be creatable', async () => {
+    // The two numbers are coupled: an env past the listing cap would exist,
+    // hold a Sprite and bill storage while `GET /envs` silently omitted it. A
+    // clamped ceiling refuses the create instead — the visible failure rather
+    // than the invisible one.
+    //
+    // The limits are read at MODULE LOAD, so this stubs the env and re-imports;
+    // asserting on the already-loaded module would pass against an unclamped
+    // implementation, since the defaults are all far below the cap.
+    vi.stubEnv('DRIVE_ENV_LIMIT_BUSINESS', '500');
+    vi.resetModules();
+    try {
+      const quota = await import('../quota');
+      expect(quota.getDriveEnvLimit('business')).toBe(MAX_DRIVE_ENVS_LISTED);
+      const decision = await quota.checkDriveEnvAllowance({
+        payerId: 'payer-1',
+        tier: 'business',
+        countEnvsOwnedBy: async () => MAX_DRIVE_ENVS_LISTED,
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'env_limit_reached', limit: MAX_DRIVE_ENVS_LISTED });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it('given an override BELOW the cap, should honor it — the clamp is a ceiling, not a floor', async () => {
+    vi.stubEnv('DRIVE_ENV_LIMIT_PRO', '7');
+    vi.resetModules();
+    try {
+      const quota = await import('../quota');
+      expect(quota.getDriveEnvLimit('pro')).toBe(7);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it('given a tier whose ceiling is above the count, should allow at exactly one below', async () => {

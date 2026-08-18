@@ -94,6 +94,46 @@ describe('createDriveEnv', () => {
     expect(store.rows.size).toBe(0);
   });
 
+  it('given the pre-check passed but the payer hit the ceiling first, should still refuse — the STRUCTURAL check is the real one', async () => {
+    // The race Codex named: two admins create differently-NAMED envs for one
+    // payer at the ceiling. `(driveId, name)` uniqueness cannot serialize them,
+    // and both advisory pre-checks read "under". The count-and-insert under the
+    // per-payer advisory lock is what actually holds the line, so a create that
+    // passed the pre-check must still be refused by the store.
+    const store = makeDriveEnvStore();
+    const deps = makeCreateDeps(store);
+    // Under the ceiling when the pre-check reads...
+    store.ownedEnvs.set(PAYER_ID, getDriveEnvLimit('pro') - 1);
+    const countEnvsOwnedBy = vi.spyOn(store.store, 'countEnvsOwnedBy').mockImplementation(async (payerId) => {
+      // ...and AT it by the time the insert serializes behind the other admin.
+      const seen = store.ownedEnvs.get(payerId) ?? 0;
+      store.ownedEnvs.set(payerId, getDriveEnvLimit('pro'));
+      return seen;
+    });
+
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: null, deps });
+
+    expect(countEnvsOwnedBy).toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      reason: 'quota_exceeded',
+      denial: 'env_limit_reached',
+      limit: getDriveEnvLimit('pro'),
+    });
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('should hand the store the payer AND the tier ceiling — the lock is per PAYER, not per drive', async () => {
+    // Per-drive serialization would let one payer's two drives race past a
+    // ceiling that is defined across every drive they own.
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: null, deps: makeCreateDeps(store) });
+    expect(createIfUnderLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ payerId: PAYER_ID, maxEnvs: getDriveEnvLimit('pro') }),
+    );
+  });
+
   it('should meter the DRIVE OWNER, not the creator — an env is drive-owned and drive-billed', async () => {
     const store = makeDriveEnvStore();
     const countEnvsOwnedBy = vi.spyOn(store.store, 'countEnvsOwnedBy');
@@ -199,14 +239,15 @@ describe('deleteDriveEnv', () => {
       order.push('kill');
       await realKill(input);
     };
-    store.store.deleteById = (async (envId: string) => {
-      order.push('deleteById');
-      return store.rows.delete(envId);
-    }) as typeof store.store.deleteById;
+    const realDelete = store.store.deleteIfUnoccupied.bind(store.store);
+    store.store.deleteIfUnoccupied = async (deleteInput) => {
+      order.push('deleteIfUnoccupied');
+      return realDelete(deleteInput);
+    };
 
     await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
-    expect(order).toEqual(['requestTeardown', 'kill', 'deleteById']);
+    expect(order).toEqual(['requestTeardown', 'kill', 'deleteIfUnoccupied']);
   });
 
   it('should CAS the kill on the INSTANCE the row records, not just the name', async () => {
@@ -296,6 +337,46 @@ describe('deleteDriveEnv', () => {
     expect(result).toEqual({ ok: true, spriteTornDown: false });
     expect(store.rows.has(ENV_ID)).toBe(false);
     expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-2');
+  });
+
+  it('given a session binds DURING the teardown, should refuse the delete rather than cascade it away', async () => {
+    // The window Codex named: the cheap guard read zero, and by the time the
+    // row would be deleted a session is live in the env. `agent_workspaces.envId`
+    // is ON DELETE CASCADE, so an unguarded delete here destroys work nobody
+    // opted into destroying. The atomic re-guard inside the delete refuses.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    const realKill = host.host.kill.bind(host.host);
+    host.host.kill = async (killInput) => {
+      await realKill(killInput);
+      store.liveSessions.set(ENV_ID, 1);
+    };
+
+    const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
+
+    expect(result).toEqual({ ok: false, reason: 'live_sessions', liveSessionCount: 1 });
+    // The env survives, machineless — an ordinary `stopped` env the racing
+    // session re-provisions on its next ensure. A rebuilt machine is
+    // recoverable; a deleted live session's work is not.
+    expect(store.rows.has(ENV_ID)).toBe(true);
+    expect(store.rows.get(ENV_ID)?.spriteTornDownAt).toEqual(NOW);
+  });
+
+  it('given force, should delete even when a session binds during the teardown', async () => {
+    // Forcing means the caller was told sessions are live and said destroy them
+    // anyway, so the atomic re-guard skips the count — not the lock.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    const realKill = host.host.kill.bind(host.host);
+    host.host.kill = async (killInput) => {
+      await realKill(killInput);
+      store.liveSessions.set(ENV_ID, 1);
+    };
+
+    const result = await deleteDriveEnv({ envId: ENV_ID, force: true, deps: makeDeleteDeps(store, host) });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: true });
+    expect(store.rows.has(ENV_ID)).toBe(false);
   });
 
   it('given no such env, should answer not_found', async () => {

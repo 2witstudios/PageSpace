@@ -26,13 +26,19 @@ export const MAX_DRIVE_ENV_NAME_LENGTH = 64;
 
 /**
  * The most environments one listing returns — and, because the store's list
- * query carries it as a LIMIT, the most a drive's listing can ever show. Set an
- * order of magnitude above the highest per-tier ceiling
- * (`DRIVE_ENV_LIMITS.business`) so it is a runaway-query backstop rather than a
- * cap a real drive can hit: a drive's envs are quota-bounded per PAYER, and a
- * payer's drives could in principle concentrate them, but a listing that
- * silently truncated a drive's real set would hide machines the drive is being
- * billed for.
+ * query carries it as a LIMIT, the most a drive's listing can ever show.
+ *
+ * It is also the CEILING ON THE CEILING: `quota.ts` clamps every per-tier
+ * `DRIVE_ENV_LIMIT_*` to this number, so no payer can hold more environments
+ * than a listing can display. That coupling is deliberate and load-bearing. An
+ * env row that exists but never appears is billed infrastructure with no
+ * surface that admits it exists — strictly worse than a refused create — and a
+ * per-payer ceiling above a per-drive listing cap is exactly how you get one,
+ * since nothing stops a payer concentrating their envs in a single drive.
+ *
+ * Raising this is therefore the FIRST half of raising any tier ceiling past
+ * 100; paginating the listing is the alternative, and would let the two numbers
+ * come apart safely.
  */
 export const MAX_DRIVE_ENVS_LISTED = 100;
 

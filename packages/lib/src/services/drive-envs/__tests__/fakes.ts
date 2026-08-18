@@ -84,8 +84,12 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     },
 
-    async create({ driveId, name, createdBy, now: at }) {
+    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs }) {
       if (nameTaken(driveId, name)) return { ok: false, reason: 'name_taken' };
+      // The structural ceiling, modelled: the fake's map IS the serialized
+      // count, so a create past the limit loses here exactly as the advisory
+      // -locked count-and-insert makes it lose in Postgres.
+      if ((ownedEnvs.get(payerId) ?? 0) >= maxEnvs) return { ok: false, reason: 'limit_reached' };
       minted += 1;
       const row = makeEnvRecord({
         id: `env-${minted}`,
@@ -109,10 +113,17 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return { ok: true, env: next };
     },
 
-    async deleteById(envId) {
+    async deleteIfUnoccupied({ envId, force }) {
       calls.deleteById += 1;
       const row = rows.get(envId);
-      if (!row) return false;
+      if (!row) return { ok: false, reason: 'not_found' };
+      // The guard re-read INSIDE the atomic step — the fake is single-threaded,
+      // so what this models is the ordering: the count is taken here, after the
+      // teardown, not from the caller's earlier snapshot.
+      if (!force) {
+        const liveSessionCount = liveSessions.get(envId) ?? 0;
+        if (liveSessionCount > 0) return { ok: false, reason: 'live_sessions', liveSessionCount };
+      }
       rows.delete(envId);
       // The AFTER DELETE trigger, WHEN clause included: it fires only for a
       // row that still BELIEVES it holds a live Sprite (`sandboxId IS NOT NULL
@@ -122,7 +133,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (row.sandboxId !== null && row.spriteTornDownAt === null) {
         reclaims.set(row.sandboxId, row.spriteInstanceId);
       }
-      return true;
+      return { ok: true };
     },
 
     async countLiveSessionsInEnv(envId) {
