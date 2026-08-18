@@ -348,10 +348,17 @@ export type DeleteDriveEnvResult =
  *     the kill is confirmed by the caller that asked for it. A failed kill
  *     ABORTS the delete: the row keeps its teardown request and stays as the
  *     reconciler's handle on the VM.
- *  3. **Delete.** The row goes; the cascade removes bound sessions (and their
- *     panes, rev counters and shells), and the AFTER DELETE trigger parks this
- *     row's Sprite pointer in `machine_sprite_reclaims` as the crash net for a
- *     teardown that never confirmed.
+ *  3. **Delete.** The row goes, and the cascade removes bound sessions (and
+ *     their panes, rev counters and shells).
+ *
+ * The AFTER DELETE trigger is the crash net UNDER step 2, not a second copy of
+ * it: it fires only `WHEN sandboxId IS NOT NULL AND spriteTornDownAt IS NULL` —
+ * a row that still believes it holds a live Sprite. After a confirmed teardown
+ * that predicate is false and nothing is enqueued, which is correct: an outbox
+ * row for a dead name would have the reclaim cron chase it forever. What the
+ * trigger DOES catch is the case step 2 cannot close by itself — a concurrent
+ * provision put a live replacement on the row, the confirmation CAS rightly
+ * refused, and the delete carries a machine nothing else would ever find.
  *
  * The cascade cannot strand a VM: an env-bound session is CHECK-forbidden from
  * holding Sprite pointers (`agent_workspaces_env_no_sprite_check`), so the only
@@ -393,6 +400,11 @@ export async function deleteDriveEnv({
     // the reclaim outbox is a net for crashes, not a substitute for a teardown
     // this process knows failed.
     if (!teardown.ok) return { ok: false, reason: 'teardown_failed', detail: teardown.detail };
+    // `stamped: false` means the confirmation CAS refused — a concurrent
+    // provision owns this row's pointer now. The delete still proceeds (the
+    // caller asked for the env to be gone, and it is), and the replacement VM
+    // is handed to the reclaim outbox by the AFTER DELETE trigger, which fires
+    // precisely because the row still reads as live.
     spriteTornDown = teardown.stamped;
   }
 

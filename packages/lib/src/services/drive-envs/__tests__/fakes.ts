@@ -114,10 +114,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       const row = rows.get(envId);
       if (!row) return false;
       rows.delete(envId);
-      // The AFTER DELETE trigger: a row carrying a Sprite pointer parks it in
-      // the reclaim outbox on the way out, whatever the caller did or did not
-      // confirm.
-      if (row.sandboxId !== null) reclaims.set(row.sandboxId, row.spriteInstanceId);
+      // The AFTER DELETE trigger, WHEN clause included: it fires only for a
+      // row that still BELIEVES it holds a live Sprite (`sandboxId IS NOT NULL
+      // AND spriteTornDownAt IS NULL` — the same predicate as the partial index
+      // and the orphan reconciler). A confirmed-dead Sprite enqueues nothing;
+      // a row for a dead name would have the cron chase it forever.
+      if (row.sandboxId !== null && row.spriteTornDownAt === null) {
+        reclaims.set(row.sandboxId, row.spriteInstanceId);
+      }
       return true;
     },
 

@@ -267,13 +267,35 @@ describe('deleteDriveEnv', () => {
     expect(host.calls.kill).toEqual([]);
   });
 
-  it('should leave the deleted row Sprite pointer in the reclaim outbox — the crash net, via the AFTER DELETE trigger', async () => {
+  it('given a CONFIRMED teardown, should enqueue NOTHING — the trigger must not have the cron chase a dead name', async () => {
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
 
     await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
-    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+    expect(store.reclaims.size).toBe(0);
+  });
+
+  it('given a concurrent re-provision won the confirmation CAS, should still delete AND leave the live replacement to the reclaim outbox', async () => {
+    // The crash net doing its actual job. Our kill destroyed instance 1; while
+    // it ran, another provisioner put a LIVE instance 2 on the row. The
+    // confirmation CAS correctly refuses (stamping that VM dead would hide a
+    // billing machine forever), so the row goes to DELETE still believing it is
+    // live — which is exactly the shape the AFTER DELETE trigger fires on.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    const realKill = host.host.kill.bind(host.host);
+    host.host.kill = async (input) => {
+      await realKill(input);
+      const row = store.rows.get(ENV_ID);
+      if (row) store.rows.set(ENV_ID, { ...row, spriteInstanceId: 'inst-2' });
+    };
+
+    const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(store.rows.has(ENV_ID)).toBe(false);
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-2');
   });
 
   it('given no such env, should answer not_found', async () => {
