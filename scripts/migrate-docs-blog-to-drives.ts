@@ -34,6 +34,17 @@
  *
  * Re-running is safe-ish but NOT idempotent: it creates new pages every time.
  * Trash the drive's contents before a second live run.
+ *
+ * STATUS: already executed. The docs and blog live in their drives and are
+ * published. Kept for the same reason the backfills in this directory are —
+ * it documents exactly how the content was transformed, and is the thing to
+ * re-run if a drive has to be rebuilt from scratch.
+ *
+ * One caveat that outlives the run: it reads `apps/marketing/src/app/docs/**`
+ * and `app/blog/[slug]/data.ts`, which the follow-up PR DELETES. Re-running it
+ * therefore requires checking out a commit from before that deletion. The pure
+ * helpers it imports (`rewriteLinks`, `imageMimeType`) have no such dependency
+ * and stay unit-tested either way.
  */
 
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
@@ -257,6 +268,13 @@ async function migrateBlog(driveId: string | undefined, posts: ExtractedPost[]):
     const flagBig = bytes > 1_000_000 ? '  ⚠️  oversized — compress before a live run' : '';
     console.log(`    ${ref.padEnd(48)} ${bytes < 0 ? 'MISSING' : `${(bytes / 1024 / 1024).toFixed(1)} MB`}${flagBig}`);
   }
+
+  // Reject an unsupported asset BEFORE anything is created. imageMimeType
+  // throws on its own, but only once uploadImage reaches that file — a .svg on
+  // the fifth post would abort after four images and a folder already existed,
+  // and this script is not idempotent, so that partial state has to be trashed
+  // by hand before a retry.
+  for (const ref of imageRefs) imageMimeType(ref);
 
   // Upload every referenced image first and build `/blog/x.png` → file id.
   // Bodies are rewritten against this map BEFORE rewriteLinks, so the publish
