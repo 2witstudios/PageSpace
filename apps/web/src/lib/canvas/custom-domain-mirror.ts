@@ -8,7 +8,7 @@ import {
   type DomainOverrideRecord,
 } from '@pagespace/lib/canvas/custom-domain-mirror';
 import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
-import type { ActiveDomainRecord } from '@pagespace/lib/canvas/primary-host';
+import { isEligibleForPrimaryHost, type ActiveDomainRecord } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
@@ -85,7 +85,7 @@ export async function getActiveDomainRecords(driveId: string): Promise<ActiveDom
     .where(eq(customDomains.driveId, driveId));
 
   return rows
-    .filter((r) => r.status === 'active' && (!r.platformOwned || r.isPrimary))
+    .filter((r) => r.status === 'active' && isEligibleForPrimaryHost(r))
     .map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
 }
 
