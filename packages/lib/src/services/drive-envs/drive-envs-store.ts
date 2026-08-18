@@ -170,6 +170,14 @@ export interface DriveEnvStore {
    * There is no third interleaving: a session cannot appear between the count
    * and the delete without the lock this transaction is holding.
    *
+   * **This reasoning assumes READ COMMITTED**, which is Postgres's default and
+   * what this deployment runs (nothing sets an isolation level — verified, not
+   * assumed). The assumption is load-bearing rather than incidental: it is what
+   * makes a blocked statement RE-READ and see the committed session. Under
+   * REPEATABLE READ the same block would end in a serialization failure
+   * instead, which is safe but a different contract — so raising the pool's
+   * isolation level means revisiting this method, not just this comment.
+   *
    * `force` skips the count (not the lock), which is the whole meaning of
    * forcing: the caller has been told sessions are live and has said destroy
    * them anyway.
