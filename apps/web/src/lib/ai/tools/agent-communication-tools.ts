@@ -65,6 +65,22 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 }
 
 /**
+ * The session family, built ONCE and reused.
+ *
+ * Every other entry in `availableTools` is a module-level constant; this one is
+ * a factory call, so without the cache each mention-triggered turn rebuilt the
+ * whole family just to look one name up. The tools hold no per-request state —
+ * they read the caller off `experimental_context` at execute time — so a single
+ * instance is the same instance a fresh call would have produced. Lazy rather
+ * than module-level to keep the import cycle this construction exists to avoid.
+ */
+let sessionToolsCache: ReturnType<typeof buildSessionTools> | null = null;
+function getSessionTools(): ReturnType<typeof buildSessionTools> {
+  sessionToolsCache ??= buildSessionTools();
+  return sessionToolsCache;
+}
+
+/**
  * Filter tools for agent configuration
  */
 function filterToolsForAgent(enabledTools: string[] | null): Record<string, unknown> {
@@ -87,7 +103,7 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     // spawn_session/send_session could only ever have refused here. Dispatch
     // signs its own hop now. Still gated per agent by `enabledTools` below, so
     // adding it here widens nothing on its own.
-    ...buildSessionTools(),
+    ...getSessionTools(),
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };
   

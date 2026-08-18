@@ -44,6 +44,7 @@ import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/cr
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import {
   AGENT_DISPATCH_SIGNATURE_HEADER,
   signAgentDispatch,
@@ -1113,8 +1114,46 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // authorized a drive admin to stop another member's worker, aborting as the
       // ADMIN would match zero rows and report success while the worker kept
       // running. Authorization happened before this call; this names the rows.
-      void actingUserId;
-      await abortConversationStreams({ conversationId, userId: streamOwnerId }).catch(() => {});
+      //
+      // A CROSS-MEMBER stop is the one outcome nobody is told about: the worker's
+      // owner sees only an aborted stream, and the abort itself is recorded under
+      // THEIR id (above), so the row cannot say who did it. Record the acting
+      // user here — it is the only place both identities are in hand (PR review).
+      //
+      // Through `audit()` rather than the ordinary logger, because this is a
+      // cross-user ADMINISTRATIVE action: the audit pipeline dual-writes to the
+      // tamper-evident `security_audit_log`, which is what makes the event
+      // survive log rotation and show up in audit queries and exports. A plain
+      // `loggers.ai.warn` reaches neither, and on the default console
+      // destination may not be retained at all (PR review, #2423).
+      //
+      // AFTER the abort, and carrying its OUTCOME. Recording first would write
+      // "terminated" into a tamper-evident log whose whole value is that it does
+      // not say things that did not happen — and the abort's failure is
+      // swallowed here (the return below is `ok: true` either way, deliberately:
+      // the conversation and transcript survive regardless). A failed
+      // cross-member stop is not a non-event, though — an admin reaching into
+      // another member's worker is worth a row whichever way it lands — so the
+      // two outcomes get two event types rather than one type and one silence
+      // (PR review, #2423).
+      const aborted = await abortConversationStreams({ conversationId, userId: streamOwnerId })
+        .then(() => true)
+        .catch(() => false);
+      if (actingUserId !== streamOwnerId) {
+        audit({
+          eventType: aborted ? 'admin.session.terminate.success' : 'admin.session.terminate.failure',
+          // The ACTOR is the subject of an audit row, always — the owner rides
+          // in details, so "what did this admin do" is one indexed query.
+          userId: actingUserId,
+          resourceType: 'agent_worker',
+          resourceId: conversationId,
+          details: { workerOwnerId: streamOwnerId },
+          // Authorized (`checkWorkspaceEndAccess` cleared it upstream) but
+          // cross-user, so it warns rather than informs: worth a look, not an
+          // alarm. `audit()` picks the level off this threshold.
+          riskScore: 0.5,
+        });
+      }
       // Deliberately NO sandbox teardown: a worker works in its SPAWNER's
       // workspace, so tearing "its" sandbox down would destroy a working context
       // that is not this worker's to release.

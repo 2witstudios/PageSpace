@@ -279,6 +279,10 @@
       "types": "./dist/schema/form-targets.d.ts",
       "default": "./dist/schema/form-targets.js"
     },
+    "./schema/drive-envs": {
+      "types": "./dist/schema/drive-envs.d.ts",
+      "default": "./dist/schema/drive-envs.js"
+    },
     "./schema/machine-sprite-reclaims": {
       "types": "./dist/schema/machine-sprite-reclaims.d.ts",
       "default": "./dist/schema/machine-sprite-reclaims.js"

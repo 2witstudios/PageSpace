@@ -31,6 +31,11 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
+  // Inbox fan-out asks the centralized helper which candidates can view the
+  // channel. Default to all of them, matching canUserViewPage's default above.
+  getUsersWhoCanViewPage: vi.fn(
+    async (_pageId: string, candidateUserIds: string[]) => new Set(candidateUserIds)
+  ),
 }));
 
 // --- Channel repository seam --------------------------------------------------

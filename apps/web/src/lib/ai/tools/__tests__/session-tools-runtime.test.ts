@@ -90,11 +90,13 @@ vi.mock('../shell-io', () => ({
   createShellIo: vi.fn(),
   realtimeShellIoTransport: {},
 }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
 import { resolveCallerSessionForWorker, buildSessionToolsDeps } from '../session-tools-runtime';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 const sessionRow = { id: 'ses-1', ownerId: 'user-1', endedAt: null };
 const globalConversation = { id: 'conv-g', type: 'global', userId: 'user-1', isActive: true, contextId: null };
@@ -465,6 +467,70 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
       conversationId: 'conv-worker',
       userId: 'worker-owner',
     });
+  });
+
+  test('a cross-member kill leaves an audit record naming BOTH parties — the abort row alone cannot say who did it', async () => {
+    // The abort is recorded under the WORKER'S OWNER (the test above), and the
+    // owner sees only a stream that stopped. This is the one place both
+    // identities are in hand, so it is the only place the record can be made.
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'worker-owner',
+      actingUserId: 'drive-admin',
+    });
+
+    // Through the AUDIT pipeline, not the ordinary logger: this is the record
+    // a dispute or incident review queries, so it has to reach the
+    // tamper-evident log rather than only the console.
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'admin.session.terminate.success',
+        userId: 'drive-admin',
+        resourceType: 'agent_worker',
+        resourceId: 'conv-worker',
+        details: expect.objectContaining({ workerOwnerId: 'worker-owner' }),
+      }),
+    );
+  });
+
+  test('an owner stopping their OWN worker records nothing — every kill would otherwise warn, and a log that always fires says nothing', async () => {
+    mockAbortConversationStreams.mockResolvedValue(undefined);
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'user-1',
+      actingUserId: 'user-1',
+    });
+
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  test('a cross-member kill whose abort REJECTS records the failure, not a termination — the tamper-evident log may not claim a stop that did not land', async () => {
+    // `killWorker` returns ok: true either way (the transcript survives
+    // regardless), so nothing downstream can tell these apart. If the record
+    // were written before the abort, the one log built to be trustworthy would
+    // be the one asserting a worker stopped while it kept running.
+    mockAbortConversationStreams.mockRejectedValue(new Error('realtime unreachable'));
+
+    const deps = buildSessionToolsDeps();
+    await deps.killWorker({
+      conversationId: 'conv-worker',
+      streamOwnerId: 'worker-owner',
+      actingUserId: 'drive-admin',
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'admin.session.terminate.failure',
+        userId: 'drive-admin',
+        resourceId: 'conv-worker',
+        details: expect.objectContaining({ workerOwnerId: 'worker-owner' }),
+      }),
+    );
   });
 
   test('a failed stream abort still reports success — the conversation and transcript survive regardless, and there is no sandbox to have failed on', async () => {

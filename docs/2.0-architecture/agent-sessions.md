@@ -23,6 +23,34 @@ context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
+> **`envId` — owning versus borrowing a sandbox.** The schema now carries a nullable
+> `agent_workspaces.envId` pointing at a `drive_envs` row: a *persistent, drive-owned*
+> ENVIRONMENT that sessions can be spawned inside (epic "Deliberate Per-Drive
+> Environments"). The column **ships dark** — nothing writes it until that epic's Phase 3
+> — so everything below still describes every session that exists today.
+>
+> What changes when it is written: an env-bound session **borrows** its env's sandbox
+> instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
+> the database, not by convention (`agent_workspaces_env_no_sprite_check`), which is what
+> makes "ending an env session cannot kill the env" structural: the lifecycle planner sees
+> `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
+> sandboxes remain the default and are unchanged.
+>
+> **An env owns its sessions.** `envId` is `ON DELETE CASCADE`: deleting an env deletes
+> the sessions run inside it, their panes, that tree's rev counter and their shells —
+> everything that already cascades from a session row. It does **not** reach chat
+> history, because nothing connects the two: `conversations` lost its session column at
+> `0256` and a pane's `targetId` is polymorphic with no foreign key, so conversations are
+> independent rows that stay reachable through the cross-session past-conversations
+> surface. What a cascade destroys is layout and shell scrollback, not threads. Nor is
+> any accounting lost — an env-bound session is CHECK-forbidden from holding Sprite or
+> storage/billing columns, so the row carries no VM to orphan and no bytes to bill.
+>
+> **There is no env "kind".** dev / staging / prod are use cases a user expresses by
+> NAMING an env; every env is Sprite-backed uniformly. The Fly serving tier attaches
+> later as a `published_apps.envId` hosting row pointing AT an env — it never puts Fly
+> pointers on the env row.
+
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 
