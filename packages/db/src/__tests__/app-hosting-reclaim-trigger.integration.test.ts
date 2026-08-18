@@ -90,6 +90,22 @@ async function seedPublishedApp(
   return { appId, flyAppName };
 }
 
+/**
+ * Tear a case down in the ONE order that leaves nothing behind: parents first,
+ * outbox last.
+ *
+ * Deleting the user cascades to its drives, their envs and their hosting rows —
+ * and every hosting row destroyed on the way fires the trigger under test,
+ * INSERTING into `app_hosting_reclaims`. Draining the outbox before that delete
+ * therefore cleans up rows that are about to be re-created, and leaves them in a
+ * database other suites share. Reclaim rows are FK-free by design, so nothing
+ * else will ever collect them.
+ */
+async function cleanup(userIds: string[], flyAppNames: string[]): Promise<void> {
+  await client.query(`DELETE FROM users WHERE id = ANY($1)`, [userIds]);
+  await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" = ANY($1)`, [flyAppNames]);
+}
+
 describe('published_apps hosting reclaim trigger — live', () => {
   it('should be armed and ENABLED on published_apps', async () => {
     const { rows } = await client.query<{ tgname: string; proname: string; tgenabled: string }>(
@@ -131,8 +147,7 @@ describe('published_apps hosting reclaim trigger — live', () => {
       // the one we meant.
       expect(rows[0].machineId).toBe('m-1');
     } finally {
-      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" = $1`, [flyAppName]);
-      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      await cleanup([userId], [flyAppName]);
     }
   });
 
@@ -155,8 +170,7 @@ describe('published_apps hosting reclaim trigger — live', () => {
       // No machine ever existed, so the destroy is unambiguous.
       expect(rows[0].machineId).toBeNull();
     } finally {
-      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" = $1`, [flyAppName]);
-      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      await cleanup([userId], [flyAppName]);
     }
   });
 
@@ -194,8 +208,7 @@ describe('published_apps hosting reclaim trigger — live', () => {
       expect(rows[0].publishedAppId).toBe(`pa-${suffix}-b`);
       expect(rows[0].machineId).toBe('m-new');
     } finally {
-      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" = $1`, [flyAppName]);
-      await client.query(`DELETE FROM users WHERE id = ANY($1)`, [[first.userId, second.userId]]);
+      await cleanup([first.userId, second.userId], [flyAppName]);
     }
   });
 
@@ -211,10 +224,9 @@ describe('published_apps hosting reclaim trigger — live', () => {
         seedPublishedApp(`${suffix}-again`, { envId, driveId, userId }),
       ).rejects.toThrow(/unique|duplicate key/i);
     } finally {
-      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" LIKE $1`, [
-        `pgs-app-${suffix}%`,
-      ]);
-      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      // The user delete cascades to the env and its hosting row, whose trigger
+      // enqueues a reclaim — so the outbox is drained after it, not before.
+      await cleanup([userId], [`pgs-app-${suffix}`, `pgs-app-${suffix}-again`]);
     }
   });
 
@@ -240,8 +252,7 @@ describe('published_apps hosting reclaim trigger — live', () => {
       );
       expect(reclaims.rows).toHaveLength(1);
     } finally {
-      await client.query(`DELETE FROM app_hosting_reclaims WHERE "flyAppName" = $1`, [flyAppName]);
-      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      await cleanup([userId], [flyAppName]);
     }
   });
 });
