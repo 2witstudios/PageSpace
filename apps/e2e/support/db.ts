@@ -294,3 +294,27 @@ export async function createMcpToken(userId: string): Promise<string> {
   });
   return raw;
 }
+
+/**
+ * A CHANNEL page in `driveId`, non-private so ordinary drive members can read it
+ * through the default membership rule rather than an explicit grant. That is the
+ * common shape in the product and the one whose fan-out regressed, so it is the
+ * shape the badge spec should exercise.
+ */
+export async function seedChannel(driveId: string, title = 'general'): Promise<string> {
+  const page = await factories.createPage(driveId, {
+    type: 'CHANNEL',
+    title,
+    isPrivate: false,
+  });
+  return page.id;
+}
+
+/**
+ * Add `userId` to `driveId` as an accepted MEMBER — no admin role, no page grant.
+ * Accepted matters: permission resolution joins drive_members on acceptedAt IS NOT
+ * NULL, so a pending invite reads as a non-member.
+ */
+export async function addDriveMember(driveId: string, userId: string): Promise<void> {
+  await factories.createDriveMember(driveId, userId, { role: 'MEMBER' });
+}

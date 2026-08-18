@@ -12,7 +12,7 @@
  *
  *  - **No policy.** Every write this store performs is described by a verdict
  *    from `plan-workspace-lifecycle.ts` — including WHICH columns to stamp, which
- *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
+ *    arrive as an `SpriteHolderRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
  *  - **No membership writes.** A thread belongs to a workspace by virtue of a
@@ -24,7 +24,7 @@
  *    (moving a thread is a fork).
  */
 
-import { planSessionReopen, type AgentSessionRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { planSessionReopen, type SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { withWorkspaceLock } from './workspace-lock';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
 
@@ -37,6 +37,20 @@ export interface AgentSessionRecord {
   driveId: string | null;
   /** Display label only — no uniqueness, never an address. */
   name: string | null;
+
+  /**
+   * The persistent ENVIRONMENT this session runs inside, or null for the
+   * default ephemeral session. Carried here because `findById` selects the
+   * WHOLE row and casts it to this interface: a field missing from this mirror
+   * is not absent at runtime, it is present and invisible to the type system,
+   * which is the drift this file would otherwise hand to its callers.
+   *
+   * Nothing reads it yet — `spawnAgentSession` starts writing it in Phase 3.
+   * An env-bound session holds NO Sprite pointer of its own (it borrows the
+   * env's), which the database enforces via
+   * `agent_workspaces_env_no_sprite_check`.
+   */
+  envId: string | null;
 
   spriteKey: string | null;
   sandboxId: string | null;
@@ -199,7 +213,7 @@ export interface AgentSessionStore {
     sandboxId: string;
     spriteInstanceId: string | null;
     egressPolicyToken: string | null;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     now: Date;
   }): Promise<boolean>;
   /**
@@ -226,7 +240,7 @@ export interface AgentSessionStore {
    */
   applyStamps(input: {
     workspaceId: string;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   /**
@@ -285,7 +299,7 @@ export interface AgentSessionStore {
     workspaceId: string;
     sandboxId: string;
     spriteInstanceId: string | null;
-    stamps: AgentSessionRowStamps;
+    stamps: SpriteHolderRowStamps;
   }): Promise<boolean>;
   /**
    * Re-read just the Sprite pointer AND INSTANCE, to reconcile a lost
@@ -311,7 +325,7 @@ export interface AgentSessionStore {
  * would collapse that distinction the moment a caller built one with an
  * explicit `undefined`, so each key is copied only when present.
  */
-export function stampColumns(stamps: AgentSessionRowStamps): Partial<{
+export function stampColumns(stamps: SpriteHolderRowStamps): Partial<{
   lastActiveAt: Date;
   endedAt: Date | null;
   teardownRequestedAt: Date | null;
@@ -345,7 +359,7 @@ export function revivedAgentSessionColumns(input: {
   sandboxId: string;
   spriteInstanceId: string | null;
   egressPolicyToken: string | null;
-  stamps: AgentSessionRowStamps;
+  stamps: SpriteHolderRowStamps;
   now: Date;
 }) {
   return {

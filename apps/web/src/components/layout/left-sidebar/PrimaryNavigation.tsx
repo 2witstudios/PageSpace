@@ -138,7 +138,10 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
                         <item.icon className="h-4 w-4 shrink-0" />
                         {item.name}
                         {item.badge > 0 && (
-                            <span className="ml-auto inline-flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-medium tabular-nums">
+                            <span
+                                data-testid={`nav-badge-${item.name.toLowerCase().replace(/\s+/g, "-")}`}
+                                className="ml-auto inline-flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-medium tabular-nums"
+                            >
                                 {item.badge > 99 ? "99+" : item.badge}
                             </span>
                         )}

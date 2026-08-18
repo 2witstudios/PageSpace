@@ -25,6 +25,8 @@ export interface ChatInputProps {
   onStop: () => void;
   /** Whether AI is currently streaming */
   isStreaming: boolean;
+  /** A Stop has been requested and has not resolved yet — see InputActions. */
+  isStopping?: boolean;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -103,6 +105,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onSend,
       onStop,
       isStreaming,
+      isStopping = false,
       disabled = false,
       placeholder = 'Type your message...',
       driveId,
@@ -267,6 +270,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
           <InputActions
             isStreaming={isStreaming}
+            isStopping={isStopping}
             onSend={handleSend}
             onStop={onStop}
             disabled={!canSend}

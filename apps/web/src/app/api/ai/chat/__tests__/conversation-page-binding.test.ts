@@ -51,8 +51,19 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   // Same boolean as isScopedMCPAuth for these fixtures; the real helper reads
   // through getAllowedDriveIds so it also covers dispatched service auth.
-  isDriveScopedPrincipal: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
-  isServiceAuthResult: vi.fn((result: { tokenType?: string }) => result?.tokenType === 'service'),
+  //
+  // Typed from the REAL exports, so a signature change here fails typecheck
+  // rather than leaving a silently stale stub. The bodies reimplement rather
+  // than delegate to the sibling `getAllowedDriveIds` mock: that mock is a
+  // fixed `() => []` in these fixtures, so delegating would make every
+  // credential read as unscoped and the scope assertions vacuous.
+  isDriveScopedPrincipal: vi.fn<typeof import('@/lib/auth').isDriveScopedPrincipal>(
+    (auth) => (('allowedDriveIds' in auth ? auth.allowedDriveIds : []) ?? []).length > 0,
+  ),
+  isServiceAuthResult: vi.fn<typeof import('@/lib/auth').isServiceAuthResult>(
+    (result): result is import('@/lib/auth').ServiceAuthResult =>
+      !('error' in result) && 'tokenType' in result && result.tokenType === 'service',
+  ),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);

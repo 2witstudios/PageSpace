@@ -4,11 +4,12 @@
  */
 
 import { useCallback, useRef } from 'react';
-import { patch, del } from '@/lib/auth/auth-fetch';
+import { patch, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
+import { readStopEpoch } from '@/lib/ai/streams/stopRequests';
 
 const browserSessionHeaders = (): Record<string, string> => ({
   'X-Browser-Session-Id': getBrowserSessionId(),
@@ -38,13 +39,29 @@ interface UseMessageActionsOptions {
   onEditVersionChange?: () => void;
 }
 
+/**
+ * What a retry did, because it can now decline — and the CALLER has to act differently per
+ * reason, so a bare boolean would not carry enough.
+ *
+ * Every non-dispatch leaves a pendingSend registered that nothing else will clear (the handoff
+ * effect is keyed on state these paths never move), so all of them need releasing. Only
+ * `delete-failed` additionally leaves the CACHE lying: the superseded rows were removed from it
+ * synchronously, and if the server still holds them the next retry would plan no deletes at all
+ * and regenerate straight over them — the same corruption, one click later.
+ */
+export type RetryOutcome =
+  | { dispatched: true }
+  | { dispatched: false; reason: 'no-conversation' | 'stopped' }
+  /** `undeletedIds` are the rows the server still holds — exactly what the cache must show. */
+  | { dispatched: false; reason: 'delete-failed'; undeletedIds: string[] };
+
 interface UseMessageActionsResult {
   /** Edit a message's content */
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   /** Delete a message */
   handleDelete: (messageId: string) => Promise<void>;
-  /** Retry/regenerate the last response */
-  handleRetry: () => Promise<void>;
+  /** Retry/regenerate the last response. */
+  handleRetry: () => Promise<RetryOutcome>;
   /** Get the last assistant message ID */
   lastAssistantMessageId: string | undefined;
   /** Get the last user message ID */
@@ -163,9 +180,18 @@ export function useMessageActions({
     [isAgentMode, agentId, conversationId]
   );
 
-  // Retry/regenerate the last response
-  const handleRetry = useCallback(async () => {
-    if (!conversationId) return;
+  // Retry/regenerate the last response.
+  //
+  // Reports whether it DISPATCHED, like `handleSend`: a caller holding a pendingSend has to know,
+  // because a wrapped callback that returns without dispatching moves none of the handoff
+  // effect's dependencies and would leave the composer showing Stop until unmount. See
+  // `useSendHandoff.releasePendingSend`.
+  const handleRetry = useCallback(async (): Promise<RetryOutcome> => {
+    if (!conversationId) return { dispatched: false, reason: 'no-conversation' };
+
+    // Snapshot BEFORE the DELETE round trip below, checked after it — see stopRequests, and the
+    // dispatch guard at the bottom of this function.
+    const stopEpochAtStart = readStopEpoch(conversationId);
 
     const currentMessages = messagesRef.current;
 
@@ -173,20 +199,95 @@ export function useMessageActions({
     const assistantMessagesToDelete = getAssistantMessagesAfterLastUser(currentMessages);
 
     if (assistantMessagesToDelete.length > 0) {
-      // Delete them from the database in parallel — calls are independent
-      await Promise.allSettled(
+      // AWAITED, AND IT HAS TO BE — this is a hard ordering dependency, not caution.
+      //
+      // The obvious latency win here is to fire these DELETEs alongside the regenerate POST
+      // instead of before it: the local cache row is already gone (useCacheMessageActions ran
+      // applyDelete synchronously), so from the client's side the deletes look like a pure
+      // prefix, and dropping the await would take a whole round trip off the retry.
+      //
+      // It would also silently corrupt the retry. The regenerate POST does NOT regenerate from
+      // the messages the client sends: `handleChatTurn` loads the conversation from the DATABASE,
+      // and both surfaces say so at their history load — "We use database-loaded messages, NOT
+      // requestMessages from client" (global-chat-turn.ts), "Used ONLY to extract new user
+      // message, NOT for conversation history" (page-chat-turn.ts). Nothing server-side
+      // supersedes the trailing assistant rows on a regenerate, either. Race the DELETEs against
+      // the POST and the model is handed its own previous answer as the newest turn — it rewrites
+      // or continues that answer instead of re-answering the user, and does it
+      // nondeterministically, depending on which request reached the DB first.
+      //
+      // The round trip is real and it is paid. What it is NOT any more is INVISIBLE: the whole
+      // retry now runs inside the surface's `wrapSend`, so the composer locks and offers Stop
+      // from the click (see useCacheMessageActions.handleRetry).
+      //
+      // The deletes are already concurrent WITH EACH OTHER — one Promise.allSettled over N
+      // independent requests, not N sequential awaits — so the cost here is one round trip, not
+      // one per superseded message.
+      const outcomes = await Promise.allSettled(
         assistantMessagesToDelete.map((msg) => {
           const url = isAgentMode
             ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
             : `/api/ai/global/${conversationId}/messages/${msg.id}`;
-          return del(url, undefined, { headers: browserSessionHeaders() }).catch((error) => {
-            console.error('Failed to delete old assistant message:', error);
-          });
+          return del(url, undefined, { headers: browserSessionHeaders() });
         })
       );
 
+      // A FAILED DELETE BREAKS THE SAME INVARIANT AS A RACED ONE (CodeRabbit).
+      //
+      // The rejections used to be swallowed into a console line, which made the ordering above
+      // load-bearing only when the network cooperated: a row that failed to delete is still in
+      // the database, the server rebuilds history FROM the database, and the model is handed its
+      // own previous answer as the newest turn — the exact corruption the await is here to
+      // prevent, arrived by a different route. Awaiting something and then ignoring what it said
+      // is not an ordering guarantee.
+      //
+      // So a failed delete refuses the dispatch, and says so. Silence would be worse than the
+      // old console line: the cache row is already gone (`useCacheMessageActions` applied it
+      // synchronously), so the user would see their answer vanish and nothing replace it, with
+      // no idea why or that a reload will bring it back.
+      //
+      // 404 IS NOT A FAILURE HERE, and conflating the two would be its own bug — the same
+      // distinction `markAbortRequested` draws between "nothing matched" and "the write did not
+      // happen". This route answers 404 'Message not found' for a row that is already gone, and
+      // gone is precisely the state we were asking for: a collaborator or a second tab having
+      // deleted it first must not block the retry or raise an error over it.
+      //
+      // Reported per ROW, not as one flag, so the caller can put back exactly what the server
+      // still holds. A partial failure is the interesting case: some rows really are gone, and
+      // restoring those too would leave the cache claiming messages that no longer exist.
+      const stillPresent = assistantMessagesToDelete
+        .map((msg, i) => ({ id: msg.id, outcome: outcomes[i] }))
+        .filter(({ outcome }) =>
+          outcome.status === 'rejected' &&
+          !(outcome.reason instanceof ApiRequestError && outcome.reason.status === 404));
+
+      if (stillPresent.length > 0) {
+        for (const { id, outcome } of stillPresent) {
+          console.error('Failed to delete old assistant message:', id, (outcome as PromiseRejectedResult).reason);
+        }
+        toast.error('Could not clear the previous reply, so the retry was not started.');
+        return {
+          dispatched: false,
+          reason: 'delete-failed',
+          undeletedIds: stillPresent.map(({ id }) => id),
+        };
+      }
+
       // No local array to prune — `useCacheMessageActions` deletes the same rows from the
       // cache, which is both what renders and what `regenerate` composes its request from.
+    }
+
+    // THE STOP THE SERVER COULD NOT HONOUR. Retry now runs inside `wrapSend`, so the composer
+    // has been offering Stop for the whole DELETE round trip above — but no stream row exists
+    // yet, so `markAbortRequested` matches nothing, the abort answers `not_found`, and
+    // `reportAbortOutcome` is deliberately silent about that. Dispatching here anyway would make
+    // that Stop a lie of exactly the kind this epic deleted `rawStop` over: the press appeared to
+    // do nothing and a generation started regardless.
+    //
+    // The deletes have already committed and cannot be taken back, so a stopped retry leaves the
+    // superseded answer gone and nothing regenerating — which is what the user asked for.
+    if (readStopEpoch(conversationId) !== stopEpochAtStart) {
+      return { dispatched: false, reason: 'stopped' };
     }
 
     // Now regenerate with a clean slate. conversationId is included for both
@@ -204,6 +305,7 @@ export function useMessageActions({
             conversationId,
           },
     });
+    return { dispatched: true };
   }, [isAgentMode, agentId, conversationId, regenerate]);
 
   // Compute last message IDs for UI

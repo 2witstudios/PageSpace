@@ -61,10 +61,25 @@ export async function GET(request: Request) {
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
           LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          -- Candidate filter only; getBatchPagePermissions below is the access
+          -- decision. An explicit grant beats membership there, so a channel
+          -- shared with someone outside the drive must survive to be asked
+          -- about. Expiry uses now() at time zone utc because expiresAt is a
+          -- UTC wall clock stored without a zone: a bare now() would compare it
+          -- against the session zone and be wrong in both directions.
+          LEFT JOIN page_permissions pp
+            ON pp."pageId" = p.id
+            AND pp."userId" = ${userId}
+            AND pp."canView" = true
+            AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
-            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+            AND (
+              d."ownerId" = ${userId}
+              OR dm."userId" IS NOT NULL
+              OR pp."userId" IS NOT NULL
+            )
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -82,7 +97,8 @@ export async function GET(request: Request) {
           FROM channel_messages cm
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+          WHERE cm."isActive" = true
+            AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
             AND (
               cm."userId" != ${userId}
               OR cm."aiMeta"->>'senderType' = 'agent'
@@ -235,9 +251,23 @@ export async function GET(request: Request) {
             FROM pages p
             INNER JOIN drives d ON d.id = p."driveId"
             LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+            -- Candidate filter only. Same join and predicate as the drive-scoped
+            -- query above and as countChannelUnread in
+            -- apps/web/src/app/api/sidebar/badges/route.ts, which is why the nav
+            -- badge and these pills agree about which channels exist; change one
+            -- and change all three.
+            LEFT JOIN page_permissions pp
+              ON pp."pageId" = p.id
+              AND pp."userId" = ${userId}
+              AND pp."canView" = true
+              AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
             WHERE p.type = 'CHANNEL'
               AND p."isTrashed" = false
-              AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+              AND (
+                d."ownerId" = ${userId}
+                OR dm."userId" IS NOT NULL
+                OR pp."userId" IS NOT NULL
+              )
           ),
           channel_last_messages AS (
             SELECT DISTINCT ON (cm."pageId")
@@ -255,7 +285,8 @@ export async function GET(request: Request) {
             FROM channel_messages cm
             LEFT JOIN channel_read_status crs
               ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-            WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+            WHERE cm."isActive" = true
+              AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
               AND (
                 cm."userId" != ${userId}
                 OR cm."aiMeta"->>'senderType' = 'agent'

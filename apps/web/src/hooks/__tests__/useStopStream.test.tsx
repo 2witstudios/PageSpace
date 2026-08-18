@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useStopStream } from '../useStopStream';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { useStopStream, STOPPING_FEEDBACK_TIMEOUT_MS } from '../useStopStream';
+import { readStopEpoch } from '@/lib/ai/streams/stopRequests';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 const abortByMessageId = vi.fn();
@@ -41,7 +42,7 @@ describe('useStopStream', () => {
     );
 
     await act(async () => {
-      await result.current();
+      await result.current.handleStop();
     });
 
     expect(abortByMessageId).toHaveBeenCalledWith({ messageId: 'msg-1' });
@@ -58,7 +59,7 @@ describe('useStopStream', () => {
     );
 
     await act(async () => {
-      await result.current();
+      await result.current.handleStop();
     });
 
     expect(abortByConversation).toHaveBeenCalledWith({ conversationId: 'conv-9' });
@@ -72,7 +73,7 @@ describe('useStopStream', () => {
     );
 
     await act(async () => {
-      await result.current();
+      await result.current.handleStop();
     });
 
     expect(abortByMessageId).not.toHaveBeenCalled();
@@ -90,9 +91,277 @@ describe('useStopStream', () => {
     );
 
     await act(async () => {
-      await result.current();
+      await result.current.handleStop();
     });
 
     expect(reportAbortOutcome).toHaveBeenCalledWith(unconfirmed);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// `isStopping` — the feedback that replaces the deleted local stop, without its lie.
+//
+// Deleting `rawStop` was right (see the hook's docblock and only-a-deliberate-stop.test.ts), but
+// it left the click with nothing to show for itself: reportAbortOutcome is silent on every
+// outcome but 'unconfirmed', so the abort POST's resolved value paints zero pixels, and what
+// actually clears the bubble and flips the composer is the chat:stream_complete SOCKET event.
+// The screen sat unchanged for a full round trip — up to ABORT_SETTLE_TIMEOUT_MS of deliberate
+// server-side settle on a cross-instance owner — plus socket delivery.
+// ---------------------------------------------------------------------------------------------
+describe('useStopStream — isStopping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    abortByMessageId.mockResolvedValue(OK);
+    abortByConversation.mockResolvedValue(OK);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const OWN_STREAM = { messageId: 'msg-1', conversationId: 'conv-1', isOwn: true } as ActiveStream;
+
+  const renderStop = (props: {
+    activeStream?: ActiveStream;
+    pendingSendConversationId?: string | null;
+  }) =>
+    renderHook(
+      (p: { activeStream?: ActiveStream; pendingSendConversationId: string | null }) =>
+        useStopStream({
+          activeStream: p.activeStream,
+          pendingSendConversationId: p.pendingSendConversationId,
+        }),
+      {
+        initialProps: {
+          activeStream: props.activeStream,
+          pendingSendConversationId: props.pendingSendConversationId ?? null,
+        },
+      },
+    );
+
+  it('given Stop is pressed, should set isStopping BEFORE the abort resolves, not after', async () => {
+    // Never resolves: if the flag were set after the await, nothing would ever paint.
+    let release: (() => void) | undefined;
+    abortByMessageId.mockImplementation(
+      () => new Promise((resolve) => { release = () => resolve(OK); }),
+    );
+
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+    expect(result.current.isStopping).toBe(false);
+
+    act(() => { void result.current.handleStop(); });
+
+    expect(result.current.isStopping).toBe(true);
+    expect(abortByMessageId).toHaveBeenCalledTimes(1);
+
+    await act(async () => { release?.(); });
+  });
+
+  // The reply keeps rendering underneath. This hook must not treat its own flag as teardown —
+  // chat:stream_complete is the sole authority, and the stream is still here until it says so.
+  it('given the abort has resolved but the stream entry is still live, should stay stopping (never "stopped")', async () => {
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(result.current.isStopping).toBe(true);
+  });
+
+  // THE clear: chat:stream_complete removes the store entry, so `activeStream` goes away.
+  it('given the socket landing removes the live stream, should clear isStopping', async () => {
+    const { result, rerender } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    rerender({ activeStream: undefined, pendingSendConversationId: null });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // Stop pressed in the TTFB window names the pendingSend conversation; that name resolving is
+  // the same landing.
+  it('given a Stop in the TTFB window, should clear isStopping when the pendingSend resolves', async () => {
+    const { result, rerender } = renderStop({ pendingSendConversationId: 'conv-1' });
+
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+    expect(abortByConversation).toHaveBeenCalledWith({ conversationId: 'conv-1' });
+
+    rerender({ activeStream: undefined, pendingSendConversationId: null });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // A socket that never arrives (dropped connection, dead owning instance) must not wedge the
+  // button spinning until unmount.
+  it('given no socket ever lands, should release isStopping on the bounded timeout', async () => {
+    vi.useFakeTimers();
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // Still stopping just short of the horizon — the wait has to outlast an honest slow abort.
+    act(() => { vi.advanceTimersByTime(STOPPING_FEEDBACK_TIMEOUT_MS - 1); });
+    expect(result.current.isStopping).toBe(true);
+
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // 'not_found' is deliberately silent (a benign race, and a toast would train users to ignore
+  // the real one), so a Stop pressed a beat after the reply finished produced NO feedback at
+  // all. The affordance appearing and then releasing IS the acknowledgement — and it must
+  // RELEASE, not hold: the server has just said nothing is running, so there is nothing to be
+  // stopping, and holding would disable the button for the whole backstop over a no-op.
+  it('given the server reports not_found, should acknowledge the click and then release', async () => {
+    abortByMessageId.mockResolvedValue({ aborted: false, code: 'not_found', reason: 'no stream' });
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    act(() => { void result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    await waitFor(() => expect(result.current.isStopping).toBe(false));
+    expect(reportAbortOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'not_found' }),
+    );
+  });
+
+  // The helpers never throw on network failure — they resolve 'unconfirmed' (NETWORK_FAILURE),
+  // which made the catch path unreachable for the case that most needs releasing: the user has
+  // just been told the generation may still be running and billing, and the only control that
+  // could stop it was disabled for the whole backstop.
+  it('given an unconfirmed abort, should release so the user can immediately try again', async () => {
+    abortByMessageId.mockResolvedValue({ aborted: false, code: 'unconfirmed', reason: 'no response' });
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    act(() => { void result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    await waitFor(() => expect(result.current.isStopping).toBe(false));
+  });
+
+  // THE P1. These surfaces keep ONE hook instance across a conversation switch. Stopping A and
+  // then switching to B — which has its own stream running — must not disable B's Stop button
+  // for a Stop nobody asked for.
+  it('given a switch to another conversation with its own live stream, should not claim to be stopping it', async () => {
+    const { result, rerender } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // Same surface, same hook instance, different conversation — and B is streaming, so the
+    // boolean "is anything stoppable?" this replaced stayed true here.
+    rerender({
+      activeStream: { messageId: 'msg-b', conversationId: 'conv-2', isOwn: true } as ActiveStream,
+      pendingSendConversationId: null,
+    });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // Nothing live and nothing sent: the composer is showing SEND, so this is unreachable by
+  // click — but it must not be able to strand the affordance either.
+  it('given nothing to stop at all, should not leave the affordance raised', async () => {
+    const { result } = renderStop({ activeStream: undefined, pendingSendConversationId: null });
+
+    await act(async () => { await result.current.handleStop(); });
+
+    await waitFor(() => expect(result.current.isStopping).toBe(false));
+  });
+
+  it('given the abort throws, should clear isStopping rather than wait out the backstop', async () => {
+    abortByMessageId.mockRejectedValue(new Error('boom'));
+    const { result } = renderStop({ activeStream: OWN_STREAM });
+
+    await act(async () => {
+      await expect(result.current.handleStop()).rejects.toThrow('boom');
+    });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  // Found while re-reading the P1 fix, same failure family: every release runs AFTER an await,
+  // so by then the user may have switched conversation and pressed Stop again. An unscoped
+  // clearStopping() there wipes the SECOND Stop's feedback on the FIRST one's late reply.
+  it('given a late reply from a superseded Stop, should not wipe the current conversation\'s stopping state', async () => {
+    let releaseA: (() => void) | undefined;
+    abortByMessageId.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        // A's abort comes back 'unconfirmed' — the outcome that releases — but LATE.
+        releaseA = () => resolve({ aborted: false, code: 'unconfirmed', reason: 'no response' });
+      }),
+    );
+
+    const { result, rerender } = renderStop({ activeStream: OWN_STREAM });
+
+    act(() => { void result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // Switch to B and stop it too. B's abort resolves normally ('aborted' → hold).
+    const streamB = { messageId: 'msg-b', conversationId: 'conv-2', isOwn: true } as ActiveStream;
+    rerender({ activeStream: streamB, pendingSendConversationId: null });
+    await act(async () => { await result.current.handleStop(); });
+    expect(result.current.isStopping).toBe(true);
+
+    // A's abort finally answers. It must not touch B's affordance.
+    await act(async () => { releaseA?.(); await Promise.resolve(); await Promise.resolve(); });
+
+    // Asserted after the queue has drained rather than via waitFor: this is a "stays true"
+    // claim, and waitFor would pass on the first tick without ever proving it survived.
+    expect(result.current.isStopping).toBe(true);
+  });
+});
+
+/**
+ * The half of Stop the SERVER cannot perform.
+ *
+ * `markAbortRequested` only marks rows that already exist as 'streaming', so a Stop pressed
+ * before the POST is out matches nothing and answers `not_found` — which the UI is deliberately
+ * silent about. A retry spends a whole DELETE round trip in that window with Stop on screen, so
+ * the press has to be recorded somewhere the retry can see it before it dispatches.
+ */
+describe('useStopStream — recording the request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    abortByMessageId.mockResolvedValue(OK);
+    abortByConversation.mockResolvedValue(OK);
+  });
+
+  it('given a Stop in the TTFB window, should record it against the conversation it named', async () => {
+    const before = readStopEpoch('conv-record-1');
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: 'conv-record-1' }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-1')).toBe(before + 1);
+  });
+
+  it('given a live own stream, should record against its conversation, not its messageId', async () => {
+    const before = readStopEpoch('conv-record-2');
+    const stream = { messageId: 'msg-r2', conversationId: 'conv-record-2', isOwn: true } as ActiveStream;
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: stream, pendingSendConversationId: null }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-2')).toBe(before + 1);
+  });
+
+  // Nothing live and nothing sent: there is no conversation to name, so there is nothing to
+  // record either — and recording under some placeholder would cancel an unrelated retry.
+  it('given nothing to stop, should record nothing', async () => {
+    const before = readStopEpoch('conv-record-3');
+    const { result } = renderHook(() =>
+      useStopStream({ activeStream: undefined, pendingSendConversationId: null }),
+    );
+
+    await act(async () => { await result.current.handleStop(); });
+
+    expect(readStopEpoch('conv-record-3')).toBe(before);
   });
 });

@@ -31,6 +31,7 @@ import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { FindBar } from '@/components/find/FindBar';
 import { useFindStore } from '@/stores/useFindStore';
+import { getEffectiveBinding, matchesKeyEvent } from '@/stores/useHotkeyStore';
 
 const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
 
@@ -279,7 +280,7 @@ export default function CenterPanel() {
   // Global Cmd+F / Ctrl+F handler — skip when Monaco has focus (CODE pages, CANVAS code tab)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+      if (matchesKeyEvent(getEffectiveBinding('editing.find'), e)) {
         const monacoFocused = document.activeElement?.closest('.monaco-editor');
         if (monacoFocused) return;
         e.preventDefault();

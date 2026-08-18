@@ -452,7 +452,7 @@ const GlobalAssistantView: React.FC = () => {
   // NO PRE-SEND HANDOFFS either. Both shells can have sends in flight at once, so a send into
   // conversation B while A generates needs no `stop()`, no settle wait, and cannot be refused.
 
-  const stop = useStopStream({
+  const { handleStop: stop, isStopping } = useStopStream({
     activeStream,
     pendingSendConversationId,
   });
@@ -524,6 +524,11 @@ const GlobalAssistantView: React.FC = () => {
       if (!currentConversationId) return;
       void regenerate(currentConversationId, opts);
     },
+    // Retry inherits send's optimistic path — see useCacheMessageActions.
+    wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -922,6 +927,7 @@ const GlobalAssistantView: React.FC = () => {
         onSend={handleSendMessage}
         onStop={stop}
         isStreaming={effectiveIsStreaming}
+        isStopping={isStopping}
         isLoading={isLoading}
         disabled={!isAnyProviderConfigured || !isInitialized}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
@@ -974,6 +980,7 @@ const GlobalAssistantView: React.FC = () => {
               onSend={props.onSend}
               onStop={props.onStop}
               isStreaming={props.isStreaming}
+              isStopping={props.isStopping}
               disabled={props.disabled}
               placeholder={props.placeholder}
               driveId={props.driveId}
