@@ -42,16 +42,6 @@ export interface ActiveDomainRecord {
 }
 
 /**
- * Select the drive's primary domain from its ACTIVE custom domains, applying the
- * same precedence the published site uses: an explicitly-flagged domain wins,
- * otherwise the earliest-created one (hostname lexicographic tie-break). Returns
- * `null` when there are no active domains (caller falls back to the subdomain).
- *
- * Generic over the record shape so both the server resolver (which has
- * `ActiveDomainRecord`) and the settings UI (which carries an `id`) can reuse the
- * SAME selection — the badge/primary controls never drift from what is served.
- */
-/**
  * Whether an ACTIVE domain may be considered for primary-host selection.
  *
  * A `platformOwned` row is normally an additional serving ALIAS, not the
@@ -74,6 +64,16 @@ export function isEligibleForPrimaryHost(domain: {
   return !domain.platformOwned || Boolean(domain.isPrimary);
 }
 
+/**
+ * Select the drive's primary domain from its ACTIVE custom domains, applying the
+ * same precedence the published site uses: an explicitly-flagged domain wins,
+ * otherwise the earliest-created one (hostname lexicographic tie-break). Returns
+ * `null` when there are no active domains (caller falls back to the subdomain).
+ *
+ * Generic over the record shape so both the server resolver (which has
+ * `ActiveDomainRecord`) and the settings UI (which carries an `id`) can reuse the
+ * SAME selection — the badge/primary controls never drift from what is served.
+ */
 export function selectPrimaryActiveDomain<T extends ActiveDomainRecord>(activeDomains: T[]): T | null {
   if (activeDomains.length === 0) return null;
 
