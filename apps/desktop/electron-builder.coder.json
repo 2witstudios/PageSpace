@@ -6,7 +6,9 @@
   "protocols": [
     {
       "name": "PageSpace Coder",
-      "schemes": ["pagespace-coder"]
+      "schemes": [
+        "pagespace-coder"
+      ]
     }
   ],
   "directories": {
@@ -14,21 +16,20 @@
     "buildResources": "assets"
   },
   "files": [
-    "out-coder/**/*",
+    {
+      "from": "out-coder",
+      "to": "out"
+    },
     "src/**/*.html",
     "assets/**/*",
     "package.json"
   ],
-  "extraMetadata": {
-    "main": "out-coder/main/index.js"
-  },
   "mac": {
     "icon": "assets/coder/icon.icns",
     "extendInfo": {
       "NSMicrophoneUsageDescription": "PageSpace Coder needs microphone access for voice mode conversations."
     },
-    "notarize": false,
-    "identity": null
+    "notarize": false
   },
   "win": {
     "icon": "assets/coder/icon.ico"

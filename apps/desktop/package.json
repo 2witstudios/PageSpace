@@ -23,10 +23,10 @@
     "package:mac": "bun run build && electron-builder --config electron-builder.pagespace.json --mac --publish never",
     "package:win": "bun run build && electron-builder --config electron-builder.pagespace.json --win --publish never",
     "package:linux": "bun run build && electron-builder --config electron-builder.pagespace.json --linux --publish never",
-    "package:coder": "bun run build:coder && electron-builder --config electron-builder.coder.json --publish never",
-    "package:coder:mac": "bun run build:coder && electron-builder --config electron-builder.coder.json --mac --publish never",
-    "package:coder:win": "bun run build:coder && electron-builder --config electron-builder.coder.json --win --publish never",
-    "package:coder:linux": "bun run build:coder && electron-builder --config electron-builder.coder.json --linux --publish never"
+    "package:coder": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --publish never",
+    "package:coder:mac": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --mac --publish never",
+    "package:coder:win": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --win --publish never",
+    "package:coder:linux": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --linux --publish never"
   },
   "dependencies": {
     "electron-store": "^10.0.0",
